@@ -1,0 +1,5 @@
+members = [
+  ".",
+  "vendor/gpui",
+  "vendor/hotpath",
+]

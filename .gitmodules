@@ -1,0 +1,9 @@
+[submodule "vendor/gpui"]
+	path = vendor/gpui
+	url = https://github.com/gpui-mbt/gpui.mbt.git
+[submodule "vendor/hotpath"]
+	path = vendor/hotpath
+	url = https://github.com/gpui-mbt/hotpath.mbt.git
+[submodule "tools/turtles"]
+	path = tools/turtles
+	url = https://github.com/gpui-mbt/turtles.mbt.git

@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="color-scheme" content="light">
+    <title>dsh.mbt — Agent workspace</title>
+    <link rel="stylesheet" href="/style.css">
+    <script type="module" src="/app.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="Sessions">
+        <div class="brand-row"><span class="brand-mark" aria-hidden="true">d</span><strong>dsh.mbt</strong></div>
+        <button id="new-session" class="new-session" type="button">+ New session</button>
+        <div class="sidebar-heading">SESSIONS</div>
+        <nav id="sessions" class="session-list" aria-label="Session list"><p class="empty-list">Loading sessions…</p></nav>
+        <p class="sidebar-note">Your local agent workspace</p>
+      </aside>
+      <main class="workspace">
+        <header class="session-header">
+          <div class="session-heading"><h1 id="session-title">Agent workspace</h1><div class="status-row"><span id="status" class="status-pill" data-state="idle">Ready</span><span id="progress" class="progress"></span></div></div>
+          <div class="header-actions"><button id="text-view" class="quiet-button" type="button" aria-pressed="false">Text view</button><button id="cancel" class="quiet-button" type="button" disabled>Stop</button></div>
+        </header>
+        <div id="connection-error" class="notice error-notice" role="alert" hidden><span id="connection-error-text"></span><button id="reconnect" type="button">Reconnect</button></div>
+        <div id="run-error" class="notice error-notice" role="alert" hidden></div>
+        <div id="transcript-area" class="transcript-area">
+          <div id="transcript-scroll" class="transcript-scroll" tabindex="0" role="region" aria-label="Conversation transcript" aria-describedby="transcript-help">
+            <canvas id="transcript-canvas" aria-hidden="true"></canvas><div id="scene-spacer" aria-hidden="true"></div>
+          </div>
+          <div id="text-transcript" class="text-transcript sr-only" role="log" aria-label="Selectable conversation transcript" aria-live="off"></div>
+          <p id="transcript-help" class="sr-only">Scroll to read the conversation. Use Text view for selectable text and screen-reader reading.</p>
+          <button id="jump-latest" class="jump-latest" type="button" hidden>↓ Latest</button>
+        </div>
+        <section id="approval" class="approval" aria-labelledby="approval-title" hidden>
+          <div class="approval-heading"><div><h2 id="approval-title">Tool approval required</h2><p id="approval-description"></p></div><span class="approval-tag">REVIEW</span></div>
+          <pre id="approval-arguments" tabindex="0" aria-label="Tool arguments"></pre>
+          <div class="approval-actions"><button id="deny" class="quiet-button" type="button">Deny</button><button id="approve" class="primary-button" type="button">Allow once</button></div>
+        </section>
+        <form id="composer" class="composer">
+          <label for="prompt" class="sr-only">Message the agent</label>
+          <textarea id="prompt" name="prompt" rows="3" maxlength="16384" placeholder="What would you like to work on?" autocomplete="off" spellcheck="true" required></textarea>
+          <div class="composer-footer"><p id="composer-hint">⌘ / Ctrl + Enter to send</p><button id="send" class="primary-button" type="submit">Send <span aria-hidden="true">↑</span></button></div>
+        </form>
+      </main>
+    </div>
+    <div id="announcement" class="sr-only" role="status" aria-live="polite"></div>
+  </body>
+</html>

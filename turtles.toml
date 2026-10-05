@@ -1,0 +1,6 @@
+# The initial gate covers production plugin composition and its existing tests.
+# scripts/mutation.mjs copies these unchanged into a temporary MoonBit module.
+# This avoids pulling every vendor OS backend into turtles' module-wide baseline.
+include = ["plugins/plugins.mbt"]
+exclude = ["vendor/", "tools/", "mutation-scopes/"]
+operators = ["comparison", "boolean", "arithmetic", "literal", "condition"]

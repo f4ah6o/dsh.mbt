@@ -1,0 +1,34 @@
+{
+  "source": {
+    "repository": "https://github.com/deepseek-ai/deepseek-harness",
+    "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+    "path": "snapshots/session/tool-call-turn/session.v4.jsonl",
+    "sha256": "c47241289c3a8eb0ac36740ee2140cc5b6b60d2363b28df054b97914931fe59a",
+    "license": "MIT, Copyright (c) 2026 DeepSeek"
+  },
+  "scope": "Extracted prompt, assistant content/tool calls and expected tool text only; not a Session v4 importer. Upstream runtime-context and permission events are intentionally not imported.",
+  "prompt": "Use the bash tool to run exactly: echo SNAPSHOT_OK. Then reply with the single word DONE and stop.",
+  "completions": [
+    {
+      "ok": true,
+      "content": "",
+      "reasoning": "The user wants me to run a specific bash command and then reply with DONE.",
+      "tool_calls": [
+        {
+          "id": "call_00_Rn2Mz1y8uZN62ukEXiNO2077",
+          "name": "bash",
+          "arguments": "{\"command\": \"echo SNAPSHOT_OK\", \"description\": \"Run echo SNAPSHOT_OK\"}"
+        }
+      ],
+      "finish_reason": "tool_calls"
+    },
+    {
+      "ok": true,
+      "content": "DONE",
+      "reasoning": "The command executed successfully and printed SNAPSHOT_OK. Now I need to reply with the single word DONE.",
+      "tool_calls": [],
+      "finish_reason": "stop"
+    }
+  ],
+  "expected_tool_output": "SNAPSHOT_OK\n"
+}
