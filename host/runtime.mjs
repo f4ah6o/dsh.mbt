@@ -98,6 +98,192 @@ async function initializeHost(options) {
     return effects;
   }
 
+  function clearStreamTimer(entry) {
+    if (entry.streamTimer) clearTimeout(entry.streamTimer);
+    entry.streamTimer = undefined;
+  }
+
+  function takeStreamBatch(entry) {
+    clearStreamTimer(entry);
+    const batch = entry.pendingStream;
+    entry.pendingStream = { content: '', reasoning: '' };
+    entry.pendingStreamUnits = 0;
+    return batch;
+  }
+
+  async function applyStreamBatch(entry, batch) {
+    if (!batch.content && !batch.reasoning) return;
+    const response = parseEnvelope(
+      facade.stream_project(entry.effect.id, batch.content, batch.reasoning),
+      'stream_project',
+    );
+    if (!response.ok) {
+      throw new HostError(typeof response.error === 'string' ? response.error : JSON.stringify(response.error), { status: 409 });
+    }
+    await checkpoint();
+    changed.emit('change');
+  }
+
+  async function flushStreamInline(entry) {
+    if (entry.applyPromise) {
+      await entry.applyPromise;
+      if (entry.pendingStreamUnits > 0) return flushStreamInline(entry);
+      return;
+    }
+    const batch = takeStreamBatch(entry);
+    if (!batch.content && !batch.reasoning) return;
+    const applying = applyStreamBatch(entry, batch);
+    entry.applyPromise = applying;
+    try { await applying; } finally {
+      if (entry.applyPromise === applying) entry.applyPromise = undefined;
+    }
+  }
+
+  async function flushBeforeCancellation(sessionID) {
+    const streaming = [...active.values()].filter((entry) => entry.effect.session_id === sessionID);
+    for (const entry of streaming) {
+      entry.cancelPending = true;
+      clearStreamTimer(entry);
+      try {
+        while (entry.pendingStreamUnits > 0) await flushStreamInline(entry);
+      } catch (error) {
+        // Capacity refusal ends this provider effect through the normal engine
+        // cancellation path. Earlier committed batches remain durable.
+        entry.pendingStream = { content: '', reasoning: '' };
+        entry.pendingStreamUnits = 0;
+        entry.streamError = report(error);
+      }
+    }
+    return streaming;
+  }
+
+  function resumeAfterRejectedCancellation(entries) {
+    for (const entry of entries) {
+      if (!entry.cancelledByEngine && !entry.streamError) {
+        entry.cancelPending = false;
+        if (entry.pendingStreamUnits > 0) scheduleStreamFlush(entry);
+      }
+    }
+  }
+
+  function mcpCallSucceeded(response) {
+    try {
+      const parsed = JSON.parse(response);
+      return !parsed?.error && parsed?.result?.isError !== true;
+    } catch { return false; }
+  }
+
+  function mcpCancellation(line) {
+    try {
+      const request = JSON.parse(line);
+      const params = request?.params;
+      const name = params?.name;
+      const args = params?.arguments;
+      if (request?.method === 'tools/call'
+        && (name === 'session_cancel' || name === 'dsh.session_cancel')
+        && typeof args?.session_id === 'string') return args.session_id;
+    } catch { /* The MoonBit MCP server returns the protocol error. */ }
+    return undefined;
+  }
+
+  function requestStreamFlush(entry) {
+    clearStreamTimer(entry);
+    if (entry.flushPromise) {
+      return entry.flushPromise.then(() => {
+        if (entry.pendingStreamUnits > 0) return requestStreamFlush(entry);
+      });
+    }
+    if (entry.pendingStreamUnits === 0) return Promise.resolve();
+    // Keep bytes attached to the effect until this action owns the serial
+    // queue. A cancellation ahead of it can flush them inline before retiring
+    // the effect, after which this queued action becomes a no-op.
+    const pending = serialize(() => flushStreamInline(entry), { internal: true });
+    const wrapped = pending.finally(() => {
+      if (entry.flushPromise === wrapped) entry.flushPromise = undefined;
+      if (entry.pendingStreamUnits > 0 && !entry.streamError && !entry.cancelPending && !entry.cancelledByEngine && !closing) scheduleStreamFlush(entry);
+    });
+    entry.flushPromise = wrapped;
+    return wrapped;
+  }
+
+  function scheduleStreamFlush(entry) {
+    if (entry.streamTimer || entry.streamError || entry.cancelPending || entry.cancelledByEngine || closing) return;
+    entry.streamTimer = setTimeout(() => {
+      entry.streamTimer = undefined;
+      requestStreamFlush(entry).catch((error) => {
+        entry.streamError = report(error);
+        entry.controller.abort(entry.streamError);
+        changed.emit('change');
+      });
+    }, 100);
+  }
+
+  async function queueStreamBatch(entry, content, reasoning) {
+    const units = content.length + reasoning.length;
+    if (units === 0) return;
+    if (entry.pendingStreamUnits + units > 4096) {
+      try {
+        if (entry.cancelPending) await flushStreamInline(entry);
+        else await requestStreamFlush(entry);
+      } catch (error) {
+        entry.streamError = report(error);
+        entry.controller.abort(entry.streamError);
+        throw entry.streamError;
+      }
+    }
+    entry.pendingStream.content += content;
+    entry.pendingStream.reasoning += reasoning;
+    entry.pendingStreamUnits += units;
+    if (entry.cancelPending) return;
+    if (entry.pendingStreamUnits >= 512) {
+      try { await requestStreamFlush(entry); } catch (error) {
+        entry.streamError = report(error);
+        entry.controller.abort(entry.streamError);
+        throw entry.streamError;
+      }
+    } else scheduleStreamFlush(entry);
+  }
+
+  async function queueStreamText(entry, channel, text) {
+    if (!text) return;
+    // Bound each durable event in UTF-16 units, matching the MoonBit session
+    // capacity checks, without ever splitting a Unicode scalar value.
+    let points = [];
+    let units = 0;
+    for (const point of text) {
+      if (units + point.length > 4096) {
+        const part = points.join('');
+        await queueStreamBatch(entry, channel === 'content' ? part : '', channel === 'reasoning' ? part : '');
+        if (entry.streamError || entry.cancelledByEngine || closing) return;
+        points = [];
+        units = 0;
+      }
+      points.push(point);
+      units += point.length;
+      if (units === 4096) {
+        const part = points.join('');
+        await queueStreamBatch(entry, channel === 'content' ? part : '', channel === 'reasoning' ? part : '');
+        if (entry.streamError || entry.cancelledByEngine || closing) return;
+        points = [];
+        units = 0;
+      }
+    }
+    if (points.length) {
+      const part = points.join('');
+      await queueStreamBatch(entry, channel === 'content' ? part : '', channel === 'reasoning' ? part : '');
+    }
+  }
+
+  async function queueStreamDeltas(entry, delta) {
+    if (entry.streamError) throw entry.streamError;
+    if (entry.cancelledByEngine || closing) return;
+    if (!delta || typeof delta.content !== 'string' || typeof delta.reasoning !== 'string') {
+      throw new HostError('Provider returned malformed projected text', { status: 502 });
+    }
+    await queueStreamText(entry, 'content', delta.content);
+    await queueStreamText(entry, 'reasoning', delta.reasoning);
+  }
+
   async function transition() {
     const effects = drainEffects();
     // These approvals reflect an explicit startup policy. Browser approvals
@@ -113,14 +299,31 @@ async function initializeHost(options) {
     // Persist both the request event and its approval before touching the OS.
     await checkpoint();
     const states = new Map(snapshot().sessions.map((session) => [session.id, session.status]));
-    for (const entry of active.values()) if (states.get(entry.effect.session_id) !== 'running') entry.controller.abort(new Error('Session is no longer running'));
+    for (const entry of active.values()) if (states.get(entry.effect.session_id) !== 'running') {
+      entry.cancelledByEngine = true;
+      entry.cancelPending = true;
+      clearStreamTimer(entry);
+      entry.controller.abort(new Error('Session is no longer running'));
+    }
     // close() can begin while the durable write above is awaiting IO. Do not
     // create a fresh controller that would miss shutdown's initial abort.
     if (closing) { changed.emit('change'); return; }
     for (const effect of effects) {
       if (states.get(effect.session_id) !== 'running') continue;
       if (active.has(effect.id)) throw new HostError('MoonBit emitted a duplicate effect ID', { status: 500 });
-      const entry = { effect, controller: new AbortController(), promise: undefined };
+      const entry = {
+        effect,
+        controller: new AbortController(),
+        promise: undefined,
+        pendingStream: { content: '', reasoning: '' },
+        pendingStreamUnits: 0,
+        streamTimer: undefined,
+        flushPromise: undefined,
+        applyPromise: undefined,
+        streamError: undefined,
+        cancelPending: false,
+        cancelledByEngine: false,
+      };
       active.set(effect.id, entry);
       entry.promise = Promise.resolve().then(() => perform(entry)).catch((error) => {
         fatalError ??= report(error);
@@ -139,14 +342,20 @@ async function initializeHost(options) {
     let result;
     try {
       result = effect.kind === 'llm'
-        ? await provider.invoke(effect.request, { signal: controller.signal })
+        ? await provider.invoke(effect.request, {
+          signal: controller.signal,
+          onDelta: (delta) => queueStreamDeltas(entry, delta),
+        })
         : await workspaceTools.execute(effect.request, { signal: controller.signal });
     } catch (error) {
-      result = { ok: false, error: provider.redact(messageOf(error)) };
+      result = { ok: false, error: provider.redact(messageOf(entry.streamError ?? error)) };
     }
-    if (controller.signal.aborted || closing || fatalError) return;
+    try { await requestStreamFlush(entry); } catch (error) {
+      result = { ok: false, error: provider.redact(messageOf(entry.streamError ?? error)) };
+    }
+    if ((entry.cancelledByEngine && controller.signal.aborted) || closing || fatalError) return;
     await serialize(async () => {
-      if (controller.signal.aborted || closing) return;
+      if ((entry.cancelledByEngine && controller.signal.aborted) || closing) return;
       // Engine rejects stale/duplicate completions; only one serialized owner
       // is allowed to settle an effect and emit its next request.
       const response = parseEnvelope(facade.complete(effect.id, JSON.stringify(result)), 'complete');
@@ -177,7 +386,20 @@ async function initializeHost(options) {
 
   async function call(operation, input = {}) {
     return serialize(async () => {
+      let cancellationEntries = [];
+      if (operation === 'session_cancel' && typeof input.session_id === 'string') {
+        cancellationEntries = await flushBeforeCancellation(input.session_id);
+      }
       const response = parseEnvelope(facade.dispatch(JSON.stringify({ operation, input })), 'dispatch');
+      if (operation === 'session_cancel' && !response.ok) resumeAfterRejectedCancellation(cancellationEntries);
+      if (operation === 'session_cancel' && response.ok) {
+        for (const entry of active.values()) if (entry.effect.session_id === input.session_id) {
+          entry.cancelledByEngine = true;
+          entry.cancelPending = true;
+          clearStreamTimer(entry);
+          entry.controller.abort(new Error('Session was cancelled'));
+        }
+      }
       if (response.ok && !READ_OPERATIONS.has(operation)) await transition();
       return response;
     });
@@ -185,8 +407,18 @@ async function initializeHost(options) {
 
   async function mcp(line) {
     return serialize(async () => {
+      const cancelID = mcpCancellation(line);
+      const cancellationEntries = cancelID ? await flushBeforeCancellation(cancelID) : [];
       const response = facade.mcp_handle(line);
       if (typeof response !== 'string') throw new HostError('MoonBit returned an invalid MCP response', { status: 500 });
+      if (cancelID) {
+        if (mcpCallSucceeded(response)) for (const entry of cancellationEntries) {
+          entry.cancelledByEngine = true;
+          entry.cancelPending = true;
+          clearStreamTimer(entry);
+          entry.controller.abort(new Error('Session was cancelled'));
+        } else resumeAfterRejectedCancellation(cancellationEntries);
+      }
       await transition();
       return response;
     });
@@ -224,11 +456,17 @@ async function initializeHost(options) {
     closing = true;
     closePromise = (async () => {
       try {
-        // Abort IO promptly, then record cancellation through MoonBit. Await
-        // every child/fetch before releasing this host's single-writer lock.
-        for (const entry of active.values()) entry.controller.abort(new Error('Host shutdown'));
+        // Stop new deltas, but let each active provider flush its already
+        // accepted batch before recording cancellation. Never leave a running
+        // provider/read after the facade and its single-writer lock are closed.
+        const stopping = [...active.values()];
+        for (const entry of stopping) {
+          entry.cancelPending = true;
+          clearStreamTimer(entry);
+          entry.controller.abort(new Error('Host shutdown'));
+        }
+        await Promise.allSettled(stopping.map((entry) => entry.promise));
         await serial;
-        for (const entry of active.values()) entry.controller.abort(new Error('Host shutdown'));
         if (!fatalError) {
           for (const current of snapshot().sessions) {
             if (['running', 'awaiting_approval'].includes(current.status)) {

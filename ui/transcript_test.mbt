@@ -76,6 +76,16 @@ test "reasoning tool requests and tool results are rendered but system prompts a
 }
 
 ///|
+test "provisional transcript blocks announce writing and partial status" {
+  let snapshot = parse(
+    "{\"messages\":[{\"role\":\"assistant\",\"reasoning\":\"thinking\",\"content\":\"draft\",\"provisional\":true,\"stream_status\":\"partial\"}]}",
+  )
+  let text = scene_text(@ui.render(snapshot, 500, 800))
+  assert_true(text.contains("Reasoning · partial"))
+  assert_true(text.contains("Assistant · partial"))
+}
+
+///|
 test "render is deterministic and does not mutate a session snapshot" {
   let snapshot = parse(
     "{\"id\":\"session-1\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}",

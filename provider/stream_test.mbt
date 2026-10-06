@@ -182,12 +182,115 @@ test "OpenAI streaming is invariant to every two-chunk boundary including CRLF a
 ///|
 test "Messages streaming preserves reasoning text tools and usage under one-character chunks" {
   let decoder = @provider.StreamDecoder::new("deepseek")
+  let deltas : Array[Json] = []
   for character in messages_stream() {
     assert_true(decoder.feed(character.to_string()) is Ok(_))
+    for delta in decoder.take_deltas() {
+      deltas.push(delta)
+    }
   }
   assert_true(value(decoder.finish()) == messages_expected())
   assert_true(value(decoder.finish()) == messages_expected())
   assert_true(decoder.feed("") is Err(_))
+  let content = StringBuilder()
+  let reasoning = StringBuilder()
+  for delta in deltas {
+    let channel = at(delta, "channel")
+    let text = at(delta, "text")
+    match (channel, text) {
+      (Json::String("content"), Json::String(value)) =>
+        content.write_string(value)
+      (Json::String("reasoning"), Json::String(value)) =>
+        reasoning.write_string(value)
+      _ => fail("unsupported projected stream delta")
+    }
+  }
+  assert_eq(content.to_string(), "確認します")
+  assert_eq(reasoning.to_string(), "Read the file")
+}
+
+///|
+test "Messages deltas preserve interleaved block arrival order and final channels" {
+  let wire = messages_start() +
+    frame("", {
+      "type": "content_block_start",
+      "index": 0,
+      "content_block": { "type": "text", "text": "" },
+    }) +
+    frame("", {
+      "type": "content_block_start",
+      "index": 1,
+      "content_block": { "type": "thinking", "thinking": "" },
+    }) +
+    frame("", {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": { "type": "text_delta", "text": "A" },
+    }) +
+    frame("", {
+      "type": "content_block_delta",
+      "index": 1,
+      "delta": { "type": "thinking_delta", "thinking": "考" },
+    }) +
+    frame("", {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": { "type": "text_delta", "text": "B" },
+    }) +
+    frame("", { "type": "content_block_stop", "index": 0 }) +
+    frame("", { "type": "content_block_stop", "index": 1 }) +
+    messages_end("end_turn")
+  let decoder = @provider.StreamDecoder::new("deepseek")
+  assert_true(decoder.feed(wire) is Ok(_))
+  let deltas = decoder.take_deltas()
+  assert_true(
+    deltas ==
+    [
+      { "channel": "content", "text": "A" },
+      { "channel": "reasoning", "text": "考" },
+      { "channel": "content", "text": "B" },
+    ],
+  )
+  let result = value(decoder.finish())
+  assert_eq(at(result, "content"), "AB".to_json())
+  assert_eq(at(result, "reasoning"), "考".to_json())
+}
+
+///|
+test "one feed keeps valid preceding frames and withholds deltas from a malformed OpenAI frame" {
+  let valid_messages = messages_start() +
+    frame("", {
+      "type": "content_block_start",
+      "index": 0,
+      "content_block": { "type": "text", "text": "" },
+    }) +
+    frame("", {
+      "type": "content_block_delta",
+      "index": 0,
+      "delta": { "type": "text_delta", "text": "kept" },
+    })
+  let deepseek = @provider.StreamDecoder::new("deepseek")
+  assert_true(deepseek.feed(valid_messages + "data: {bad}\r\n\r\n") is Err(_))
+  assert_true(
+    deepseek.take_deltas() == [{ "channel": "content", "text": "kept" }],
+  )
+
+  let invalid_openai = openai_frame(
+    {
+      "content": "must not leak",
+      "tool_calls": [
+        {
+          "index": 0,
+          "type": "not-a-function",
+          "function": { "name": "write", "arguments": "{}" },
+        },
+      ],
+    },
+    null,
+  )
+  let openai = @provider.StreamDecoder::new("openai")
+  assert_true(openai.feed(invalid_openai) is Err(_))
+  assert_true(openai.take_deltas().is_empty())
 }
 
 ///|

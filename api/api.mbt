@@ -359,6 +359,22 @@ pub fn HarnessApi::complete(
 }
 
 ///|
+/// Admit provider text/reasoning progress under the active LLM effect identity.
+pub fn HarnessApi::project_stream(
+  self : HarnessApi,
+  effect_id : String,
+  content : String,
+  reasoning : String,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.project_stream", () => {
+    self.engine.project_stream(effect_id, content, reasoning)
+  })
+}
+
+///|
 pub fn HarnessApi::snapshot(self : HarnessApi) -> Json {
   self.engine.snapshot()
 }

@@ -5,6 +5,10 @@
 const SESSION_CAPACITY : Int = 262144
 
 ///|
+/// Maximum text/reasoning carried by one durable provider flush event.
+const STREAM_DELTA_CAPACITY : Int = 4096
+
+///|
 const CAPACITY_ERROR : String = "Session capacity reached; create a new session"
 
 ///|

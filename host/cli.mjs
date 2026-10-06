@@ -144,7 +144,9 @@ async function runPrompt(host, prompt, options, signal) {
   else {
     const messages = current.messages ?? [];
     const lastUser = messages.findLastIndex((message) => message.role === 'user');
-    const response = messages.slice(lastUser + 1).findLast((message) => message.role === 'assistant' && message.content);
+    // Live provider text is presentation-only until a completion event closes
+    // the step; keep run-mode stdout to the final assistant response.
+    const response = messages.slice(lastUser + 1).findLast((message) => message.role === 'assistant' && !message.provisional && message.content);
     if (response) process.stdout.write(`${typeof response.content === 'string' ? response.content : JSON.stringify(response.content)}\n`);
     process.stderr.write(`Session ${current.id}: ${current.status}\n`);
     if (current.status === 'failed') {

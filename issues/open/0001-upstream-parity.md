@@ -32,6 +32,14 @@ spill/offload、retry scheduling lifecycle は引き続き拒否または未実�
 Live compaction、tool result pruning、spill を導入し、262,144-unit 上限に依存しない長い会話を支える。
 provider SSE の delta を engine event と UI に逐次反映し、切断時の未完了 tool を実行しない。
 
+部分対応（2026-10-07）: OpenAI-compatible / DeepSeek Messages の検証済み text・reasoning delta を host が bounded batch で
+`assistant/stream_delta` event に checkpoint し、browser と gpui scene は writing / partial として表示します。
+final message は同じ provisional row を置き換え、次の provider context には provisional text を含めません。
+effect・turn・step の照合、final text の一致検証、cancel / EOF failure / reopen 後の partial 保持、incomplete tool の不実行を
+keyless regression で確認しています。provider parser は任意 chunk / UTF-8 境界を検証します。Session v1 の
+262,144-unit 上限は維持され、拒否時は追加 batch を適用せず provider を止めます。live compaction、spill/offload、
+retry の durable lifecycle は未実装なので、長い会話の上限超過を解決せず、本 issue は open のままです。
+
 受入条件:
 
 - 旧上限を超える複数 turn の会話が継続し、縮約前後の履歴が説明可能である。

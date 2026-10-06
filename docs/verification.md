@@ -77,6 +77,27 @@ correlation を確認し、画像形式・metadata、admitted user message ident
 foreground enclosure、unsupported background flag と ignorable unknown execution-family row の偽造を atomic rejection します。
 catalog import / reopen では provider / tool effect は 0 件です。全 repository gate はこの変更を含めて完了しました。
 
+## live stream projection increment
+
+2026-10-07、provider の live text / reasoning projection を追加した状態で `npm test` **PASS / exit 0**。
+固定 session snapshot `dsh.mbt-session-v1` と read-only Session v4 importer の互換性は維持しています。
+provider は complete SSE frame のみを投影し、host は bounded batch を checkpoint します。partial は次の provider context
+には入らず、正常完了時だけ final message が同じ turn / step の provisional row を置き換えます。
+
+| gate | 結果 |
+| --- | --- |
+| MoonBit format / checks, JavaScript syntax | PASS。自身の warning 0、pinned hotpath diagnostics のみ、syntax 26 files。 |
+| MoonBit portable packages | Wasm、Wasm GC、JS、native の各 target で 68 / 68 PASS。app JS target に test entry はありません。 |
+| JavaScript app release build | PASS。 |
+| Node host / browser view model | 35 / 35 PASS、9 / 9 PASS。 |
+| Built app integration | 26 / 26 PASS。 |
+
+`tests/integration/live-stream.test.mjs` は実際の compiled app facade と host を使い、EOF 前の visible text / reasoning と
+checkpoint、split UTF-8 と 4096-unit scalar-safe batching、truncated tool-call safety と reopen、cancel 後の late-delta fencing
+と次 request の context exclusion、reader cleanup を待つ shutdown、malformed cancel 中に到着する frame の保持、
+queued timer flush と cancellation の順序を確認します。provider / engine / persistence tests は malformed/final divergence,
+event identity and replay validation, capacity refusal, legacy v1 restore を検証します。
+
 ## upstream の実記録を使う結合テスト
 
 `tests/fixtures/upstream-tool-call-turn.json` は upstream の
@@ -104,7 +125,7 @@ MoonBit white-box test は importer の不変条件と内部所有権を JS / na
 
 ## 実 Chromium 検証
 
-`web/browser-smoke.mjs` **PASS / exit 0 (2026-10-06)**。実際の browser、HTTP server、MoonBit engine / API / gpui scene、Canvas を使用しました。
+`web/browser-smoke.mjs` **PASS / exit 0 (2026-10-07)**。実際の browser、HTTP server、MoonBit engine / API / gpui scene、Canvas を使用しました。
 provider response は固定 fixture です。file write は test 用の一時ディレクトリで本当に実行します。
 
 確認範囲:
@@ -114,6 +135,7 @@ provider response は固定 fixture です。file write は test 用の一時デ
 - New session の処理中に active session を明示的に選び直した場合の selection-intent race。
 - 承認前にはファイルが存在しないこと、Allow 後に作成されること、Deny では作成されないこと。
 - provider 処理の cancel、HTTP 503 の表示。
+- gated provider response の EOF 前に provisional text / reasoning と accessible writing label が見え、EOF 後に同じ turn の final row だけが残ること。
 - `<script>` の文字列が実行されずに表示されること。
 - Canvas scroll と Text view の読書位置、create と select の応答順の競合。
 - 390px viewport で横 overflow がないこと。
@@ -130,7 +152,7 @@ node web/browser-smoke.mjs
 ```
 
 既存の Chromium を使う場合は `PLAYWRIGHT_CHROMIUM_EXECUTABLE` に executable を指定します。
-この実行環境では browser CDN の応答が HTML だったため、既に入手済みの完全な Chrome Headless 153 archive を展開して検証しました。
+この実行環境では browser CDN の応答が HTML だったため、既に入手済みの Playwright Chromium executable を指定して検証しました。
 browser / host / HTTP server / test workspace は終了時に後片付けします。
 画像は `_build/browser-smoke/` に生成し、desktop approval と mobile transcript を目視確認しています。
 

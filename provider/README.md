@@ -14,6 +14,7 @@ especially `serialize.ts`, `wire-types.ts`, `messages-api.ts`, `sse.ts`, and
 | `decode(mode, response)` | Validate a nonstreaming JSON response and normalize it for the engine. |
 | `StreamDecoder::new(mode)` | Allocate one incremental decoder for one HTTP response. |
 | `decoder.feed(chunk)` | Consume a UTF-8-decoded text chunk. Return a sticky error on malformed input. |
+| `decoder.take_deltas()` | Drain text/reasoning deltas from complete, validated frames without retaining repeated cumulative snapshots. |
 | `decoder.finish()` | Require a complete terminal SSE event and return the normalized completion. |
 | `decode_sse(mode, text)` | Convenience entry point using the same decoder for already buffered SSE. |
 
@@ -88,11 +89,22 @@ code units per data frame, 1 Mi characters per line, and indexes 0–1023 for co
 blocks/tools. The host must use a streaming UTF-8 decoder before `feed`; this
 package operates on strings rather than network bytes.
 
+The host drains `take_deltas()` after each feed and forwards text and reasoning
+to the engine under the active effect ID. It batches small deltas for up to 100
+ms, splits durable events at 4096 UTF-16 units without cutting Unicode scalar
+values, and checkpoints each accepted batch. A live assistant row is marked
+provisional; it stays visible as partial on cancellation, provider failure, or
+reopen, and is excluded from later model context. The final normalized text must
+match the projection before a response can proceed to tool dispatch. A
+malformed/truncated tool stream cannot execute its incomplete call. This
+projection remains subject to the engine's 262,144-unit per-session cap.
+
 ## Current port scope
 
 Text, reasoning, function tools, tool results, token usage, nonstreaming responses,
-and incremental SSE decoding are implemented. Network cancellation, timeouts,
-HTTP retries, and authentication are host responsibilities. Image upload and
+incremental SSE decoding, and live text/reasoning projection through the host are
+implemented. Network cancellation, timeouts, HTTP retries, and authentication
+are host responsibilities. Image upload and
 Files API fallback, mid-conversation system/tool updates, provider model
 discovery, and native thinking-signature replay metadata are outside this first
 package. Signature deltas are parsed and checked but the engine's current

@@ -31,6 +31,11 @@ test("a stale poll cannot replace a newer mutation response", () => {
   assert.equal(acceptsSnapshot({ id: "s1", turn_id: 2, status: "running", events: [1, 2, 3] }, current), false);
   assert.equal(acceptsSnapshot({ ...current, events: [1, 2, 3, 4, 5] }, current), true);
   assert.equal(acceptsSnapshot({ id: "s2", turn_id: 1, events: [] }, current), true);
+  const projected = { id: "s1", turn_id: 3, events: [1, 2], stream_revision: 18, messages: [] };
+  assert.equal(acceptsSnapshot({ ...projected, stream_revision: 12 }, projected), false);
+  assert.equal(acceptsSnapshot({ ...projected, stream_revision: 19 }, projected), true);
+  // Legacy session-v1 snapshots have no revision and retain their old rule.
+  assert.equal(acceptsSnapshot({ id: "s1", turn_id: 3, events: [1, 2] }, { id: "s1", turn_id: 3, events: [1, 2] }), true);
 });
 
 test("provider errors are selected from the active failed turn only", () => {
@@ -59,6 +64,14 @@ test("accessible transcript includes reasoning and tool arguments without system
   ] });
   assert.deepEqual(messages.map((item) => item.label), ["You", "Reasoning", "Assistant", "Tool request · read_file", "Tool result"]);
   assert.equal(messages.some((item) => item.text === "hidden"), false);
+});
+
+test("accessible transcript labels provisional reasoning and partial answer explicitly", () => {
+  const rows = displayMessages({ messages: [
+    { role: "assistant", content: "kept text", reasoning: "working it out", provisional: true, stream_status: "partial" },
+    { role: "assistant", content: "final text", provisional: false },
+  ] });
+  assert.deepEqual(rows.map((item) => item.label), ["Reasoning · partial", "Assistant · partial", "Assistant"]);
 });
 
 test("Canvas leaf rejects a malformed frame before clearing an existing frame", () => {

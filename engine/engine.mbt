@@ -150,6 +150,73 @@ fn Engine::invoke_impl(
 }
 
 ///|
+/// Commit a bounded text/reasoning delta only while its exact LLM effect is
+/// current. Provisional content is durable but excluded from model context.
+pub fn Engine::project_stream(
+  self : Engine,
+  effect_id : String,
+  content : String,
+  reasoning : String,
+) -> Result[Json, String] {
+  let candidate = self.copy_state()
+  match candidate.project_stream_impl(effect_id, content, reasoning) {
+    Err(error) => Err(error)
+    Ok(value) => {
+      if !candidate.within_capacity() {
+        return Err(CAPACITY_ERROR)
+      }
+      self.adopt(candidate)
+      Ok(value)
+    }
+  }
+}
+
+///|
+fn Engine::project_stream_impl(
+  self : Engine,
+  effect_id : String,
+  content : String,
+  reasoning : String,
+) -> Result[Json, String] {
+  try {
+    let effect = match self.effects.get(effect_id) {
+      Some(effect) => effect
+      None => raise Invalid("Unknown or settled stream effect")
+    }
+    let session = self.lookup(effect.session_id)
+    if session.imported ||
+      session.status != Running ||
+      session.active_effect != Some(effect_id) ||
+      session.active_kind != Some(Llm) ||
+      session.turn_id != effect.turn_id ||
+      session.step != effect.step ||
+      !session.open_step {
+      raise Invalid("Stale or misplaced stream delta")
+    }
+    if content.is_empty() && reasoning.is_empty() {
+      raise Invalid("Stream delta must contain text or reasoning")
+    }
+    if content.length() + reasoning.length() > STREAM_DELTA_CAPACITY {
+      raise Invalid("Stream delta batch exceeds its 4096-character limit")
+    }
+    if session.events.length() + session.max_steps * 112 + 16 > 32768 {
+      raise Invalid("Session event limit reached; create a new session")
+    }
+    session.append(
+      "assistant/stream_delta",
+      object([
+        ("effect_id", Json::string(effect_id)),
+        ("content", Json::string(content)),
+        ("reasoning", Json::string(reasoning)),
+      ]),
+    )
+    Ok(session.json())
+  } catch {
+    Invalid(message) => Err(message)
+  }
+}
+
+///|
 fn Engine::lookup(self : Engine, id : String) -> Session raise EngineError {
   match self.sessions.get(id) {
     Some(session) => session
@@ -234,6 +301,129 @@ fn Session::messages(self : Session) -> Array[Json] {
   if self.imported {
     return imported_messages(self.events)
   }
+  let finalized : Map[String, Bool] = Map([])
+  let failed_streams : Map[String, Bool] = Map([])
+  for event in self.events {
+    let key = "\{event.turn_id}/\{event.step}"
+    if event.kind == "assistant/message" {
+      finalized.set(key, true)
+    } else if event.kind == "assistant/attempt" {
+      failed_streams.set(key, true)
+    }
+  }
+  let provisional : Map[String, Json] = Map([])
+  let provisional_content : Map[String, StringBuilder] = Map([])
+  let provisional_reasoning : Map[String, StringBuilder] = Map([])
+  let result : Array[Json] = []
+  for event in self.events {
+    match event.kind {
+      "user/message" | "tool/result" => result.push(detached(event.data))
+      "assistant/message" =>
+        match event.data {
+          Json::Object(data) =>
+            match data.get("message") {
+              Some(message) => result.push(detached(message))
+              None => ()
+            }
+          _ => ()
+        }
+      "assistant/stream_delta" => {
+        let key = "\{event.turn_id}/\{event.step}"
+        if finalized.get(key) is Some(_) {
+          continue
+        }
+        match provisional.get(key) {
+          Some(_) => ()
+          None => {
+            let values = Map::from_array([
+              ("role", Json::string("assistant")),
+              ("content", Json::string("")),
+              ("provisional", boolean(true)),
+              (
+                "stream_status",
+                Json::string(
+                  if failed_streams.get(key) is Some(_) {
+                    "partial"
+                  } else {
+                    "writing"
+                  },
+                ),
+              ),
+              ("turn_id", integer(event.turn_id)),
+              ("step", integer(event.step)),
+            ])
+            let message = Json::object(values)
+            provisional.set(key, message)
+            result.push(message)
+          }
+        }
+        let (content, reasoning) = match event.data {
+          Json::Object(data) =>
+            (
+              match data.get("content") {
+                Some(Json::String(value)) => value
+                _ => ""
+              },
+              match data.get("reasoning") {
+                Some(Json::String(value)) => value
+                _ => ""
+              },
+            )
+          _ => ("", "")
+        }
+        if !content.is_empty() {
+          let builder = match provisional_content.get(key) {
+            Some(builder) => builder
+            None => {
+              let builder = StringBuilder()
+              provisional_content.set(key, builder)
+              builder
+            }
+          }
+          builder.write_string(content)
+        }
+        if !reasoning.is_empty() {
+          let builder = match provisional_reasoning.get(key) {
+            Some(builder) => builder
+            None => {
+              let builder = StringBuilder()
+              provisional_reasoning.set(key, builder)
+              builder
+            }
+          }
+          builder.write_string(reasoning)
+        }
+      }
+      _ => ()
+    }
+  }
+  for key, message in provisional {
+    match message {
+      Json::Object(values) => {
+        match provisional_content.get(key) {
+          Some(builder) =>
+            values.set("content", Json::string(builder.to_string()))
+          None => ()
+        }
+        match provisional_reasoning.get(key) {
+          Some(builder) =>
+            values.set("reasoning", Json::string(builder.to_string()))
+          None => ()
+        }
+      }
+      _ => ()
+    }
+  }
+  result
+}
+
+///|
+/// Build only completed conversational context. Provisional stream rows are
+/// transcript diagnostics until a final assistant/message replaces them.
+fn Session::model_messages(self : Session) -> Array[Json] {
+  if self.imported {
+    return imported_messages(self.events)
+  }
   self.events.filter_map(event => {
     match event.kind {
       "user/message" | "tool/result" => Some(detached(event.data))
@@ -245,6 +435,59 @@ fn Session::messages(self : Session) -> Array[Json] {
       _ => None
     }
   })
+}
+
+///|
+fn Session::stream_revision(self : Session) -> Int {
+  let mut result = 0
+  for event in self.events {
+    if event.kind == "assistant/stream_delta" {
+      match event.data {
+        Json::Object(data) => {
+          match data.get("content") {
+            Some(Json::String(text)) => result += text.length()
+            _ => ()
+          }
+          match data.get("reasoning") {
+            Some(Json::String(text)) => result += text.length()
+            _ => ()
+          }
+        }
+        _ => ()
+      }
+    }
+  }
+  result
+}
+
+///|
+fn Session::stream_projection(
+  self : Session,
+  effect_id : String,
+) -> (Bool, String, String) {
+  let content = StringBuilder()
+  let reasoning = StringBuilder()
+  let mut found = false
+  for event in self.events {
+    if event.kind != "assistant/stream_delta" {
+      continue
+    }
+    match event.data {
+      Json::Object(data) if data.get("effect_id") == Some(effect_id.to_json()) => {
+        found = true
+        match data.get("content") {
+          Some(Json::String(text)) => content.write_string(text)
+          _ => ()
+        }
+        match data.get("reasoning") {
+          Some(Json::String(text)) => reasoning.write_string(text)
+          _ => ()
+        }
+      }
+      _ => ()
+    }
+  }
+  (found, content.to_string(), reasoning.to_string())
 }
 
 ///|
@@ -271,6 +514,16 @@ fn Session::json(self : Session) -> Json {
     ("events", Json::array(self.events.map(Event::json))),
     ("messages", Json::array(self.messages())),
   ])
+  if self.imported {
+    value.set("source_format", Json::string("deepseek-session-v4"))
+    value.set(
+      "pending_tool_calls",
+      Json::array(imported_pending_calls(self.events)),
+    )
+    value.set("pending_inbox", imported_pending_inbox(self.events))
+  } else {
+    value.set("stream_revision", integer(self.stream_revision()))
+  }
   match self.approval {
     Some(approval) =>
       value.set(
@@ -282,14 +535,6 @@ fn Session::json(self : Session) -> Json {
         ]),
       )
     None => ()
-  }
-  if self.imported {
-    value.set("source_format", Json::string("deepseek-session-v4"))
-    value.set(
-      "pending_tool_calls",
-      Json::array(imported_pending_calls(self.events)),
-    )
-    value.set("pending_inbox", imported_pending_inbox(self.events))
   }
   Json::object(value)
 }
@@ -350,7 +595,7 @@ fn Engine::start_step(self : Engine, session : Session) -> Unit {
     Llm,
     object([
       ("system", Json::string(session.system_prompt)),
-      ("messages", Json::array(session.messages())),
+      ("messages", Json::array(session.model_messages())),
       ("tools", Json::array(self.tools.map(Tool::json))),
     ]),
   )
@@ -592,6 +837,16 @@ fn Engine::complete_impl(
       match effect.kind {
         Llm => {
           let completion = parse_llm_completion(result)
+          let (projected, content, reasoning) = session.stream_projection(
+            effect_id,
+          )
+          if projected &&
+            (
+              completion.content != content ||
+              completion.reasoning.unwrap_or("") != reasoning
+            ) {
+            raise Invalid("Provider completion differs from projected stream")
+          }
           for call in completion.calls {
             if session.used_calls.get(call.id) is Some(_) {
               raise Invalid("Duplicate tool call id: \{call.id}")

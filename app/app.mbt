@@ -129,6 +129,25 @@ pub fn complete(id : String, raw : String) -> String {
 }
 
 ///|
+#export_name("stream_project")
+pub fn stream_project(
+  id : String,
+  content : String,
+  reasoning : String,
+) -> String {
+  let prefix = incarnation.val.to_string() + ":"
+  let internal_id = match id.strip_prefix(prefix) {
+    None =>
+      return response(Err("stream belongs to a different application lifetime"))
+    Some(value) => value.to_owned()
+  }
+  match active() {
+    Ok(api) => response(api.project_stream(internal_id, content, reasoning))
+    Err(error) => response(Err(error))
+  }
+}
+
+///|
 #export_name("snapshot")
 pub fn snapshot() -> String {
   match active() {
@@ -210,11 +229,17 @@ pub fn stream_feed(handle : Int, chunk : String) -> String {
     Some(stream) =>
       match stream.feed(chunk) {
         Ok(_) => response(Ok(true))
-        Err(error) => {
-          streams.remove(handle)
-          response(Err(error))
-        }
+        Err(error) => response(Err(error))
       }
+  }
+}
+
+///|
+#export_name("stream_take_deltas")
+pub fn stream_take_deltas(handle : Int) -> String {
+  match streams.get(handle) {
+    None => response(Err("unknown stream handle"))
+    Some(stream) => response(Ok(Json::array(stream.take_deltas())))
   }
 }
 
