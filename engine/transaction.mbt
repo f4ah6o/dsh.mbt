@@ -14,6 +14,7 @@ fn Session::copy_state(self : Session) -> Session {
     title: self.title,
     system_prompt: self.system_prompt,
     max_steps: self.max_steps,
+    imported: self.imported,
     status: self.status,
     turn_id: self.turn_id,
     step: self.step,

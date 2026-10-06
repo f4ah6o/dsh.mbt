@@ -28,6 +28,10 @@ test('CLI options preserve explicit provider and approval policy', () => {
   assert.throws(() => parseCLI(['run'], {}), /requires a prompt/);
   assert.throws(() => parseCLI(['--port'], {}), /Missing value/);
   assert.throws(() => parseCLI(['--unknown'], {}), /Unknown option/);
+  const importer = parseCLI(['import-session', '/tmp/session.v4.jsonl', '--json'], {});
+  assert.equal(importer.sessionPath, '/tmp/session.v4.jsonl');
+  assert.equal(importer.options.json, true);
+  assert.throws(() => parseCLI(['import-session'], {}), /requires one Session v4 JSONL path/);
 });
 
 test('stdio MCP separates lines, handles UTF-8 chunks and emits no notification bytes', async () => {
@@ -72,4 +76,52 @@ test('CLI offline run completes the real tool turn and leaves no live host lock'
   await assert.rejects(fs.stat(path.join(workspace, '.dsh.mbt/host.lock')), { code: 'ENOENT' });
   const saved = JSON.parse(await fs.readFile(path.join(workspace, '.dsh.mbt/sessions.json'), 'utf8'));
   assert.equal(saved.sessions[0].status, 'completed');
+});
+
+test('CLI Session v4 import creates a read-only history without provider or tool I/O', async (t) => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cli-v4-'));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  const archive = path.join(repository, 'tests/fixtures/upstream-tool-call-turn/session.v4.jsonl');
+  const { stdout, stderr } = await execute(process.execPath, [
+    'host/cli.mjs', 'import-session', archive, '--workspace', workspace, '--json',
+  ], { cwd: repository, timeout: 15_000, env: process.env });
+  const imported = JSON.parse(stdout);
+  assert.equal(imported.source_format, 'deepseek-session-v4');
+  assert.equal(imported.status, 'completed');
+  assert.ok(stderr.length === 0);
+  const saved = JSON.parse(await fs.readFile(path.join(workspace, '.dsh.mbt/sessions.json'), 'utf8'));
+  assert.equal(saved.sessions.length, 1);
+  assert.equal(saved.sessions[0].source_format, 'deepseek-session-v4');
+  assert.equal(saved.sessions[0].messages.at(-1).content, 'DONE');
+  await assert.rejects(fs.stat(path.join(workspace, '.dsh.mbt/host.lock')), { code: 'ENOENT' });
+});
+
+test('CLI Session v4 import rejects oversized files before reading them into the importer', async (t) => {
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cli-v4-large-'));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  const archive = path.join(workspace, 'too-large.jsonl');
+  await fs.writeFile(archive, Buffer.alloc(1024 * 1024 + 1));
+  await assert.rejects(
+    execute(process.execPath, ['host/cli.mjs', 'import-session', archive, '--workspace', workspace], {
+      cwd: repository,
+      timeout: 15_000,
+      env: process.env,
+    }),
+    (error) => /Session v4 archive exceeds the 1 MiB CLI file limit/.test(error.stderr),
+  );
+});
+
+test('CLI Session v4 import rejects FIFOs without blocking or retaining the host lock', async (t) => {
+  if (process.platform === 'win32') return t.skip('POSIX named pipe behavior');
+  const workspace = await fs.mkdtemp(path.join(os.tmpdir(), 'dsh-cli-v4-fifo-'));
+  t.after(() => fs.rm(workspace, { recursive: true, force: true }));
+  const archive = path.join(workspace, 'archive.jsonl');
+  await execute('mkfifo', [archive]);
+  await assert.rejects(
+    execute(process.execPath, [
+      'host/cli.mjs', 'import-session', archive, '--demo', '--workspace', workspace,
+    ], { cwd: repository, timeout: 5_000, env: process.env }),
+    (error) => /regular file/.test(error.stderr) && error.killed !== true,
+  );
+  await assert.rejects(fs.stat(path.join(workspace, '.dsh.mbt/host.lock')), { code: 'ENOENT' });
 });

@@ -142,6 +142,9 @@ fn restore_session(
   effect_ids : Map[String, Bool],
   next_effect : Int,
 ) -> Session raise EngineError {
+  if json_field(value, "source_format") == Some("deepseek-session-v4".to_json()) {
+    return restore_imported_session(value)
+  }
   if value.stringify().length() > SESSION_CAPACITY {
     raise Invalid("Snapshot session exceeds the 262144-character capacity")
   }

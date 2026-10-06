@@ -64,6 +64,7 @@ fn operation_schema(operation : String) -> @capability.Schema raise InitError {
         field("system_prompt", string, false),
         field("max_steps", @capability.Schema::int(), false),
       ]
+    "session_import" => [field("jsonl", string, true)]
     "session_get" | "session_cancel" => [session]
     "session_send" => [session, field("prompt", string, true)]
     "tool_approve" =>
@@ -160,6 +161,10 @@ fn create_api() -> HarnessApi raise InitError {
       (
         "session_list", "List sessions", "Read the current sessions and their execution states.",
         true,
+      ),
+      (
+        "session_import", "Import Session v4", "Validate and import a DeepSeek Session v4 JSONL archive as a read-only history. Import never replays external effects.",
+        false,
       ),
       (
         "session_get", "Read session", "Read a session, its transcript, events, and pending tool approval.",
