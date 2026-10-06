@@ -2,7 +2,7 @@
 
 状態: open。最初の browser / CLI 実行経路は [移植状況](../../docs/port-status.md) を参照。
 Model: gpt-6-luna
-Updated: 2026-10-06
+Updated: 2026-10-07
 upstream baseline は `5badb15009ae1756c3afe0ae0cef1faafc290ccc`。
 
 ## 1. Session v4 と replay
@@ -14,9 +14,11 @@ upstream JSONL を version ごとに厳密に decode し、イベントの意味
 元の raw lines を保持した read-only projection を作る。対応 event / 拒否する event は
 [移植状況](../../docs/port-status.md) に記載する。2026-10-06 の increment では developer tool/header 更新、
 current-position surface replacement、限定的な compaction checkpoint / pruning、診断用 assistant attempt を追加した。
-25 upstream v4 snapshots の独立 smoke では 17 を import・reopen でき、残る 8 は未対応 event のため拒否する。
-通常の v1 restore は維持し、import history は再開しない。v0–v3 migration、v4 writer、全 snapshot catalog 互換は
-引き続き本 issue の対象。
+2026-10-07 の increment では unmodified upstream catalog 25 件すべてを fixture と regression に追加し、import / reopen
+後の raw source、transcript と call correlation を確認する。追加した image reference、skill provenance、mod append、
+PTC / subagent / foreground workflow lifecycle は inert projection metadata に限り、background workflow、実行、nested fork、
+spill/offload、retry scheduling lifecycle は引き続き拒否または未実装。通常の v1 restore は維持し、import history は
+再開しない。v0–v3 migration、v4 writer、catalog 外の全 event semantics は引き続き本 issue の対象。
 
 受入条件:
 

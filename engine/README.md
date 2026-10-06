@@ -97,14 +97,19 @@ within the application's snapshot and API transport limits.
 subset. It retains the v4 header and raw source lines inside the v1 snapshot,
 projects basic messages/tool lifecycles, inbox splices, first-level fork
 closures, selected developer/header updates, current-surface replacements,
-compaction checkpoints/pruning, and diagnostic assistant attempts, then
-re-decodes the source during every restore. The imported state is read-only:
-sending and canceling are rejected, the browser disables its composer, and no
-provider, tool, permission preset, or approval policy is activated. Attachments,
-skills/provenance, spill, images, retry scheduling lifecycle, PTC/subagent
-workflows, and nested forks still fail import explicitly. Engine JSONL input is
-capped at 262,144 UTF-16 code units; the CLI additionally caps source files at
-1 MiB.
+compaction checkpoints/pruning, diagnostic assistant attempts, skill catalog
+provenance, unresolved image references, and correlated PTC/subagent/foreground
+workflow metadata, then re-decodes the source during every restore. Image data
+is absent from JSONL and remains an inert placeholder; background workflow
+events and unsupported attachment fields remain outside the accepted subset.
+The imported state is read-only: sending and canceling are rejected, the browser
+disables its composer, and no provider, tool, permission preset, or approval
+policy is activated. Spill/offload, retry scheduling lifecycle, unsupported
+execution-family events, and nested forks still fail import explicitly. Engine
+JSONL input is capped at 262,144 UTF-16 code units; the CLI additionally caps
+source files at 1 MiB. The checked-in integration catalog imports and reopens all
+25 unmodified upstream Session v4 snapshots; this does not imply runtime feature
+parity.
 Restore also recognizes an exact older transcript projection for archives in
 the original append-only subset, then stores the current canonical projection.
 Any partial, reordered, or otherwise modified projection remains an error.

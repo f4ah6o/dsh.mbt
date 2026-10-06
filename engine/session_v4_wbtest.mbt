@@ -13,6 +13,40 @@ fn session_v4_portable_fixture() -> String {
 }
 
 ///|
+fn session_v4_metadata_fixture() -> String {
+  "{\"type\":\"session\",\"version\":4,\"id\":\"metadata-fixture\",\"createdAt\":1,\"isSeeded\":false,\"delegationDepth\":0}\n" +
+  "{\"type\":\"turn/start\",\"data\":{\"turn\":1}}\n" +
+  "{\"type\":\"step/start\",\"data\":{\"turn\":1,\"step\":1}}\n" +
+  "{\"type\":\"user/message\",\"data\":{\"role\":\"user\",\"id\":\"user-1\",\"source\":{\"kind\":\"user\"},\"content\":[{\"type\":\"text\",\"text\":\"inspect inert metadata\"}]},\"surfaceOp\":\"append\"}\n" +
+  "{\"type\":\"request/header\",\"data\":{\"reason\":\"initial\",\"header\":{\"config\":{\"provider\":\"fixture\",\"model\":\"fixture-model\"}}}}\n" +
+  "{\"type\":\"request/context\",\"data\":{\"provider\":\"fixture\",\"model\":\"fixture-model\"}}\n" +
+  "{\"type\":\"assistant/message\",\"data\":{\"turn\":1,\"step\":1,\"message\":{\"role\":\"assistant\",\"id\":\"assistant-ptc\",\"source\":{\"kind\":\"model\",\"provider\":\"fixture\",\"model\":\"fixture-model\"},\"content\":[{\"type\":\"tool-call\",\"id\":\"root-call\",\"name\":\"run_code\",\"arguments\":\"{}\"}]}},\"surfaceOp\":\"append\"}\n" +
+  "{\"type\":\"tool/call\",\"data\":{\"turn\":1,\"step\":1,\"callId\":\"root-call\",\"name\":\"run_code\",\"arguments\":\"{}\"}}\n" +
+  "{\"type\":\"tool/ptc-dispatch-start\",\"data\":{\"rootCallId\":\"root-call\",\"parentCallId\":\"root-call\",\"subCallId\":\"nested-call\",\"name\":\"read\",\"arguments\":{\"path\":\"note.txt\"}}}\n" +
+  "{\"type\":\"tool/ptc-dispatch\",\"data\":{\"rootCallId\":\"root-call\",\"parentCallId\":\"root-call\",\"subCallId\":\"nested-call\",\"name\":\"read\",\"arguments\":{\"path\":\"note.txt\"},\"isError\":false,\"content\":[{\"type\":\"text\",\"text\":\"nested result\"}]}}\n" +
+  "{\"type\":\"tool/result\",\"data\":{\"turn\":1,\"step\":1,\"message\":{\"role\":\"tool\",\"id\":\"result-ptc\",\"source\":{\"kind\":\"tool\",\"callId\":\"root-call\"},\"toolCallId\":\"root-call\",\"isError\":false,\"content\":[{\"type\":\"text\",\"text\":\"outer result\"},{\"type\":\"image\",\"attachment\":{\"attachmentId\":\"opaque-image-id\",\"mediaType\":\"image/png\",\"width\":1,\"height\":2,\"bytes\":8}}]}},\"surfaceOp\":\"append\"}\n" +
+  "{\"type\":\"step/end\",\"data\":{\"turn\":1,\"step\":1}}\n" +
+  "{\"type\":\"step/start\",\"data\":{\"turn\":1,\"step\":2}}\n" +
+  "{\"type\":\"request/header\",\"data\":{\"reason\":\"resume\",\"header\":{\"config\":{\"provider\":\"fixture\",\"model\":\"fixture-model\"}}}}\n" +
+  "{\"type\":\"request/context\",\"data\":{\"provider\":\"fixture\",\"model\":\"fixture-model\"}}\n" +
+  "{\"type\":\"assistant/message\",\"data\":{\"turn\":1,\"step\":2,\"message\":{\"role\":\"assistant\",\"id\":\"assistant-workflow\",\"source\":{\"kind\":\"model\",\"provider\":\"fixture\",\"model\":\"fixture-model\"},\"content\":[{\"type\":\"tool-call\",\"id\":\"workflow-call\",\"name\":\"workflow\",\"arguments\":\"{\\\"meta\\\":{\\\"name\\\":\\\"sample workflow\\\"}}\"}]}},\"surfaceOp\":\"append\"}\n" +
+  "{\"type\":\"tool/call\",\"data\":{\"turn\":1,\"step\":2,\"callId\":\"workflow-call\",\"name\":\"workflow\",\"arguments\":\"{\\\"meta\\\":{\\\"name\\\":\\\"sample workflow\\\"}}\"}}\n" +
+  "{\"type\":\"tool-workflow/run-start\",\"data\":{\"runId\":\"workflow-run\",\"name\":\"sample workflow\"}}\n" +
+  "{\"type\":\"subagent/catalog\",\"data\":{\"version\":0,\"childId\":\"child-session\",\"childCreatedAt\":2,\"mode\":\"one-shot\"}}\n" +
+  "{\"type\":\"tool-workflow/agent-start\",\"data\":{\"runId\":\"workflow-run\",\"seq\":1,\"label\":\"worker\",\"childId\":\"child-session\"}}\n" +
+  "{\"type\":\"tool-workflow/agent-end\",\"data\":{\"runId\":\"workflow-run\",\"seq\":1,\"outcome\":\"completed\"}}\n" +
+  "{\"type\":\"tool-workflow/run-end\",\"data\":{\"runId\":\"workflow-run\",\"stopReason\":\"completed\"}}\n" +
+  "{\"type\":\"tool/result\",\"data\":{\"turn\":1,\"step\":2,\"message\":{\"role\":\"tool\",\"id\":\"result-workflow\",\"source\":{\"kind\":\"tool\",\"callId\":\"workflow-call\"},\"toolCallId\":\"workflow-call\",\"isError\":false,\"content\":[{\"type\":\"text\",\"text\":\"workflow result\"}]}},\"surfaceOp\":\"append\"}\n" +
+  "{\"type\":\"step/end\",\"data\":{\"turn\":1,\"step\":2}}\n" +
+  "{\"type\":\"step/start\",\"data\":{\"turn\":1,\"step\":3}}\n" +
+  "{\"type\":\"request/header\",\"data\":{\"reason\":\"resume\",\"header\":{\"config\":{\"provider\":\"fixture\",\"model\":\"fixture-model\"}}}}\n" +
+  "{\"type\":\"request/context\",\"data\":{\"provider\":\"fixture\",\"model\":\"fixture-model\"}}\n" +
+  "{\"type\":\"assistant/message\",\"data\":{\"turn\":1,\"step\":3,\"message\":{\"role\":\"assistant\",\"id\":\"assistant-final\",\"source\":{\"kind\":\"model\",\"provider\":\"fixture\",\"model\":\"fixture-model\"},\"content\":[{\"type\":\"text\",\"text\":\"done\"}]}},\"surfaceOp\":\"append\"}\n" +
+  "{\"type\":\"step/end\",\"data\":{\"turn\":1,\"step\":3}}\n" +
+  "{\"type\":\"turn/end\",\"data\":{\"turn\":1,\"reason\":{\"kind\":\"completed\"}}}"
+}
+
+///|
 test "Session v4 import is inert, read-only, atomic, and restorable" {
   let engine = Engine::new(test_tools())
   let imported = success(
@@ -130,6 +164,51 @@ test "Session v4 import is inert, read-only, atomic, and restorable" {
   assert_eq(untouched.snapshot(), empty)
   assert_true(untouched.restore(forged) is Err(_))
   assert_eq(untouched.snapshot(), empty)
+}
+
+///|
+test "Session v4 catalog metadata and unresolved image references remain inert" {
+  let engine = Engine::new(test_tools())
+  let imported = success(
+    engine.invoke(
+      "session_import",
+      object([("jsonl", Json::string(session_v4_metadata_fixture()))]),
+    ),
+  )
+  assert_eq(get_status(imported), "completed")
+  let messages = array_value(
+    required_field(imported, "messages"),
+    "messages",
+    16,
+  )
+  assert_eq(messages.length(), 6)
+  assert_true(
+    required_string(messages[2], "content").contains(
+      "[unresolved image attachment opaque-image-id (image/png, 1x2, 8 bytes; image data is not present in JSONL)]",
+    ),
+  )
+  let events = array_value(required_field(imported, "events"), "events", 64)
+  let mut ptc_starts = 0
+  for event in events {
+    if required_string(event, "type", max=64) == "upstream/event" {
+      let record = required_field(required_field(event, "data"), "record")
+      if required_string(record, "type", max=128) == "tool/ptc-dispatch-start" {
+        ptc_starts += 1
+      }
+    }
+  }
+  assert_eq(ptc_starts, 1)
+  assert_true(engine.take_effects().is_empty())
+
+  let restored = Engine::new(test_tools())
+  assert_true(restored.restore(engine.snapshot()) is Ok(_))
+  assert_eq(
+    success(
+      restored.invoke("session_get", fixture("{\"session_id\":\"session-1\"}")),
+    ),
+    imported,
+  )
+  assert_true(restored.take_effects().is_empty())
 }
 
 ///|

@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+  "path": "snapshots/session/windows-acl-skill/session.v4.jsonl",
+  "sha256": "d8e0bbae23227daac42fd28cb0c88ba1a2ebe7522b27aef905ae2d4084e33218",
+  "license": "MIT, Copyright (c) 2026 DeepSeek",
+  "note": "Unmodified upstream Session v4 snapshot fixture. Its snapshot shorthand omits physical seq/time envelope fields."
+}

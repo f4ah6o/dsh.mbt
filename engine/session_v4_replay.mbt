@@ -114,6 +114,7 @@ fn replay_v4_event(
         )
       }
       require_v4_calls_settled(replay, replay.turn, replay.step)
+      require_v4_metadata_settled(replay)
       replay.open_step = false
     }
     "turn/end" => {
@@ -154,6 +155,7 @@ fn replay_v4_event(
         archive_v4_inbox_claims(replay.inbox)
       }
       require_v4_calls_settled(replay, replay.turn, replay.step)
+      require_v4_metadata_settled(replay)
       if replay.fork_closing && end_kind != "forked" {
         raise Invalid(
           "Session v4 fork closure must end with reason.kind=forked",
@@ -325,6 +327,8 @@ fn replay_v4_event(
             }
           }
         }
+        require_v4_ptc_root_settled(replay, id)
+        require_v4_workflow_owner_settled(replay, id)
         call.settled = true
       }
       let content = project_v4_content(
@@ -363,6 +367,7 @@ fn replay_v4_event(
         match source_kind {
           "user" => replay.admitted_prompt = true
           "runtime-context" | "repeat-tool-reminder" => ()
+          "skill-catalog" => validate_v4_skill_catalog_source(source)
           _ => raise Invalid("Unsupported Session v4 user message provenance")
         }
       }
@@ -488,6 +493,14 @@ fn replay_v4_event(
     | "compaction/prune"
     | "compaction/end" =>
       replay_v4_compaction(replay, record, kind, data, source_seq, line_number)
+    "subagent/catalog"
+    | "tool/ptc-dispatch"
+    | "tool/ptc-dispatch-start"
+    | "tool-workflow/agent-end"
+    | "tool-workflow/agent-start"
+    | "tool-workflow/run-end"
+    | "tool-workflow/run-start" =>
+      replay_v4_metadata(replay, kind, data, line_number)
     _ =>
       // Metadata and extension rows remain verbatim in the source archive.
       // An explicitly ignorable unknown row has no reconstruction semantics.
@@ -569,6 +582,7 @@ fn validate_v4_message_source(
     | ("user", "runtime-context")
     | ("user", "repeat-tool-reminder")
     | ("user", "compact-checkpoint") => ()
+    ("user", "skill-catalog") => validate_v4_skill_catalog_source(source)
     ("system", "system-prompt") => ()
     ("developer", "tool-registry") => ()
     ("assistant", "model") =>

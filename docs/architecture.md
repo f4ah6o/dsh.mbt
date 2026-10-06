@@ -65,7 +65,10 @@ checkpoint に失敗した場合は新しい外部作用を続行せず、host �
 Session v4 JSONL を厳密に読み取り、header と各 raw source line をこの snapshot の中に保持します。
 Session v4 の自動 restore migration や v4 writer はありません。read-only importer は basic message/tool lifecycle、
 inbox splice と第一階層 fork に加え、限定的な developer/header 更新、current-surface replacement、compaction
-checkpoint/pruning、診断用 assistant attempt を扱います。live compaction や retry scheduling は実装しません。
+checkpoint/pruning、診断用 assistant attempt、inert skill/image references、correlated PTC/subagent/foreground-workflow
+history を扱います。image bytes は解決せず placeholder を表示し、workflow background mode は拒否します。
+live compaction、retry scheduling、tool/subagent/workflow execution は実装しません。2026-10-07 の catalog regression は
+unmodified upstream snapshot 25 件すべての import / reopen、transcript/correlation、effect がないことを検証します。
 詳細な受理範囲と拒否条件は
 [移植状況](port-status.md) を参照してください。全 session の event log と派生
 messages を、単一 writer の atomic snapshot として保存します。一時ファイル、fsync、rename を使い、

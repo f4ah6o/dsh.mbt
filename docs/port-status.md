@@ -19,9 +19,9 @@ MoonBit で agent の基本実行経路を動かす最初の移植です。
 | `api`, `sdk/protocol`, `typert` | `api/`, `app/`, `host/server.mjs` | gpui typed capability / GUI binding / MCP で置換。upstream API / SDK wire compatibility は提供しない。 |
 | `boot/plugin-manager`, `extensions/cordis-*` | `plugins/` | MoonBit startup descriptor の依存・重複・tool 所有権を実装済み。npm / Cordis ABI、runtime code loading、HMR は未実装。 |
 | `session/session-telemetry*`, inspector | `api/` + hotpath | API 呼出し時間の集計を実装済み。OpenTelemetry、CPU / allocation sampling は未実装。 |
-| `test-support/session-snapshot`, `test-support/llm-replay` | `tests/fixtures/`, `tests/integration/` | upstream tool-call-turn fixture の provenance を保持し、実 tool と完了応答を再現。Session v4 catalog の 25 snapshot 中 17 は独立 smoke で import / reopen を確認し、残り 8 は各 archive の未対応 semantics により fail closed。 |
-| `compaction`, `spill`, `attachment`, `context` | `engine/` の read-only v4 projection | v4 importer は compaction summary/checkpoint と tool result pruning の一部を現在の transcript surface に反映。live context compaction、長い会話の継続、spill、attachment block は未実装。 |
-| `subagent`, `goal`, `plan`, `workflow`, `jobs`, `schedule`, `todo` | — | 未実装。 |
+| `test-support/session-snapshot`, `test-support/llm-replay` | `tests/fixtures/`, `tests/integration/` | upstream tool-call-turn fixture の provenance を保持し、実 tool と完了応答を再現。固定 upstream Session v4 catalog の unmodified 25 snapshot は import / reopen、transcript、tool correlation を integration test で確認。 |
+| `compaction`, `spill`, `attachment`, `context` | `engine/` の read-only v4 projection | v4 importer は compaction summary/checkpoint と tool result pruning の一部を現在の transcript surface に反映し、画像参照を unresolved placeholder として表示。live context compaction、spill、attachment binary / preview は未実装。 |
+| `subagent`, `goal`, `plan`, `workflow`, `jobs`, `schedule`, `todo` | `engine/` の read-only v4 projection | 限定的な subagent catalog / foreground workflow lifecycle metadata の相関のみ対応。子 agent、workflow、job の実行や再開は未実装。その他の機能も未実装。 |
 | 外部 MCP client / ACP / hooks / LSP / skill loader | — | 未実装。gpui MCP server の公開とは別機能。 |
 | browser / computer use、SSH、account login、web search、office preview | — | 未実装。 |
 
@@ -59,16 +59,37 @@ tool object が必要です。upstream snapshot shorthand では名前配列を�
 content array が空の system / developer / assistant event は surface に残しますが、derived transcript message は作りません。
 明示的な空文字 text block がある message は、空文字 content の transcript message として投影します。
 
+2026-10-07 increment では、upstream catalog の unmodified 25 snapshot 全件を fixture として収録し、各 JSONL の
+repository / commit / source path / SHA-256 / license を `provenance.json` に記録しました。integration catalog は
+全件について raw source bytes、message source identity、tool-call/result correlation、pending tool がないこと、
+import と reopen 後の同一 transcript を検証します。provider / tool effect はどちらの段階も 0 件です。
+
+画像 block は JSONL にある opaque attachment ID、許可した media type (`image/png`, `image/jpeg`, `image/webp`,
+`image/gif`)、寸法、byte 数を unresolved reference placeholder として transcript に表示します。画像の binary は
+JSONL に含まれず取得もしません。現在の subset は attachment reference の `name` と `originalDimensions` を拒否します。
+`skill-catalog` source の `kind` / `form` と entries schema を検証します。entry の名前と説明は raw event と
+user transcript text にある内容をそのまま保持し、projected message の source metadata に複製しません。
+Claude Code mod admission は inbox が保持した元 message の identity / source / content を prefix として保ち、
+末尾への text block 追加だけを受け入れます。
+
+PTC dispatch start/result は root / parent / child ID、name、arguments を相関し、親または root result より前に
+子 dispatch が settle していることを検証します。`subagent/catalog` と foreground workflow run / agent lifecycle は
+inert metadata として相関します。workflow run name は未 settlement の owning `workflow` call の
+`arguments.meta.name` と一致する必要があり、その owner result は `run-end` の後でなければなりません。
+`run_in_background: true` の workflow lifecycle、live execution、子 session の restore / continuation はこの importer
+の対応範囲外です。画像取得、skill の実行、PTC / subagent / workflow の実行は行いません。
+
 EOF 時に未完了の tool call は
 `not_started` または `outcome_unknown` として表示し、結果を捏造しません。`ignorable: true` の未知 event は
 raw history に保持し、projection に意味を持たせません。turn 開始時に inbox から claim 済みでも
 model-visible user message にならなかった input は `pending_inbox.unadmitted_turn/step` に分離し、
 通常の pending queue に戻したり実行したりしません。
 
-attachment block、skill provenance、spill、画像、subagent / PTC workflow、nested fork、retry scheduling
-lifecycle など projection の意味を安全に復元できない event は、import 全体を明示的に拒否します。現在拒否する
-upstream catalog snapshot は `advanced-toolchain`、`advanced-toolchain-runtime`、`claude-code-mods`、
-`multimodal-spill-ends`、`office-skills`、`office-skills-no-renderer`、`skill-load`、`windows-acl-skill` です。
+spill / offload、unsupported attachment shape、background workflow、nested fork、retry scheduling lifecycle
+など projection の意味を安全に復元できない event は、import 全体を明示的に拒否します。未知の
+PTC / workflow / subagent / team execution-family event は `ignorable: true` があっても拒否します。
+unmodified catalog 25 snapshot はすべて受理しますが、これは全 Session v4 event や runtime feature parity を
+意味しません。
 制約は engine 側の 262,144 UTF-16 code unit 上限と CLI の 1 MiB file 上限にも従います。
 import history は画面上で read-only と表示され、prompt 送信と cancel を拒否します。これは決定的な履歴表示であり、
 agent loop の再開ではありません。記録された provider / tool / approval / permission preset を実行・有効化しません。

@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+  "path": "snapshots/session/persistent-pwsh-padded-completion/session.v4.jsonl",
+  "sha256": "49b242b3160f71c96f7bcd66792d27330d1b7fa3d6171cec25e009bd7d262df9",
+  "license": "MIT, Copyright (c) 2026 DeepSeek",
+  "note": "Unmodified upstream Session v4 snapshot fixture. Its snapshot shorthand omits physical seq/time envelope fields."
+}

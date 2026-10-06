@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+  "path": "snapshots/session/parallel-tool-calls/session.v4.jsonl",
+  "sha256": "c6d375780dc5aee93fafb54fad713e8a0dc560a5f924413824604a6cdbe5a157",
+  "license": "MIT, Copyright (c) 2026 DeepSeek",
+  "note": "Unmodified upstream Session v4 snapshot fixture. Its snapshot shorthand omits physical seq/time envelope fields."
+}

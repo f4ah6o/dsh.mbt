@@ -29,6 +29,35 @@ priv struct ImportedCompaction {
 }
 
 ///|
+priv struct ImportedPtcDispatch {
+  root_call_id : String
+  parent_call_id : String
+  name : String
+  arguments : Json
+  mut settled : Bool
+}
+
+///|
+priv struct ImportedWorkflowAgent {
+  child_id : String
+  mut settled : Bool
+}
+
+///|
+priv struct ImportedWorkflowRun {
+  owner_call_id : String
+  mut next_agent_seq : Int
+  agents : Map[Int, ImportedWorkflowAgent]
+  mut ended : Bool
+}
+
+///|
+priv struct ImportedSubagentCatalog {
+  workflow_run_id : String?
+  mut workflow_linked : Bool
+}
+
+///|
 priv struct V4Replay {
   mut turn : Int
   mut step : Int
@@ -55,6 +84,9 @@ priv struct V4Replay {
   message_ids : Map[String, Bool]
   calls : Map[String, ImportedCall]
   call_order : Array[String]
+  ptc_dispatches : Map[String, ImportedPtcDispatch]
+  workflow_runs : Map[String, ImportedWorkflowRun]
+  subagents : Map[String, ImportedSubagentCatalog]
   inbox : InboxReplay
 }
 

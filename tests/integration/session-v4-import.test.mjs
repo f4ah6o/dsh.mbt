@@ -16,6 +16,60 @@ const newlySupportedSnapshots = [
   'compaction-output-reserve',
   'compaction-summary-headroom',
 ];
+const upstreamCatalogSnapshots = [
+  'advanced-toolchain',
+  'advanced-toolchain-runtime',
+  'bash-same-mode-empty-justification',
+  'bash-spill',
+  'bash-tool-turn',
+  'claude-code-mods',
+  'compaction-output-reserve',
+  'compaction-summary-headroom',
+  'cordis-inspect-jsdoc',
+  'cordis-inspect-liveness',
+  'cordis-inspect-timeout',
+  'dynamic-tool-prompt-updates',
+  'dynamic-tool-updates',
+  'multimodal-spill-ends',
+  'multimodal-spill-middle',
+  'office-skills',
+  'office-skills-no-renderer',
+  'parallel-tool-calls',
+  'persistent-pwsh-padded-completion',
+  'plugin-manager',
+  'plugin-manager-mcp',
+  'session-query-spill',
+  'skill-load',
+  'tool-call-turn',
+  'windows-acl-skill',
+];
+const expectedCatalogShape = new Map([
+  ['advanced-toolchain', [14, 5, 5]],
+  ['advanced-toolchain-runtime', [12, 4, 4]],
+  ['bash-same-mode-empty-justification', [6, 1, 1]],
+  ['bash-spill', [6, 1, 1]],
+  ['bash-tool-turn', [6, 1, 1]],
+  ['claude-code-mods', [8, 2, 2]],
+  ['compaction-output-reserve', [5, 1, 1]],
+  ['compaction-summary-headroom', [5, 1, 1]],
+  ['cordis-inspect-jsdoc', [8, 2, 2]],
+  ['cordis-inspect-liveness', [11, 3, 3]],
+  ['cordis-inspect-timeout', [8, 2, 2]],
+  ['dynamic-tool-prompt-updates', [11, 2, 2]],
+  ['dynamic-tool-updates', [10, 2, 2]],
+  ['multimodal-spill-ends', [6, 1, 1]],
+  ['multimodal-spill-middle', [6, 1, 1]],
+  ['office-skills', [8, 2, 2]],
+  ['office-skills-no-renderer', [9, 3, 3]],
+  ['parallel-tool-calls', [7, 2, 2]],
+  ['persistent-pwsh-padded-completion', [8, 2, 2]],
+  ['plugin-manager', [8, 2, 2]],
+  ['plugin-manager-mcp', [9, 2, 2]],
+  ['session-query-spill', [8, 2, 2]],
+  ['skill-load', [7, 1, 1]],
+  ['tool-call-turn', [6, 1, 1]],
+  ['windows-acl-skill', [7, 1, 1]],
+]);
 
 function row(type, data, extra = {}) { return { type, data, ...extra }; }
 
@@ -26,6 +80,10 @@ function archive(header, events) {
 
 function snapshotArchive(header, events) {
   return [header, ...events].map((value) => JSON.stringify(value)).join('\n');
+}
+
+function encodeSnapshotRows(rows) {
+  return rows.map((value) => JSON.stringify(value)).join('\n');
 }
 
 function message(role, id, source, content, extra = {}) {
@@ -511,6 +569,125 @@ async function newHost(t, dataDir) {
   return { host, facade, close, fetchCalls: () => fetchCalls };
 }
 
+function assertCatalogTranscriptCorrelation(session, jsonl, name) {
+  const lines = jsonl.trimEnd().split('\n');
+  const sourceRows = lines.map((line) => JSON.parse(line));
+  const sourceEvents = session.events.filter((event) => event.type === 'upstream/event');
+  assert.equal(sourceEvents.length, sourceRows.length - 1, `${name} retains every source event`);
+  for (const [index, event] of sourceEvents.entries()) {
+    assert.equal(event.data.source_seq, index, `${name} source sequence`);
+    assert.equal(event.data.raw, lines[index + 1], `${name} raw source line ${index}`);
+    assert.deepEqual(event.data.record, sourceRows[index + 1], `${name} parsed source row ${index}`);
+  }
+
+  const sourceBySeq = new Map(sourceRows.slice(1).map((record, sourceSeq) => [sourceSeq, record]));
+  const projectedSeqs = new Set();
+  for (const message of session.messages) {
+    const source = sourceBySeq.get(message.source_event_seq);
+    assert.ok(source, `${name} transcript source sequence ${message.source_event_seq} exists`);
+    assert.ok(!projectedSeqs.has(message.source_event_seq), `${name} projects a surface row only once`);
+    projectedSeqs.add(message.source_event_seq);
+    const original = source.type === 'user/message' ? source.data : source.data.message;
+    assert.equal(message.role, original.role, `${name} preserves transcript role`);
+    assert.equal(message.source_message_id, original.id, `${name} preserves message identity`);
+  }
+
+  const advertised = new Map();
+  for (const row of sourceRows.slice(1)) {
+    if (row.type !== 'assistant/message') continue;
+    for (const block of row.data.message.content) {
+      if (block.type === 'tool-call') advertised.set(block.id, { name: block.name, arguments: block.arguments });
+    }
+  }
+  const started = new Map();
+  const settledCalls = new Set();
+  const ptc = new Map();
+  const workflowRuns = new Map();
+  const workflowAgents = new Map();
+  const subagentCatalog = new Set();
+  for (const [index, row] of sourceRows.slice(1).entries()) {
+    if (row.type === 'tool/call') {
+      const call = advertised.get(row.data.callId);
+      assert.deepEqual(call, { name: row.data.name, arguments: row.data.arguments }, `${name} tool/call correlation at ${index}`);
+      assert.ok(!started.has(row.data.callId), `${name} starts a tool call once`);
+      started.set(row.data.callId, row.data);
+    } else if (row.type === 'tool/result') {
+      const callId = row.data.message.toolCallId;
+      assert.ok(advertised.has(callId), `${name} tool result has an advertised assistant call`);
+      const call = started.get(callId);
+      assert.ok(call, `${name} tool result follows tool/call`);
+      assert.ok(!settledCalls.has(callId), `${name} tool call settles once`);
+      assert.equal(row.data.message.source.kind, 'tool', `${name} result source kind`);
+      assert.equal(row.data.message.source.callId, callId, `${name} result source call id`);
+      assert.equal(row.data.message.toolCallId, callId, `${name} result message call id`);
+      assert.equal(row.data.turn, call.turn, `${name} result turn`);
+      assert.equal(row.data.step, call.step, `${name} result step`);
+      for (const run of workflowRuns.values()) {
+        if (run.ownerCallId === callId) assert.ok(run.ended, `${name} foreground workflow ends before its tool result`);
+      }
+      settledCalls.add(callId);
+    } else if (row.type === 'tool/ptc-dispatch-start') {
+      assert.ok(!ptc.has(row.data.subCallId), `${name} PTC subcall starts once`);
+      assert.ok(started.has(row.data.rootCallId), `${name} PTC root call has started`);
+      assert.ok(!settledCalls.has(row.data.rootCallId), `${name} PTC root is still open`);
+      if (row.data.parentCallId !== row.data.rootCallId) {
+        const parent = ptc.get(row.data.parentCallId);
+        assert.ok(parent, `${name} PTC parent has started`);
+        assert.ok(!parent.settled, `${name} PTC parent remains open`);
+      }
+      ptc.set(row.data.subCallId, { ...row.data, settled: false });
+    } else if (row.type === 'tool/ptc-dispatch') {
+      const prior = ptc.get(row.data.subCallId);
+      assert.ok(prior, `${name} PTC result has a start`);
+      for (const key of ['rootCallId', 'parentCallId', 'name', 'arguments']) {
+        assert.deepEqual(row.data[key], prior[key], `${name} PTC result preserves ${key}`);
+      }
+      assert.ok(!settledCalls.has(row.data.rootCallId), `${name} PTC result has an open root`);
+      if (row.data.parentCallId !== row.data.rootCallId) {
+        const parent = ptc.get(row.data.parentCallId);
+        assert.ok(parent && !parent.settled, `${name} PTC result has an open parent`);
+      }
+      assert.ok(!prior.settled, `${name} PTC result settles once`);
+      for (const child of ptc.values()) {
+        if (child.parentCallId === row.data.subCallId) assert.ok(child.settled, `${name} PTC parent waits for children`);
+      }
+      prior.settled = true;
+    } else if (row.type === 'subagent/catalog') {
+      assert.ok(!subagentCatalog.has(row.data.childId), `${name} child catalog appears once`);
+      subagentCatalog.add(row.data.childId);
+    } else if (row.type === 'tool-workflow/run-start') {
+      assert.ok(!workflowRuns.has(row.data.runId), `${name} workflow run starts once`);
+      const owners = [...started.entries()].filter(([callId, call]) => call.name === 'workflow' && !settledCalls.has(callId));
+      assert.equal(owners.length, 1, `${name} workflow has one open owner call`);
+      const [ownerCallId, ownerCall] = owners[0];
+      assert.equal(JSON.parse(ownerCall.arguments).meta.name, row.data.name, `${name} workflow name matches owner meta`);
+      workflowRuns.set(row.data.runId, { ownerCallId, ended: false });
+    } else if (row.type === 'tool-workflow/agent-start') {
+      const run = workflowRuns.get(row.data.runId);
+      assert.ok(run && !run.ended, `${name} workflow agent belongs to an open run`);
+      const key = `${row.data.runId}:${row.data.seq}`;
+      assert.ok(!workflowAgents.has(key), `${name} workflow agent starts once`);
+      assert.ok(subagentCatalog.has(row.data.childId), `${name} workflow agent has catalog metadata`);
+      workflowAgents.set(key, row.data.runId);
+    } else if (row.type === 'tool-workflow/agent-end') {
+      const key = `${row.data.runId}:${row.data.seq}`;
+      assert.ok(workflowAgents.has(key), `${name} workflow agent result has a start`);
+      assert.equal(workflowAgents.get(key), row.data.runId, `${name} workflow agent result run id`);
+      workflowAgents.delete(key);
+    } else if (row.type === 'tool-workflow/run-end') {
+      const run = workflowRuns.get(row.data.runId);
+      assert.ok(run && !run.ended, `${name} workflow result has a unique start`);
+      assert.ok(![...workflowAgents.values()].includes(row.data.runId), `${name} workflow run waits for agents`);
+      run.ended = true;
+    }
+  }
+  assert.equal([...ptc.values()].filter((dispatch) => !dispatch.settled).length, 0, `${name} PTC dispatches settle`);
+  assert.equal([...workflowRuns.values()].filter((run) => !run.ended).length, 0, `${name} workflow runs settle`);
+  assert.equal(workflowAgents.size, 0, `${name} workflow agents settle`);
+  assert.equal(settledCalls.size, started.size, `${name} all started calls have one result`);
+  assert.equal(session.pending_tool_calls.length, 0, `${name} has no invented pending tool work`);
+}
+
 test('unmodified upstream snapshot imports as an inert read-only history and survives restore', async (t) => {
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'dsh-v4-restore-'));
   const dataDir = path.join(temporary, '.dsh.mbt');
@@ -659,6 +836,143 @@ test('new snapshot projections reject forged developer and compaction relationsh
   assert.equal(fetchCalls(), 0);
 });
 
+test('catalog projection rejects altered mod admissions and malformed inert metadata atomically', async (t) => {
+  const { host, fetchCalls } = await newHost(t);
+  const before = await host.call('session_list');
+  const claude = await readFile(
+    new URL('../fixtures/upstream-session-v4/claude-code-mods/session.v4.jsonl', import.meta.url),
+    'utf8',
+  );
+  const multimodal = await readFile(
+    new URL('../fixtures/upstream-session-v4/multimodal-spill-ends/session.v4.jsonl', import.meta.url),
+    'utf8',
+  );
+  const advanced = await readFile(
+    new URL('../fixtures/upstream-session-v4/advanced-toolchain/session.v4.jsonl', import.meta.url),
+    'utf8',
+  );
+
+  const modifiedAdmissions = [
+    (rows) => { rows.find((row) => row.type === 'user/message' && row.data.id === '{{message:1}}').data.id = 'forged-user-id'; },
+    (rows) => { rows.find((row) => row.type === 'user/message' && row.data.id === '{{message:1}}').data.source.kind = 'runtime-context'; },
+    (rows) => { rows.find((row) => row.type === 'user/message' && row.data.id === '{{message:1}}').data.content[0].text = 'rewritten original prompt'; },
+  ];
+  for (const mutate of modifiedAdmissions) {
+    const rows = structuredClone(claude.trimEnd().split('\n').map((line) => JSON.parse(line)));
+    mutate(rows);
+    const rejected = await host.call('session_import', { jsonl: encodeSnapshotRows(rows) });
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error, /inbox|claim/i);
+  }
+
+  const malformedImages = [
+    (rows) => { rows.find((row) => row.type === 'tool/result').data.message.content.find((block) => block.type === 'image').attachment.mediaType = 'image/svg+xml'; },
+    (rows) => { rows.find((row) => row.type === 'tool/result').data.message.content.find((block) => block.type === 'image').attachment.bytes = -1; },
+    (rows) => { rows.find((row) => row.type === 'tool/result').data.message.content.find((block) => block.type === 'image').attachment.name = 'local name'; },
+  ];
+  for (const mutate of malformedImages) {
+    const rows = structuredClone(multimodal.trimEnd().split('\n').map((line) => JSON.parse(line)));
+    mutate(rows);
+    const rejected = await host.call('session_import', { jsonl: encodeSnapshotRows(rows) });
+    assert.equal(rejected.ok, false);
+    assert.match(rejected.error, /image|attachment/i);
+  }
+
+  const badPtc = structuredClone(advanced.trimEnd().split('\n').map((line) => JSON.parse(line)));
+  badPtc.find((row) => row.type === 'tool/ptc-dispatch').data.name = 'forged_tool';
+  const rejectedPtc = await host.call('session_import', { jsonl: encodeSnapshotRows(badPtc) });
+  assert.equal(rejectedPtc.ok, false);
+  assert.match(rejectedPtc.error, /PTC dispatch result differs from its start/);
+
+  const badPtcAlias = structuredClone(advanced.trimEnd().split('\n').map((line) => JSON.parse(line)));
+  badPtcAlias.find((row) => row.type === 'tool/ptc-dispatch-start').data.subCallId = 'advanced-code';
+  const rejectedPtcAlias = await host.call('session_import', { jsonl: encodeSnapshotRows(badPtcAlias) });
+  assert.equal(rejectedPtcAlias.ok, false);
+  assert.match(rejectedPtcAlias.error, /Malformed or duplicate Session v4 PTC dispatch start/);
+
+  const badPtcError = structuredClone(advanced.trimEnd().split('\n').map((line) => JSON.parse(line)));
+  const ptcResult = badPtcError.find((row) => row.type === 'tool/ptc-dispatch');
+  ptcResult.data.error = { name: 'FixtureError', code: 'FIXTURE_ERROR' };
+  const rejectedPtcError = await host.call('session_import', { jsonl: encodeSnapshotRows(badPtcError) });
+  assert.equal(rejectedPtcError.ok, false);
+  assert.match(rejectedPtcError.error, /PTC result has an error with isError=false/);
+
+  const closedRootEarly = structuredClone(advanced.trimEnd().split('\n').map((line) => JSON.parse(line)));
+  const earlyRootResultIndex = closedRootEarly.findIndex((row) => row.type === 'tool/result' && row.data.message.toolCallId === 'advanced-code');
+  closedRootEarly.splice(earlyRootResultIndex, 1);
+  const ptcResultIndex = closedRootEarly.findIndex((row) => row.type === 'tool/ptc-dispatch');
+  closedRootEarly.splice(ptcResultIndex, 0, {
+    ...JSON.parse(advanced.trimEnd().split('\n').find((line) => {
+      const row = JSON.parse(line);
+      return row.type === 'tool/result' && row.data.message.toolCallId === 'advanced-code';
+    })),
+  });
+  const rejectedEarlyRoot = await host.call('session_import', { jsonl: encodeSnapshotRows(closedRootEarly) });
+  assert.equal(rejectedEarlyRoot.ok, false);
+  assert.match(rejectedEarlyRoot.error, /root tool result precedes nested PTC settlement|still-open root tool call/);
+
+  const closedPtcParentEarly = structuredClone(advanced.trimEnd().split('\n').map((line) => JSON.parse(line)));
+  const parentStartIndex = closedPtcParentEarly.findIndex((row) => row.type === 'tool/ptc-dispatch-start');
+  const parentStart = structuredClone(closedPtcParentEarly[parentStartIndex]);
+  const parentResultIndex = closedPtcParentEarly.findIndex((row) => row.type === 'tool/ptc-dispatch');
+  const parentResult = structuredClone(closedPtcParentEarly[parentResultIndex]);
+  closedPtcParentEarly.splice(parentResultIndex, 1);
+  const childStart = structuredClone(parentStart);
+  childStart.data.parentCallId = parentStart.data.subCallId;
+  childStart.data.subCallId = 'nested-ptc-call';
+  childStart.data.name = 'nested-read';
+  const childResult = structuredClone(parentResult);
+  childResult.data.parentCallId = parentStart.data.subCallId;
+  childResult.data.subCallId = 'nested-ptc-call';
+  childResult.data.name = 'nested-read';
+  closedPtcParentEarly.splice(parentStartIndex + 1, 0, childStart, parentResult, childResult);
+  const rejectedEarlyPtcParent = await host.call('session_import', { jsonl: encodeSnapshotRows(closedPtcParentEarly) });
+  assert.equal(rejectedEarlyPtcParent.ok, false);
+  assert.match(rejectedEarlyPtcParent.error, /PTC parent settles before its nested child/);
+
+  const badWorkflow = structuredClone(advanced.trimEnd().split('\n').map((line) => JSON.parse(line)));
+  badWorkflow.find((row) => row.type === 'tool-workflow/agent-end').data.runId = 'missing-run';
+  const rejectedWorkflow = await host.call('session_import', { jsonl: encodeSnapshotRows(badWorkflow) });
+  assert.equal(rejectedWorkflow.ok, false);
+  assert.match(rejectedWorkflow.error, /workflow agent end has no open run/);
+
+  const badWorkflowName = structuredClone(advanced.trimEnd().split('\n').map((line) => JSON.parse(line)));
+  badWorkflowName.find((row) => row.type === 'tool-workflow/run-start').data.name = 'forged-workflow-name';
+  const rejectedWorkflowName = await host.call('session_import', { jsonl: encodeSnapshotRows(badWorkflowName) });
+  assert.equal(rejectedWorkflowName.ok, false);
+  assert.match(rejectedWorkflowName.error, /workflow run name differs from owner meta\.name/);
+
+  const earlyWorkflowResult = structuredClone(advanced.trimEnd().split('\n').map((line) => JSON.parse(line)));
+  const workflowResultIndex = earlyWorkflowResult.findIndex((row) => row.type === 'tool/result' && row.data.message.toolCallId === 'advanced-workflow');
+  const [workflowResult] = earlyWorkflowResult.splice(workflowResultIndex, 1);
+  const workflowRunEndIndex = earlyWorkflowResult.findIndex((row) => row.type === 'tool-workflow/run-end');
+  earlyWorkflowResult.splice(workflowRunEndIndex, 0, workflowResult);
+  const rejectedEarlyWorkflowResult = await host.call('session_import', { jsonl: encodeSnapshotRows(earlyWorkflowResult) });
+  assert.equal(rejectedEarlyWorkflowResult.ok, false);
+  assert.match(rejectedEarlyWorkflowResult.error, /foreground workflow result precedes run-end/);
+
+  const backgroundWorkflow = structuredClone(advanced.trimEnd().split('\n').map((line) => JSON.parse(line)));
+  const workflowCall = backgroundWorkflow.find((row) => row.type === 'tool/call' && row.data.callId === 'advanced-workflow');
+  const workflowArguments = JSON.parse(workflowCall.data.arguments);
+  workflowArguments.run_in_background = true;
+  workflowCall.data.arguments = JSON.stringify(workflowArguments);
+  const assistantCall = backgroundWorkflow.find((row) => row.type === 'assistant/message' && row.data.message.content.some((block) => block.id === 'advanced-workflow'));
+  assistantCall.data.message.content.find((block) => block.id === 'advanced-workflow').arguments = workflowCall.data.arguments;
+  const rejectedBackgroundWorkflow = await host.call('session_import', { jsonl: encodeSnapshotRows(backgroundWorkflow) });
+  assert.equal(rejectedBackgroundWorkflow.ok, false);
+  assert.match(rejectedBackgroundWorkflow.error, /Background Session v4 workflow runs are outside the supported import subset/);
+
+  const unknownWorkflowFamily = structuredClone(advanced.trimEnd().split('\n').map((line) => JSON.parse(line)));
+  unknownWorkflowFamily.push({ type: 'tool-workflow/agent-paused', data: { runId: 'unknown' }, ignorable: true });
+  const rejectedUnknownWorkflow = await host.call('session_import', { jsonl: encodeSnapshotRows(unknownWorkflowFamily) });
+  assert.equal(rejectedUnknownWorkflow.ok, false);
+  assert.match(rejectedUnknownWorkflow.error, /Unsupported Session v4 execution correlation/);
+
+  assert.deepEqual(await host.call('session_list'), before);
+  assert.equal(host.activeCount, 0);
+  assert.equal(fetchCalls(), 0);
+});
+
 test('surface replacement uses current positions and may cite shadowed assistant events', async (t) => {
   const { host, fetchCalls } = await newHost(t);
   const source = await readFile(
@@ -731,6 +1045,84 @@ test('standalone turn-null compaction replaces the current surface without reviv
   assert.ok(session.events.some((event) => event.type === 'upstream/event' && event.data.record.type === 'compaction/summary'));
   assert.equal(host.activeCount, 0);
   assert.equal(fetchCalls(), 0);
+});
+
+test('all pinned upstream Session v4 catalog snapshots import and reopen as correlated inert transcripts', async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'dsh-v4-catalog-restore-'));
+  const dataDir = path.join(temporary, '.dsh.mbt');
+  const hosts = [];
+  t.after(async () => {
+    for (const item of hosts) await item.close();
+    await rm(temporary, { recursive: true, force: true });
+  });
+  const first = await newHost(t, dataDir);
+  hosts.push(first);
+  const imported = new Map();
+
+  for (const name of upstreamCatalogSnapshots) {
+    const directory = new URL(`../fixtures/upstream-session-v4/${name}/`, import.meta.url);
+    const [jsonl, provenanceText] = await Promise.all([
+      readFile(new URL('session.v4.jsonl', directory), 'utf8'),
+      readFile(new URL('provenance.json', directory), 'utf8'),
+    ]);
+    const provenance = JSON.parse(provenanceText);
+    assert.equal(provenance.repository, 'https://github.com/deepseek-ai/deepseek-harness', name);
+    assert.equal(provenance.commit, '5badb15009ae1756c3afe0ae0cef1faafc290ccc', name);
+    assert.equal(provenance.path, `snapshots/session/${name}/session.v4.jsonl`, name);
+    assert.equal(
+      createHash('sha256').update(jsonl).digest('hex'),
+      provenance.sha256,
+      `${name} must remain byte-for-byte identical to its pinned upstream snapshot`,
+    );
+
+    const result = await first.host.call('session_import', { jsonl });
+    assert.equal(result.ok, true, `${name}: ${result.error}`);
+    const session = result.result;
+    assert.equal(session.source_format, 'deepseek-session-v4', name);
+    assert.equal(session.status, 'completed', name);
+    const [expectedMessages, expectedCalls, expectedResults] = expectedCatalogShape.get(name);
+    assert.equal(session.messages.length, expectedMessages, `${name} transcript size`);
+    assert.equal(
+      session.messages.reduce((count, message) => count + (message.tool_calls?.length ?? 0), 0),
+      expectedCalls,
+      `${name} advertised tool calls`,
+    );
+    assert.equal(session.messages.filter((message) => message.role === 'tool').length, expectedResults, `${name} tool results`);
+    assertCatalogTranscriptCorrelation(session, jsonl, name);
+    imported.set(name, { id: session.id, session, jsonl });
+  }
+
+  const advanced = imported.get('advanced-toolchain').session;
+  const advancedTypes = advanced.events
+    .filter((event) => event.type === 'upstream/event')
+    .map((event) => event.data.record.type);
+  for (const kind of [
+    'tool/ptc-dispatch-start', 'tool/ptc-dispatch', 'subagent/catalog',
+    'tool-workflow/run-start', 'tool-workflow/agent-start',
+    'tool-workflow/agent-end', 'tool-workflow/run-end',
+  ]) assert.ok(advancedTypes.includes(kind), `advanced-toolchain retains ${kind}`);
+
+  const claude = imported.get('claude-code-mods').session;
+  assert.ok(claude.messages.some((message) => message.role === 'user' && message.content.includes('Context from the snapshot-guard mod')));
+  const multimodal = imported.get('multimodal-spill-ends').session;
+  const imageResult = multimodal.messages.find((message) => message.role === 'tool');
+  assert.ok(imageResult.content.includes('unresolved image attachment sha256:999f1d1527ee7e79266f16add5430fff76b1225d742464a5b1ff1f02971bb8ee'));
+  assert.equal((imageResult.content.match(/unresolved image attachment/g) ?? []).length, 2);
+  for (const name of ['office-skills', 'office-skills-no-renderer', 'skill-load', 'windows-acl-skill']) {
+    assert.ok(imported.get(name).session.messages.some((message) => message.role === 'user' && message.content.includes('<available_skills>')), name);
+  }
+
+  assert.equal(first.host.activeCount, 0);
+  assert.equal(first.fetchCalls(), 0);
+  await first.close();
+
+  const reopened = await newHost(t, dataDir);
+  hosts.push(reopened);
+  for (const { id, session } of imported.values()) {
+    assert.deepEqual(await reopened.host.session(id), session);
+  }
+  assert.equal(reopened.host.activeCount, 0);
+  assert.equal(reopened.fetchCalls(), 0);
 });
 
 test('a seeded fork cut may abandon an inherited compaction summary or prune transaction', async (t) => {
