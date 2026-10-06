@@ -1,0 +1,24 @@
+{
+  "name": "@f4ah6o/dsh.mbt",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "MoonBit DeepSeek Harness port with gpui.mbt UI and capability APIs.",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "verify:env": "node scripts/verify-env.mjs",
+    "build": "sh scripts/build.sh",
+    "check": "node scripts/check.mjs",
+    "test": "npm run check && npm run test:moon && npm run build && npm run test:host && npm run test:web && npm run test:integration",
+    "test:moon": "sh scripts/test-moon.sh",
+    "test:host": "node --test tests/host/*.test.mjs",
+    "test:web": "node --test web/*.test.mjs",
+    "test:integration": "node --test tests/integration/*.test.mjs",
+    "start": "node host/cli.mjs",
+    "demo": "npm run build && node host/cli.mjs --demo",
+    "mutation": "node scripts/mutation.mjs",
+    "mutation:list": "node scripts/mutation.mjs --list"
+  }
+}
