@@ -95,14 +95,19 @@ within the application's snapshot and API transport limits.
 
 `session_import` is a separate, explicit path for a bounded Session v4 event
 subset. It retains the v4 header and raw source lines inside the v1 snapshot,
-projects basic messages/tool lifecycles, inbox splices and first-level fork
-closures, then re-decodes the source during every restore. The imported state is
-read-only: sending and canceling are rejected, the browser disables its
-composer, and no provider, tool, permission preset, or approval policy is
-activated. Unknown required semantics such as attachments, compaction, surface
-replacement, developer header updates, retries, PTC/subagent workflows, and
-nested forks fail import explicitly. Engine JSONL input is capped at 262,144
-UTF-16 code units; the CLI additionally caps source files at 1 MiB.
+projects basic messages/tool lifecycles, inbox splices, first-level fork
+closures, selected developer/header updates, current-surface replacements,
+compaction checkpoints/pruning, and diagnostic assistant attempts, then
+re-decodes the source during every restore. The imported state is read-only:
+sending and canceling are rejected, the browser disables its composer, and no
+provider, tool, permission preset, or approval policy is activated. Attachments,
+skills/provenance, spill, images, retry scheduling lifecycle, PTC/subagent
+workflows, and nested forks still fail import explicitly. Engine JSONL input is
+capped at 262,144 UTF-16 code units; the CLI additionally caps source files at
+1 MiB.
+Restore also recognizes an exact older transcript projection for archives in
+the original append-only subset, then stores the current canonical projection.
+Any partial, reordered, or otherwise modified projection remains an error.
 Claimed inbox messages that never became a model-visible `user/message` remain
 visible in `pending_inbox.unadmitted_turn` or `unadmitted_step`; they are not
 requeued or executed.
@@ -127,6 +132,6 @@ moon test --target native -p f4ah6o/dsh/engine
 
 Cordis/npm plugin loading, automatic Session v4 restore migration and v4 writing,
 v0–v3 migrations, parallel tools, stream deltas inside the engine, retry policy,
-compaction, attachment replay, subagents, and durable inbox editing are not
+live compaction/context management, attachment replay, subagents, and durable inbox editing are not
 implemented by this initial engine. The explicit v4 importer accepts only the
 documented subset above; it is not full upstream compatibility.

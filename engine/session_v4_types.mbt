@@ -19,9 +19,20 @@ priv struct InboxReplay {
 }
 
 ///|
+priv struct ImportedCompaction {
+  id : String
+  command : Json?
+  turn : Int?
+  mut summary_seq : Int?
+  mut summary_span : Array[Int]
+  mut checkpoint_seq : Int?
+}
+
+///|
 priv struct V4Replay {
   mut turn : Int
   mut step : Int
+  snapshot : Bool
   mut status : Status
   mut open_turn : Bool
   mut open_step : Bool
@@ -31,10 +42,15 @@ priv struct V4Replay {
   mut fork_closing : Bool
   mut request_header : Json?
   mut request_context_seen : Bool
+  mut surface : Array[Int]
+  mut protected_head : Int?
+  mut compaction : ImportedCompaction?
+  mut pending_prune : Array[Int]?
   mut admitted_prompt : Bool
   mut assistant_seen : Bool
   mut terminal_step_without_assistant : Bool
   source_types : Map[Int, String]
+  source_records : Map[Int, Json]
   user_messages : Map[Int, Bool]
   message_ids : Map[String, Bool]
   calls : Map[String, ImportedCall]
@@ -47,6 +63,7 @@ priv struct ProjectedContent {
   mut text : String
   mut reasoning : String
   calls : Array[Json]
+  changes : Array[Json]
 }
 
 ///|

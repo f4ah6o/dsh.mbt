@@ -2,9 +2,15 @@
 fn project_v4_content(
   value : Json,
   allow_tool_calls : Bool,
+  allow_tool_changes : Bool,
   line_number : Int,
 ) -> ProjectedContent raise EngineError {
-  let output : ProjectedContent = { text: "", reasoning: "", calls: [], }
+  let output : ProjectedContent = {
+    text: "",
+    reasoning: "",
+    calls: [],
+    changes: [],
+  }
   match value {
     Json::String(_) =>
       raise Invalid("Session v4 native message content must be a block array")
@@ -25,6 +31,27 @@ fn project_v4_content(
           "tool-call" =>
             raise Invalid(
               "Session v4 tool-call block is only valid in assistant messages",
+            )
+          "tool-addition" | "tool-removal" if allow_tool_changes => {
+            let name = required_string(block, "toolName", max=256)
+            if name.length() == 0 {
+              raise Invalid("Session v4 developer tool change requires a name")
+            }
+            if kind == "tool-addition" && fields(block).get("tool") is Some(_) {
+              raise Invalid(
+                "Session v4 tool-addition must omit inline tool definitions",
+              )
+            }
+            output.changes.push(
+              object([
+                ("type", Json::string(kind)),
+                ("tool_name", Json::string(name)),
+              ]),
+            )
+          }
+          "tool-addition" | "tool-removal" =>
+            raise Invalid(
+              "Session v4 tool change blocks are only valid in developer messages",
             )
           _ =>
             raise Invalid(
@@ -148,7 +175,12 @@ fn validate_inbox_message(
     raise Invalid("Session v4 inbox messages require user provenance")
   }
   ignore(
-    project_v4_content(required_field(message, "content"), false, line_number),
+    project_v4_content(
+      required_field(message, "content"),
+      false,
+      false,
+      line_number,
+    ),
   )
   inbox.used_ids.set(id, true)
 }
@@ -225,7 +257,12 @@ fn imported_record(event : Event) -> Json? {
 }
 
 ///|
-fn project_v4_message(kind : String, record : Json, source_seq : Int) -> Json? {
+fn project_v4_message(
+  kind : String,
+  record : Json,
+  source_seq : Int,
+  preserve_empty_source_arrays? : Bool = false,
+) -> Json? {
   try {
     let data = required_field(record, "data")
     let message = match kind {
@@ -237,9 +274,15 @@ fn project_v4_message(kind : String, record : Json, source_seq : Int) -> Json? {
       _ => return None
     }
     let role = required_string(message, "role", max=16)
+    let source_content = required_field(message, "content")
+    let has_source_blocks = match source_content {
+      Json::Array(blocks) => !blocks.is_empty()
+      _ => false
+    }
     let content = project_v4_content(
-      required_field(message, "content"),
+      source_content,
       role == "assistant",
+      role == "developer",
       source_seq + 2,
     )
     let output : Map[String, Json] = Map::from_array([
@@ -251,6 +294,9 @@ fn project_v4_message(kind : String, record : Json, source_seq : Int) -> Json? {
     }
     if !content.calls.is_empty() {
       output.set("tool_calls", Json::array(content.calls))
+    }
+    if !content.changes.is_empty() {
+      output.set("tool_changes", Json::array(content.changes))
     }
     if role == "tool" {
       match json_field(message, "toolCallId") {
@@ -266,6 +312,11 @@ fn project_v4_message(kind : String, record : Json, source_seq : Int) -> Json? {
       Some(value) => output.set("source_message_id", detached(value))
       None => ()
     }
+    if (role == "system" || role == "developer" || role == "assistant") &&
+      !has_source_blocks &&
+      !preserve_empty_source_arrays {
+      return None
+    }
     output.set("source_event_seq", integer(source_seq))
     Some(Json::object(output))
   } catch {
@@ -275,21 +326,80 @@ fn project_v4_message(kind : String, record : Json, source_seq : Int) -> Json? {
 
 ///|
 fn imported_messages(events : Array[Event]) -> Array[Json] {
-  events.filter_map(event => {
+  let surface : Array[Int] = []
+  let records : Map[Int, Json] = Map([])
+  for event in events {
     match imported_record(event) {
-      None => None
+      None => ()
+      Some(record) =>
+        match
+          (json_field(record, "type"), json_field(event.data, "source_seq")) {
+          (Some(Json::String(kind)), Some(Json::Number(seq, ..))) =>
+            if is_v4_surface_event(kind) {
+              let source_seq = seq.to_int()
+              records.set(source_seq, record)
+              match json_field(record, "surfaceOp") {
+                Some(Json::String("append")) => surface.push(source_seq)
+                Some(Json::Object(operation)) =>
+                  try {
+                    let start_seq = int_value(
+                      required_field(Json::object(operation), "startSeq"),
+                      "replacement startSeq",
+                      0,
+                      source_seq,
+                    )
+                    let end_seq = int_value(
+                      required_field(Json::object(operation), "endSeq"),
+                      "replacement endSeq",
+                      0,
+                      source_seq,
+                    )
+                    match
+                      v4_surface_replacement_indices(
+                        surface, start_seq, end_seq,
+                      ) {
+                      Some((first, last)) => {
+                        let updated : Array[Int] = []
+                        for index in 0..<first {
+                          updated.push(surface[index])
+                        }
+                        updated.push(source_seq)
+                        for index in (last + 1)..<surface.length() {
+                          updated.push(surface[index])
+                        }
+                        surface.clear()
+                        for seq in updated {
+                          surface.push(seq)
+                        }
+                      }
+                      None => ()
+                    }
+                  } catch {
+                    _ => ()
+                  }
+                _ => ()
+              }
+            }
+          _ => ()
+        }
+    }
+  }
+  let projected : Array[Json] = []
+  for source_seq in surface {
+    match records.get(source_seq) {
+      None => ()
       Some(record) =>
         match json_field(record, "type") {
           Some(Json::String(kind)) =>
-            match json_field(event.data, "source_seq") {
-              Some(Json::Number(seq, ..)) =>
-                project_v4_message(kind, record, seq.to_int())
-              _ => None
+            match project_v4_message(kind, record, source_seq) {
+              Some(message) => projected.push(message)
+              None => ()
             }
-          _ => None
+          _ => ()
         }
     }
-  })
+  }
+  projected
 }
 
 ///|

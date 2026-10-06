@@ -4,7 +4,10 @@
 `0.10.14+7d59c7ec9`、固定 moon / moonrun で実行。
 以下は実行して終了を確認した local の結果です。GitHub Actions の状態は対象 PR の Checks を参照してください。
 
-## 通常 gate
+## 前回の通常 gate
+
+次の表は Session v4 parity increment より前の baseline 実行記録です。現在の変更に対する選択 gate は下の
+「Session v4 parity increment」に記録しています。最終 PR gate は変更を取り込んだ状態で再実行します。
 
 `npm test` **PASS / exit 0**。
 
@@ -25,6 +28,36 @@
 `app` 自体に MoonBit unit test はなく、生成 ESM の export / lifetime は Node 結合テストで検証しています。
 固定 hotpath source の `derive(Show, Eq)` に由来する 3 種の warning は依存の既知診断として表示します。
 自身の warning、別の依存からの warning、format 差分は check を失敗させます。
+
+## Session v4 parity increment
+
+2026-10-06 の現在の変更に対して、以下の repository-selected gate を実行しました。
+
+| command | 結果 |
+| --- | --- |
+| `npm run check` | PASS。MoonBit format、engine/provider/plugins/api/ui の all-target check と app JS check、自身の warning 0、JavaScript syntax 25 files。pinned hotpath warning のみ。 |
+| `npm run test:moon` | engine/provider/plugins/api/ui は Wasm、Wasm GC、JS、native の各 target で 57 / 57 PASS。app JS target は test entry なし。 |
+| `npm run build` | PASS。`_build/js/release/build/f4ah6o/dsh/app/app.js` を生成。 |
+| `npm run test:integration` | 17 / 17 PASS。Session v4 importer の選択ケースは 15 / 15 PASS。 |
+
+この変更で追加した MoonBit white-box coverage は、数値の前後と異なる current-position の replacement、
+逆向き / 不在 surface boundary の拒否、tool result の identity・座標保持を確認します。Node integration は、
+unmodified upstream fixture の import / reopen、provider・tool effect が 0 件、tampered relationship の atomic rejection、
+assistant を引用する surface replacement、過去 turn の tool-result pruning、between-step checkpoint、
+standalone `turn: null` compaction、summary / prune 後の first-level fork cut を確認します。
+さらに、空文字の text block は empty message として表示し、空 content array は derived message だけを省き、
+surface node 自体は後続 replacement で参照できることを確認します。
+
+restore は、旧 append-only importer subset が受理した archive について、過去の v1 message projection と完全一致する
+snapshot も認識し、現在の canonical projection へ移行します。raw source lines、event coordinates、pending-state checks は
+引き続き検証します。回帰テストは legacy snapshot の restore / close / reopen と effect が発生しないことを確認し、
+content、message identity、source sequence の改変や旧・新 row の混在を atomic に拒否します。
+
+コミット済み integration catalog に追加した 5 snapshot は、pinned upstream JSONL と SHA-256 が一致することを毎回検証します。
+これは full snapshot catalog test ではありません。別途、独立した release-app smoke は pinned upstream の 25 snapshot 全件を import / reopen
+し、17 件を受理、8 件を未対応 semantics として拒否し、両段階で provider / tool effect が 0 件であることを確認しました。
+拒否対象は `advanced-toolchain`、`advanced-toolchain-runtime`、`claude-code-mods`、`multimodal-spill-ends`、
+`office-skills`、`office-skills-no-renderer`、`skill-load`、`windows-acl-skill` です。
 
 ## upstream の実記録を使う結合テスト
 
@@ -135,7 +168,7 @@ restore は成功し、effect の再発行は 0 でした。
 ## 未実行・未実装との区別
 
 - **未実行:** 実 API key による有料 provider 接続。
-- **未実装:** native window、自動 Session v4 migration / writer と importer が拒否する event semantics、v0–v3 migration、動的 Cordis / npm plugin、subagent、compaction など。
+- **未実装:** native window、自動 Session v4 migration / writer と importer が拒否する event semantics、v0–v3 migration、動的 Cordis / npm plugin、subagent、live context compaction、spill、attachment など。
 - **対象外:** gpui の全 OS backend / example の検証。portable package の native PASS を native UI の実機 PASS として扱いません。
 
 全機能の対応表は [移植状況](port-status.md)、後続の受入条件は [残りの移植作業](../issues/open/0001-upstream-parity.md) にあります。

@@ -16,6 +16,11 @@ fn Engine::import_upstream_v4(
   }
   let header = v4_parse_line(lines[0], 1)
   validate_v4_header(header)
+  let physical = if lines.length() > 1 {
+    has_v4_physical_envelope(v4_parse_line(lines[1], 2))
+  } else {
+    true
+  }
   let source_id = required_string(header, "id", max=128)
   let mut next = self.next_session
   while self.sessions.get("session-\{next}") is Some(_) {
@@ -29,6 +34,7 @@ fn Engine::import_upstream_v4(
   let replay : V4Replay = {
     turn: 0,
     step: 0,
+    snapshot: !physical,
     status: Idle,
     open_turn: false,
     open_step: false,
@@ -38,10 +44,15 @@ fn Engine::import_upstream_v4(
     fork_closing: false,
     request_header: None,
     request_context_seen: false,
+    surface: [],
+    protected_head: None,
+    compaction: None,
+    pending_prune: None,
     admitted_prompt: false,
     assistant_seen: false,
     terminal_step_without_assistant: false,
     source_types: Map([]),
+    source_records: Map([]),
     user_messages: Map([]),
     message_ids: Map([]),
     calls: Map([]),
@@ -55,11 +66,6 @@ fn Engine::import_upstream_v4(
     },
   }
   let records : Array[Json] = []
-  let physical = if lines.length() > 1 {
-    has_v4_physical_envelope(v4_parse_line(lines[1], 2))
-  } else {
-    true
-  }
   for index in 1..<lines.length() {
     let line_number = index + 1
     let record = v4_parse_line(lines[index], line_number)

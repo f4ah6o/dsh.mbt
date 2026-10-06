@@ -111,10 +111,16 @@ fn restore_imported_session(value : Json) -> Session raise EngineError {
       )
     }
   }
-  if required_field(value, "messages") != Json::array(replayed.messages()) {
-    raise Invalid(
-      "Imported Session v4 message projection disagrees with the source archive",
-    )
+  let stored_messages = required_field(value, "messages")
+  let canonical_messages = Json::array(replayed.messages())
+  if stored_messages != canonical_messages {
+    if !v4_legacy_projection_supported(replayed.events) ||
+      stored_messages !=
+      Json::array(v4_legacy_imported_messages(replayed.events)) {
+      raise Invalid(
+        "Imported Session v4 message projection disagrees with the source archive",
+      )
+    }
   }
   let replayed_json = replayed.json()
   if required_field(value, "pending_tool_calls") !=
