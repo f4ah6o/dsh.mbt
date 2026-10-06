@@ -7,7 +7,9 @@ UI と capability API に [gpui-mbt/gpui.mbt](https://github.com/gpui-mbt/gpui.m
 
 **現在は最初の動作する移植版です。** ブラウザ / CLI から会話し、ローカルツールを実行して履歴を保存できます。
 upstream 全機能の互換移植は進行中です。Session v4 は明示的な read-only import に限って対応し、
-Cordis / npm plugin 互換、subagent、compaction、native window などは未実装です。
+Cordis / npm plugin 互換、subagent、live compaction、native window などは未実装です。
+importer は一部の compaction checkpoint と transcript pruning を履歴表示用に復元しますが、
+agent の context 管理や長い会話の継続には使いません。
 詳細な対応範囲は [移植状況](docs/port-status.md) に記載しています。
 
 ## 起動

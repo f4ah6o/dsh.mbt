@@ -167,6 +167,7 @@ fn validate_v4_event_envelope(
 fn known_v4_event(kind : String) -> Bool {
   [
     "agent/inbox/spliced", "approval/policy", "assistant/attempt", "assistant/message",
+    "compaction/end", "compaction/prune", "compaction/start", "compaction/summary",
     "developer/message", "permission/preset", "request/context", "request/header",
     "sandbox/mode", "session/end-seed", "session/title", "step/end", "step/start",
     "system/message", "tool/call", "tool/result", "turn/end", "turn/start", "user/message",
@@ -178,16 +179,7 @@ fn validate_supported_v4_event(
   kind : String,
   line_number : Int,
 ) -> Unit raise EngineError {
-  if kind == "developer/message" {
-    raise Invalid(
-      "Session v4 developer/tool-registry updates are not projected yet on line \{line_number}",
-    )
-  }
-  if kind == "compaction/start" ||
-    kind == "compaction/end" ||
-    kind == "compaction/prune" ||
-    kind == "compaction/summary" ||
-    kind == "image/offload" ||
+  if kind == "image/offload" ||
     kind == "feedback/message-put" ||
     kind == "feedback/message-delete" {
     raise Invalid(
@@ -220,6 +212,9 @@ fn validate_v4_surface(
     kind == "user/message" ||
     kind == "assistant/message" ||
     kind == "tool/result"
+  if kind == "assistant/message" && values.get("sourceEventSeqs") is Some(_) {
+    raise Invalid("Session v4 assistant/message cannot carry sourceEventSeqs")
+  }
   match values.get("surfaceOp") {
     None =>
       if surface {
@@ -232,11 +227,6 @@ fn validate_v4_surface(
     Some(Json::String("append")) => {
       if !surface {
         raise Invalid("Session v4 non-message event cannot have surfaceOp")
-      }
-      if kind == "assistant/message" && values.get("sourceEventSeqs") is Some(_) {
-        raise Invalid(
-          "Session v4 assistant/message cannot carry sourceEventSeqs",
-        )
       }
       match values.get("sourceEventSeqs") {
         None => ()
@@ -251,14 +241,37 @@ fn validate_v4_surface(
     Some(Json::Object(operation)) => {
       if !surface ||
         operation.length() != 3 ||
-        operation.get("op") != Some("replace".to_json()) {
+        operation.get("op") != Some("replace".to_json()) ||
+        operation.get("startSeq") is None ||
+        operation.get("endSeq") is None {
         raise Invalid("Session v4 surfaceOp replacement is malformed")
       }
-      // Replacement changes which messages are model-visible. This importer
-      // deliberately refuses it until it can replay the exact projection.
-      raise Invalid(
-        "Session v4 surface replacement is unsupported; archive preserved",
+      ignore(
+        int_value(
+          operation.get("startSeq").unwrap(),
+          "replacement startSeq",
+          0,
+          expected_seq,
+        ),
       )
+      ignore(
+        int_value(
+          operation.get("endSeq").unwrap(),
+          "replacement endSeq",
+          0,
+          expected_seq,
+        ),
+      )
+      let sources = match values.get("sourceEventSeqs") {
+        Some(sources) => v4_source_sequences(sources, expected_seq)
+        None =>
+          raise Invalid("Session v4 replacement is missing sourceEventSeqs")
+      }
+      if sources.is_empty() {
+        raise Invalid(
+          "Session v4 replacement sourceEventSeqs must not be empty",
+        )
+      }
     }
     Some(_) => raise Invalid("Invalid Session v4 surfaceOp")
   }
@@ -271,7 +284,7 @@ fn v4_source_sequences(
 ) -> Array[Int] raise EngineError {
   let encoded = array_value(value, "sourceEventSeqs", 32768)
   let expanded : Array[Int] = []
-  let mut previous = -1
+  let seen : Map[Int, Bool] = Map([])
   for item in encoded {
     match item {
       Json::Array(range) => {
@@ -296,24 +309,24 @@ fn v4_source_sequences(
           )
         }
         for seq in start..<=end {
-          if seq <= previous {
+          if seq >= before || seen.get(seq) is Some(_) {
             raise Invalid(
-              "Session v4 sourceEventSeqs must be strictly increasing",
+              "Session v4 sourceEventSeqs must be unique earlier sequences",
             )
           }
           expanded.push(seq)
-          previous = seq
+          seen.set(seq, true)
         }
       }
       _ => {
         let seq = int_value(item, "sourceEventSeqs member", 0, before)
-        if seq >= before || seq <= previous {
+        if seq >= before || seen.get(seq) is Some(_) {
           raise Invalid(
             "Session v4 sourceEventSeqs must be unique earlier sequences",
           )
         }
         expanded.push(seq)
-        previous = seq
+        seen.set(seq, true)
       }
     }
   }

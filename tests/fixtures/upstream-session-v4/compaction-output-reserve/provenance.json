@@ -1,0 +1,8 @@
+{
+  "repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+  "path": "snapshots/session/compaction-output-reserve/session.v4.jsonl",
+  "sha256": "d033c383d3b8096460ce4208b7ea3b3be2168462bc36ee3479ead393cc877c00",
+  "license": "MIT, Copyright (c) 2026 DeepSeek",
+  "note": "Unmodified upstream Session v4 snapshot fixture. Its snapshot shorthand omits physical seq/time envelope fields."
+}

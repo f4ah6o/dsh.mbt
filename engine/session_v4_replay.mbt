@@ -8,6 +8,39 @@ fn replay_v4_event(
   let kind = required_string(record, "type", max=128)
   let data = required_field(record, "data")
   let values = fields(data)
+  if replay.compaction is Some(_) &&
+    (kind == "turn/start" || kind == "turn/end") {
+    raise Invalid("Session v4 turn boundary crosses an open compaction")
+  }
+  let abandons_inherited = match (kind, fields(data).get("inherited")) {
+    ("session/end-seed", Some(Json::True)) => true
+    _ => false
+  }
+  match replay.pending_prune {
+    Some(_) if kind != "tool/result" && !abandons_inherited =>
+      raise Invalid(
+        "Session v4 compaction/prune must immediately precede its tool-result replacement",
+      )
+    _ => ()
+  }
+  match replay.compaction {
+    Some(compaction) if compaction.summary_seq is Some(_) &&
+      compaction.checkpoint_seq is None =>
+      if kind == "user/message" {
+        if required_string(required_field(data, "source"), "kind", max=64) !=
+          "compact-checkpoint" {
+          raise Invalid(
+            "Session v4 compaction summary must immediately precede its checkpoint",
+          )
+        }
+      } else if (kind != "compaction/end" || fields(data).get("error") is None) &&
+        !abandons_inherited {
+        raise Invalid(
+          "Session v4 compaction summary must immediately precede its checkpoint",
+        )
+      }
+    _ => ()
+  }
   if replay.terminal_step_without_assistant && kind != "turn/end" {
     raise Invalid(
       "An assistant-less Session v4 step must be followed by its terminal turn/end",
@@ -143,9 +176,9 @@ fn replay_v4_event(
         raise Invalid("Session v4 assistant/message is outside an open step")
       }
       validate_turn_step(data, replay.turn, replay.step)
-      if !replay.request_context_seen {
+      if replay.request_header is None {
         raise Invalid(
-          "Session v4 assistant/message has no validated request/context",
+          "Session v4 assistant/message has no validated request/header",
         )
       }
       if replay.assistant_seen {
@@ -164,6 +197,7 @@ fn replay_v4_event(
       let content = project_v4_content(
         required_field(message, "content"),
         true,
+        false,
         line_number,
       )
       for call_json in content.calls {
@@ -188,10 +222,13 @@ fn replay_v4_event(
       validate_optional_usage(values.get("usage"))
       replay.assistant_seen = true
     }
-    "assistant/attempt" =>
-      raise Invalid(
-        "Session v4 assistant/attempt retry semantics are unsupported on line \{line_number}",
-      )
+    "assistant/attempt" => {
+      if !replay.open_step {
+        raise Invalid("Session v4 assistant/attempt is outside an open step")
+      }
+      validate_turn_step(data, replay.turn, replay.step)
+      validate_v4_attempt_stream(required_field(data, "stream"), line_number)
+    }
     "tool/call" => {
       if !replay.open_step {
         raise Invalid("Session v4 tool/call is outside an open step")
@@ -216,70 +253,83 @@ fn replay_v4_event(
       call.call_seq = Some(source_seq)
     }
     "tool/result" => {
-      if !replay.open_step {
-        raise Invalid("Session v4 tool/result is outside an open step")
+      let is_replacement = fields(record).get("surfaceOp")
+        is Some(Json::Object(_))
+      if is_replacement {
+        if !replay.open_turn {
+          raise Invalid(
+            "Session v4 tool/result replacement is outside an open turn",
+          )
+        }
+      } else {
+        if !replay.open_step {
+          raise Invalid("Session v4 tool/result is outside an open step")
+        }
+        validate_turn_step(data, replay.turn, replay.step)
       }
-      validate_turn_step(data, replay.turn, replay.step)
       let message = required_field(data, "message")
       if required_string(message, "role", max=16) != "tool" {
         raise Invalid("Session v4 tool/result has a non-tool role")
       }
-      let id = required_string(message, "toolCallId", max=128)
-      let call = match replay.calls.get(id) {
-        Some(call) => call
-        None =>
-          raise Invalid(
-            "Session v4 tool/result has no matching tool/call: \{id}",
-          )
-      }
-      match fields(record).get("sourceEventSeqs") {
-        None => ()
-        Some(encoded) => {
-          let refs = v4_source_sequences(encoded, source_seq)
-          match call.call_seq {
-            Some(call_seq) =>
-              if refs.length() != 1 || refs[0] != call_seq {
+      if !is_replacement {
+        let id = required_string(message, "toolCallId", max=128)
+        let call = match replay.calls.get(id) {
+          Some(call) => call
+          None =>
+            raise Invalid(
+              "Session v4 tool/result has no matching tool/call: \{id}",
+            )
+        }
+        match fields(record).get("sourceEventSeqs") {
+          None => ()
+          Some(encoded) => {
+            let refs = v4_source_sequences(encoded, source_seq)
+            match call.call_seq {
+              Some(call_seq) =>
+                if refs.length() != 1 || refs[0] != call_seq {
+                  raise Invalid(
+                    "Session v4 tool/result sourceEventSeqs does not cite its matching tool/call",
+                  )
+                }
+              None =>
                 raise Invalid(
-                  "Session v4 tool/result sourceEventSeqs does not cite its matching tool/call",
+                  "Session v4 tool/result sourceEventSeqs has no started tool call",
                 )
-              }
-            None =>
-              raise Invalid(
-                "Session v4 tool/result sourceEventSeqs has no started tool call",
-              )
+            }
           }
         }
-      }
-      let error = fields(data).get("error")
-      if call.settled || (!call.started && !replay.fork_closing) {
-        raise Invalid(
-          "Session v4 tool/result is duplicated or precedes tool/call",
-        )
-      }
-      if replay.fork_closing {
-        validate_v4_fork_result(record, message, error, call, id, source_seq)
-      } else if is_fork_not_started_result(error) {
-        raise Invalid(
-          "Session v4 TOOL_NOT_STARTED result is only supported in a fork closure",
-        )
-      }
-      validate_v4_tool_result_source(message, id, replay.message_ids)
-      match error {
-        None => ()
-        Some(error_value) => {
-          ignore(fields(error_value))
-          match fields(message).get("isError") {
-            Some(Json::True) => ()
-            _ =>
-              raise Invalid(
-                "Session v4 errored tool result must set isError=true",
-              )
+        let error = fields(data).get("error")
+        if call.settled || (!call.started && !replay.fork_closing) {
+          raise Invalid(
+            "Session v4 tool/result is duplicated or precedes tool/call",
+          )
+        }
+        if replay.fork_closing {
+          validate_v4_fork_result(record, message, error, call, id, source_seq)
+        } else if is_fork_not_started_result(error) {
+          raise Invalid(
+            "Session v4 TOOL_NOT_STARTED result is only supported in a fork closure",
+          )
+        }
+        validate_v4_tool_result_source(message, id, replay.message_ids)
+        match error {
+          None => ()
+          Some(error_value) => {
+            ignore(fields(error_value))
+            match fields(message).get("isError") {
+              Some(Json::True) => ()
+              _ =>
+                raise Invalid(
+                  "Session v4 errored tool result must set isError=true",
+                )
+            }
           }
         }
+        call.settled = true
       }
-      call.settled = true
       let content = project_v4_content(
         required_field(message, "content"),
+        false,
         false,
         line_number,
       )
@@ -294,31 +344,43 @@ fn replay_v4_event(
       if role != "user" {
         raise Invalid("Session v4 user/message has a non-user role")
       }
-      if !replay.open_turn {
-        raise Invalid("Session v4 user/message is outside an open turn")
-      }
-      if !replay.open_step || replay.assistant_seen {
-        raise Invalid("Session v4 user/message is outside prompt admission")
-      }
-      match fields(required_field(data, "source")).get("kind") {
-        Some(Json::String("user")) => replay.admitted_prompt = true
-        Some(Json::String("runtime-context"))
-        | Some(Json::String("repeat-tool-reminder")) => ()
-        _ => raise Invalid("Unsupported Session v4 user message provenance")
+      let source = required_field(data, "source")
+      let source_kind = required_string(source, "kind", max=64)
+      let is_checkpoint = source_kind == "compact-checkpoint"
+      if is_checkpoint {
+        if values.get("turn") is Some(_) || values.get("step") is Some(_) {
+          raise Invalid(
+            "Session v4 compact checkpoint must omit turn and step coordinates",
+          )
+        }
+      } else {
+        if !replay.open_turn {
+          raise Invalid("Session v4 user/message is outside an open turn")
+        }
+        if !replay.open_step || replay.assistant_seen {
+          raise Invalid("Session v4 user/message is outside prompt admission")
+        }
+        match source_kind {
+          "user" => replay.admitted_prompt = true
+          "runtime-context" | "repeat-tool-reminder" => ()
+          _ => raise Invalid("Unsupported Session v4 user message provenance")
+        }
       }
       validate_v4_message_source(data, "user", replay.message_ids)
-      let human = required_string(
-          required_field(data, "source"),
-          "kind",
-          max=64,
-        ) ==
-        "user"
+      let human = source_kind == "user"
       replay.user_messages[source_seq] = human
       ignore(
-        project_v4_content(required_field(data, "content"), false, line_number),
+        project_v4_content(
+          required_field(data, "content"),
+          false,
+          false,
+          line_number,
+        ),
       )
-      validate_claimed_message(replay, data, line_number)
-      if replay.open_turn {
+      if !is_checkpoint {
+        validate_claimed_message(replay, data, line_number)
+      }
+      if replay.open_turn && !is_checkpoint {
         match (values.get("turn"), values.get("step")) {
           (Some(_), Some(_)) =>
             validate_turn_step(data, replay.turn, replay.step)
@@ -351,34 +413,26 @@ fn replay_v4_event(
         project_v4_content(
           required_field(message, "content"),
           false,
+          kind == "developer/message",
           line_number,
         ),
       )
       if kind == "developer/message" {
-        match fields(data).get("headerSeq") {
-          Some(header_seq) => {
-            let seq = int_value(header_seq, "headerSeq", 0, source_seq)
-            if seq >= source_seq ||
-              replay.source_types.get(seq) != Some("request/header") {
-              raise Invalid(
-                "Session v4 developer headerSeq must bind an earlier request/header",
-              )
-            }
-          }
-          None => ()
-        }
+        validate_v4_developer_header(
+          replay, data, message, source_seq, line_number,
+        )
       }
     }
     "request/header" => {
-      if !replay.open_step {
-        raise Invalid("Session v4 request/header is outside an open step")
+      if !replay.open_turn {
+        raise Invalid("Session v4 request/header is outside an open turn")
       }
       validate_v4_request_header(replay, data)
     }
     "request/context" => {
-      if !replay.open_step || replay.request_context_seen {
+      if !replay.open_turn || replay.request_context_seen {
         raise Invalid(
-          "Session v4 request/context is outside its request header",
+          "Session v4 request/context is outside its request header or repeats",
         )
       }
       let provider = required_string(data, "provider", max=256)
@@ -420,6 +474,8 @@ fn replay_v4_event(
           }
           replay.seed_marker = Some(source_seq)
           replay.fork_closing = replay.open_turn || replay.open_step
+          replay.compaction = None
+          replay.pending_prune = None
         }
         Some(_) =>
           raise Invalid("Session v4 inherited seed marker must be true")
@@ -427,6 +483,11 @@ fn replay_v4_event(
       }
     "session/title" =>
       replay.title = validate_v4_title(data, source_seq, replay.user_messages)
+    "compaction/start"
+    | "compaction/summary"
+    | "compaction/prune"
+    | "compaction/end" =>
+      replay_v4_compaction(replay, record, kind, data, source_seq, line_number)
     _ =>
       // Metadata and extension rows remain verbatim in the source archive.
       // An explicitly ignorable unknown row has no reconstruction semantics.
@@ -436,6 +497,10 @@ fn replay_v4_event(
         )
       }
   }
+  if is_v4_surface_event(kind) {
+    apply_v4_surface(replay, record, kind, source_seq)
+  }
+  replay.source_records.set(source_seq, record)
   (turn, step)
 }
 
@@ -445,18 +510,18 @@ fn validate_v4_references(
   source_seq : Int,
   prior_types : Map[Int, String],
 ) -> Unit raise EngineError {
+  let kind = required_string(record, "type", max=128)
+  let is_append_result = kind == "tool/result" &&
+    fields(record).get("surfaceOp") == Some("append".to_json())
   match fields(record).get("sourceEventSeqs") {
     None => ()
     Some(encoded) =>
       for seq in v4_source_sequences(encoded, source_seq) {
         match prior_types.get(seq) {
           Some(kind) =>
-            if kind != "tool/call" &&
-              kind != "user/message" &&
-              kind != "system/message" &&
-              kind != "developer/message" {
+            if is_append_result && kind != "tool/call" {
               raise Invalid(
-                "Session v4 sourceEventSeqs references a non-message source",
+                "Session v4 sourceEventSeqs references an unsupported source",
               )
             }
           None =>
@@ -502,7 +567,8 @@ fn validate_v4_message_source(
   match (role, source_kind) {
     ("user", "user")
     | ("user", "runtime-context")
-    | ("user", "repeat-tool-reminder") => ()
+    | ("user", "repeat-tool-reminder")
+    | ("user", "compact-checkpoint") => ()
     ("system", "system-prompt") => ()
     ("developer", "tool-registry") => ()
     ("assistant", "model") =>
@@ -608,99 +674,6 @@ fn validate_v4_fork_result(
         "Session v4 fork TOOL_OUTCOME_UNKNOWN result is not canonical",
       )
     }
-  }
-}
-
-///|
-fn validate_v4_request_header(
-  replay : V4Replay,
-  data : Json,
-) -> Unit raise EngineError {
-  let reason = required_string(data, "reason", max=32)
-  if reason != "initial" &&
-    reason != "resume" &&
-    reason != "change" &&
-    reason != "series" {
-    raise Invalid("Unknown Session v4 request/header reason")
-  }
-  for key, _ in fields(data) {
-    if key != "reason" && key != "header" && key != "startsSeries" {
-      raise Invalid("Unsupported Session v4 request/header field: {key}")
-    }
-  }
-  match fields(data).get("startsSeries") {
-    None => ()
-    Some(value) =>
-      if reason != "series" || !bool_value(value, "startsSeries") {
-        raise Invalid("Session v4 startsSeries requires a series header")
-      }
-  }
-  let header = required_field(data, "header")
-  for key, _ in fields(header) {
-    if key != "config" && key != "adapterDefaults" && key != "tools" {
-      raise Invalid("Unsupported Session v4 request header field: {key}")
-    }
-  }
-  let config = required_field(header, "config")
-  for key, _ in fields(config) {
-    if key != "provider" &&
-      key != "model" &&
-      key != "maxTokens" &&
-      key != "reasoningEffort" {
-      raise Invalid("Unsupported Session v4 model configuration field: {key}")
-    }
-  }
-  if required_string(config, "provider", max=256).length() == 0 ||
-    required_string(config, "model", max=256).length() == 0 {
-    raise Invalid("Session v4 request header requires provider and model")
-  }
-  match fields(config).get("maxTokens") {
-    None => ()
-    Some(value) => ignore(int_value(value, "maxTokens", 1, 10000000))
-  }
-  match fields(config).get("reasoningEffort") {
-    None => ()
-    Some(value) => ignore(string_value(value, "reasoningEffort", max=32))
-  }
-  match fields(header).get("tools") {
-    None => ()
-    Some(Json::String("{{tools}}")) => ()
-    Some(Json::String(_)) =>
-      raise Invalid(
-        "Session v4 request header tools string is not a snapshot placeholder",
-      )
-    Some(Json::Array(tools)) =>
-      for tool in tools {
-        validate_v4_tool_definition(tool)
-      }
-    Some(_) => raise Invalid("Session v4 request header tools must be an array")
-  }
-  match fields(header).get("adapterDefaults") {
-    None => ()
-    Some(defaults) => ignore(fields(defaults))
-  }
-  replay.request_header = Some(header)
-  replay.request_context_seen = false
-}
-
-///|
-fn validate_v4_tool_definition(tool : Json) -> Unit raise EngineError {
-  if required_string(tool, "name", max=256).length() == 0 {
-    raise Invalid("Session v4 request tool name must not be empty")
-  }
-  ignore(
-    string_value(
-      required_field(tool, "description"),
-      "tool description",
-      max=16384,
-    ),
-  )
-  ignore(fields(required_field(tool, "parameters")))
-  match fields(tool).get("deferLoading") {
-    None => ()
-    Some(Json::True) => ()
-    Some(_) =>
-      raise Invalid("Session v4 tool deferLoading must be true when present")
   }
 }
 
@@ -811,6 +784,11 @@ fn validate_v4_replay_end(
   }
   if replay.fork_closing {
     raise Invalid("Session v4 fork tail has no complete branch-owned closure")
+  }
+  if replay.pending_prune is Some(_) {
+    raise Invalid(
+      "Session v4 compaction/prune has no adjacent tool-result replacement",
+    )
   }
   if replay.open_turn || replay.open_step {
     // A valid EOF can interrupt a turn. Do not synthesize a tool result or a

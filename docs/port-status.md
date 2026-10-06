@@ -19,8 +19,8 @@ MoonBit で agent の基本実行経路を動かす最初の移植です。
 | `api`, `sdk/protocol`, `typert` | `api/`, `app/`, `host/server.mjs` | gpui typed capability / GUI binding / MCP で置換。upstream API / SDK wire compatibility は提供しない。 |
 | `boot/plugin-manager`, `extensions/cordis-*` | `plugins/` | MoonBit startup descriptor の依存・重複・tool 所有権を実装済み。npm / Cordis ABI、runtime code loading、HMR は未実装。 |
 | `session/session-telemetry*`, inspector | `api/` + hotpath | API 呼出し時間の集計を実装済み。OpenTelemetry、CPU / allocation sampling は未実装。 |
-| `test-support/session-snapshot`, `test-support/llm-replay` | `tests/fixtures/`, `tests/integration/` | upstream tool-call-turn fixture の provenance を保持し、実 tool と完了応答を再現。元の v4 fixture は別の read-only import / reopen 結合テストでも使用。全 snapshot catalog は未対応。 |
-| `compaction`, `spill`, `attachment`, `context` | — | 未実装。初期版は明示的な容量上限で閉じる。 |
+| `test-support/session-snapshot`, `test-support/llm-replay` | `tests/fixtures/`, `tests/integration/` | upstream tool-call-turn fixture の provenance を保持し、実 tool と完了応答を再現。Session v4 catalog の 25 snapshot 中 17 は独立 smoke で import / reopen を確認し、残り 8 は各 archive の未対応 semantics により fail closed。 |
+| `compaction`, `spill`, `attachment`, `context` | `engine/` の read-only v4 projection | v4 importer は compaction summary/checkpoint と tool result pruning の一部を現在の transcript surface に反映。live context compaction、長い会話の継続、spill、attachment block は未実装。 |
 | `subagent`, `goal`, `plan`, `workflow`, `jobs`, `schedule`, `todo` | — | 未実装。 |
 | 外部 MCP client / ACP / hooks / LSP / skill loader | — | 未実装。gpui MCP server の公開とは別機能。 |
 | browser / computer use、SSH、account login、web search、office preview | — | 未実装。 |
@@ -43,14 +43,32 @@ snapshot に保存し、reopen ごとに archive 全体と派生 projection を�
 
 対応する projection は、基本的な user / system / assistant / tool message、tool 呼出しと result の
 相関、複数 turn、通常の failed / cancelled / interrupted 終了、title の user-message citation、
-基本的な inbox splice、および第一階層の seeded fork closure です。EOF 時に未完了の tool call は
+基本的な inbox splice、および第一階層の seeded fork closure です。追加で、`developer/message` による
+tool add/remove、request/header の更新、診断用 `assistant/attempt` stream、current-surface replacement、
+compaction summary/checkpoint と `compaction/prune` による tool result の置換を検証します。
+surface の順序は event sequence の数値順ではなく、現在の surface 上の位置で管理します。replacement は
+shadowed surface node をすべて引用し、tool result の置換は同一 message identity と content 以外の
+全フィールドを維持します。checkpoint は between-step と `turn: null` の standalone archive で受理し、
+成功した compaction は summary・checkpoint・end の関係を検証します。第一階層の seeded fork は
+compaction summary または prune の直後を cut として継承できます。
+
+developer tool addition は過去の request/header から tool 定義を束縛します。native archive では完全な
+tool object が必要です。upstream snapshot shorthand では名前配列を受理して raw history に保持しますが、
+不足した schema を復元・生成しません。header の optional field は省略で clear され、null 値は受理しません。
+`assistant/attempt` は診断 event のみで、retry schedule/start lifecycle や tool execution を意味しません。
+content array が空の system / developer / assistant event は surface に残しますが、derived transcript message は作りません。
+明示的な空文字 text block がある message は、空文字 content の transcript message として投影します。
+
+EOF 時に未完了の tool call は
 `not_started` または `outcome_unknown` として表示し、結果を捏造しません。`ignorable: true` の未知 event は
 raw history に保持し、projection に意味を持たせません。turn 開始時に inbox から claim 済みでも
 model-visible user message にならなかった input は `pending_inbox.unadmitted_turn/step` に分離し、
 通常の pending queue に戻したり実行したりしません。
 
-attachment block、surface replacement、compaction、developer/header 更新、assistant retry、subagent / PTC
-workflow、nested fork など projection の意味を安全に復元できない event は、import 全体を明示的に拒否します。
+attachment block、skill provenance、spill、画像、subagent / PTC workflow、nested fork、retry scheduling
+lifecycle など projection の意味を安全に復元できない event は、import 全体を明示的に拒否します。現在拒否する
+upstream catalog snapshot は `advanced-toolchain`、`advanced-toolchain-runtime`、`claude-code-mods`、
+`multimodal-spill-ends`、`office-skills`、`office-skills-no-renderer`、`skill-load`、`windows-acl-skill` です。
 制約は engine 側の 262,144 UTF-16 code unit 上限と CLI の 1 MiB file 上限にも従います。
 import history は画面上で read-only と表示され、prompt 送信と cancel を拒否します。これは決定的な履歴表示であり、
 agent loop の再開ではありません。記録された provider / tool / approval / permission preset を実行・有効化しません。

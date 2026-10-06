@@ -131,3 +131,56 @@ test "Session v4 import is inert, read-only, atomic, and restorable" {
   assert_true(untouched.restore(forged) is Err(_))
   assert_eq(untouched.snapshot(), empty)
 }
+
+///|
+test "Session v4 replacements follow current surface positions and preserve result identity" {
+  let surface = [7, 19, 13, 15]
+  match v4_surface_replacement_indices(surface, 19, 15) {
+    Some((1, 3)) => ()
+    _ => assert_true(false)
+  }
+  assert_true(v4_surface_replacement_indices(surface, 15, 19) is None)
+  assert_true(v4_surface_replacement_indices(surface, 19, 999) is None)
+
+  let old_message = object([
+    ("role", Json::string("tool")),
+    ("id", Json::string("result-1")),
+    ("toolCallId", Json::string("call-1")),
+    ("isError", Json::boolean(false)),
+    ("content", Json::array([Json::string("large output")])),
+  ])
+  let new_message = object([
+    ("role", Json::string("tool")),
+    ("id", Json::string("result-1")),
+    ("toolCallId", Json::string("call-1")),
+    ("isError", Json::boolean(false)),
+    ("content", Json::array([Json::string("pruned output")])),
+  ])
+  assert_true(v4_json_fields_equal_except(old_message, new_message, "content"))
+  let changed_id = object([
+    ("role", Json::string("tool")),
+    ("id", Json::string("different-result")),
+    ("toolCallId", Json::string("call-1")),
+    ("isError", Json::boolean(false)),
+    ("content", Json::array([Json::string("pruned output")])),
+  ])
+  assert_true(!v4_json_fields_equal_except(old_message, changed_id, "content"))
+
+  let old_data = object([
+    ("turn", integer(1)),
+    ("step", integer(1)),
+    ("message", old_message),
+  ])
+  let new_data = object([
+    ("turn", integer(1)),
+    ("step", integer(1)),
+    ("message", new_message),
+  ])
+  assert_true(v4_json_fields_equal_except(old_data, new_data, "message"))
+  let changed_turn = object([
+    ("turn", integer(2)),
+    ("step", integer(1)),
+    ("message", new_message),
+  ])
+  assert_true(!v4_json_fields_equal_except(old_data, changed_turn, "message"))
+}

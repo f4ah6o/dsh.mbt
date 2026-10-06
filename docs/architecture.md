@@ -64,7 +64,9 @@ checkpoint に失敗した場合は新しい外部作用を続行せず、host �
 ローカルの保存形式は **`dsh.mbt-session-v1`** です。明示的な `session_import` は upstream
 Session v4 JSONL を厳密に読み取り、header と各 raw source line をこの snapshot の中に保持します。
 Session v4 の自動 restore migration や v4 writer はありません。read-only importer は basic message/tool lifecycle、
-inbox splice と第一階層 fork の限定 subset のみを扱います。詳細な拒否条件は
+inbox splice と第一階層 fork に加え、限定的な developer/header 更新、current-surface replacement、compaction
+checkpoint/pruning、診断用 assistant attempt を扱います。live compaction や retry scheduling は実装しません。
+詳細な受理範囲と拒否条件は
 [移植状況](port-status.md) を参照してください。全 session の event log と派生
 messages を、単一 writer の atomic snapshot として保存します。一時ファイル、fsync、rename を使い、
 未完了の書込みを次回の正常な履歴として読みません。
@@ -72,7 +74,9 @@ messages を、単一 writer の atomic snapshot として保存します。一�
 restore は identity、event sequence、turn / step、tool correlation、message projection を検証します。
 import 済み history の restore は保存した v4 archive 全体を再 decode し、raw envelope、派生 transcript、
 status、pending inbox、tool outcome の一致を確認します。imported history は UI でも read-only と表示し、
-prompt を無効にします。import と再オープンは provider/tool effect を発行しません。
+prompt を無効にします。以前の v1 snapshot が元の append-only subset に対する旧 transcript projection と
+完全一致するときだけ、新 projection に正規化して復元します。部分的な旧 projection や行の改変は拒否します。
+import と再オープンは provider/tool effect を発行しません。
 通常の runtime session で保存時に実行中だった turn は interruption として閉じます。
 **既に承認された tool も自動再実行しません。** runtime history はその結果を確認して新しい turn を送信できます。
 import 済み v4 history は immutable な履歴であり、新しい turn も cancel も受け付けません。
