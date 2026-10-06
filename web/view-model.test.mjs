@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isBusy, statusLabel, sessionList, acceptsSnapshot, prettyArguments, runError, displayMessages } from "./view-model.js";
+import { isBusy, isReadOnly, statusLabel, sessionList, acceptsSnapshot, prettyArguments, runError, displayMessages } from "./view-model.js";
 import { drawSceneSnapshot } from "./canvas-renderer.js";
 
 test("pending approval blocks another prompt and exposes a review status", () => {
@@ -9,6 +9,20 @@ test("pending approval blocks another prompt and exposes a review status", () =>
   assert.equal(isBusy({ status: "idle", pending_approval: { call_id: "c1" } }), true);
   assert.equal(isBusy({ status: "completed" }), false);
   assert.equal(statusLabel({ status: "awaiting_approval" }), "Needs approval");
+});
+
+test("imported Session v4 is visibly read-only", () => {
+  const imported = { status: "completed", source_format: "deepseek-session-v4" };
+  assert.equal(isReadOnly(imported), true);
+  assert.equal(statusLabel(imported), "Read-only · Completed");
+  assert.equal(isReadOnly({ status: "completed" }), false);
+  assert.equal(statusLabel({ status: "completed" }), "Completed");
+});
+
+test("failed imported Session v4 does not suggest it can be continued", () => {
+  const imported = { status: "failed", source_format: "deepseek-session-v4", events: [] };
+  assert.match(runError(imported), /cannot be continued/);
+  assert.doesNotMatch(runError(imported), /send another prompt/);
 });
 
 test("a stale poll cannot replace a newer mutation response", () => {

@@ -3,9 +3,14 @@ export function isBusy(session) {
     || ["running", "queued", "awaiting_approval"].includes(session?.status);
 }
 
+export function isReadOnly(session) {
+  return session?.source_format === "deepseek-session-v4";
+}
+
 export function statusLabel(session) {
   if (session?.pending_approval || session?.status === "awaiting_approval") return "Needs approval";
-  return ({ idle: "Ready", running: "Running", queued: "Queued", completed: "Completed", failed: "Failed", cancelled: "Cancelled" })[session?.status] || session?.status || "Ready";
+  const label = ({ idle: "Ready", running: "Running", queued: "Queued", completed: "Completed", failed: "Failed", cancelled: "Cancelled" })[session?.status] || session?.status || "Ready";
+  return isReadOnly(session) ? `Read-only · ${label}` : label;
 }
 
 export function sessionList(result) {
@@ -38,6 +43,7 @@ export function runError(session) {
     if (event.turn_id !== session.turn_id) continue;
     if (typeof event.data?.error === "string" && event.data.error) return event.data.error;
   }
+  if (isReadOnly(session)) return "This imported history records a failed turn and cannot be continued.";
   return "The turn failed. You can review the conversation and send another prompt.";
 }
 

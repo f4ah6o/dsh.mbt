@@ -2,6 +2,8 @@
 import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline/promises';
 import { StringDecoder } from 'node:string_decoder';
+import { constants as fsConstants } from 'node:fs';
+import { open } from 'node:fs/promises';
 import { createHost } from './runtime.mjs';
 import { startWebServer } from './server.mjs';
 import { HostError, messageOf } from './errors.mjs';
@@ -11,6 +13,7 @@ const HELP = `dsh.mbt — MoonBit agent runtime
 Usage:
   node host/cli.mjs [web] [options]
   node host/cli.mjs run "prompt" [options]
+  node host/cli.mjs import-session SESSION.v4.jsonl [options]
   node host/cli.mjs mcp [options]
 
 Options:
@@ -26,9 +29,12 @@ Options:
   --approve-tools NAMES   Explicit auto-approval for write,edit,bash (comma list)
   --approve-writes        Explicit auto-approval for write and edit
   --session ID            Send the run prompt to an existing session
+  --json                  Print the final or imported session as JSON
   --title TEXT            Title for a new run session
-  --json                  Print the final run session as JSON
   --help                  Show this help
+
+import-session accepts a native Session v4 JSONL file and creates a read-only history.
+It does not resume the turn, execute recorded tools, or activate imported permissions.
 
 Credentials remain in the host process: DEEPSEEK_API_KEY or OPENAI_API_KEY.
 DSH_API_KEY, DSH_MODEL, DSH_BASE_URL, and DSH_MODE override the provider defaults.
@@ -59,13 +65,14 @@ export function parseCLI(argv, env = process.env) {
     else positionals.push(argument);
   }
   const command = positionals.shift() ?? 'web';
-  if (!['web', 'run', 'mcp'].includes(command) && !options.help) throw new HostError(`Unknown command: ${command}`);
-  if (command !== 'run' && positionals.length) throw new HostError('Unexpected positional arguments');
+  if (!['web', 'run', 'import-session', 'mcp'].includes(command) && !options.help) throw new HostError(`Unknown command: ${command}`);
+  if (command !== 'run' && command !== 'import-session' && positionals.length) throw new HostError('Unexpected positional arguments');
   if (command === 'run' && !positionals.length && !options.help) throw new HostError('run requires a prompt');
+  if (command === 'import-session' && positionals.length !== 1 && !options.help) throw new HostError('import-session requires one Session v4 JSONL path');
   if (options.mode === 'openai' && !options.demo && !options.model && !options.help) throw new HostError('OpenAI-compatible mode requires an explicit model: set --model NAME or DSH_MODEL');
   if (options.mode === 'deepseek') options.model ??= 'deepseek-flash';
   options.apiKey = env.DSH_API_KEY ?? (options.mode === 'openai' ? env.OPENAI_API_KEY : env.DEEPSEEK_API_KEY);
-  return { command, prompt: positionals.join(' '), options };
+  return { command, prompt: command === 'run' ? positionals.join(' ') : '', sessionPath: command === 'import-session' ? positionals[0] : undefined, options };
 }
 
 export async function serveMcp(host, input = process.stdin, output = process.stdout) {
@@ -148,8 +155,40 @@ async function runPrompt(host, prompt, options, signal) {
   if (current.status !== 'completed') process.exitCode ||= 1;
 }
 
+async function importSession(host, sourcePath, options, signal) {
+  const maxBytes = 1024 * 1024;
+  let file;
+  try { file = await open(sourcePath, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0)); }
+  catch (cause) { throw new HostError(`Cannot read Session v4 archive at ${sourcePath}`, { cause }); }
+  let bytes;
+  try {
+    signal.throwIfAborted();
+    const info = await file.stat();
+    if (!info.isFile()) throw new HostError('Session v4 archive path must name a regular file');
+    if (info.size > maxBytes) throw new HostError('Session v4 archive exceeds the 1 MiB CLI file limit');
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let total = 0;
+    while (total < buffer.length) {
+      signal.throwIfAborted();
+      const { bytesRead } = await file.read(buffer, total, buffer.length - total, total);
+      if (bytesRead === 0) break;
+      total += bytesRead;
+    }
+    if (total > maxBytes) throw new HostError('Session v4 archive exceeds the 1 MiB CLI file limit');
+    bytes = buffer.subarray(0, total);
+  } finally { await file.close(); }
+  let jsonl;
+  try { jsonl = new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
+  catch (cause) { throw new HostError('Session v4 archive is not valid UTF-8', { cause }); }
+  signal.throwIfAborted();
+  const imported = await host.call('session_import', { jsonl });
+  if (!imported.ok) throw new HostError(imported.error);
+  if (options.json) process.stdout.write(`${JSON.stringify(imported.result)}\n`);
+  else process.stdout.write(`Imported Session v4 as ${imported.result.id}: ${imported.result.title}\nRead-only history (${imported.result.status}); recorded tools were not executed.\n`);
+}
+
 export async function main(argv = process.argv.slice(2)) {
-  const { command, prompt, options } = parseCLI(argv);
+  const { command, prompt, sessionPath, options } = parseCLI(argv);
   if (options.help) { process.stdout.write(HELP); return; }
   const controller = new AbortController();
   const interrupt = () => { process.exitCode = 130; controller.abort(new Error('Interrupted')); };
@@ -172,7 +211,8 @@ export async function main(argv = process.argv.slice(2)) {
       const abortInput = () => process.stdin.destroy();
       controller.signal.addEventListener('abort', abortInput, { once: true });
       try { await serveMcp(host); } finally { controller.signal.removeEventListener('abort', abortInput); }
-    } else await runPrompt(host, prompt, options, controller.signal);
+    } else if (command === 'import-session') await importSession(host, sessionPath, options, controller.signal);
+    else await runPrompt(host, prompt, options, controller.signal);
   } finally {
     try { await web?.close(); } finally {
       try { await host?.close(); } finally {

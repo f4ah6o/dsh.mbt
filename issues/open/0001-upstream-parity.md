@@ -1,12 +1,19 @@
 # 0001: DeepSeek Harness の残りの機能を MoonBit へ移植する
 
 状態: open。最初の browser / CLI 実行経路は [移植状況](../../docs/port-status.md) を参照。
+Model: gpt-6-luna
+Updated: 2026-10-06
 upstream baseline は `5badb15009ae1756c3afe0ae0cef1faafc290ccc`。
 
 ## 1. Session v4 と replay
 
 upstream JSONL を version ごとに厳密に decode し、イベントの意味を MoonBit 型へ移す。
 未知の event、attachment、interruption を黙って捨てない。v4 のまま保存するか、明示的な importer として独自 schema へ移すかを仕様に記録する。
+
+部分対応: `session_import` は Session v4 native JSONL と upstream snapshot shorthand の限定 event subset を検証し、
+元の raw lines を保持した read-only projection を作る。対応 event / 拒否する event は
+[移植状況](../../docs/port-status.md) に記載する。通常の v1 restore は維持し、
+import history は再開しない。v0–v3 migration、v4 writer、全 snapshot catalog 互換は引き続き本 issue の対象。
 
 受入条件:
 

@@ -1,7 +1,7 @@
 # 検証記録
 
-2026-10-05、Linux x86_64、Node.js `24.19.0`、MoonBit compiler / core
-`0.10.14+7d59c7ec9`、moon / moonrun `0.1.20260920` で実行。
+2026-10-06、macOS arm64、Node.js `24.21.0`、MoonBit compiler / core
+`0.10.14+7d59c7ec9`、固定 moon / moonrun で実行。
 以下は実行して終了を確認した local の結果です。GitHub Actions の状態は対象 PR の Checks を参照してください。
 
 ## 通常 gate
@@ -12,17 +12,16 @@
 | --- | --- |
 | 固定 toolchain / core / 3 submodule の確認 | PASS |
 | MoonBit format と check | PASS。自身の warning 0 |
-| JavaScript source / test の syntax check | PASS、24 files |
-| MoonBit portable packages / JS | 55 / 55 PASS |
-| MoonBit portable packages / native | 55 / 55 PASS |
-| MoonBit portable packages / Wasm | 55 / 55 PASS |
-| MoonBit portable packages / Wasm GC | 55 / 55 PASS |
+| JavaScript source / test の syntax check | PASS、25 files |
+| MoonBit portable packages / JS | 56 / 56 PASS |
+| MoonBit portable packages / native | 56 / 56 PASS |
+| MoonBit portable packages / Wasm | 56 / 56 PASS |
+| MoonBit portable packages / Wasm GC | 56 / 56 PASS |
 | JavaScript app release build | PASS |
-| Node host | 30 / 30 PASS |
-| Browser view model | 6 / 6 PASS |
-| Built app integration | 2 / 2 PASS |
+| Node host | 34 / 34 PASS |
+| Browser view model | 8 / 8 PASS |
+| Built app integration | 8 / 8 PASS |
 
-portable package 内訳は engine 22、provider 19、plugins 4、api 4、ui 6。
 `app` 自体に MoonBit unit test はなく、生成 ESM の export / lifetime は Node 結合テストで検証しています。
 固定 hotpath source の `derive(Show, Eq)` に由来する 3 種の warning は依存の既知診断として表示します。
 自身の warning、別の依存からの warning、format 差分は check を失敗させます。
@@ -31,7 +30,8 @@ portable package 内訳は engine 22、provider 19、plugins 4、api 4、ui 6。
 
 `tests/fixtures/upstream-tool-call-turn.json` は upstream の
 `snapshots/session/tool-call-turn/session.v4.jsonl` から prompt と 2 回の assistant completion を抽出したものです。
-元 repository、revision、path、SHA-256、license を fixture に保持しています。
+`tests/fixtures/upstream-tool-call-turn/session.v4.jsonl` は元の v4 snapshot file であり、内容を変更せず保存しています。
+元 repository、revision、path、SHA-256、license は fixture provenance に記録しています。
 
 `tests/integration/upstream-replay.test.mjs` は生成済み MoonBit ESM と実際の host を使用して、次を確認します。
 
@@ -42,17 +42,25 @@ portable package 内訳は engine 22、provider 19、plugins 4、api 4、ui 6。
 5. upstream 記録の最終応答 `DONE` で会話が完了する。
 6. host を閉じて開き直しても同じ messages を保持し、provider / bash を再実行しない。
 
-これは upstream v4 file importer のテストではありません。upstream の runtime-context や permission subsystem を丸ごと再現するものでもありません。
+この runtime replay は provider と承認済み tool を動かすテストです。対して
+`tests/integration/session-v4-import.test.mjs` は Session v4 の明示的 read-only importer を使い、
+元 fixture の transcript projection、provider/tool effect がないこと、reopen 時の再検証、偽造 projection の
+atomic rejection を確認します。生成した physical envelope のログでは multi-turn tool correlations、title citation、
+inbox splice と未 admission claim、first-level fork の両方の未完了 tool outcome、assistant-less provider failure / cancellation、
+interrupted tail、restore source/creation tampering、malformed archive rejection を確認します。CLI は大容量 file と FIFO の拒否も確認します。
+MoonBit white-box test は importer の不変条件と内部所有権を JS / native / Wasm / Wasm GC の全 target で実行します。
 もう 1 本の integration test は app の `stop` / `start` をまたぐ古い effect が新しい session を更新できないことを検証します。
 
 ## 実 Chromium 検証
 
-`web/browser-smoke.mjs` **PASS / exit 0**。実際の browser、HTTP server、MoonBit engine / API / gpui scene、Canvas を使用しました。
+`web/browser-smoke.mjs` **PASS / exit 0 (2026-10-06)**。実際の browser、HTTP server、MoonBit engine / API / gpui scene、Canvas を使用しました。
 provider response は固定 fixture です。file write は test 用の一時ディレクトリで本当に実行します。
 
 確認範囲:
 
 - create / select / send / complete と入力中 draft の保持。
+- upstream Session v4 import 後の read-only status / composer、transcript、provider を呼ばない continuation refusal。
+- New session の処理中に active session を明示的に選び直した場合の selection-intent race。
 - 承認前にはファイルが存在しないこと、Allow 後に作成されること、Deny では作成されないこと。
 - provider 処理の cancel、HTTP 503 の表示。
 - `<script>` の文字列が実行されずに表示されること。
@@ -126,8 +134,8 @@ restore は成功し、effect の再発行は 0 でした。
 
 ## 未実行・未実装との区別
 
-- **未実行:** 実 API key による有料 provider 接続、macOS 上の host 実行。
-- **未実装:** native window、upstream Session v4 importer、動的 Cordis / npm plugin、subagent、compaction など。
+- **未実行:** 実 API key による有料 provider 接続。
+- **未実装:** native window、自動 Session v4 migration / writer と importer が拒否する event semantics、v0–v3 migration、動的 Cordis / npm plugin、subagent、compaction など。
 - **対象外:** gpui の全 OS backend / example の検証。portable package の native PASS を native UI の実機 PASS として扱いません。
 
 全機能の対応表は [移植状況](port-status.md)、後続の受入条件は [残りの移植作業](../issues/open/0001-upstream-parity.md) にあります。

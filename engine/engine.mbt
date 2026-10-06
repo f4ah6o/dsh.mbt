@@ -54,6 +54,11 @@ fn Engine::invoke_impl(
       "session_get" => self.input_session(input).json()
       "session_send" => {
         let session = self.input_session(input)
+        if session.imported {
+          raise Invalid(
+            "Imported Session v4 histories are read-only and cannot be continued",
+          )
+        }
         let prompt = required_string(input, "prompt", max=16384)
         if prompt.length() == 0 {
           raise Invalid("prompt must not be empty")
@@ -87,6 +92,11 @@ fn Engine::invoke_impl(
       }
       "session_cancel" => {
         let session = self.input_session(input)
+        if session.imported {
+          raise Invalid(
+            "Imported Session v4 histories are read-only and cannot be cancelled",
+          )
+        }
         if session.is_busy() {
           self.terminate(session, Cancelled, "cancelled", "Cancelled by user")
         } else if session.status == Idle {
@@ -125,6 +135,12 @@ fn Engine::invoke_impl(
         }
         session.json()
       }
+      "session_import" =>
+        self
+        .import_upstream_v4(
+          required_string(input, "jsonl", max=SESSION_CAPACITY),
+        )
+        .json()
       _ => raise Invalid("Unknown operation: \{operation}")
     }
     Ok(value)
@@ -215,6 +231,9 @@ fn Session::append(self : Session, kind : String, data : Json) -> Unit {
 
 ///|
 fn Session::messages(self : Session) -> Array[Json] {
+  if self.imported {
+    return imported_messages(self.events)
+  }
   self.events.filter_map(event => {
     match event.kind {
       "user/message" | "tool/result" => Some(detached(event.data))
@@ -263,6 +282,14 @@ fn Session::json(self : Session) -> Json {
         ]),
       )
     None => ()
+  }
+  if self.imported {
+    value.set("source_format", Json::string("deepseek-session-v4"))
+    value.set(
+      "pending_tool_calls",
+      Json::array(imported_pending_calls(self.events)),
+    )
+    value.set("pending_inbox", imported_pending_inbox(self.events))
   }
   Json::object(value)
 }

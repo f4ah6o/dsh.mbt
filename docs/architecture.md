@@ -61,13 +61,21 @@ checkpoint に失敗した場合は新しい外部作用を続行せず、host �
 
 ## 永続化と容量
 
-保存形式は **`dsh.mbt-session-v1`** です。upstream の Session v4 JSONL importer ではありません。
-全 session の event log と derived messages を、単一 writer の atomic snapshot として保存します。
-一時ファイル、fsync、rename を使い、未完了の書込みを次回の正常な履歴として読みません。
+ローカルの保存形式は **`dsh.mbt-session-v1`** です。明示的な `session_import` は upstream
+Session v4 JSONL を厳密に読み取り、header と各 raw source line をこの snapshot の中に保持します。
+Session v4 の自動 restore migration や v4 writer はありません。read-only importer は basic message/tool lifecycle、
+inbox splice と第一階層 fork の限定 subset のみを扱います。詳細な拒否条件は
+[移植状況](port-status.md) を参照してください。全 session の event log と派生
+messages を、単一 writer の atomic snapshot として保存します。一時ファイル、fsync、rename を使い、
+未完了の書込みを次回の正常な履歴として読みません。
 
 restore は identity、event sequence、turn / step、tool correlation、message projection を検証します。
-保存時に実行中だった turn は interruption として閉じます。**既に承認された tool も自動再実行しません。**
-ユーザーはその結果を確認して新しい turn を送信できます。
+import 済み history の restore は保存した v4 archive 全体を再 decode し、raw envelope、派生 transcript、
+status、pending inbox、tool outcome の一致を確認します。imported history は UI でも read-only と表示し、
+prompt を無効にします。import と再オープンは provider/tool effect を発行しません。
+通常の runtime session で保存時に実行中だった turn は interruption として閉じます。
+**既に承認された tool も自動再実行しません。** runtime history はその結果を確認して新しい turn を送信できます。
+import 済み v4 history は immutable な履歴であり、新しい turn も cancel も受け付けません。
 
 初期版には次の上限があります。
 
@@ -80,7 +88,7 @@ restore は identity、event sequence、turn / step、tool correlation、message
 | host が返す tool output | UTF-8 で 65,536 bytes、打切りマーカー込み |
 | 1 model step の tool 数 | 16 |
 | 1 turn の model step | 既定 16、指定範囲 1–64 |
-| HTTP request / MCP line | 1 MiB |
+| HTTP request / MCP line / CLI import file | 1 MiB |
 
 capacity を超える completion は、採用前の履歴を保ったまま `session_capacity` で失敗として閉じます。
 その candidate から作られた tool / LLM effect は送出しません。続行には新しい session を作成してください。
@@ -101,6 +109,7 @@ public deployment や multi-user authentication は未実装です。
 | 操作 | 入力 | 結果 |
 | --- | --- | --- |
 | `session_create` | 任意の `id`, `title`, `system_prompt`, `max_steps` | 作成した session |
+| `session_import` | `jsonl` に upstream Session v4 archive | 検証済み read-only history |
 | `session_list` | `{}` | `id`, `title`, `status`, `turn_id`, `step` の要約配列 |
 | `session_get` | `session_id` | events / messages / pending approval を含む session |
 | `session_send` | `session_id`, `prompt` | 受理後の session |
@@ -111,6 +120,8 @@ public deployment や multi-user authentication は未実装です。
 
 各操作の入力は additional properties を認めません。typed GUI binding にも同じ検証を適用します。
 `session_send` は実行中の session への重複投入を拒否します。
+import 済み history は `session_send` と `session_cancel` を拒否します。permission preset、approval policy、sandbox mode は
+元の履歴としてだけ保持し、host の設定や capability admission に反映しません。
 クライアントが再送する create には明示的な `id` を使用できます。
 JSON-RPC の `id` は応答の相関用であり、同じ ID の request を自動 deduplicate するものではありません。
 

@@ -1,5 +1,5 @@
 import { drawSceneSnapshot } from "./canvas-renderer.js";
-import { isBusy, statusLabel, sessionList, acceptsSnapshot, prettyArguments, runError, displayMessages } from "./view-model.js";
+import { isBusy, isReadOnly, statusLabel, sessionList, acceptsSnapshot, prettyArguments, runError, displayMessages } from "./view-model.js";
 
 const $ = (id) => document.getElementById(id);
 const state = {
@@ -79,6 +79,7 @@ function renderSessions() {
 function renderControls() {
   const session = state.snapshot;
   const busy = isBusy(session);
+  const readOnly = isReadOnly(session);
   const approval = session.pending_approval;
   $("session-title").textContent = state.id ? session.title || "Untitled session" : "Agent workspace";
   $("status").textContent = statusLabel(session);
@@ -86,8 +87,10 @@ function renderControls() {
   $("progress").textContent = session.turn_id > 0 ? `Turn ${session.turn_id} · Step ${session.step || 0}` : "";
   $("cancel").disabled = state.mutation || !busy;
   $("new-session").disabled = state.mutation;
-  $("send").disabled = state.mutation || busy || !state.moon || !$("prompt").value.trim();
-  $("composer-hint").textContent = approval ? "Review the tool request to continue." : busy ? "The agent is working. Stop to cancel this turn." : "⌘ / Ctrl + Enter to send";
+  $("prompt").disabled = readOnly;
+  $("prompt").placeholder = readOnly ? "Imported history is read-only" : "What would you like to work on?";
+  $("send").disabled = state.mutation || busy || readOnly || !state.moon || !$("prompt").value.trim();
+  $("composer-hint").textContent = readOnly ? "This imported history is read-only and cannot be continued." : approval ? "Review the tool request to continue." : busy ? "The agent is working. Stop to cancel this turn." : "⌘ / Ctrl + Enter to send";
   $("approval").hidden = !approval;
   if (approval) {
     $("approval-description").textContent = `${approval.name} is waiting for permission to run.`;
@@ -201,8 +204,10 @@ async function poll() {
 }
 
 async function selectSession(id) {
-  if (id === state.id) return;
-  state.id = id; state.selection += 1; state.follow = true; state.actionError = "";
+  const alreadySelected = id === state.id;
+  state.selection += 1; state.follow = true; state.actionError = "";
+  if (alreadySelected) return;
+  state.id = id;
   const selection = state.selection;
   const cached = state.sessions.find((row) => row.id === id);
   if (cached) acceptSnapshot(cached);
@@ -241,7 +246,7 @@ $("composer").addEventListener("submit", (event) => {
   event.preventDefault();
   const entered = $("prompt").value;
   const prompt = entered.trim();
-  if (!prompt || isBusy(state.snapshot) || !state.moon) return;
+  if (!prompt || isBusy(state.snapshot) || isReadOnly(state.snapshot) || !state.moon) return;
   mutate(async () => {
     const id = state.id || (await createSession(prompt.slice(0, 60))).id;
     const snapshot = await api("session_send", { session_id: id, prompt });

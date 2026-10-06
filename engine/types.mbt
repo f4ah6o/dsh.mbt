@@ -82,6 +82,7 @@ priv struct Session {
   title : String
   system_prompt : String
   max_steps : Int
+  mut imported : Bool
   mut status : Status
   mut turn_id : Int
   mut step : Int
@@ -157,6 +158,7 @@ fn fresh_session(
     title,
     system_prompt,
     max_steps,
+    imported: false,
     status: Idle,
     turn_id: 0,
     step: 0,

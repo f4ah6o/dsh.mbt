@@ -6,8 +6,9 @@ UI と capability API に [gpui-mbt/gpui.mbt](https://github.com/gpui-mbt/gpui.m
 ネットワーク・ファイル・子プロセス・永続化の I/O は Node.js host が担当します。
 
 **現在は最初の動作する移植版です。** ブラウザ / CLI から会話し、ローカルツールを実行して履歴を保存できます。
-upstream 全機能の互換移植は進行中です。Session v4 の直接読込、Cordis / npm plugin 互換、
-subagent、compaction、native window などの未実装範囲は [移植状況](docs/port-status.md) に記載しています。
+upstream 全機能の互換移植は進行中です。Session v4 は明示的な read-only import に限って対応し、
+Cordis / npm plugin 互換、subagent、compaction、native window などは未実装です。
+詳細な対応範囲は [移植状況](docs/port-status.md) に記載しています。
 
 ## 起動
 
@@ -57,12 +58,15 @@ node host/cli.mjs web --mode openai --model MODEL --base-url https://YOUR-PROVID
 node host/cli.mjs run "この workspace のファイルを確認してください" --demo --json
 node host/cli.mjs run "README を確認してください" --workspace /absolute/path/to/project
 node host/cli.mjs run "続きを進めてください" --session SESSION_ID
+node host/cli.mjs import-session /path/to/session.v4.jsonl --json
 node host/cli.mjs --help
 ```
 
 `run` は完了した会話を出力します。`--json` はセッション全体を出力します。
 同じ workspace の `.dsh.mbt/sessions.json` に履歴を保存し、次回起動で復元します。
 保存先は `--data-dir` で指定できます。同一データディレクトリを複数プロセスから同時に開くことはできません。
+`import-session` は upstream Session v4 を検証して、再開できない読み取り専用履歴として保存します。
+記録された tool、inbox、permission、preset は履歴に残しますが、実行や権限設定には使いません。
 
 ## ツールと承認
 
@@ -117,9 +121,13 @@ curl -sS http://127.0.0.1:3080/api/call \
 返却形式は `{ "ok": true, "result": ... }` または `{ "ok": false, "error": "..." }`。
 `session_send` は処理の受付を返します。完了は `session_get` で確認します。
 
-公開操作は `session_create`、`session_list`、`session_get`、`session_send`、`session_cancel`、
+公開操作は `session_create`、`session_import`、`session_list`、`session_get`、`session_send`、`session_cancel`、
 `tool_approve`、`plugin_list`、`profile_stats`。`session_list` は一覧用の要約を返します。
 HTTP carrier は loopback に限定します。
+
+`session_import` は `jsonl` に Session v4 archive 全体を受け取ります。import は read-only で、
+再オープン時も原文と派生 messages / status / pending inbox / tool outcome を再検証します。
+これは deterministic history projection であり、agent loop の再開、provider request、tool execution は行いません。
 
 `POST /mcp` と `node host/cli.mjs mcp` は gpui の MCP protocol を直接公開します。
 この固定版は **`2026-07-28` / `server/discover`** を使用します。
@@ -141,6 +149,7 @@ MoonBit の portable package は JS / native / Wasm / Wasm GC の全 target で�
 テストは API key を使いません。移植元の実記録から抽出した fixture をローカル HTTP provider に流し、
 承認済みの `echo SNAPSHOT_OK`、次のモデル応答 `DONE`、保存と再読込まで再現します。
 任意の実 Chromium 検証は `web/browser-smoke.mjs` にあります。
+Session v4 importer の対応 event と明示的な制約は [移植状況](docs/port-status.md) を参照してください。
 詳細な結果と再実行方法は [検証記録](docs/verification.md) を参照してください。
 
 ## ドキュメント

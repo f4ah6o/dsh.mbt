@@ -15,6 +15,7 @@ const screenshots = path.resolve(process.env.DSH_SCREENSHOT_DIR || path.join(rep
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "dsh-browser-"));
 await fs.mkdir(screenshots, { recursive: true });
 let callNumber = 0;
+let providerCalls = 0;
 let browser;
 let host;
 let web;
@@ -30,6 +31,7 @@ function completion(content, toolCalls) {
 }
 
 async function provider(_url, options) {
+  providerCalls += 1;
   const request = JSON.parse(options.body);
   const messages = request.messages;
   const prompt = [...messages].reverse().find((message) => message.role === "user")?.content || "";
@@ -139,6 +141,23 @@ try {
   assert.equal(await page.locator("#text-transcript").evaluate((element) => element.scrollTop), 0);
   await page.locator("#text-view").click();
 
+  const importedSource = await fs.readFile(new URL("../tests/fixtures/upstream-tool-call-turn/session.v4.jsonl", import.meta.url), "utf8");
+  const imported = await host.call("session_import", { jsonl: importedSource });
+  assert.equal(imported.ok, true, imported.error);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.waitForFunction(() => document.getElementById("status").textContent === "Read-only · Completed");
+  assert.equal(await page.locator("#prompt").isDisabled(), true);
+  assert.equal(await page.locator("#send").isDisabled(), true);
+  assert.match(await page.locator("#composer-hint").textContent(), /read-only/);
+  assert.match(await page.locator("#text-transcript").textContent(), /DONE/);
+  const providerCallsBeforeRejectedContinuation = providerCalls;
+  const deniedContinuation = await host.call("session_send", { session_id: imported.result.id, prompt: "do not run" });
+  assert.equal(deniedContinuation.ok, false);
+  assert.equal(providerCalls, providerCallsBeforeRejectedContinuation);
+
+  await page.locator(`.session-option[data-id='${firstId}']`).click();
+  await page.waitForFunction(() => document.getElementById("status").textContent === "Completed");
+
   // A later explicit session selection wins over an earlier create request.
   await page.locator("#new-session").click();
   await page.locator(`.session-option[data-id='${firstId}']`).click();
@@ -158,7 +177,7 @@ try {
   await page.locator("#connection-error").waitFor({ state: "hidden" });
   assert.equal(await currentId(), firstId);
   assert.deepEqual(failures, []);
-  console.log(JSON.stringify({ status: "PASS", assertions: "startup, create/select, draft preservation, submit, approval allow/deny, real file write, cancellation, provider error, literal output, scrolling, text-view follow, create/select race, mobile layout, reconnect", screenshots }));
+  console.log(JSON.stringify({ status: "PASS", assertions: "startup, create/select, draft preservation, submit, approval allow/deny, real file write, cancellation, provider error, literal output, scrolling, text-view follow, Session v4 read-only import/no-effect display, same-session create/select race, mobile layout, reconnect", screenshots }));
 } catch (error) {
   if (page && !page.isClosed()) await page.screenshot({ path: path.join(screenshots, "failure.png"), fullPage: true }).catch(() => {});
   throw error;
