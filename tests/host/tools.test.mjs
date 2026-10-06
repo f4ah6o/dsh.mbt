@@ -68,6 +68,21 @@ test('glob and regex grep are bounded and exclude protected host state and symli
   assert.equal((await tools.execute({ name: 'glob', arguments: { pattern: '../*' } })).ok, false);
 });
 
+test('protected paths canonicalize symlink aliases and missing descendants', async (t) => {
+  const { base, workspace } = await setup(t);
+  const protectedDirectory = path.join(workspace, '.dsh.mbt');
+  await fs.mkdir(protectedDirectory);
+  const alias = path.join(base, 'workspace-alias');
+  await fs.symlink(workspace, alias);
+  const tools = await createWorkspaceTools({
+    workspace,
+    protectedPaths: [path.join(alias, '.dsh.mbt', 'sessions.json')],
+  });
+  const result = await tools.execute({ name: 'read', arguments: { file_path: '.dsh.mbt/sessions.json' } });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /Host data is not accessible/);
+});
+
 test('catastrophic regular expressions cannot block the host event loop', { timeout: 4000 }, async (t) => {
   const { workspace } = await setup(t);
   await fs.writeFile(path.join(workspace, 'long.txt'), `${'a'.repeat(50_000)}!`);

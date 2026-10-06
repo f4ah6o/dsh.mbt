@@ -39,6 +39,23 @@ function sameVersion(left, right) {
   return sameFile(left, right) && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 
+async function canonicalizePathWithMissingTail(target) {
+  let current = path.resolve(target);
+  const suffix = [];
+  while (true) {
+    try {
+      const resolved = await fs.realpath(current);
+      return path.join(resolved, ...suffix.reverse());
+    } catch (error) {
+      if (error.code !== 'ENOENT' && error.code !== 'ENOTDIR') throw error;
+      const parent = path.dirname(current);
+      if (parent === current) throw error;
+      suffix.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
 function bounded(text, maximum = OUTPUT_LIMIT) {
   const bytes = Buffer.from(text);
   if (bytes.length <= maximum) return text;
@@ -61,7 +78,7 @@ export async function createWorkspaceTools({ workspace, allowShell = false, prot
   const root = await fs.realpath(path.resolve(workspace ?? process.cwd()));
   const rootIdentity = await fs.lstat(root);
   if (!rootIdentity.isDirectory()) throw new HostError('Workspace must be a directory');
-  const blocked = protectedPaths.map((item) => path.resolve(item));
+  const blocked = await Promise.all(protectedPaths.map(canonicalizePathWithMissingTail));
   const useDirectoryFD = process.platform === 'linux';
 
   function resolveWorkspace(input, { directory = false } = {}) {
