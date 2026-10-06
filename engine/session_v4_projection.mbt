@@ -53,6 +53,7 @@ fn project_v4_content(
             raise Invalid(
               "Session v4 tool change blocks are only valid in developer messages",
             )
+          "image" => output.text += v4_image_reference_text(block, line_number)
           _ =>
             raise Invalid(
               "Unsupported Session v4 attachment/content block on line \{line_number}: \{kind}",
@@ -197,7 +198,7 @@ fn validate_claimed_message(
   let claimed_step : Array[Json] = []
   for message in inbox.claimed_step {
     if !found && required_string(message, "id", max=128) == id {
-      if message != data {
+      if message != data && !validate_v4_inbox_mod_append(message, data) {
         raise Invalid("Admitted user/message differs from its inbox entry")
       }
       found = true
@@ -212,7 +213,7 @@ fn validate_claimed_message(
   let claimed_turn : Array[Json] = []
   for message in inbox.claimed_turn {
     if !found && required_string(message, "id", max=128) == id {
-      if message != data {
+      if message != data && !validate_v4_inbox_mod_append(message, data) {
         raise Invalid("Admitted user/message differs from its inbox entry")
       }
       found = true

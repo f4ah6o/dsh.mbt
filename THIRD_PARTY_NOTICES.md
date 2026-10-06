@@ -8,8 +8,10 @@ commit `5badb15009ae1756c3afe0ae0cef1faafc290ccc` (0.2.1-alpha.1).
 
 Copyright (c) 2026 DeepSeek. Licensed under the MIT License. The original notice
 is retained in [LICENSE](LICENSE). Source provenance appears in the provider
-package and in the extracted test fixture. The original TypeScript runtime is
-not shipped or invoked by this project.
+package and in the extracted test fixtures, including the 25 JSONL archives
+under upstream `snapshots/session/`. Per-fixture source paths and SHA-256
+digests are recorded beside the files. The original TypeScript runtime is not
+shipped or invoked by this project.
 
 ## gpui.mbt
 

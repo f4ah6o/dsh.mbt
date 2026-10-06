@@ -57,6 +57,9 @@ fn Engine::import_upstream_v4(
     message_ids: Map([]),
     calls: Map([]),
     call_order: [],
+    ptc_dispatches: Map([]),
+    workflow_runs: Map([]),
+    subagents: Map([]),
     inbox: {
       next_turn: [],
       next_step: [],

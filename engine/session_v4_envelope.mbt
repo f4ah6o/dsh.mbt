@@ -170,7 +170,9 @@ fn known_v4_event(kind : String) -> Bool {
     "compaction/end", "compaction/prune", "compaction/start", "compaction/summary",
     "developer/message", "permission/preset", "request/context", "request/header",
     "sandbox/mode", "session/end-seed", "session/title", "step/end", "step/start",
-    "system/message", "tool/call", "tool/result", "turn/end", "turn/start", "user/message",
+    "subagent/catalog", "system/message", "tool-workflow/agent-end", "tool-workflow/agent-start",
+    "tool-workflow/run-end", "tool-workflow/run-start", "tool/call", "tool/ptc-dispatch",
+    "tool/ptc-dispatch-start", "tool/result", "turn/end", "turn/start", "user/message",
   ].contains(kind)
 }
 
@@ -186,14 +188,18 @@ fn validate_supported_v4_event(
       "Unsupported Session v4 projection event on line \{line_number}: \{kind}",
     )
   }
-  if kind == "tool/ptc-dispatch" ||
-    kind == "tool/ptc-dispatch-start" ||
-    kind.has_prefix("tool-workflow/") ||
-    kind.has_prefix("subagent/") ||
-    kind.has_prefix("team/") {
-    // These records describe nested execution ownership that the read-only
-    // projection cannot reconstruct. Preserve neither a guessed result nor an
-    // apparently complete imported transcript.
+  if (
+      kind.has_prefix("tool/ptc-") ||
+      kind.has_prefix("tool-workflow/") ||
+      kind.has_prefix("subagent/") ||
+      kind.has_prefix("team/")
+    ) &&
+    ![
+      "subagent/catalog", "tool/ptc-dispatch", "tool/ptc-dispatch-start", "tool-workflow/agent-end",
+      "tool-workflow/agent-start", "tool-workflow/run-end", "tool-workflow/run-start",
+    ].contains(kind) {
+    // These execution families are opt-in allowlists. `ignorable` cannot
+    // silently turn a new lifecycle record into inert source history.
     raise Invalid(
       "Unsupported Session v4 execution correlation on line \{line_number}: \{kind}",
     )

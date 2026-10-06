@@ -59,6 +59,24 @@ content、message identity、source sequence の改変や旧・新 row の混在
 拒否対象は `advanced-toolchain`、`advanced-toolchain-runtime`、`claude-code-mods`、`multimodal-spill-ends`、
 `office-skills`、`office-skills-no-renderer`、`skill-load`、`windows-acl-skill` です。
 
+## Session v4 catalog completion increment
+
+2026-10-07、今回の差分を含む状態で `npm test` **PASS / exit 0**。
+
+| command | 結果 |
+| --- | --- |
+| 固定 toolchain / core / 3 submodule の確認 | PASS。Node.js `24.21.0`、MoonBit `0.10.14+7d59c7ec9`。 |
+| MoonBit format / package checks、JavaScript syntax | PASS。engine/provider/plugins/api/ui は all-target check、app JS check、syntax 25 files、自身の warning 0。固定 hotpath diagnostics のみ。 |
+| MoonBit portable packages | Wasm、Wasm GC、JS、native の各 target で 58 / 58 PASS。app JS target は test entry なし。 |
+| JavaScript app release build | PASS。 |
+| Node host / browser view model | 34 / 34 PASS、8 / 8 PASS。 |
+| Built app integration | 19 / 19 PASS。catalog regression は upstream Session v4 snapshot 25 件すべてを import / reopen。 |
+
+追加した integration は unresolved image placeholder、skill catalog source、Claude Code mod append、PTC / workflow lifecycle の
+correlation を確認し、画像形式・metadata、admitted user message identity/content、PTC root/parent drain order、workflow owner/name/
+foreground enclosure、unsupported background flag と ignorable unknown execution-family row の偽造を atomic rejection します。
+catalog import / reopen では provider / tool effect は 0 件です。全 repository gate はこの変更を含めて完了しました。
+
 ## upstream の実記録を使う結合テスト
 
 `tests/fixtures/upstream-tool-call-turn.json` は upstream の
