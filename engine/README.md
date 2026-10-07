@@ -11,6 +11,7 @@ Engine::new(tools : Array[Json]) -> Engine
 Engine::invoke(operation : String, input : Json) -> Result[Json, String]
 Engine::take_effects() -> Array[Json]
 Engine::complete(effect_id : String, result : Json) -> Result[Json, String]
+Engine::project_stream(effect_id : String, content : String, reasoning : String) -> Result[Json, String]
 Engine::snapshot() -> Json
 Engine::restore(snapshot : Json) -> Result[Unit, String]
 ```
@@ -30,6 +31,18 @@ Session views contain `id`, `title`, `system_prompt`, `max_steps`, `status`,
 `pending_approval: {call_id, name, arguments}`. `session_list` returns an array
 in creation order. Terminal sessions accept a follow-up prompt as a new turn;
 running and approval-waiting sessions reject overlapping prompts.
+
+`project_stream` records bounded text/reasoning batches only for the exact live
+LLM effect. An unfinished projection appears in `messages` as one assistant row
+with `provisional: true`, `stream_status: "writing"` and its `turn_id` / `step`.
+Failed, cancelled and interrupted attempts keep the row with
+`stream_status: "partial"`; a matching final assistant message replaces it in
+the transcript. `stream_revision` increases with projected UTF-16 units so a
+browser can reject an older poll even when the event count has not changed.
+These provisional rows are presentation-only and never enter a later provider
+request. Successful completion must match the accumulated projection, and
+restore replays the delta events without reissuing effects. Older
+`dsh.mbt-session-v1` snapshots without `stream_revision` remain accepted.
 
 Each tool descriptor has `name`, `description`, an object `input_schema`, and
 `effect: "read" | "write" | "shell"`. Read effects start automatically. Every
@@ -67,8 +80,9 @@ assistant answer.
 The snapshot schema is **`dsh.mbt-session-v1`**, not upstream Session v4. It
 contains the effect and session counters plus full session views. Restore checks
 the schema, unique identities, contiguous event sequences, turn/step boundaries,
-request and tool/result correlation, and agreement between projected messages
-and logged events before atomically replacing an idle engine.
+request and tool/result correlation, stream effect identity/finality and
+agreement between projected messages and logged events before atomically
+replacing an idle engine.
 
 Restoring `running` or `awaiting_approval` work records an explicit interruption,
 settles remaining calls with error results, and marks the session failed. It
@@ -136,7 +150,7 @@ moon test --target native -p f4ah6o/dsh/engine
 ```
 
 Cordis/npm plugin loading, automatic Session v4 restore migration and v4 writing,
-v0–v3 migrations, parallel tools, stream deltas inside the engine, retry policy,
-live compaction/context management, attachment replay, subagents, and durable inbox editing are not
-implemented by this initial engine. The explicit v4 importer accepts only the
+v0–v3 migrations, parallel tools, retry policy, live compaction/context
+management, spill/offload, attachment replay, subagents, and durable inbox
+editing are not implemented by this engine. The explicit v4 importer accepts only the
 documented subset above; it is not full upstream compatibility.

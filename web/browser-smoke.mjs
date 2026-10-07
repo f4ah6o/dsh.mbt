@@ -21,6 +21,8 @@ let host;
 let web;
 let page;
 const failures = [];
+let releaseLiveStream;
+const encoder = new TextEncoder();
 
 function completion(content, toolCalls) {
   return new Response(JSON.stringify({
@@ -41,6 +43,28 @@ async function provider(_url, options) {
       if (options.signal.aborted) reject(options.signal.reason);
       else options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
     });
+  }
+  if (prompt.includes("live stream smoke")) {
+    const initial = [
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", reasoning_content: "Reasoning arrives first." }, finish_reason: null }] })}\n\n`,
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "Live answer 日本語 🌱" }, finish_reason: null }] })}\n\n`,
+    ].join("");
+    const terminal = [
+      `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`,
+      "data: [DONE]\n\n",
+    ].join("");
+    return new Response(new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(initial));
+        let released = false;
+        releaseLiveStream = () => {
+          if (released) return;
+          released = true;
+          controller.enqueue(encoder.encode(terminal));
+          controller.close();
+        };
+      },
+    }), { headers: { "content-type": "text/event-stream" } });
   }
   if (prompt.includes("provider failure")) return new Response("Fixture provider unavailable", { status: 503 });
   if ((prompt.includes("approved.txt") || prompt.includes("denied.txt")) && last.role !== "tool") {
@@ -90,6 +114,21 @@ try {
   assert.match(await page.locator("#text-transcript").textContent(), /MoonBit engine/);
   assert.equal(await page.locator("#text-transcript script").count(), 0);
   const firstId = await currentId();
+
+  const finalAssistantRowsBefore = await page.locator("#text-transcript h2").filter({ hasText: /^Assistant$/ }).count();
+  await send("live stream smoke");
+  await page.waitForFunction(() => {
+    const transcript = document.getElementById("text-transcript");
+    return transcript.textContent.includes("Assistant · writing")
+      && transcript.textContent.includes("Live answer 日本語 🌱");
+  }, undefined, { timeout: 15_000 });
+  assert.match(await page.locator("#text-transcript").textContent(), /Reasoning · writing/);
+  assert.equal(await page.locator("#status").textContent(), "Running");
+  releaseLiveStream();
+  releaseLiveStream = undefined;
+  await waitStatus("Completed");
+  assert.equal(await page.locator("#text-transcript h2").filter({ hasText: /^Assistant$/ }).count(), finalAssistantRowsBefore + 1);
+  assert.doesNotMatch(await page.locator("#text-transcript").textContent(), /Assistant · writing/);
 
   // Successful responses must preserve edits made to the next draft in flight.
   await send("draft race");
@@ -177,7 +216,7 @@ try {
   await page.locator("#connection-error").waitFor({ state: "hidden" });
   assert.equal(await currentId(), firstId);
   assert.deepEqual(failures, []);
-  console.log(JSON.stringify({ status: "PASS", assertions: "startup, create/select, draft preservation, submit, approval allow/deny, real file write, cancellation, provider error, literal output, scrolling, text-view follow, Session v4 read-only import/no-effect display, same-session create/select race, mobile layout, reconnect", screenshots }));
+  console.log(JSON.stringify({ status: "PASS", assertions: "startup, create/select, draft preservation, submit, live provisional text/reasoning and final replacement, approval allow/deny, real file write, cancellation, provider error, literal output, scrolling, text-view follow, Session v4 read-only import/no-effect display, same-session create/select race, mobile layout, reconnect", screenshots }));
 } catch (error) {
   if (page && !page.isClosed()) await page.screenshot({ path: path.join(screenshots, "failure.png"), fullPage: true }).catch(() => {});
   throw error;

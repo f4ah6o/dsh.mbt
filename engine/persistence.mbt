@@ -262,6 +262,31 @@ fn restore_session(
             session.active_kind = Some(ToolExecution)
           }
         }
+        "assistant/stream_delta" => {
+          if !session.open_step ||
+            assistant_recorded ||
+            session.active_kind != Some(Llm) {
+            raise Invalid("Stream delta without an active LLM request")
+          }
+          let effect_id = required_string(data, "effect_id", max=128)
+          if session.active_effect != Some(effect_id) {
+            raise Invalid("Stream delta references a stale LLM effect")
+          }
+          let content = required_string(
+            data,
+            "content",
+            max=STREAM_DELTA_CAPACITY,
+          )
+          let reasoning = required_string(
+            data,
+            "reasoning",
+            max=STREAM_DELTA_CAPACITY,
+          )
+          if (content.is_empty() && reasoning.is_empty()) ||
+            content.length() + reasoning.length() > STREAM_DELTA_CAPACITY {
+            raise Invalid("Invalid stream delta batch size")
+          }
+        }
         "assistant/message" => {
           if !session.open_step ||
             assistant_recorded ||
@@ -282,6 +307,17 @@ fn restore_session(
             None => ()
           }
           let completion = parse_llm_completion(Json::object(completion_data))
+          let effect_id = session.active_effect.unwrap()
+          let (projected, streamed_content, streamed_reasoning) = session.stream_projection(
+            effect_id,
+          )
+          if projected &&
+            (
+              completion.content != streamed_content ||
+              completion.reasoning.unwrap_or("") != streamed_reasoning
+            ) {
+            raise Invalid("Assistant message differs from its projected stream")
+          }
           for call in completion.calls {
             if session.used_calls.get(call.id) is Some(_) {
               raise Invalid("Duplicate recorded tool call id")
@@ -427,6 +463,11 @@ fn restore_session(
   }
   if required_field(value, "messages") != Json::array(session.messages()) {
     raise Invalid("Snapshot messages disagree with the event log")
+  }
+  match fields(value).get("stream_revision") {
+    Some(revision) if revision != integer(session.stream_revision()) =>
+      raise Invalid("Snapshot stream revision disagrees with the event log")
+    _ => ()
   }
   let expected_approval = fields(value).get("pending_approval")
   let actual_approval = fields(session.json()).get("pending_approval")

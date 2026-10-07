@@ -24,6 +24,13 @@ export function sessionList(result) {
 export function acceptsSnapshot(candidate, current) {
   if (!current || candidate.id !== current.id) return true;
   if ((candidate.turn_id || 0) < (current.turn_id || 0)) return false;
+  // The host batches deltas before appending them, so two polls can have the
+  // same event count while one carries newer provisional text. The revision
+  // counts projected UTF-16 units. Old v1 snapshots omit it and keep the
+  // historical count-only rule.
+  if (Number.isSafeInteger(candidate.stream_revision) && Number.isSafeInteger(current.stream_revision)
+    && (candidate.turn_id || 0) === (current.turn_id || 0)
+    && candidate.stream_revision < current.stream_revision) return false;
   if (Array.isArray(candidate.events) && Array.isArray(current.events)
     && candidate.events.length < current.events.length) return false;
   return true;
@@ -51,9 +58,13 @@ export function displayMessages(session) {
   const rows = [];
   for (const message of session?.messages || []) {
     if (!message || ["system", "developer"].includes(message.role)) continue;
-    if (message.reasoning) rows.push({ label: "Reasoning", text: String(message.reasoning) });
+    const provisional = message.provisional === true;
+    const status = message.stream_status === "partial" ? "partial" : "writing";
+    if (message.reasoning) rows.push({ label: provisional ? `Reasoning · ${status}` : "Reasoning", text: String(message.reasoning) });
     if (message.content) rows.push({
-      label: ({ user: "You", assistant: "Assistant", tool: "Tool result" })[message.role] || "Message",
+      label: provisional && message.role === "assistant"
+        ? `Assistant · ${status}`
+        : ({ user: "You", assistant: "Assistant", tool: "Tool result" })[message.role] || "Message",
       text: String(message.content),
     });
     for (const call of message.tool_calls || []) {

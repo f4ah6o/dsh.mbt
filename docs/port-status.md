@@ -9,13 +9,13 @@ MoonBit で agent の基本実行経路を動かす最初の移植です。
 
 | upstream の領域 | 移植先 | 状態と差分 |
 | --- | --- | --- |
-| `core/session`, `core/agent-loop`, `core/tools` | `engine/` | 基本 turn / step、event log、messages、直列 tool、follow-up、cancel、late result 拒否を実装済み。inbox の動的編集、fork の作成、parallel tool は未実装。 |
+| `core/session`, `core/agent-loop`, `core/tools` | `engine/` | 基本 turn / step、event log、messages、直列 tool、follow-up、cancel、late result 拒否、LLM text/reasoning の bounded live projection を実装済み。inbox の動的編集、fork の作成、parallel tool は未実装。 |
 | `interaction/user-approval` | `engine/`, `api/`, `web/`, `host/cli.mjs` | read / write / shell 分類、呼出しごとの Allow / Deny、明示的 startup 自動承認を実装済み。upstream permission preset / account authorization の互換は未実装。 |
-| `llm/llm-deepseek` | `provider/`, `host/provider.mjs` | Messages / Chat Completions の text、reasoning、function tool、usage、JSON / incremental SSE を実装済み。画像、Files API、model discovery、thinking signature の durable replay は未実装。 |
+| `llm/llm-deepseek` | `provider/`, `host/provider.mjs` | Messages / Chat Completions の text、reasoning、function tool、usage、JSON / incremental SSE と host 経由の live text projection を実装済み。画像、Files API、model discovery、thinking signature の durable replay は未実装。 |
 | `session/session-persistence*`, `session/session-projection` | `engine/`, `host/persistence.mjs` | 検証付き復元、atomic snapshot、interruption の終了、no replay を実装済み。保存形式は独自 `dsh.mbt-session-v1`。明示的な read-only v4 JSONL importer は下記の範囲で対応。v0–v3 migration、自動 v4 restore、v4 writer は未実装。 |
 | `fs/tool-fs*`, `fs/tool-str-replace-editor` | `plugins/`, `host/tools.mjs` | read / write / edit / glob / grep を実装済み。workspace 制限、symlink 拒否、bounded regex / output。SSH filesystem、filesystem observation は未実装。 |
 | `shell`, `subprocess` | `host/tools.mjs` | opt-in bash、timeout / cancel、出力上限を実装済み。persistent shell、terminal、PowerShell、OS sandbox は未実装。 |
-| `client/ui-*`, `client/web` | `ui/`, `web/` | gpui scene による transcript、承認、会話一覧、再接続、scroll、Text view、mobile を実装済み。upstream の全設定画面 / sidebar / attachment preview は未実装。 |
+| `client/ui-*`, `client/web` | `ui/`, `web/` | gpui scene による transcript、streaming 中の writing / partial 表示、承認、会話一覧、再接続、scroll、Text view、mobile を実装済み。upstream の全設定画面 / sidebar / attachment preview は未実装。 |
 | `api`, `sdk/protocol`, `typert` | `api/`, `app/`, `host/server.mjs` | gpui typed capability / GUI binding / MCP で置換。upstream API / SDK wire compatibility は提供しない。 |
 | `boot/plugin-manager`, `extensions/cordis-*` | `plugins/` | MoonBit startup descriptor の依存・重複・tool 所有権を実装済み。npm / Cordis ABI、runtime code loading、HMR は未実装。 |
 | `session/session-telemetry*`, inspector | `api/` + hotpath | API 呼出し時間の集計を実装済み。OpenTelemetry、CPU / allocation sampling は未実装。 |
@@ -29,9 +29,9 @@ MoonBit で agent の基本実行経路を動かす最初の移植です。
 
 - JavaScript output を Node host と browser の双方で使う。portable package の native テストは native GUI の完成を意味しない。
 - 依存を upstream Git revision に固定し、互換性が確認できていない latest へ自動更新しない。
-- SSE は MoonBit で逐次解析する。session / UI の streaming delta 更新は後続作業とする。
+- SSE は MoonBit で逐次解析し、text / reasoning を host が bounded event batch として永続化して session / browser / scene に投影する。live compaction、spill、retry scheduling は後続作業とする。
 - 自動 HTTP retry は行わない。新しい外部作用を再試行する policy と durable recording は後続作業とする。
-- 1 session 262,144 serialized UTF-16 units、最大 32 sessions。容量超過を明示し、履歴・承認・再開の整合性を保つ。
+- 1 session 262,144 serialized UTF-16 units、最大 32 sessions。stream projection もこの上限内で、容量超過は provider を停止して既に保存済み partial を保つ。長い会話向け live compaction / spill は未実装。
 - browser host は loopback 専用。認証付き remote service や deployment platform はこの版に含めない。
 
 ## Session v4 の read-only import 範囲

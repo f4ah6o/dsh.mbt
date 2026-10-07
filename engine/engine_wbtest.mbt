@@ -531,6 +531,301 @@ test "provider failures are explicit attempts and resume without fabricated mess
 }
 
 ///|
+test "stream projections stay out of model context and survive failure and reopen" {
+  let (engine, llm) = started_engine()
+  let effect_id = id_of(llm)
+  let writing = success(
+    engine.project_stream(effect_id, "partial answer", "thinking"),
+  )
+  let messages = array_value(
+    required_field(writing, "messages"),
+    "messages",
+    100,
+  )
+  assert_eq(messages.length(), 2)
+  assert_eq(required_string(messages[1], "content"), "partial answer")
+  assert_eq(required_string(messages[1], "reasoning"), "thinking")
+  assert_true(
+    bool_value(required_field(messages[1], "provisional"), "provisional"),
+  )
+  assert_eq(required_string(messages[1], "stream_status"), "writing")
+  assert_eq(
+    int_value(
+      required_field(writing, "stream_revision"),
+      "stream_revision",
+      0,
+      100,
+    ),
+    22,
+  )
+
+  let failed = success(
+    engine.complete(
+      effect_id,
+      fixture("{\"ok\":false,\"error\":\"provider ended early\"}"),
+    ),
+  )
+  let failed_messages = array_value(
+    required_field(failed, "messages"),
+    "messages",
+    100,
+  )
+  assert_eq(required_string(failed_messages[1], "stream_status"), "partial")
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  let reopened = get_session(restored)
+  assert_eq(
+    required_string(
+      array_value(required_field(reopened, "messages"), "messages", 100)[1],
+      "content",
+    ),
+    "partial answer",
+  )
+  assert_eq(restored.take_effects().length(), 0)
+
+  ignore(
+    success(
+      restored.invoke(
+        "session_send",
+        fixture(
+          "{\"session_id\":\"test\",\"prompt\":\"continue without partial\"}",
+        ),
+      ),
+    ),
+  )
+  let next_llm = restored.take_effects()[0]
+  let next_messages = required_field(
+    required_field(next_llm, "request"),
+    "messages",
+  )
+  assert_false(next_messages.stringify().contains("partial answer"))
+  assert_false(next_messages.stringify().contains("thinking"))
+}
+
+///|
+test "stream completion must match its deltas and late deltas are fenced" {
+  let (engine, llm) = started_engine()
+  let effect_id = id_of(llm)
+  ignore(success(engine.project_stream(effect_id, "visible", "reason")))
+  let before = engine.snapshot()
+  assert_true(engine.complete(effect_id, stop_response("different")) is Err(_))
+  assert_eq(engine.snapshot(), before)
+  let matching = fixture(
+    "{\"ok\":true,\"content\":\"visible\",\"reasoning\":\"reason\",\"tool_calls\":[],\"finish_reason\":\"stop\"}",
+  )
+  let finished = success(engine.complete(effect_id, matching))
+  let messages = array_value(
+    required_field(finished, "messages"),
+    "messages",
+    100,
+  )
+  assert_eq(messages.length(), 2)
+  assert_eq(required_string(messages[1], "content"), "visible")
+  assert_true(fields(messages[1]).get("provisional") is None)
+  assert_true(engine.project_stream(effect_id, "late", "") is Err(_))
+  assert_eq(
+    array_value(
+      required_field(get_session(engine), "messages"),
+      "messages",
+      100,
+    ).length(),
+    2,
+  )
+}
+
+///|
+test "stream deltas are accepted only for the live LLM effect and restore rejects forged identity" {
+  let (engine, llm) = started_engine()
+  let effect_id = id_of(llm)
+  assert_true(engine.project_stream("effect-999", "x", "") is Err(_))
+  let waiting = success(
+    engine.complete(
+      effect_id,
+      calls_response([("read-1", "read", "{\"file_path\":\"README.md\"}")]),
+    ),
+  )
+  assert_eq(get_status(waiting), "running")
+  let active_tool = engine.take_effects()[0]
+  assert_eq(required_string(active_tool, "kind"), "tool")
+  assert_true(engine.project_stream(effect_id, "tool noise", "") is Err(_))
+}
+
+///|
+test "reopen closes an in-flight projected stream without replay and rejects a forged delta" {
+  let (engine, llm) = started_engine()
+  ignore(success(engine.project_stream(id_of(llm), "kept", "")))
+  let valid = engine.snapshot()
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(valid), Ok(()))
+  let reopened = get_session(restored)
+  assert_eq(get_status(reopened), "failed")
+  assert_eq(
+    required_string(
+      array_value(required_field(reopened, "messages"), "messages", 100)[1],
+      "content",
+    ),
+    "kept",
+  )
+  assert_eq(restored.take_effects().length(), 0)
+
+  let forged = engine.snapshot()
+  let sessions = array_value(required_field(forged, "sessions"), "sessions", 32)
+  let events = array_value(required_field(sessions[0], "events"), "events", 100)
+  let delta = events[events.length() - 1]
+  fields(required_field(delta, "data")).set(
+    "effect_id",
+    Json::string("effect-999"),
+  )
+  let destination = Engine::new(test_tools())
+  assert_true(destination.restore(forged) is Err(_))
+  assert_eq(destination.order.length(), 0)
+}
+
+///|
+test "stream capacity refusal keeps the last committed partial reloadable" {
+  let (engine, llm) = started_engine()
+  let effect_id = id_of(llm)
+  let builder = StringBuilder()
+  for _ in 0..<4096 {
+    builder.write_string("x")
+  }
+  let batch = builder.to_string()
+  let mut accepted = 0
+  let mut refused = false
+  while accepted < 100 && !refused {
+    match engine.project_stream(effect_id, batch, "") {
+      Ok(_) => accepted += 1
+      Err(_) => refused = true
+    }
+  }
+  assert_true(refused)
+  assert_true(accepted > 1)
+  let before_restore = engine.snapshot()
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(before_restore), Ok(()))
+  assert_eq(restored.take_effects().length(), 0)
+  let reopened = get_session(restored)
+  assert_eq(get_status(reopened), "failed")
+  let partial = array_value(
+      required_field(reopened, "messages"),
+      "messages",
+      100,
+    )[1]
+  assert_eq(required_string(partial, "stream_status"), "partial")
+  assert_eq(
+    required_string(partial, "content", max=262144).length(),
+    accepted * 4096,
+  )
+}
+
+///|
+test "legacy v1 without stream revision restores and replay rejects stream tampering" {
+  let (engine, llm) = started_engine()
+  let effect_id = id_of(llm)
+  ignore(success(engine.project_stream(effect_id, "partial", "")))
+  let old = engine.snapshot()
+  let old_session = array_value(required_field(old, "sessions"), "sessions", 32)[0]
+  fields(old_session).remove("stream_revision")
+  let compatible = Engine::new(test_tools())
+  assert_eq(compatible.restore(old), Ok(()))
+  assert_eq(get_status(get_session(compatible)), "failed")
+
+  let wrong_coordinates = engine.snapshot()
+  let session = array_value(
+      required_field(wrong_coordinates, "sessions"),
+      "sessions",
+      32,
+    )[0]
+  let events = array_value(required_field(session, "events"), "events", 100)
+  fields(events[events.length() - 1]).set("turn_id", integer(9))
+  let rejected_coordinates = Engine::new(test_tools())
+  assert_true(rejected_coordinates.restore(wrong_coordinates) is Err(_))
+
+  let failed = Engine::new(test_tools())
+  assert_eq(failed.restore(engine.snapshot()), Ok(()))
+  let recovered = get_session(failed)
+  let saved = failed.snapshot()
+  // Tampering with the derived provisional message is rejected independently
+  // of the immutable event projection check.
+  let saved_session = array_value(
+      required_field(saved, "sessions"),
+      "sessions",
+      32,
+    )[0]
+  let messages = array_value(
+    required_field(saved_session, "messages"),
+    "messages",
+    100,
+  )
+  fields(messages[1]).set("content", Json::string("forged"))
+  let rejected_message = Engine::new(test_tools())
+  assert_true(rejected_message.restore(saved) is Err(_))
+  assert_eq(get_status(recovered), "failed")
+}
+
+///|
+test "replay rejects stream deltas after an attempt and a forged final message" {
+  let (engine, llm) = started_engine()
+  let effect_id = id_of(llm)
+  ignore(success(engine.project_stream(effect_id, "visible", "")))
+  ignore(
+    success(
+      engine.complete(
+        effect_id,
+        fixture("{\"ok\":false,\"error\":\"truncated\"}"),
+      ),
+    ),
+  )
+  let settled = engine.snapshot()
+  let session = array_value(required_field(settled, "sessions"), "sessions", 32)[0]
+  let events = array_value(required_field(session, "events"), "events", 100)
+  events.push(
+    object([
+      ("seq", integer(events.length())),
+      ("type", Json::string("assistant/stream_delta")),
+      ("turn_id", integer(1)),
+      ("step", integer(1)),
+      (
+        "data",
+        object([
+          ("effect_id", Json::string(effect_id)),
+          ("content", Json::string("late")),
+          ("reasoning", Json::string("")),
+        ]),
+      ),
+    ]),
+  )
+  let rejected_late = Engine::new(test_tools())
+  assert_true(rejected_late.restore(settled) is Err(_))
+
+  let (complete_engine, complete_llm) = started_engine()
+  let complete_id = id_of(complete_llm)
+  ignore(success(complete_engine.project_stream(complete_id, "visible", "")))
+  ignore(
+    success(complete_engine.complete(complete_id, stop_response("visible"))),
+  )
+  let forged_final = complete_engine.snapshot()
+  let complete_session = array_value(
+      required_field(forged_final, "sessions"),
+      "sessions",
+      32,
+    )[0]
+  let complete_events = array_value(
+    required_field(complete_session, "events"),
+    "events",
+    100,
+  )
+  for event in complete_events {
+    if required_string(event, "type") == "assistant/message" {
+      let message = required_field(required_field(event, "data"), "message")
+      fields(message).set("content", Json::string("forged final"))
+    }
+  }
+  let rejected_final = Engine::new(test_tools())
+  assert_true(rejected_final.restore(forged_final) is Err(_))
+}
+
+///|
 test "public Json collections cannot mutate tool policy or durable history" {
   let inventory = test_tools()
   let engine = Engine::new(inventory)

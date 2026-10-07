@@ -1,4 +1,4 @@
-import { HostError, checkAbort, messageOf, unwrap } from './errors.mjs';
+import { HostError, checkAbort, messageOf, parseEnvelope, unwrap } from './errors.mjs';
 
 const RESPONSE_LIMIT = 16 * 1024 * 1024;
 
@@ -20,7 +20,7 @@ export function createProvider({ facade, mode = 'deepseek', model, baseURL, apiK
   const base = baseURL ?? (mode === 'deepseek' ? 'https://api.deepseek.com/anthropic' : 'https://api.openai.com');
   const redact = (message) => apiKey ? message.split(apiKey).join('[redacted]') : message;
 
-  async function invoke(request, { signal } = {}) {
+  async function invoke(request, { signal, onDelta } = {}) {
     checkAbort(signal);
     if (demo) return demoResponse(request);
     const url = providerURL(base, mode === 'deepseek' ? '/v1/messages' : '/v1/chat/completions');
@@ -44,17 +44,78 @@ export function createProvider({ facade, mode = 'deepseek', model, baseURL, apiK
       if ((response.headers.get('content-type') ?? '').toLowerCase().includes('text/event-stream')) {
         if (!response.body) throw new HostError('Provider returned an empty event stream', { status: 502 });
         streamHandle = facade.stream_start(mode);
-        const decoder = new TextDecoder();
+        if (!Number.isSafeInteger(streamHandle) || streamHandle <= 0) throw new HostError('Provider stream decoder capacity is exhausted', { status: 502 });
+        const decoder = new TextDecoder('utf-8', { fatal: true });
+        const observed = { content: '', reasoning: '' };
+        const hasDeltaDrain = typeof facade.stream_take_deltas === 'function';
+        const drainDeltas = async () => {
+          if (!hasDeltaDrain) return;
+          const deltas = unwrap(facade.stream_take_deltas(streamHandle), 'provider.stream_take_deltas');
+          if (!Array.isArray(deltas)) throw new HostError('Provider returned malformed stream deltas', { status: 502 });
+          let content = '';
+          let reasoning = '';
+          for (const delta of deltas) {
+            if (!delta || typeof delta !== 'object' || typeof delta.text !== 'string') throw new HostError('Provider returned malformed stream delta', { status: 502 });
+            if (delta.channel === 'content') content += delta.text;
+            else if (delta.channel === 'reasoning') reasoning += delta.text;
+            else throw new HostError('Provider returned an unsupported stream delta channel', { status: 502 });
+          }
+          observed.content += content;
+          observed.reasoning += reasoning;
+          if ((content || reasoning) && onDelta) await onDelta({ content, reasoning });
+        };
+        const feed = async (text) => {
+          if (!text) return;
+          const result = parseEnvelope(facade.stream_feed(streamHandle, text), 'provider.stream_feed');
+          // One transport chunk may contain valid frames followed by a bad one.
+          // Drain their validated deltas before surfacing the sticky parser error.
+          await drainDeltas();
+          if (!result.ok) throw new HostError(typeof result.error === 'string' ? result.error : JSON.stringify(result.error), { status: 502 });
+        };
         let bytes = 0;
-        for await (const chunk of response.body) {
-          checkAbort(combined);
-          bytes += chunk.byteLength;
-          if (bytes > responseLimit) throw new HostError('Provider response exceeded its size limit', { status: 502 });
-          unwrap(facade.stream_feed(streamHandle, decoder.decode(chunk, { stream: true })), 'provider.stream_feed');
+        const reader = response.body.getReader();
+        let reachedEof = false;
+        let cancelPromise;
+        const cancelRead = () => {
+          if (cancelPromise) return;
+          try { cancelPromise = reader.cancel(combined.reason ?? new Error('Provider stream processing stopped')).catch(() => {}); }
+          catch { cancelPromise = Promise.resolve(); }
+        };
+        combined.addEventListener('abort', cancelRead, { once: true });
+        try {
+          for (;;) {
+            checkAbort(combined);
+            const { done, value } = await reader.read();
+            checkAbort(combined);
+            if (done) { reachedEof = true; break; }
+            bytes += value.byteLength;
+            if (bytes > responseLimit) throw new HostError('Provider response exceeded its size limit', { status: 502 });
+            await feed(decoder.decode(value, { stream: true }));
+          }
+          await feed(decoder.decode());
+        } finally {
+          combined.removeEventListener('abort', cancelRead);
+          // A parser error, size-limit failure or rejected projection callback
+          // can happen while the producer still has bytes to send. Stop that
+          // body before releasing the reader so failed effects do not leave an
+          // unread response consuming a connection in the background.
+          if (!reachedEof) {
+            cancelRead();
+          }
+          // Await the underlying source's cleanup before invoke settles. Host
+          // shutdown and facade ownership must not race a still-live response.
+          if (cancelPromise) await cancelPromise;
+          try { reader.releaseLock(); } catch { /* A cancelled stream may still be settling. */ }
         }
-        const tail = decoder.decode();
-        if (tail) unwrap(facade.stream_feed(streamHandle, tail), 'provider.stream_feed');
         const result = unwrap(facade.stream_finish(streamHandle), 'provider.stream_finish');
+        if (hasDeltaDrain) {
+          const finalContent = result?.content;
+          const finalReasoning = result?.reasoning ?? '';
+          if (typeof finalContent !== 'string' || typeof finalReasoning !== 'string'
+            || observed.content !== finalContent || observed.reasoning !== finalReasoning) {
+            throw new HostError('Provider final response differs from its live text/reasoning projection', { status: 502 });
+          }
+        }
         return result;
       }
       const body = await boundedResponseText(response, responseLimit);

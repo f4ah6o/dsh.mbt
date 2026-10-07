@@ -24,6 +24,15 @@ fn string_member(value : Json, key : String) -> String {
 }
 
 ///|
+fn bool_member(value : Json, key : String) -> Bool {
+  match json_field(value, key) {
+    Some(Json::True) => true
+    Some(Json::False) => false
+    _ => false
+  }
+}
+
+///|
 fn array_member(value : Json, key : String) -> Array[Json] {
   match json_field(value, key) {
     Some(Json::Array(values)) => values
@@ -177,10 +186,20 @@ fn transcript_blocks(snapshot : Json, width : Double) -> Array[Block] {
     if role == "system" || role == "developer" {
       continue
     }
+    let provisional = bool_member(message, "provisional")
+    let stream_status = if string_member(message, "stream_status") == "partial" {
+      "partial"
+    } else {
+      "writing"
+    }
     let reasoning = string_member(message, "reasoning")
     if reasoning != "" {
       blocks.push({
-        label: "Reasoning",
+        label: if provisional {
+          "Reasoning · " + stream_status
+        } else {
+          "Reasoning"
+        },
         role: "reasoning",
         lines: wrap_text(reasoning, columns),
       })
@@ -189,7 +208,12 @@ fn transcript_blocks(snapshot : Json, width : Double) -> Array[Block] {
     if content != "" {
       let label = match role {
         "user" => "You"
-        "assistant" => "Assistant"
+        "assistant" =>
+          if provisional {
+            "Assistant · " + stream_status
+          } else {
+            "Assistant"
+          }
         "tool" => "Tool result"
         _ => "Message"
       }

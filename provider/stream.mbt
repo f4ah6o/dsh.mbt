@@ -56,6 +56,7 @@ pub struct StreamDecoder {
   block_order : Array[Int]
   content : StringBuilder
   reasoning : StringBuilder
+  pending_deltas : Array[Json]
   usage : Map[String, Json]
 }
 
@@ -87,6 +88,7 @@ pub fn StreamDecoder::new(mode : String) -> StreamDecoder {
     block_order: [],
     content: StringBuilder(),
     reasoning: StringBuilder(),
+    pending_deltas: [],
     usage: Map([]),
   }
 }
@@ -139,12 +141,26 @@ pub fn StreamDecoder::finish(self : StreamDecoder) -> Result[Json, String] {
 }
 
 ///|
+/// Drain text and reasoning deltas from completely validated SSE frames. Tool
+/// arguments and reasoning signatures are intentionally not projected.
+pub fn StreamDecoder::take_deltas(self : StreamDecoder) -> Array[Json] {
+  let result = self.pending_deltas.copy()
+  self.pending_deltas.clear()
+  result
+}
+
+///|
 /// Decode one buffered SSE string using the same incremental state machine.
 pub fn decode_sse(mode : String, input : String) -> Result[Json, String] {
   let decoder = StreamDecoder::new(mode)
   match decoder.feed(input) {
     Err(message) => Err(message)
-    Ok(_) => decoder.finish()
+    Ok(_) => {
+      // Buffered callers consume only the final completion. Drop the optional
+      // live projection so the decoder does not retain a second copy of it.
+      ignore(decoder.take_deltas())
+      decoder.finish()
+    }
   }
 }
 
@@ -263,6 +279,22 @@ fn StreamDecoder::consume_frame(
 }
 
 ///|
+fn stream_delta(channel : String, text : String) -> Json {
+  Json::object({ "channel": Json::string(channel), "text": Json::string(text) })
+}
+
+///|
+fn StreamDecoder::record_delta(
+  self : StreamDecoder,
+  channel : String,
+  text : String,
+) -> Unit {
+  if !text.is_empty() {
+    self.pending_deltas.push(stream_delta(channel, text))
+  }
+}
+
+///|
 fn block_index(raw : Map[String, Json]) -> Int raise ProviderError {
   let index = integer(field(raw, "index"), "block index")
   if index > 1023 {
@@ -312,10 +344,15 @@ fn StreamDecoder::consume_messages(
     }
     let native = object(field(raw, "content_block"), "content block")
     let block = StreamBlock::new(text_field(native, "type"))
+    let mut initial_text = ""
     match block.kind {
-      "text" => block.text.write_string(text_field(native, "text"))
+      "text" => {
+        initial_text = text_field(native, "text")
+        block.text.write_string(initial_text)
+      }
       "thinking" => {
-        block.text.write_string(text_field(native, "thinking"))
+        initial_text = text_field(native, "thinking")
+        block.text.write_string(initial_text)
         match optional_text(native, "signature") {
           None => ()
           Some(signature) => block.signature.write_string(signature)
@@ -333,6 +370,17 @@ fn StreamDecoder::consume_messages(
     }
     self.blocks[index] = block
     self.block_order.push(index)
+    match block.kind {
+      "text" => {
+        self.content.write_string(initial_text)
+        self.record_delta("content", initial_text)
+      }
+      "thinking" => {
+        self.reasoning.write_string(initial_text)
+        self.record_delta("reasoning", initial_text)
+      }
+      _ => ()
+    }
     return
   }
   if kind == "content_block_delta" || kind == "content_block_stop" {
@@ -353,10 +401,18 @@ fn StreamDecoder::consume_messages(
     let delta = object(field(raw, "delta"), "content delta")
     let delta_type = text_field(delta, "type")
     match (delta_type, block.kind) {
-      ("text_delta", "text") =>
-        block.text.write_string(text_field(delta, "text"))
-      ("thinking_delta", "thinking") =>
-        block.text.write_string(text_field(delta, "thinking"))
+      ("text_delta", "text") => {
+        let text = text_field(delta, "text")
+        block.text.write_string(text)
+        self.content.write_string(text)
+        self.record_delta("content", text)
+      }
+      ("thinking_delta", "thinking") => {
+        let text = text_field(delta, "thinking")
+        block.text.write_string(text)
+        self.reasoning.write_string(text)
+        self.record_delta("reasoning", text)
+      }
       ("signature_delta", "thinking") =>
         block.signature.write_string(text_field(delta, "signature"))
       ("input_json_delta", "tool_use") =>
@@ -425,10 +481,8 @@ fn StreamDecoder::consume_completion(
     Some(refusal) if !refusal.is_empty() => reject("REFUSAL", refusal)
     _ => ()
   }
-  self.content.write_string(optional_text(delta, "content").unwrap_or(""))
-  self.reasoning.write_string(
-    optional_text(delta, "reasoning_content").unwrap_or(""),
-  )
+  let content_delta = optional_text(delta, "content").unwrap_or("")
+  let reasoning_delta = optional_text(delta, "reasoning_content").unwrap_or("")
   if delta.contains("function_call") {
     reject("UNSUPPORTED_CONTENT", "legacy function_call is not supported")
   }
@@ -464,10 +518,17 @@ fn StreamDecoder::consume_completion(
       }
     }
   }
-  match optional_text(choice, "finish_reason") {
+  let finish_reason = optional_text(choice, "finish_reason").map(reason => {
+    normalized_reason(self.mode, reason)
+  })
+  match finish_reason {
     None => ()
-    Some(reason) => self.reason = Some(normalized_reason(self.mode, reason))
+    Some(reason) => self.reason = Some(reason)
   }
+  self.content.write_string(content_delta)
+  self.reasoning.write_string(reasoning_delta)
+  self.record_delta("content", content_delta)
+  self.record_delta("reasoning", reasoning_delta)
   self.started = true
 }
 
@@ -485,17 +546,13 @@ fn StreamDecoder::finish_impl(self : StreamDecoder) -> Json raise ProviderError 
   }
   let content = StringBuilder()
   let reasoning = StringBuilder()
-  if self.mode == "openai" {
-    content.write_string(self.content.to_string())
-    reasoning.write_string(self.reasoning.to_string())
-  }
+  content.write_string(self.content.to_string())
+  reasoning.write_string(self.reasoning.to_string())
   let calls : Array[Json] = []
   let seen : Map[String, Bool] = Map([])
   for index in self.block_order {
     let block = self.blocks[index]
     match block.kind {
-      "text" => content.write_string(block.text.to_string())
-      "thinking" => reasoning.write_string(block.text.to_string())
       "tool_use" =>
         if reason != "length" {
           let arguments = if self.mode == "deepseek" &&
