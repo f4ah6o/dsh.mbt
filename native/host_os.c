@@ -496,9 +496,16 @@ int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
   if (capacity < 0) return -EINVAL;
   int fd = dsh_open_directory_beneath(root_fd, path);
   if (fd < 0) return -errno;
-  int scan_fd = dsh_dup_cloexec(fd);
+  /* A dup shares the directory-stream offset with the anchored root FD.
+   * Open "." to give fdopendir an independent open-file description. */
+  int scan_fd = openat(fd, ".",
+                       O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+  int saved = errno;
   close(fd);
-  if (scan_fd < 0) return -errno;
+  if (scan_fd < 0) {
+    errno = saved;
+    return -saved;
+  }
   DIR *dir = fdopendir(scan_fd);
   if (!dir) {
     int saved = errno;

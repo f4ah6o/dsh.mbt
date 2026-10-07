@@ -104,6 +104,20 @@ async test "native workspace tools preserve file and process behavior" {
     assert_true(safety_tool_ok(edit_result))
     assert_eq(root.read_text("nested/a.txt").unwrap().0, "alpha\ngamma")
 
+    // Directory streams must start at the beginning for every safe listing.
+    let first_root_entries = root
+      .list_directory(".")
+      .unwrap()
+      .map(entry => entry.0 + ":" + entry.1)
+    first_root_entries.sort()
+    let second_root_entries = root
+      .list_directory(".")
+      .unwrap()
+      .map(entry => entry.0 + ":" + entry.1)
+    second_root_entries.sort()
+    assert_eq(first_root_entries, second_root_entries)
+    assert_true(first_root_entries.contains("nested:directory"))
+
     assert_eq(
       glob_match_bounded("**/*.txt", "a.txt", { steps: 0, }),
       Some(true),
@@ -119,6 +133,27 @@ async test "native workspace tools preserve file and process behavior" {
 
     // `gamm[ae]` is a POSIX extended regular expression consumed by grep -E.
     // The fixture intentionally does not imply full JS-RegExp compatibility.
+    // First prove that the isolated child trampoline receives its stdin pipe.
+    let stdin_probe = tools
+      .run_process(
+        "/bin/cat",
+        [],
+        "native-grep-stdin-probe",
+        3000,
+        memory_limit_mb=256,
+      )
+      .unwrap()
+    assert_eq(stdin_probe.code, 0)
+    assert_eq(stdin_probe.output, "native-grep-stdin-probe")
+    let grep_file_result = tools.execute(
+      safety_tool_request(
+        "grep",
+        Json::object({
+          "pattern": Json::string("gamm[ae]"),
+          "path": Json::string("nested/a.txt"),
+        }),
+      ),
+    )
     let grep_result = tools.execute(
       safety_tool_request(
         "grep",
@@ -134,9 +169,44 @@ async test "native workspace tools preserve file and process behavior" {
         safety_tool_error(grep_result),
         "grep is disabled because this host cannot enforce a hard worker memory limit",
       )
+      assert_eq(
+        safety_tool_error(grep_file_result),
+        "grep is disabled because this host cannot enforce a hard worker memory limit",
+      )
     } else {
+      // This fixed, small pattern checks child stdin independently of SafeRoot
+      // reads and directory walking. Arbitrary host regexes remain bounded by
+      // the Linux worker's hard address-space and CPU limits.
+      let grep_stdin = tools
+        .run_process(
+          "/usr/bin/grep",
+          ["-E", "-n", "--", "gamm[ae]"],
+          "alpha\ngamma",
+          3000,
+          memory_limit_mb=256,
+        )
+        .unwrap()
+      if grep_stdin.code != 0 || grep_stdin.output != "2:gamma\n" {
+        fail(
+          "native grep stdin probe failed: code=" +
+          grep_stdin.code.to_string() +
+          ", output=" +
+          grep_stdin.output,
+        )
+      }
       assert_true(safety_tool_ok(grep_result))
-      assert_eq(safety_tool_content(grep_result), "nested/a.txt:2:gamma")
+      assert_true(safety_tool_ok(grep_file_result))
+      let expected = "nested/a.txt:2:gamma"
+      let directory_content = safety_tool_content(grep_result)
+      let file_content = safety_tool_content(grep_file_result)
+      if directory_content != expected || file_content != expected {
+        fail(
+          "native grep mismatch; file result=" +
+          grep_file_result.stringify() +
+          "; directory result=" +
+          grep_result.stringify(),
+        )
+      }
     }
 
     let bounded_result = tools.execute(
