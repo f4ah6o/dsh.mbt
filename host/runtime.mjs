@@ -9,6 +9,7 @@ import { HostError, messageOf, parseEnvelope, unwrap } from './errors.mjs';
 export const defaultModulePath = fileURLToPath(new URL('../_build/js/release/build/f4ah6o/dsh/app/app.js', import.meta.url));
 const ownedFacades = new WeakSet();
 const READ_OPERATIONS = new Set(['session_get', 'session_list', 'plugin_list', 'profile_stats']);
+const MAX_STREAM_UNITS = 16 * 1024 * 1024;
 
 export async function loadFacade(modulePath = defaultModulePath) {
   try {
@@ -105,10 +106,38 @@ async function initializeHost(options) {
 
   function takeStreamBatch(entry) {
     clearStreamTimer(entry);
-    const batch = entry.pendingStream;
-    entry.pendingStream = { content: '', reasoning: '' };
-    entry.pendingStreamUnits = 0;
-    return batch;
+    const content = [];
+    const reasoning = [];
+    let units = 0;
+    while (entry.pendingStreamHead < entry.pendingStream.length && units < 4096) {
+      const segment = entry.pendingStream[entry.pendingStreamHead];
+      const points = [];
+      let offset = 0;
+      for (const point of segment.text) {
+        if (units + point.length > 4096) break;
+        points.push(point);
+        offset += point.length;
+        units += point.length;
+      }
+      if (points.length === 0) break;
+      const prefix = points.join('');
+      if (segment.channel === 'content') content.push(prefix);
+      else reasoning.push(prefix);
+      if (offset < segment.text.length) {
+        segment.text = segment.text.slice(offset);
+        break;
+      }
+      entry.pendingStreamHead++;
+    }
+    entry.pendingStreamUnits -= units;
+    if (entry.pendingStreamHead === entry.pendingStream.length) {
+      entry.pendingStream = [];
+      entry.pendingStreamHead = 0;
+    } else if (entry.pendingStreamHead >= 128 && entry.pendingStreamHead * 2 >= entry.pendingStream.length) {
+      entry.pendingStream.splice(0, entry.pendingStreamHead);
+      entry.pendingStreamHead = 0;
+    }
+    return { content: content.join(''), reasoning: reasoning.join('') };
   }
 
   async function applyStreamBatch(entry, batch) {
@@ -145,11 +174,36 @@ async function initializeHost(options) {
       entry.cancelPending = true;
       clearStreamTimer(entry);
       try {
-        while (entry.pendingStreamUnits > 0) await flushStreamInline(entry);
+        // Provider callbacks only enqueue bounded segments; all checkpointing
+        // stays inside this serialized owner. Wait for both current IO and any
+        // callback that is still splitting a large validated delta.
+        for (;;) {
+          if (entry.applyPromise) {
+            await entry.applyPromise;
+            continue;
+          }
+          if (entry.pendingStreamUnits > 0) {
+            await flushStreamInline(entry);
+            continue;
+          }
+          if (entry.deltaTasks.size > 0) {
+            await Promise.all([...entry.deltaTasks]);
+            continue;
+          }
+          // No async gap follows this check before cancellation dispatch.
+          entry.streamCutoff = true;
+          break;
+        }
       } catch (error) {
         // Capacity refusal ends this provider effect through the normal engine
         // cancellation path. Earlier committed batches remain durable.
-        entry.pendingStream = { content: '', reasoning: '' };
+        entry.streamCutoff = true;
+        await Promise.allSettled([
+          ...entry.deltaTasks,
+          ...(entry.applyPromise ? [entry.applyPromise] : []),
+        ]);
+        entry.pendingStream = [];
+        entry.pendingStreamHead = 0;
         entry.pendingStreamUnits = 0;
         entry.streamError = report(error);
       }
@@ -160,6 +214,7 @@ async function initializeHost(options) {
   function resumeAfterRejectedCancellation(entries) {
     for (const entry of entries) {
       if (!entry.cancelledByEngine && !entry.streamError) {
+        entry.streamCutoff = false;
         entry.cancelPending = false;
         if (entry.pendingStreamUnits > 0) scheduleStreamFlush(entry);
       }
@@ -190,7 +245,7 @@ async function initializeHost(options) {
     clearStreamTimer(entry);
     if (entry.flushPromise) {
       return entry.flushPromise.then(() => {
-        if (entry.pendingStreamUnits > 0) return requestStreamFlush(entry);
+        if (entry.pendingStreamUnits > 0 && !entry.cancelPending && !entry.cancelledByEngine) return requestStreamFlush(entry);
       });
     }
     if (entry.pendingStreamUnits === 0) return Promise.resolve();
@@ -203,7 +258,9 @@ async function initializeHost(options) {
       if (entry.pendingStreamUnits > 0 && !entry.streamError && !entry.cancelPending && !entry.cancelledByEngine && !closing) scheduleStreamFlush(entry);
     });
     entry.flushPromise = wrapped;
-    return wrapped;
+    return wrapped.then(() => {
+      if (entry.pendingStreamUnits > 0 && !entry.cancelPending && !entry.cancelledByEngine) return requestStreamFlush(entry);
+    });
   }
 
   function scheduleStreamFlush(entry) {
@@ -218,29 +275,20 @@ async function initializeHost(options) {
     }, 100);
   }
 
-  async function queueStreamBatch(entry, content, reasoning) {
+  function queueStreamBatch(entry, content, reasoning) {
+    if (entry.streamCutoff || entry.cancelledByEngine || closing) return;
     const units = content.length + reasoning.length;
     if (units === 0) return;
-    if (entry.pendingStreamUnits + units > 4096) {
-      try {
-        if (entry.cancelPending) await flushStreamInline(entry);
-        else await requestStreamFlush(entry);
-      } catch (error) {
-        entry.streamError = report(error);
-        entry.controller.abort(entry.streamError);
-        throw entry.streamError;
-      }
-    }
-    entry.pendingStream.content += content;
-    entry.pendingStream.reasoning += reasoning;
+    if (content) entry.pendingStream.push({ channel: 'content', text: content });
+    if (reasoning) entry.pendingStream.push({ channel: 'reasoning', text: reasoning });
     entry.pendingStreamUnits += units;
     if (entry.cancelPending) return;
-    if (entry.pendingStreamUnits >= 512) {
-      try { await requestStreamFlush(entry); } catch (error) {
+    if (entry.pendingStreamUnits >= 512 && !entry.flushPromise) {
+      requestStreamFlush(entry).catch((error) => {
         entry.streamError = report(error);
         entry.controller.abort(entry.streamError);
-        throw entry.streamError;
-      }
+        changed.emit('change');
+      });
     } else scheduleStreamFlush(entry);
   }
 
@@ -250,38 +298,64 @@ async function initializeHost(options) {
     // capacity checks, without ever splitting a Unicode scalar value.
     let points = [];
     let units = 0;
+    let chunks = 0;
     for (const point of text) {
       if (units + point.length > 4096) {
         const part = points.join('');
-        await queueStreamBatch(entry, channel === 'content' ? part : '', channel === 'reasoning' ? part : '');
-        if (entry.streamError || entry.cancelledByEngine || closing) return;
+        queueStreamBatch(entry, channel === 'content' ? part : '', channel === 'reasoning' ? part : '');
+        if (entry.streamError || entry.streamCutoff || entry.cancelledByEngine || closing) return;
         points = [];
         units = 0;
+        chunks++;
+        if (chunks % 16 === 0) await Promise.resolve();
       }
       points.push(point);
       units += point.length;
       if (units === 4096) {
         const part = points.join('');
-        await queueStreamBatch(entry, channel === 'content' ? part : '', channel === 'reasoning' ? part : '');
-        if (entry.streamError || entry.cancelledByEngine || closing) return;
+        queueStreamBatch(entry, channel === 'content' ? part : '', channel === 'reasoning' ? part : '');
+        if (entry.streamError || entry.streamCutoff || entry.cancelledByEngine || closing) return;
         points = [];
         units = 0;
+        chunks++;
+        if (chunks % 16 === 0) await Promise.resolve();
       }
     }
     if (points.length) {
       const part = points.join('');
-      await queueStreamBatch(entry, channel === 'content' ? part : '', channel === 'reasoning' ? part : '');
+      queueStreamBatch(entry, channel === 'content' ? part : '', channel === 'reasoning' ? part : '');
     }
   }
 
   async function queueStreamDeltas(entry, delta) {
     if (entry.streamError) throw entry.streamError;
-    if (entry.cancelledByEngine || closing) return;
+    if (entry.streamCutoff || entry.cancelledByEngine || closing) return;
     if (!delta || typeof delta.content !== 'string' || typeof delta.reasoning !== 'string') {
       throw new HostError('Provider returned malformed projected text', { status: 502 });
     }
+    const units = delta.content.length + delta.reasoning.length;
+    if (units > MAX_STREAM_UNITS - entry.projectedStreamUnits) {
+      entry.streamError = report(new HostError('Provider stream exceeds the 16 Mi unit limit', { status: 502 }));
+      entry.controller.abort(entry.streamError);
+      throw entry.streamError;
+    }
+    entry.projectedStreamUnits += units;
     await queueStreamText(entry, 'content', delta.content);
     await queueStreamText(entry, 'reasoning', delta.reasoning);
+  }
+
+  function trackStreamDeltas(entry, delta) {
+    if (entry.streamError || entry.streamCutoff || entry.cancelledByEngine || closing) return Promise.resolve();
+    // Register before allowing the asynchronous projection work to run.
+    // Cancellation preflight also waits for this set, so no callback-owned
+    // checkpoint can outlive the serialized cancellation action.
+    const task = Promise.resolve().then(() => queueStreamDeltas(entry, delta));
+    entry.deltaTasks.add(task);
+    task.then(
+      () => entry.deltaTasks.delete(task),
+      () => entry.deltaTasks.delete(task),
+    );
+    return task;
   }
 
   async function transition() {
@@ -315,13 +389,17 @@ async function initializeHost(options) {
         effect,
         controller: new AbortController(),
         promise: undefined,
-        pendingStream: { content: '', reasoning: '' },
+        pendingStream: [],
+        pendingStreamHead: 0,
         pendingStreamUnits: 0,
+        projectedStreamUnits: 0,
         streamTimer: undefined,
         flushPromise: undefined,
         applyPromise: undefined,
+        deltaTasks: new Set(),
         streamError: undefined,
         cancelPending: false,
+        streamCutoff: false,
         cancelledByEngine: false,
       };
       active.set(effect.id, entry);
@@ -344,7 +422,7 @@ async function initializeHost(options) {
       result = effect.kind === 'llm'
         ? await provider.invoke(effect.request, {
           signal: controller.signal,
-          onDelta: (delta) => queueStreamDeltas(entry, delta),
+          onDelta: (delta) => trackStreamDeltas(entry, delta),
         })
         : await workspaceTools.execute(effect.request, { signal: controller.signal });
     } catch (error) {
@@ -389,6 +467,10 @@ async function initializeHost(options) {
       let cancellationEntries = [];
       if (operation === 'session_cancel' && typeof input.session_id === 'string') {
         cancellationEntries = await flushBeforeCancellation(input.session_id);
+        if (closing) {
+          resumeAfterRejectedCancellation(cancellationEntries);
+          throw new HostError('Host is closing', { status: 503 });
+        }
       }
       const response = parseEnvelope(facade.dispatch(JSON.stringify({ operation, input })), 'dispatch');
       if (operation === 'session_cancel' && !response.ok) resumeAfterRejectedCancellation(cancellationEntries);
@@ -409,6 +491,10 @@ async function initializeHost(options) {
     return serialize(async () => {
       const cancelID = mcpCancellation(line);
       const cancellationEntries = cancelID ? await flushBeforeCancellation(cancelID) : [];
+      if (cancelID && closing) {
+        resumeAfterRejectedCancellation(cancellationEntries);
+        throw new HostError('Host is closing', { status: 503 });
+      }
       const response = facade.mcp_handle(line);
       if (typeof response !== 'string') throw new HostError('MoonBit returned an invalid MCP response', { status: 500 });
       if (cancelID) {

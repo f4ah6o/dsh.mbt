@@ -90,12 +90,16 @@ provider は complete SSE frame のみを投影し、host は bounded batch を 
 | MoonBit portable packages | Wasm、Wasm GC、JS、native の各 target で 68 / 68 PASS。app JS target に test entry はありません。 |
 | JavaScript app release build | PASS。 |
 | Node host / browser view model | 35 / 35 PASS、9 / 9 PASS。 |
-| Built app integration | 26 / 26 PASS。 |
+| Built app integration | 29 / 29 PASS。 |
 
 `tests/integration/live-stream.test.mjs` は実際の compiled app facade と host を使い、EOF 前の visible text / reasoning と
 checkpoint、split UTF-8 と 4096-unit scalar-safe batching、truncated tool-call safety と reopen、cancel 後の late-delta fencing
 と次 request の context exclusion、reader cleanup を待つ shutdown、malformed cancel 中に到着する frame の保持、
-queued timer flush と cancellation の順序を確認します。provider / engine / persistence tests は malformed/final divergence,
+queued timer flush と cancellation の順序、5000-unit callback を drain する accepted / rejected cancellation、
+cancellation より先に queue 済みの 600-unit callback の bounded completion と live/durable snapshot parity を確認します。
+host callback は callback 側で checkpoint を待たず、cancellation の serialized preflight が pending segments と active
+checkpoint を drain するため、callback が cancellation の後ろに queue 済み flush を待つ deadlock を作りません。
+provider / engine / persistence tests は malformed/final divergence,
 event identity and replay validation, capacity refusal, legacy v1 restore を検証します。
 
 ## upstream の実記録を使う結合テスト

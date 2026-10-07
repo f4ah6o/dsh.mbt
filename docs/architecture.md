@@ -48,8 +48,12 @@ tool は呼出し順に直列実行します。unknown tool、不正な引数、
 モデルが次の step で回復を試みられます。truncated tool arguments は実行しません。
 
 SSE decoder は分割された text / reasoning / tool arguments を逐次解析します。完全に検証された text / reasoning frame
-だけが stream event になり、tool arguments や reasoning signature は projection しません。host は 512 code units
-ごと、または 100 ms ごとに bounded batch を engine に渡して checkpoint します。最終 completion は投影済み内容と
+だけが stream event になり、tool arguments や reasoning signature は projection しません。host は有限の 16 Mi-unit
+queue に Unicode scalar 境界を守った segment として追加し、onDelta callback 自身は state mutation や checkpoint を
+待ちません。MoonBit state mutation と checkpoint は serialized owner だけが実行し、512 code units ごと、または
+100 ms ごとに bounded batch を engine に渡します。cancel preflight は進行中 callback と projection/checkpoint を
+quiescence まで drain してから engine cancellation を記録するため、遅れた古い snapshot が最後に保存されません。
+最終 completion は投影済み内容と
 一致しなければ受理されず、partial / failed / cancelled turn は useful な provisional text を履歴に残します。
 provisional row は accessible name と Canvas scene label で writing / partial と示し、final row が同じ turn / step
 を置き換えるため duplicate transcript はできません。restore は stream event を検証して partial を再表示しますが、
