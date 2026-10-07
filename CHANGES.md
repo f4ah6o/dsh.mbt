@@ -16,6 +16,7 @@
 
 ### Fixed
 
+- native service を停止した直後に、同じ loopback port で再起動できるようにした。
 - ChatGPT へのサインイン完了後にモデル一覧を自動取得し、取得失敗時は再試行できるようにした。
 
 ### Deprecated
