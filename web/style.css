@@ -48,6 +48,7 @@ h1 { font-size: 18px; letter-spacing: -.35px; margin: 0 0 9px; overflow: hidden;
 .account-status[data-state="reauth_required"] { color: #9a4038; }
 .account-status[data-state="signing_in"] { color: #84661e; }
 .account-detail { color: #7a8596; font-size: 9px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.account-link { color: #4264a3; font-size: 9px; text-decoration: underline; text-underline-offset: 2px; }
 .account-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .model-control { display: flex; align-items: center; gap: 6px; color: #7a8596; font-size: 10px; }
 .model-control select { max-width: 185px; min-width: 120px; color: #33445d; background: white; border: 1px solid #dce2eb; border-radius: 6px; padding: 7px 26px 7px 9px; font: inherit; font-size: 11px; }

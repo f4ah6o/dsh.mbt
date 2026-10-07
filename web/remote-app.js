@@ -199,12 +199,18 @@ function renderAccount() {
   const usage = auth.plan_usage === "enabled"
     ? "Plan usage available"
     : connected
-      ? "ChatGPT plan usage is not enabled"
+      ? "Plan usage is unavailable for this account. Check ChatGPT Settings → Usage."
       : "Sign in to check plan access";
   const scopes = Array.isArray(auth.scopes) && auth.scopes.length
     ? ` · ${auth.scopes.join(", ")}`
     : "";
   $("auth-detail").textContent = `${usage}${scopes}`;
+  $("auth-guidance").textContent = connected
+    ? "Disconnect to sign out or switch accounts, then sign in with the other account."
+    : auth.state === "signing_in"
+      ? "Complete sign-in in the host computer’s browser. Remote/headless sign-in is not available yet."
+      : "Sign-in opens the host computer’s browser. Remote/headless sign-in is not available yet.";
+  $("usage-link").hidden = !connected || auth.plan_usage === "enabled";
   $("auth-sign-in").hidden = connected;
   $("auth-sign-in").textContent = auth.state === "reauth_required" ? "Sign in again" : "Sign in with ChatGPT";
   $("auth-sign-in").disabled = state.mutation || auth.state === "signing_in";

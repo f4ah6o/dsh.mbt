@@ -27,7 +27,7 @@
           <div class="header-actions"><button id="text-view" class="quiet-button" type="button" aria-pressed="false">Text view</button><button id="prune-results" class="quiet-button" type="button" hidden>Trim outputs</button><button id="cancel" class="quiet-button" type="button" disabled>Stop</button></div>
         </header>
         <section class="account-bar" aria-label="ChatGPT account">
-          <div class="account-summary"><span id="auth-status" class="account-status" data-state="signed_out">ChatGPT not connected</span><span id="auth-detail" class="account-detail"></span></div>
+          <div class="account-summary"><span id="auth-status" class="account-status" data-state="signed_out">ChatGPT not connected</span><span id="auth-detail" class="account-detail"></span><span id="auth-guidance" class="account-detail"></span><a id="usage-link" class="account-link" href="https://chatgpt.com" target="_blank" rel="noopener noreferrer" hidden>Open ChatGPT · Settings → Usage</a></div>
           <div class="account-actions"><label class="model-control" for="model-picker"><span>Model</span><select id="model-picker" disabled><option>Connect ChatGPT to discover models</option></select></label><button id="auth-sign-in" class="quiet-button" type="button">Sign in with ChatGPT</button><button id="auth-sign-out" class="quiet-button" type="button" hidden>Disconnect</button><button id="install-app" class="quiet-button" type="button" hidden>Install</button></div>
         </section>
         <div id="connection-error" class="notice error-notice" role="alert" hidden><span id="connection-error-text"></span><button id="reconnect" type="button">Reconnect</button></div>
