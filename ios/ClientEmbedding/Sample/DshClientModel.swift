@@ -17,7 +17,10 @@ struct ClientMessageRow: Identifiable {
 @MainActor
 final class DshClientModel: ObservableObject {
     @Published var hostURL: String {
-        didSet { defaults.set(hostURL, forKey: "dsh.native.host") }
+        didSet {
+            defaults.set(hostURL, forKey: "dsh.native.host")
+            if oldValue != hostURL { invalidateConnection() }
+        }
     }
     @Published var connection = "offline"
     @Published var authSummary = "Not connected"
@@ -26,6 +29,7 @@ final class DshClientModel: ObservableObject {
     @Published var messages: [ClientMessageRow] = []
     @Published var pendingApproval: [String: Any]?
     @Published var draft = ""
+    @Published var followLatest = true
     @Published var errorMessage: String?
     @Published var commandNotice: String?
     @Published var isBusy = false
@@ -36,7 +40,18 @@ final class DshClientModel: ObservableObject {
     private let handle: DshMoonBitClientHandle
     private var streamTask: Task<Void, Never>?
     private var preferenceScope: String?
-    private var operationInFlight = false
+    private enum OperationKind { case connection, read, mutation }
+    private struct OperationContext {
+        let generation: UInt64
+        let scopeKey: String?
+    }
+    private var activeOperationID: UInt64?
+    private var activeOperationKind: OperationKind?
+    private var nextOperationID: UInt64 = 1
+    private var resumeAfterMutation = false
+    private var connectionGeneration: UInt64 = 0
+    private var snapshotRequestID: UInt64 = 0
+    private var streamGeneration: UInt64 = 0
 
     init(
         urlSession: URLSession = .shared,
@@ -62,15 +77,23 @@ final class DshClientModel: ObservableObject {
             errorMessage = "Enter the HTTPS URL of the host on your tailnet."
             return
         }
-        guard beginOperation() else { return }
-        defer { endOperation() }
+        guard let operationID = beginOperation(.connection) else {
+            if activeOperationKind == .mutation { resumeAfterMutation = true }
+            return
+        }
+        defer { endOperation(operationID) }
+        let generation = advanceConnectionGeneration()
         errorMessage = nil
         _ = bridgeString(dsh_moonbit_client_begin_connect(handle))
         refreshFromClient()
         do {
-            try await loadSnapshot(baseURL: baseURL)
-            startEventStream(baseURL: baseURL)
+            try await loadSnapshot(baseURL: baseURL, generation: generation)
+            guard isCurrentConnection(generation) else { return }
+            startEventStream(baseURL: baseURL, generation: generation)
+        } catch is CancellationError {
+            return
         } catch {
+            guard isCurrentConnection(generation) else { return }
             _ = bridgeString(dsh_moonbit_client_connection_failed(handle))
             errorMessage = error.localizedDescription
             refreshFromClient()
@@ -84,15 +107,16 @@ final class DshClientModel: ObservableObject {
     }
 
     func suspend() {
-        streamTask?.cancel()
-        streamTask = nil
-        guard connection != "offline" else { return }
-        _ = bridgeString(dsh_moonbit_client_connection_failed(handle))
-        persistPreferences()
-        refreshFromClient()
+        invalidateConnection()
     }
 
     func selectSession(_ id: String) async {
+        await selectSession(id, generation: connectionGeneration)
+    }
+
+    private func selectSession(_ id: String, generation: UInt64) async {
+        guard isCurrentConnection(generation) else { return }
+        let expectedScope = currentScopeKey()
         _ = callString(Data(id.utf8)) { pointer, count in
             dsh_moonbit_client_set_selection(handle, pointer, count)
         }
@@ -101,12 +125,16 @@ final class DshClientModel: ObservableObject {
         guard let baseURL = validatedBaseURL() else { return }
         do {
             let data = try await request(baseURL: baseURL, path: "/api/v1/sessions/\(id)")
+            guard isCurrentConnection(generation), currentScopeKey() == expectedScope,
+                  selectedSessionID == id else { return }
             _ = callString(data) { pointer, count in
                 dsh_moonbit_client_accept_session(handle, pointer, count)
             }
             refreshFromClient()
-            restartEventStream()
+            restartEventStream(generation: generation)
         } catch {
+            guard isCurrentConnection(generation), currentScopeKey() == expectedScope,
+                  selectedSessionID == id else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -119,21 +147,39 @@ final class DshClientModel: ObservableObject {
         persistPreferences()
     }
 
+    func setFollowLatest(_ value: Bool) {
+        followLatest = value
+        _ = bridgeString(dsh_moonbit_client_set_follow_latest(handle, value ? 1 : 0))
+        persistPreferences()
+    }
+
+    func updateFollowLatestFromUserScroll(isNearLatest: Bool, isUserScrolling: Bool) {
+        guard isUserScrolling, followLatest != isNearLatest else { return }
+        setFollowLatest(isNearLatest)
+    }
+
     func createSession() async {
-        guard beginOperation() else { return }
-        defer { endOperation() }
+        guard let operationID = beginOperation(.mutation) else { return }
+        defer { endOperation(operationID) }
+        let context = operationContext()
         do {
             let sessionID = UUID().uuidString.lowercased()
             _ = try await sendCommand(
                 operation: "session_create",
                 sessionID: nil,
                 input: ["id": sessionID, "title": "New session"],
-                approvalRevision: -1
+                approvalRevision: -1,
+                context: context
             )
+            guard isCurrent(context) else { return }
             guard let baseURL = validatedBaseURL() else { throw ClientError.invalidHost }
-            try await loadSnapshot(baseURL: baseURL)
-            await selectSession(sessionID)
+            try await loadSnapshot(baseURL: baseURL, generation: context.generation)
+            guard isCurrent(context) else { return }
+            await selectSession(sessionID, generation: context.generation)
+            guard isCurrent(context) else { return }
         } catch {
+            if error is CancellationError { return }
+            guard isCurrent(context) else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -142,8 +188,9 @@ final class DshClientModel: ObservableObject {
         let originalDraft = draft
         let prompt = originalDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
-        guard beginOperation() else { return }
-        defer { endOperation() }
+        guard let operationID = beginOperation(.mutation) else { return }
+        defer { endOperation(operationID) }
+        let context = operationContext()
         commandNotice = nil
         do {
             var sessionID = selectedSessionID
@@ -153,29 +200,38 @@ final class DshClientModel: ObservableObject {
                     operation: "session_create",
                     sessionID: nil,
                     input: ["id": sessionID!, "title": String(prompt.prefix(52))],
-                    approvalRevision: -1
+                    approvalRevision: -1,
+                    context: context
                 )
+                guard isCurrent(context) else { return }
                 guard let baseURL = validatedBaseURL() else { throw ClientError.invalidHost }
-                try await loadSnapshot(baseURL: baseURL)
-                await selectSession(sessionID!)
+                try await loadSnapshot(baseURL: baseURL, generation: context.generation)
+                guard isCurrent(context) else { return }
+                await selectSession(sessionID!, generation: context.generation)
+                guard isCurrent(context) else { return }
             }
             _ = try await sendCommand(
                 operation: "session_send",
                 sessionID: sessionID,
                 input: ["prompt": prompt],
-                approvalRevision: -1
+                approvalRevision: -1,
+                context: context
             )
+            guard isCurrent(context) else { return }
             if draft == originalDraft { setDraft("") }
             guard let baseURL = validatedBaseURL() else { throw ClientError.invalidHost }
-            try await loadSnapshot(baseURL: baseURL)
+            try await loadSnapshot(baseURL: baseURL, generation: context.generation)
         } catch {
+            if error is CancellationError { return }
+            guard isCurrent(context) else { return }
             errorMessage = error.localizedDescription
         }
     }
 
     func decideApproval(approved: Bool) async {
-        guard beginOperation() else { return }
-        defer { endOperation() }
+        guard let operationID = beginOperation(.mutation) else { return }
+        defer { endOperation(operationID) }
+        let context = operationContext()
         commandNotice = nil
         guard let pendingApproval,
               let callID = pendingApproval["call_id"] as? String,
@@ -190,10 +246,16 @@ final class DshClientModel: ObservableObject {
                 operation: "tool_approve",
                 sessionID: sessionID,
                 input: ["call_id": callID, "approved": approved],
-                approvalRevision: revision
+                approvalRevision: revision,
+                context: context
             )
-            if let baseURL = validatedBaseURL() { try await loadSnapshot(baseURL: baseURL) }
+            guard isCurrent(context) else { return }
+            if let baseURL = validatedBaseURL() {
+                try await loadSnapshot(baseURL: baseURL, generation: context.generation)
+            }
         } catch {
+            if error is CancellationError { return }
+            guard isCurrent(context) else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -203,11 +265,16 @@ final class DshClientModel: ObservableObject {
             errorMessage = "Enter the HTTPS URL of the host on your tailnet."
             return
         }
-        guard beginOperation() else { return }
-        defer { endOperation() }
+        guard let operationID = beginOperation(.read) else { return }
+        defer { endOperation(operationID) }
+        let generation = connectionGeneration
         do {
-            try await loadSnapshot(baseURL: baseURL)
+            try await loadSnapshot(baseURL: baseURL, generation: generation)
+            guard isCurrentConnection(generation) else { return }
+            startEventStream(baseURL: baseURL, generation: generation)
         } catch {
+            if error is CancellationError { return }
+            guard isCurrentConnection(generation) else { return }
             errorMessage = error.localizedDescription
         }
     }
@@ -216,8 +283,10 @@ final class DshClientModel: ObservableObject {
         operation: String,
         sessionID: String?,
         input: [String: Any],
-        approvalRevision: Int
+        approvalRevision: Int,
+        context: OperationContext
     ) async throws -> [String: Any] {
+        guard isCurrent(context) else { throw CancellationError() }
         guard let baseURL = validatedBaseURL() else { throw ClientError.invalidHost }
         let entropy = try secureEntropyHex()
         let timestamp = String(Int64(Date().timeIntervalSince1970 * 1000))
@@ -271,23 +340,47 @@ final class DshClientModel: ObservableObject {
                 body: encoded
             )
         } catch {
-            _ = callString(Data(commandID.utf8)) { pointer, count in
-                dsh_moonbit_client_mark_command_uncertain(handle, pointer, count)
+            markCommandUncertain(commandID)
+            guard isCurrent(context) else { throw CancellationError() }
+            let receipt: Data
+            do {
+                receipt = try await request(
+                    baseURL: baseURL,
+                    path: "/api/v1/commands/\(commandID)"
+                )
+            } catch {
+                guard isCurrent(context) else { throw CancellationError() }
+                markReceiptMissing(commandID)
+                commandNotice = "The host’s response was lost and no receipt is available yet. The command was not resent; check its status before retrying."
+                throw ClientError.commandUnconfirmed
             }
-            persistPreferences()
-            refreshFromClient()
-            if let receipt = try? await request(baseURL: baseURL, path: "/api/v1/commands/\(commandID)") {
-                return try applyReceipt(receipt, expectedCommandID: commandID)
-            }
-            markReceiptMissing(commandID)
-            commandNotice = "The host’s response was lost and no receipt is available yet. The command was not resent; check its status before retrying."
-            throw ClientError.commandUnconfirmed
+            guard isCurrent(context) else { throw CancellationError() }
+            return try applyReceipt(receipt, expectedCommandID: commandID)
+        }
+        guard isCurrent(context) else {
+            markCommandUncertain(commandID)
+            throw CancellationError()
         }
         return try applyReceipt(receiptData, expectedCommandID: commandID)
     }
 
-    private func loadSnapshot(baseURL: URL) async throws {
-        let raw = try await request(baseURL: baseURL, path: "/api/v1/snapshot")
+    private func loadSnapshot(baseURL: URL, generation: UInt64) async throws {
+        guard isCurrentConnection(generation) else { throw CancellationError() }
+        snapshotRequestID += 1
+        let requestID = snapshotRequestID
+        let initialScope = currentScopeKey()
+        let raw: Data
+        do {
+            raw = try await request(baseURL: baseURL, path: "/api/v1/snapshot")
+        } catch {
+            guard isCurrentSnapshot(generation: generation, requestID: requestID),
+                  currentScopeKey() == initialScope else { throw CancellationError() }
+            throw error
+        }
+        guard isCurrentSnapshot(generation: generation, requestID: requestID),
+              currentScopeKey() == initialScope else {
+            throw CancellationError()
+        }
         guard let resultRaw = callString(raw, { pointer, count in
             dsh_moonbit_client_accept_snapshot(handle, pointer, count)
         }),
@@ -296,24 +389,59 @@ final class DshClientModel: ObservableObject {
         }
         restorePreferencesForCurrentScope()
         refreshFromClient()
+        let snapshotScope = currentScopeKey()
         if let id = selectedSessionID {
-            let detail = try await request(baseURL: baseURL, path: "/api/v1/sessions/\(id)")
+            let detail: Data
+            do {
+                detail = try await request(baseURL: baseURL, path: "/api/v1/sessions/\(id)")
+            } catch {
+                guard isCurrentSnapshot(generation: generation, requestID: requestID),
+                      currentScopeKey() == snapshotScope else { throw CancellationError() }
+                throw error
+            }
+            guard isCurrentSnapshot(generation: generation, requestID: requestID),
+                  currentScopeKey() == snapshotScope else {
+                throw CancellationError()
+            }
             _ = callString(detail) { pointer, count in
                 dsh_moonbit_client_accept_session(handle, pointer, count)
             }
             refreshFromClient()
         }
-        await reconcilePendingReceipts(baseURL: baseURL)
+        await reconcilePendingReceipts(
+            baseURL: baseURL,
+            generation: generation,
+            requestID: requestID,
+            scopeKey: snapshotScope
+        )
     }
 
-    private func maintainEventStream(baseURL: URL) async {
-        while !Task.isCancelled {
+    private func maintainEventStream(
+        baseURL: URL,
+        generation: UInt64,
+        streamID: UInt64,
+        scopeKey: String
+    ) async {
+        while !Task.isCancelled && isCurrentStream(generation, streamID: streamID, scopeKey: scopeKey) {
             do {
-                let wantsSnapshot = try await readProjectionStream(baseURL: baseURL)
-                if wantsSnapshot { try await loadSnapshot(baseURL: baseURL) }
+                let wantsSnapshot = try await readProjectionStream(
+                    baseURL: baseURL,
+                    generation: generation,
+                    streamID: streamID,
+                    scopeKey: scopeKey
+                )
+                if wantsSnapshot {
+                    try await loadSnapshot(baseURL: baseURL, generation: generation)
+                    guard isCurrentConnection(generation) else { return }
+                    if currentScopeKey() != scopeKey {
+                        restartEventStream(generation: generation)
+                        return
+                    }
+                }
             } catch is CancellationError {
                 return
             } catch {
+                guard isCurrentStream(generation, streamID: streamID, scopeKey: scopeKey) else { return }
                 _ = bridgeString(dsh_moonbit_client_connection_failed(handle))
                 refreshFromClient()
                 try? await Task.sleep(for: .seconds(2))
@@ -321,7 +449,15 @@ final class DshClientModel: ObservableObject {
         }
     }
 
-    private func readProjectionStream(baseURL: URL) async throws -> Bool {
+    private func readProjectionStream(
+        baseURL: URL,
+        generation: UInt64,
+        streamID: UInt64,
+        scopeKey expectedScope: String
+    ) async throws -> Bool {
+        guard isCurrentStream(generation, streamID: streamID, scopeKey: expectedScope) else {
+            throw CancellationError()
+        }
         guard let state = clientState(),
               let cursor = state["cursor"] as? String, !cursor.isEmpty else {
             throw ClientError.snapshotRejected
@@ -334,6 +470,9 @@ final class DshClientModel: ObservableObject {
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
         let (bytes, response) = try await urlSession.bytes(for: request)
+        guard isCurrentStream(generation, streamID: streamID, scopeKey: expectedScope) else {
+            throw CancellationError()
+        }
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
             throw ClientError.serverUnavailable
         }
@@ -344,7 +483,9 @@ final class DshClientModel: ObservableObject {
         var eventID = ""
         var eventName = "message"
         for try await line in bytes.lines {
-            if Task.isCancelled { throw CancellationError() }
+            if Task.isCancelled || !isCurrentStream(generation, streamID: streamID, scopeKey: expectedScope) {
+                throw CancellationError()
+            }
             if line.isEmpty {
                 if !dataLines.isEmpty {
                     let raw = Data(dataLines.joined(separator: "\n").utf8)
@@ -461,6 +602,7 @@ final class DshClientModel: ObservableObject {
             authSummary = [auth["state"] as? String, account, model]
                 .compactMap { $0 }.joined(separator: " · ")
         }
+        followLatest = state["follow_latest"] as? Bool ?? true
         let projection = state["projection"] as? [String: Any]
         let sessionRows = projection?["sessions"] as? [[String: Any]] ?? []
         sessions = sessionRows.compactMap { row in
@@ -524,30 +666,98 @@ final class DshClientModel: ObservableObject {
         return parseObject(raw)
     }
 
-    private func restartEventStream() {
+    private func restartEventStream(generation: UInt64) {
         guard eventStreamEnabled else { return }
         guard let baseURL = validatedBaseURL() else { return }
-        startEventStream(baseURL: baseURL)
+        startEventStream(baseURL: baseURL, generation: generation)
     }
 
-    private func startEventStream(baseURL: URL) {
-        guard eventStreamEnabled else { return }
+    private func startEventStream(baseURL: URL, generation: UInt64) {
+        guard eventStreamEnabled, isCurrentConnection(generation),
+              let scopeKey = currentScopeKey() else { return }
         streamTask?.cancel()
+        streamGeneration += 1
+        let streamID = streamGeneration
         streamTask = Task { [weak self] in
-            await self?.maintainEventStream(baseURL: baseURL)
+            await self?.maintainEventStream(
+                baseURL: baseURL,
+                generation: generation,
+                streamID: streamID,
+                scopeKey: scopeKey
+            )
         }
     }
 
-    private func beginOperation() -> Bool {
-        guard !operationInFlight else { return false }
-        operationInFlight = true
+    private func beginOperation(_ kind: OperationKind) -> UInt64? {
+        guard activeOperationID == nil else { return nil }
+        let operationID = nextOperationID
+        nextOperationID += 1
+        activeOperationID = operationID
+        activeOperationKind = kind
         isBusy = true
-        return true
+        return operationID
     }
 
-    private func endOperation() {
-        operationInFlight = false
+    private func endOperation(_ operationID: UInt64) {
+        guard activeOperationID == operationID else { return }
+        let shouldResume = activeOperationKind == .mutation && resumeAfterMutation
+        activeOperationID = nil
+        activeOperationKind = nil
         isBusy = false
+        if shouldResume {
+            resumeAfterMutation = false
+            let generation = connectionGeneration
+            Task { [weak self] in
+                guard let self, self.isCurrentConnection(generation) else { return }
+                await self.connect()
+            }
+        }
+    }
+
+    private func advanceConnectionGeneration() -> UInt64 {
+        connectionGeneration += 1
+        snapshotRequestID += 1
+        streamGeneration += 1
+        streamTask?.cancel()
+        streamTask = nil
+        return connectionGeneration
+    }
+
+    private func invalidateConnection() {
+        resumeAfterMutation = false
+        _ = advanceConnectionGeneration()
+        if activeOperationKind == .connection || activeOperationKind == .read {
+            activeOperationID = nil
+            activeOperationKind = nil
+            isBusy = false
+        }
+        _ = bridgeString(dsh_moonbit_client_connection_failed(handle))
+        persistPreferences()
+        refreshFromClient()
+    }
+
+    private func isCurrentConnection(_ generation: UInt64) -> Bool {
+        connectionGeneration == generation
+    }
+
+    private func isCurrentStream(_ generation: UInt64, streamID: UInt64, scopeKey: String) -> Bool {
+        isCurrentConnection(generation) && streamGeneration == streamID && currentScopeKey() == scopeKey
+    }
+
+    private func isCurrentSnapshot(generation: UInt64, requestID: UInt64) -> Bool {
+        isCurrentConnection(generation) && snapshotRequestID == requestID
+    }
+
+    private func operationContext() -> OperationContext {
+        OperationContext(generation: connectionGeneration, scopeKey: currentScopeKey())
+    }
+
+    private func isCurrent(_ context: OperationContext) -> Bool {
+        isCurrentConnection(context.generation) && currentScopeKey() == context.scopeKey
+    }
+
+    private func currentScopeKey() -> String? {
+        clientState()?["scope_key"] as? String
     }
 
     private func applyReceipt(_ data: Data, expectedCommandID: String) throws -> [String: Any] {
@@ -583,26 +793,38 @@ final class DshClientModel: ObservableObject {
         return receipt
     }
 
-    private func reconcilePendingReceipts(baseURL: URL) async {
+    private func reconcilePendingReceipts(
+        baseURL: URL,
+        generation: UInt64,
+        requestID: UInt64,
+        scopeKey: String?
+    ) async {
         guard let raw = bridgeString(dsh_moonbit_client_pending_ids_json(handle)),
               let ids = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String] else {
             return
         }
         var hasUnconfirmedOutcome = false
         for commandID in ids {
-            if Task.isCancelled { return }
+            guard isCurrentSnapshot(generation: generation, requestID: requestID),
+                  currentScopeKey() == scopeKey else { return }
             do {
                 let receipt = try await request(baseURL: baseURL, path: "/api/v1/commands/\(commandID)")
+                guard isCurrentSnapshot(generation: generation, requestID: requestID),
+                      currentScopeKey() == scopeKey else { return }
                 _ = try applyReceipt(receipt, expectedCommandID: commandID)
             } catch ClientError.commandRejected(_), ClientError.commandExpired {
                 // applyReceipt already saved the receipt and exposed its outcome.
             } catch ClientError.commandUnconfirmed {
                 hasUnconfirmedOutcome = true
             } catch {
+                guard isCurrentSnapshot(generation: generation, requestID: requestID),
+                      currentScopeKey() == scopeKey else { return }
                 markReceiptMissing(commandID)
                 hasUnconfirmedOutcome = true
             }
         }
+        guard isCurrentSnapshot(generation: generation, requestID: requestID),
+              currentScopeKey() == scopeKey else { return }
         persistPreferences()
         refreshFromClient()
         if hasUnconfirmedOutcome {
@@ -613,6 +835,14 @@ final class DshClientModel: ObservableObject {
     private func markReceiptMissing(_ commandID: String) {
         _ = callString(Data(commandID.utf8)) { pointer, count in
             dsh_moonbit_client_mark_receipt_missing(handle, pointer, count)
+        }
+        persistPreferences()
+        refreshFromClient()
+    }
+
+    private func markCommandUncertain(_ commandID: String) {
+        _ = callString(Data(commandID.utf8)) { pointer, count in
+            dsh_moonbit_client_mark_command_uncertain(handle, pointer, count)
         }
         persistPreferences()
         refreshFromClient()
