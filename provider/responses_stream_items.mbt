@@ -12,7 +12,7 @@ fn ResponsesStreamDecoder::record_created(
   if text_field(response, "status") != "in_progress" {
     reject("MALFORMED_RESPONSE", "created response is not in progress")
   }
-  ignore(identity(response, "id"))
+  self.response_id = Some(identity(response, "id"))
   self.started = true
 }
 
@@ -27,6 +27,12 @@ fn ResponsesStreamDecoder::record_output_item_added(
   let kind = text_field(item, "type")
   if self.output_items.contains(item_id) {
     reject("MALFORMED_RESPONSE", "output item id was reused")
+  }
+  let output_index = integer(field(raw, "output_index"), "output_index")
+  if output_index != self.output_item_order.length() {
+    reject(
+      "MALFORMED_RESPONSE", "output item indexes are not unique and contiguous",
+    )
   }
   match kind {
     "message" | "reasoning" => self.output_items[item_id] = kind
@@ -79,6 +85,8 @@ fn ResponsesStreamDecoder::record_output_item_added(
         "unsupported Responses output item " + other,
       )
   }
+  self.output_item_order.push(item_id)
+  self.output_indices[item_id] = output_index
 }
 
 ///|
@@ -234,6 +242,13 @@ fn ResponsesStreamDecoder::record_output_item_done(
   let item = object(field(raw, "item"), "completed output item")
   let item_id = identity(item, "id")
   let kind = text_field(item, "type")
+  let output_index = integer(field(raw, "output_index"), "output_index")
+  if self.completed_output_items.contains(item_id) {
+    reject("MALFORMED_RESPONSE", "duplicate output item completion")
+  }
+  if self.output_indices.get(item_id) != Some(output_index) {
+    reject("MALFORMED_RESPONSE", "completed output item index changed")
+  }
   match kind {
     "message" | "reasoning" => {
       if self.output_items.get(item_id) != Some(kind) {
@@ -241,6 +256,7 @@ fn ResponsesStreamDecoder::record_output_item_done(
           "MALFORMED_RESPONSE", "output item completed without being added",
         )
       }
+      self.completed_output_items[item_id] = Json::object(item.copy())
       return
     }
     "function_call" | "custom_tool_call" => ()
@@ -298,4 +314,5 @@ fn ResponsesStreamDecoder::record_output_item_done(
       },
     )
   }
+  self.completed_output_items[item_id] = Json::object(item.copy())
 }

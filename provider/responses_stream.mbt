@@ -50,7 +50,11 @@ struct ResponsesStreamDecoder {
   mut terminal_failure : String?
   mut terminal_incomplete : String?
   mut completion : Json?
+  mut response_id : String?
   output_items : Map[String, String]
+  output_item_order : Array[String]
+  output_indices : Map[String, Int]
+  completed_output_items : Map[String, Json]
   calls : Map[String, ResponsesFunctionCall]
   call_ids : Map[String, Bool]
   call_order : Array[String]
@@ -82,7 +86,11 @@ pub fn ResponsesStreamDecoder::new() -> ResponsesStreamDecoder {
     terminal_failure: None,
     terminal_incomplete: None,
     completion: None,
+    response_id: None,
     output_items: Map([]),
+    output_item_order: [],
+    output_indices: Map([]),
+    completed_output_items: Map([]),
     calls: Map([]),
     call_ids: Map([]),
     call_order: [],
@@ -129,8 +137,22 @@ pub fn ResponsesStreamDecoder::take_events(
 }
 
 ///|
-/// EOF succeeds only after a complete `response.completed` event. `failed`,
-/// `incomplete`, malformed tails, and a bare socket close all fail closed.
+/// Report whether a validated response.completed result can be finalized.
+/// Provider failures and incomplete responses never produce a ready result.
+pub fn ResponsesStreamDecoder::has_completed_result(
+  self : ResponsesStreamDecoder,
+) -> Bool {
+  !self.closed &&
+  self.failure is None &&
+  self.terminal_failure is None &&
+  self.terminal_incomplete is None &&
+  self.completion is Some(_)
+}
+
+///|
+/// Finalization succeeds only after a complete response.completed event and
+/// a clean SSE frame boundary. The transport may instead end before that
+/// event; failures, incomplete responses, and malformed tails fail closed.
 pub fn ResponsesStreamDecoder::finish(
   self : ResponsesStreamDecoder,
 ) -> Result[Json, String] {

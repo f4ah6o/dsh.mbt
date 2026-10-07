@@ -996,6 +996,82 @@ fn native_failure_is_retryable(result : Json) -> Json? {
 }
 
 ///|
+const NATIVE_PROVIDER_STREAM_DELTA_CAPACITY : Int = 4096
+
+///|
+fn native_provider_utf16_units(value : String) -> Int {
+  let mut units = 0
+  for character in value {
+    units += if character.to_int() > 0xFFFF { 2 } else { 1 }
+  }
+  units
+}
+
+///|
+fn native_provider_split_stream_delta(value : String) -> Array[String] {
+  let chunks : Array[String] = []
+  let mut chunk = StringBuilder()
+  let mut units = 0
+  for character in value {
+    let width = if character.to_int() > 0xFFFF { 2 } else { 1 }
+    if units + width > NATIVE_PROVIDER_STREAM_DELTA_CAPACITY {
+      chunks.push(chunk.to_string())
+      chunk = StringBuilder()
+      units = 0
+    }
+    chunk.write_char(character)
+    units += width
+  }
+  if units > 0 {
+    chunks.push(chunk.to_string())
+  }
+  chunks
+}
+
+///|
+async fn NativeRuntime::project_provider_stream_batch(
+  self : NativeRuntime,
+  effect_id : @engine.EffectId,
+  text : String,
+  reasoning : String,
+) -> Result[Unit, String] {
+  match self.project(effect_id, text, reasoning) {
+    Ok(next_effects) if next_effects.is_empty() => Ok(())
+    Ok(_) => Err("provider stream projection produced new effects")
+    Err(error) => Err(error)
+  }
+}
+
+///|
+async fn NativeRuntime::project_provider_delta(
+  self : NativeRuntime,
+  effect_id : @engine.EffectId,
+  text : String,
+  reasoning : String,
+) -> Result[Unit, String] {
+  if text.is_empty() && reasoning.is_empty() {
+    return Ok(())
+  }
+  if native_provider_utf16_units(text) + native_provider_utf16_units(reasoning) <=
+    NATIVE_PROVIDER_STREAM_DELTA_CAPACITY {
+    return self.project_provider_stream_batch(effect_id, text, reasoning)
+  }
+  for chunk in native_provider_split_stream_delta(text) {
+    match self.project_provider_stream_batch(effect_id, chunk, "") {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
+  }
+  for chunk in native_provider_split_stream_delta(reasoning) {
+    match self.project_provider_stream_batch(effect_id, "", chunk) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
+  }
+  Ok(())
+}
+
+///|
 async fn NativeRuntime::run_provider_effect(
   self : NativeRuntime,
   effect : @engine.EngineEffect,
@@ -1004,8 +1080,6 @@ async fn NativeRuntime::run_provider_effect(
     return Err("effect is not a provider request")
   }
   let request = effect.request()
-  let mut content = ""
-  let mut reasoning = ""
   let mut final_result : Json? = None
   // Bind every retry to the account, model, and generation selected for this
   // effect. A sign-out, re-login, or model switch during backoff must make the
@@ -1076,39 +1150,14 @@ async fn NativeRuntime::run_provider_effect(
           @provider.ResponsesEvent::ReasoningDelta(value) => ("", value)
           _ => ("", "")
         }
-        if !text.is_empty() || !why.is_empty() {
-          let (next_content, next_reasoning) = (content + text, reasoning + why)
-          match self.project(effect.id(), next_content, next_reasoning) {
-            Ok(next_effects) if next_effects.is_empty() => {
-              content = next_content
-              reasoning = next_reasoning
-              Ok(())
-            }
-            Ok(_) => Err("provider stream projection produced new effects")
-            Err(error) => Err(error)
-          }
-        } else {
-          Ok(())
-        }
+        self.project_provider_delta(effect.id(), text, why)
       })
     } else {
       native_run_api_key(selection, request, api_key.unwrap(), async fn(
         text,
         why,
       ) -> Result[Unit, String] {
-        if text.is_empty() && why.is_empty() {
-          return Ok(())
-        }
-        let (next_content, next_reasoning) = (content + text, reasoning + why)
-        match self.project(effect.id(), next_content, next_reasoning) {
-          Ok(next_effects) if next_effects.is_empty() => {
-            content = next_content
-            reasoning = next_reasoning
-            Ok(())
-          }
-          Ok(_) => Err("provider stream projection produced new effects")
-          Err(error) => Err(error)
-        }
+        self.project_provider_delta(effect.id(), text, why)
       })
     }
     match result {

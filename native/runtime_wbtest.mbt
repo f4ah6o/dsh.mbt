@@ -66,6 +66,118 @@ fn native_runtime_unscoped_command(
 }
 
 ///|
+async test "native runtime projects exact provider deltas and completes long Unicode output" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-stream-deltas")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let runtime = match
+      NativeRuntime::open(fixture + "/data", workspace, false, true) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "native-stream-delta-session"
+    let (_, create_effects) = runtime
+      .invoke("session_create", {
+        "id": session_id,
+        "title": "Stream delta projection",
+      })
+      .unwrap()
+    assert_true(create_effects.is_empty())
+    let (_, effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id,
+        "prompt": "return a short answer",
+      })
+      .unwrap()
+    assert_eq(effects.length(), 1)
+    let effect = effects[0]
+
+    let small_deltas = [("Hel", "think "), ("lo", "carefully")]
+    for (text, reasoning) in small_deltas {
+      assert_eq(
+        runtime.project_provider_delta(effect.id(), text, reasoning),
+        Ok(()),
+      )
+    }
+    let long_text = StringView::repeat("x"[:], 4095).to_owned() + "😀z"
+    let long_reasoning = StringView::repeat("r"[:], 4500).to_owned()
+    assert_eq(native_provider_split_stream_delta(long_text).length(), 2)
+    assert_eq(native_provider_split_stream_delta(long_text)[0].length(), 4095)
+    assert_eq(native_provider_split_stream_delta(long_text)[1], "😀z")
+    assert_eq(
+      runtime.project_provider_delta(effect.id(), long_text, long_reasoning),
+      Ok(()),
+    )
+
+    let (streaming, no_effects) = runtime
+      .invoke("session_get", { "session_id": session_id })
+      .unwrap()
+    assert_true(no_effects.is_empty())
+    let events = match object_field(streaming, "events") {
+      Some(Json::Array(values)) => values
+      _ => fail("streaming session did not contain events")
+    }
+    let deltas = events.filter(event => {
+      string_field(event, "type") == Some("assistant/stream_delta")
+    })
+    assert_eq(deltas.length(), 6)
+    let first = object_field(deltas[0], "data").unwrap()
+    assert_eq(string_field(first, "content"), Some("Hel"))
+    assert_eq(string_field(first, "reasoning"), Some("think "))
+    let second = object_field(deltas[1], "data").unwrap()
+    assert_eq(string_field(second, "content"), Some("lo"))
+    assert_eq(string_field(second, "reasoning"), Some("carefully"))
+    let third = object_field(deltas[2], "data").unwrap()
+    assert_eq(
+      string_field(third, "content"),
+      Some(StringView::repeat("x"[:], 4095).to_owned()),
+    )
+    assert_eq(string_field(third, "reasoning"), Some(""))
+    let fourth = object_field(deltas[3], "data").unwrap()
+    assert_eq(string_field(fourth, "content"), Some("😀z"))
+    assert_eq(string_field(fourth, "reasoning"), Some(""))
+    let fifth = object_field(deltas[4], "data").unwrap()
+    assert_eq(string_field(fifth, "content"), Some(""))
+    assert_eq(
+      string_field(fifth, "reasoning"),
+      Some(StringView::repeat("r"[:], 4096).to_owned()),
+    )
+    let sixth = object_field(deltas[5], "data").unwrap()
+    assert_eq(string_field(sixth, "content"), Some(""))
+    assert_eq(
+      string_field(sixth, "reasoning"),
+      Some(StringView::repeat("r"[:], 404).to_owned()),
+    )
+
+    let final_content = "Hello" + long_text
+    let final_reasoning = "think carefully" + long_reasoning
+    let (completed, follow_up_effects) = runtime
+      .complete(effect.id(), {
+        "ok": true,
+        "content": final_content,
+        "reasoning": final_reasoning,
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(follow_up_effects.is_empty())
+    assert_eq(string_field(completed, "status"), Some("completed"))
+    let messages = match object_field(completed, "messages") {
+      Some(Json::Array(values)) => values
+      _ => fail("completed session did not contain messages")
+    }
+    let assistant = messages[messages.length() - 1]
+    assert_eq(string_field(assistant, "content"), Some(final_content))
+    assert_eq(string_field(assistant, "reasoning"), Some(final_reasoning))
+  }
+}
+
+///|
 async test "native runtime replays an accepted in-flight command before scheduler admission" {
   let fixture = @fs.tmpdir(prefix="dsh-native-receipt-replay")
   @async.with_task_group() <| group => {
