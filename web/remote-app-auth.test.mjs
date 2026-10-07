@@ -66,7 +66,19 @@ function auth(state, models = [], profileId = "profile-test") {
   };
 }
 
-function createHarness({ failFirstModelRefresh = false, initialAuth = auth("signed_out"), deferModelRefresh = false } = {}) {
+function createHarness({
+  failFirstModelRefresh = false,
+  initialAuth = auth("signed_out"),
+  deferModelRefresh = false,
+  origin = "http://127.0.0.1:3210",
+  popupBlocked = false,
+  signInResult = {
+    started: true,
+    authorization_url: "https://auth.openai.com/api/accounts/authorize?client_id=fixture",
+  },
+  signInFailure = null,
+  failPostSignInSnapshot = false,
+} = {}) {
   const elements = new Map();
   const getElement = (id) => {
     if (!elements.has(id)) elements.set(id, fakeElement(id));
@@ -96,6 +108,9 @@ function createHarness({ failFirstModelRefresh = false, initialAuth = auth("sign
   let currentAuth = structuredClone(initialAuth);
   let backendAuth = structuredClone(initialAuth);
   let signInRequested = false;
+  let signInRequests = 0;
+  const operations = [];
+  const openedTabs = [];
   let postSignInSnapshots = 0;
   let modelRefreshes = 0;
   let shouldFail = failFirstModelRefresh;
@@ -123,6 +138,7 @@ function createHarness({ failFirstModelRefresh = false, initialAuth = auth("sign
     async snapshot() {
       if (signInRequested) {
         postSignInSnapshots += 1;
+        if (failPostSignInSnapshot) throw new Error("fixture snapshot failed");
         currentAuth = postSignInSnapshots === 1
           ? auth("signing_in")
           : structuredClone(backendAuth.state === "connected" ? backendAuth : auth("connected"));
@@ -143,12 +159,21 @@ function createHarness({ failFirstModelRefresh = false, initialAuth = auth("sign
 
   const fetch = async (_url, init) => {
     const operation = JSON.parse(init.body).operation;
-    if (operation === "auth_sign_in") {
+    operations.push(operation);
+    if (operation === "auth_sign_in_browser") {
+      signInRequests += 1;
+      if (signInFailure) {
+        return {
+          ok: false,
+          status: signInFailure.status || 503,
+          async json() { return { ok: false, error: signInFailure.error || "fixture sign-in preparation failed" }; },
+        };
+      }
       signInRequested = true;
       return {
         ok: true,
         status: 202,
-        async json() { return { ok: true, result: { started: true } }; },
+        async json() { return { ok: true, result: structuredClone(signInResult) }; },
       };
     }
     if (operation === "auth_models") {
@@ -178,9 +203,22 @@ function createHarness({ failFirstModelRefresh = false, initialAuth = auth("sign
   };
 
   const window = {
+    location: new URL(origin),
     visualViewport: { height: 820, addEventListener() {} },
     matchMedia: () => ({ matches: false }),
     addEventListener() {},
+    open(url, target) {
+      if (popupBlocked) return null;
+      const tab = {
+        opener: window,
+        closed: false,
+        replacedUrl: null,
+        close() { this.closed = true; },
+        location: { replace(value) { tab.replacedUrl = value; } },
+      };
+      openedTabs.push({ url, target, tab });
+      return tab;
+    },
   };
   const source = appSource
     .replace('import * as bridge from "/moonbit/client.js";\n', "")
@@ -197,6 +235,7 @@ function createHarness({ failFirstModelRefresh = false, initialAuth = auth("sign
     testMoon: { render_ui() {}, measure_ui() { return 0; } },
     document,
     window,
+    URL,
     fetch,
     setTimeout: setTimer,
     clearTimeout: clearTimer,
@@ -217,6 +256,9 @@ function createHarness({ failFirstModelRefresh = false, initialAuth = auth("sign
     elements,
     timers,
     get modelRefreshes() { return modelRefreshes; },
+    get signInRequests() { return signInRequests; },
+    get operations() { return operations; },
+    get openedTabs() { return openedTabs; },
     modelRequestStarted,
     resolveModelResponse,
     async start() { await sandbox.__appStarted; },
@@ -244,6 +286,10 @@ test("sign-in polling discovers models after the first connected snapshot", asyn
   await app.start();
   await app.click("auth-sign-in");
 
+  assert.equal(app.signInRequests, 1);
+  assert.deepEqual(app.openedTabs.map(({ url, target }) => [url, target]), [["about:blank", "_blank"]]);
+  assert.equal(app.openedTabs[0].tab.opener, null);
+  assert.equal(app.openedTabs[0].tab.replacedUrl, "https://auth.openai.com/api/accounts/authorize?client_id=fixture");
   assert.equal(app.modelRefreshes, 0, "the first sign-in response still reports signing_in");
   await app.fireAuthPoll();
 
@@ -252,6 +298,73 @@ test("sign-in polling discovers models after the first connected snapshot", asyn
   assert.ok(picker.children.some((option) => option.value === "gpt-6-luna"));
   assert.equal(picker.disabled, false);
   assert.equal(app.elements.get("auth-models-retry").hidden, true);
+});
+
+test("blocked sign-in pop-up makes no host request", async () => {
+  const app = createHarness({ popupBlocked: true });
+  await app.start();
+  await app.click("auth-sign-in");
+
+  assert.equal(app.openedTabs.length, 0);
+  assert.equal(app.signInRequests, 0);
+  assert.equal(app.operations.includes("auth_sign_in_browser"), false);
+  assert.match(app.elements.get("run-error").textContent, /blocked the sign-in tab/i);
+});
+
+test("failed browser preparation closes the reserved tab", async () => {
+  const app = createHarness({ signInFailure: { status: 503, error: "fixture preparation failed" } });
+  await app.start();
+  await app.click("auth-sign-in");
+
+  assert.equal(app.signInRequests, 1);
+  assert.equal(app.openedTabs[0].tab.opener, null);
+  assert.equal(app.openedTabs[0].tab.closed, true);
+  assert.equal(app.openedTabs[0].tab.replacedUrl, null);
+  assert.match(app.elements.get("run-error").textContent, /fixture preparation failed/i);
+});
+
+test("duplicate browser sign-in closes the reserved tab", async () => {
+  const app = createHarness({ signInResult: { started: false } });
+  await app.start();
+  await app.click("auth-sign-in");
+
+  assert.equal(app.signInRequests, 1);
+  assert.equal(app.openedTabs[0].tab.closed, true);
+  assert.equal(app.openedTabs[0].tab.replacedUrl, null);
+  assert.match(app.elements.get("action-message").textContent, /already in progress/i);
+});
+
+test("untrusted authorization URL closes the reserved tab", async () => {
+  const app = createHarness({
+    signInResult: { started: true, authorization_url: "https://attacker.example/authorize" },
+  });
+  await app.start();
+  await app.click("auth-sign-in");
+
+  assert.equal(app.openedTabs[0].tab.closed, true);
+  assert.equal(app.openedTabs[0].tab.replacedUrl, null);
+  assert.match(app.elements.get("run-error").textContent, /invalid ChatGPT authorization URL/i);
+});
+
+test("a refresh failure after navigation leaves the OAuth tab open", async () => {
+  const app = createHarness({ failPostSignInSnapshot: true });
+  await app.start();
+  await app.click("auth-sign-in");
+
+  assert.equal(app.openedTabs[0].tab.closed, false);
+  assert.equal(app.openedTabs[0].tab.replacedUrl, "https://auth.openai.com/api/accounts/authorize?client_id=fixture");
+  assert.match(app.elements.get("run-error").textContent, /fixture snapshot failed/i);
+});
+
+test("Tailnet UI disables sign-in and never requests a host browser handoff", async () => {
+  const app = createHarness({ origin: "https://machine.example-tailnet.ts.net:8443" });
+  await app.start();
+
+  assert.equal(app.elements.get("auth-sign-in").disabled, true);
+  await app.click("auth-sign-in");
+  assert.equal(app.openedTabs.length, 0);
+  assert.equal(app.signInRequests, 0);
+  assert.match(app.elements.get("run-error").textContent, /host Mac/i);
 });
 
 test("failed model discovery is visible and waits for an explicit retry", async () => {

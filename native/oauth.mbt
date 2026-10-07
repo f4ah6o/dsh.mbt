@@ -138,6 +138,14 @@ pub fn NativeProviderSelection::api_key(
 }
 
 ///|
+struct NativePreparedSignIn {
+  server : @http.Server
+  attempt : @auth.LoginAttempt
+  expected_generation : String
+  authorization_url : String
+}
+
+///|
 /// Native credential coordinator. The protected file is the single durable
 /// unit for credentials, generation, selected model, and account-scoped model
 /// catalog.
@@ -153,6 +161,8 @@ pub struct NativeAuth {
   mut model_identity : String?
   mut models : Array[Json]
   mut login_state : String
+  mut pending_browser_sign_in_server : @http.Server?
+  mut pending_browser_sign_in_generation : String?
   mut pending_checkpoint : Bool
   mut closed : Bool
 }
@@ -183,6 +193,8 @@ fn NativeAuth::open(store : NativeStore) -> Result[NativeAuth, String] {
     model_identity: state.model_identity,
     models: state.models,
     login_state: state.login_state,
+    pending_browser_sign_in_server: None,
+    pending_browser_sign_in_generation: None,
     pending_checkpoint: false,
     closed: false,
   }
@@ -793,20 +805,23 @@ pub async fn NativeAuth::sign_in(self : NativeAuth) -> Result[Json, String] {
   if self.closed {
     return Err("AUTH_CLOSED: authentication manager is closed")
   }
+  if self.pending_browser_sign_in_server is Some(_) {
+    return Err("AUTH_BUSY: a browser sign-in attempt is already active")
+  }
+  let expected_generation = self.generation
   self.login_state = "signing_in"
   let result = self.sign_in_flow()
   match result {
-    Ok(_) => {
-      self.login_state = "connected"
-      Ok(self.status())
-    }
+    Ok(_) => Ok(self.status())
     Err(error) => {
-      self.login_state = if self.credential is Some(_) {
-        "connected"
-      } else if error.has_prefix("AUTH_REAUTH_REQUIRED") {
-        "reauth_required"
-      } else {
-        "signed_out"
+      if self.generation == expected_generation {
+        self.login_state = if self.credential is Some(_) {
+          "connected"
+        } else if error.has_prefix("AUTH_REAUTH_REQUIRED") {
+          "reauth_required"
+        } else {
+          "signed_out"
+        }
       }
       Err(error)
     }
@@ -815,6 +830,25 @@ pub async fn NativeAuth::sign_in(self : NativeAuth) -> Result[Json, String] {
 
 ///|
 async fn NativeAuth::sign_in_flow(self : NativeAuth) -> Result[Json, String] {
+  let prepared = match self.prepare_sign_in_attempt(true) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let open_status = c_auth_open_url(
+    @utf8.encode(prepared.authorization_url + "\u0000"),
+  )
+  if open_status != 0 {
+    prepared.server.close()
+    return Err("AUTH_BROWSER_ERROR: could not open the system browser")
+  }
+  self.finish_prepared_sign_in(prepared)
+}
+
+///|
+async fn NativeAuth::prepare_sign_in_attempt(
+  self : NativeAuth,
+  include_id_token_hint : Bool,
+) -> Result[NativePreparedSignIn, String] {
   self.gate.acquire()
   if self.closed {
     self.gate.release()
@@ -861,7 +895,11 @@ async fn NativeAuth::sign_in_flow(self : NativeAuth) -> Result[Json, String] {
   let selected_subject = reauth.map(value => {
     value.selected_identity_for_native()
   })
-  let id_token_hint = reauth.map(value => value.id_token_hint_for_native())
+  let id_token_hint = if include_id_token_hint {
+    reauth.map(value => value.id_token_hint_for_native())
+  } else {
+    None
+  }
   let attempt = match
     @auth.LoginAttempt::new(
       self.host_id,
@@ -893,11 +931,145 @@ async fn NativeAuth::sign_in_flow(self : NativeAuth) -> Result[Json, String] {
     self.endpoints.authorize,
     attempt.authorization_params(),
   )
-  let open_status = c_auth_open_url(@utf8.encode(authorization_url + "\u0000"))
-  if open_status != 0 {
-    server.close()
-    return Err("AUTH_BROWSER_ERROR: could not open the system browser")
+  Ok({ server, attempt, expected_generation, authorization_url, })
+}
+
+///|
+async fn NativeAuth::prepare_browser_sign_in(
+  self : NativeAuth,
+) -> Result[NativePreparedSignIn?, String] {
+  if self.closed {
+    return Err("AUTH_CLOSED: authentication manager is closed")
   }
+  if self.login_state == "signing_in" ||
+    self.pending_browser_sign_in_server is Some(_) {
+    return Ok(None)
+  }
+  self.login_gate.acquire()
+  defer self.login_gate.release()
+  self.gate.acquire()
+  if self.closed {
+    self.gate.release()
+    return Err("AUTH_CLOSED: authentication manager is closed")
+  }
+  if self.login_state == "signing_in" ||
+    self.pending_browser_sign_in_server is Some(_) {
+    self.gate.release()
+    return Ok(None)
+  }
+  let starting_generation = self.generation
+  let prior_login_state = self.login_state
+  self.login_state = "signing_in"
+  self.gate.release()
+  let mut preparation_completed = false
+  defer (if !preparation_completed &&
+    !self.closed &&
+    self.generation == starting_generation &&
+    self.login_state == "signing_in" {
+    self.login_state = if self.credential is Some(_) {
+      "connected"
+    } else if prior_login_state == "reauth_required" {
+      "reauth_required"
+    } else {
+      "signed_out"
+    }
+  })
+  match self.prepare_sign_in_attempt(false) {
+    Ok(prepared) => {
+      let mut transferred = false
+      defer (if !transferred { prepared.server.close() })
+      self.gate.acquire()
+      if self.closed ||
+        self.generation != starting_generation ||
+        self.generation != prepared.expected_generation {
+        self.gate.release()
+        return Err(
+          "AUTH_ACCOUNT_CHANGED: sign-in was superseded during preparation",
+        )
+      }
+      self.pending_browser_sign_in_server = Some(prepared.server)
+      self.pending_browser_sign_in_generation = Some(
+        prepared.expected_generation,
+      )
+      self.gate.release()
+      transferred = true
+      preparation_completed = true
+      Ok(Some(prepared))
+    }
+    Err(error) => {
+      self.gate.acquire()
+      if self.generation == starting_generation &&
+        self.login_state == "signing_in" {
+        self.login_state = if self.credential is Some(_) {
+          "connected"
+        } else if error.has_prefix("AUTH_REAUTH_REQUIRED") ||
+          prior_login_state == "reauth_required" {
+          "reauth_required"
+        } else {
+          "signed_out"
+        }
+      }
+      self.gate.release()
+      preparation_completed = true
+      Err(error)
+    }
+  }
+}
+
+///|
+async fn NativeAuth::finish_browser_sign_in(
+  self : NativeAuth,
+  prepared : NativePreparedSignIn,
+) -> Result[Json, String] {
+  let expected_generation = prepared.expected_generation
+  defer {
+    prepared.server.close()
+    if self.pending_browser_sign_in_generation == Some(expected_generation) {
+      self.pending_browser_sign_in_server = None
+      self.pending_browser_sign_in_generation = None
+      if self.generation == expected_generation &&
+        self.login_state == "signing_in" {
+        self.login_state = if self.credential is Some(_) {
+          "connected"
+        } else {
+          "signed_out"
+        }
+      }
+    }
+  }
+  self.login_gate.acquire()
+  defer self.login_gate.release()
+  if self.closed {
+    return Err("AUTH_CLOSED: authentication manager is closed")
+  }
+  let result = self.finish_prepared_sign_in(prepared)
+  match result {
+    Ok(value) => Ok(value)
+    Err(error) => {
+      if self.generation == expected_generation &&
+        self.pending_browser_sign_in_generation == Some(expected_generation) {
+        self.login_state = if self.credential is Some(_) {
+          "connected"
+        } else if error.has_prefix("AUTH_REAUTH_REQUIRED") {
+          "reauth_required"
+        } else {
+          "signed_out"
+        }
+      }
+      Err(error)
+    }
+  }
+}
+
+///|
+async fn NativeAuth::finish_prepared_sign_in(
+  self : NativeAuth,
+  prepared : NativePreparedSignIn,
+) -> Result[Json, String] {
+  let server = prepared.server
+  let attempt = prepared.attempt
+  let expected_generation = prepared.expected_generation
+  defer server.close()
   let callback = match native_wait_for_callback(server) {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -1061,13 +1233,27 @@ pub async fn NativeAuth::sign_out(self : NativeAuth) -> Result[Json, String] {
       self.login_state = old_login_state
       Err(error)
     }
-    Ok(_) => Ok({ "cleared": true })
+    Ok(_) => {
+      match self.pending_browser_sign_in_server {
+        Some(server) => server.close()
+        None => ()
+      }
+      self.pending_browser_sign_in_server = None
+      self.pending_browser_sign_in_generation = None
+      Ok({ "cleared": true })
+    }
   }
 }
 
 ///|
 pub fn NativeAuth::close(self : NativeAuth) -> Unit {
   if !self.closed {
+    match self.pending_browser_sign_in_server {
+      Some(server) => server.close()
+      None => ()
+    }
+    self.pending_browser_sign_in_server = None
+    self.pending_browser_sign_in_generation = None
     if self.pending_checkpoint {
       match self.persist_locked() {
         Ok(_) => self.pending_checkpoint = false
