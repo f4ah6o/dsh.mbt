@@ -14,9 +14,11 @@ compiler / core `0.10.14+7d59c7ec9` で検証しました。`npm ci` と `npm te
 | `npm run test:web` | 34 / 34 PASS。remote ChatGPT auth、delayed fork / trim selection fencing、service-worker generation、view model と scene renderer を含む。 |
 | `npm run test:integration` | 44 / 44 PASS。 |
 | `moon run scripts/native-verify.mbtx --target native` | PASS。native MoonBit 188 / 188、worker build / CLI help、committed shell asset presence、native checkpoint / approval / tool / context / reload demo。 |
-| `web/browser-smoke.mjs` | PASS。versioned Node host、compiled MoonBit engine / client、Canvas scene と固定 provider response を使う Chromium acceptance。 |
+| `web/browser-smoke.mjs` | PASS。legacy Node browser host、compiled MoonBit app / engine、Canvas scene と固定 provider response を使う Chromium acceptance。 |
 
 Browser smoke は conversation create / search / fork / trim、live context details、imported read-only history、tool approval / denial、cancel、provider error、drawer focus trap / restore、mobile New conversation dismissal、768 / 821px header layouts、1280×500px composer と approval controls を確認します。Playwright `1.62.1` と cached headless Chromium shell `1228` を使いました。画像は `_build/browser-smoke/` にあり、`mobile-navigation.png`、`mobile-details.png`、`mobile-transcript.png`、`short-desktop-composer.png`、`short-desktop-approval.png` を目視確認しました。
+
+この browser run は Node host の legacy browser API を選び、compiled MoonBit app / engine を実行します。versioned remote app と remote authentication は `npm run test:web` の isolated remote-app harness、native HTTP browser transport は native verification / package tests で別々に検証しています。browser smoke 自体は remote API や native service の end-to-end test ではありません。
 
 ## iOS client lifecycle fencing increment
 
