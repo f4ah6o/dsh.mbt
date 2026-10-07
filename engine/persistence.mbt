@@ -220,6 +220,11 @@ fn restore_session(
       }
       session.step = step
       session.open_step = true
+      session.retry_count = 0
+      session.retry_max_retries = None
+      session.retry_initial_delay_ms = None
+      session.retry_max_delay_ms = None
+      session.pending_retry_id = None
       assistant_recorded = false
     } else {
       if turn_id != session.turn_id || step != session.step {
@@ -262,10 +267,151 @@ fn restore_session(
             session.active_kind = Some(ToolExecution)
           }
         }
-        "assistant/stream_delta" => {
+        "llm/retry" => {
+          validate_retry_fields(data, [
+            "retry_id", "effect_id", "turn", "step", "retry", "max_retries", "initial_delay_ms",
+            "max_delay_ms", "delay_ms", "failure",
+          ])
+          if !session.open_step ||
+            assistant_recorded ||
+            session.active_kind != Some(Llm) ||
+            session.pending_retry_id is Some(_) {
+            raise Invalid("Retry schedule without an available LLM request")
+          }
+          let effect_id = required_string(data, "effect_id", max=128)
+          if session.active_effect != Some(effect_id) ||
+            session.stream_projection(effect_id).0 {
+            raise Invalid(
+              "Retry schedule does not match an unprojected request",
+            )
+          }
+          if int_value(required_field(data, "turn"), "retry turn", 1, 1000000) !=
+            turn_id ||
+            int_value(required_field(data, "step"), "retry step", 1, 64) != step {
+            raise Invalid("Retry schedule coordinates differ from its event")
+          }
+          let retry = int_value(
+            required_field(data, "retry"),
+            "retry",
+            1,
+            MAX_PROVIDER_RETRIES,
+          )
+          let max_retries = int_value(
+            required_field(data, "max_retries"),
+            "max_retries",
+            0,
+            MAX_PROVIDER_RETRIES,
+          )
+          let initial_delay_ms = int_value(
+            required_field(data, "initial_delay_ms"),
+            "initial_delay_ms",
+            0,
+            MAX_PROVIDER_RETRY_DELAY_MS,
+          )
+          let max_delay_ms = int_value(
+            required_field(data, "max_delay_ms"),
+            "max_delay_ms",
+            1,
+            MAX_PROVIDER_RETRY_DELAY_MS,
+          )
+          let delay_ms = int_value(
+            required_field(data, "delay_ms"),
+            "delay_ms",
+            0,
+            MAX_PROVIDER_RETRY_DELAY_MS,
+          )
+          if retry != session.retry_count + 1 ||
+            retry > max_retries ||
+            initial_delay_ms > max_delay_ms ||
+            (
+              session.retry_max_retries is Some(previous) &&
+              (
+                previous != max_retries ||
+                session.retry_initial_delay_ms != Some(initial_delay_ms) ||
+                session.retry_max_delay_ms != Some(max_delay_ms)
+              )
+            ) {
+            raise Invalid("Retry sequence or policy changed within a step")
+          }
+          let expected_retry_id = "retry-\{effect_id}-\{retry}"
+          let retry_id = required_string(data, "retry_id", max=128)
+          if retry_id != expected_retry_id {
+            raise Invalid("Retry id does not match its effect and attempt")
+          }
+          let failure = required_field(data, "failure")
+          validate_retry_fields(failure, [
+            "code", "message", "status", "retry_after_ms",
+          ])
+          let code = required_string(failure, "code", max=32)
+          ignore(required_string(failure, "message", max=512))
+          if !retryable_provider_code(code) {
+            raise Invalid("Retry failure code is not eligible")
+          }
+          match fields(failure).get("status") {
+            Some(value) => ignore(int_value(value, "status", 100, 599))
+            None => ()
+          }
+          let retry_after_ms = match fields(failure).get("retry_after_ms") {
+            Some(value) =>
+              Some(int_value(value, "retry_after_ms", 0, 2147483647))
+            None => None
+          }
+          let expected_delay = match retry_after_ms {
+            Some(delay) if delay > 0 => {
+              if delay > max_delay_ms {
+                raise Invalid("Retry-After exceeds the recorded delay limit")
+              }
+              delay
+            }
+            _ => {
+              let mut exponential = initial_delay_ms
+              for _ in 0..<(retry - 1) {
+                exponential = Int::min(exponential * 2, max_delay_ms)
+              }
+              Int::min(exponential, max_delay_ms)
+            }
+          }
+          if delay_ms != expected_delay {
+            raise Invalid("Retry delay differs from its recorded policy")
+          }
+          session.retry_count = retry
+          session.retry_max_retries = Some(max_retries)
+          session.retry_initial_delay_ms = Some(initial_delay_ms)
+          session.retry_max_delay_ms = Some(max_delay_ms)
+          session.pending_retry_id = Some(retry_id)
+        }
+        "llm/retry-started" => {
+          validate_retry_fields(data, [
+            "retry_id", "effect_id", "turn", "step", "retry",
+          ])
           if !session.open_step ||
             assistant_recorded ||
             session.active_kind != Some(Llm) {
+            raise Invalid("Retry start without an active provider request")
+          }
+          let effect_id = required_string(data, "effect_id", max=128)
+          let retry_id = required_string(data, "retry_id", max=128)
+          if session.active_effect != Some(effect_id) ||
+            session.pending_retry_id != Some(retry_id) ||
+            int_value(required_field(data, "turn"), "retry turn", 1, 1000000) !=
+            turn_id ||
+            int_value(required_field(data, "step"), "retry step", 1, 64) != step ||
+            int_value(
+              required_field(data, "retry"),
+              "retry",
+              1,
+              MAX_PROVIDER_RETRIES,
+            ) !=
+            session.retry_count {
+            raise Invalid("Retry start does not match its pending schedule")
+          }
+          session.pending_retry_id = None
+        }
+        "assistant/stream_delta" => {
+          if !session.open_step ||
+            assistant_recorded ||
+            session.active_kind != Some(Llm) ||
+            session.pending_retry_id is Some(_) {
             raise Invalid("Stream delta without an active LLM request")
           }
           let effect_id = required_string(data, "effect_id", max=128)
@@ -290,7 +436,8 @@ fn restore_session(
         "assistant/message" => {
           if !session.open_step ||
             assistant_recorded ||
-            session.active_kind != Some(Llm) {
+            session.active_kind != Some(Llm) ||
+            session.pending_retry_id is Some(_) {
             raise Invalid("Assistant message without an LLM request")
           }
           let message = required_field(data, "message")
@@ -328,6 +475,7 @@ fn restore_session(
           assistant_recorded = true
           session.active_effect = None
           session.active_kind = None
+          session.pending_retry_id = None
         }
         "assistant/attempt" => {
           if !session.open_step ||
@@ -339,6 +487,7 @@ fn restore_session(
           assistant_recorded = true
           session.active_effect = None
           session.active_kind = None
+          session.pending_retry_id = None
         }
         "tool/call" => {
           if !session.open_step || !assistant_recorded {
@@ -404,6 +553,7 @@ fn restore_session(
           session.cursor += 1
           session.active_effect = None
           session.active_kind = None
+          session.pending_retry_id = None
           session.approval = None
           session.status = Running
         }
@@ -411,7 +561,8 @@ fn restore_session(
           if !session.open_step ||
             !assistant_recorded ||
             session.cursor != session.calls.length() ||
-            session.active_effect is Some(_) {
+            session.active_effect is Some(_) ||
+            session.pending_retry_id is Some(_) {
             raise Invalid("Step ended with unsettled work")
           }
           ignore(required_string(data, "reason", max=64))
@@ -423,7 +574,8 @@ fn restore_session(
           if !open_turn ||
             session.open_step ||
             session.active_effect is Some(_) ||
-            session.approval is Some(_) {
+            session.approval is Some(_) ||
+            session.pending_retry_id is Some(_) {
             raise Invalid("Turn ended with unsettled work")
           }
           session.status = match required_string(data, "reason", max=64) {

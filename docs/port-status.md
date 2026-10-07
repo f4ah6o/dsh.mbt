@@ -12,6 +12,7 @@ MoonBit で agent の基本実行経路を動かす最初の移植です。
 | `core/session`, `core/agent-loop`, `core/tools` | `engine/` | 基本 turn / step、event log、messages、直列 tool、follow-up、cancel、late result 拒否、LLM text/reasoning の bounded live projection を実装済み。inbox の動的編集、fork の作成、parallel tool は未実装。 |
 | `interaction/user-approval` | `engine/`, `api/`, `web/`, `host/cli.mjs` | read / write / shell 分類、呼出しごとの Allow / Deny、明示的 startup 自動承認を実装済み。upstream permission preset / account authorization の互換は未実装。 |
 | `llm/llm-deepseek` | `provider/`, `host/provider.mjs` | Messages / Chat Completions の text、reasoning、function tool、usage、JSON / incremental SSE と host 経由の live text projection を実装済み。画像、Files API、model discovery、thinking signature の durable replay は未実装。 |
+| `llm/llm-retry`、`llm/retry-policy` | `engine/retry.mbt`, `host/runtime.mjs`, `host/provider.mjs` | MoonBit event log に schedule / start を保存する、最大 5 回の bounded retry を実装済み。既定 backoff は 500 ms から 10 秒までの deterministic exponential（jitter なし）。許可する一時 failure は空応答、429、408/504、5xx、識別済み transport error。positive `Retry-After` は上限以内で採用し、上限超過なら retry しません。accepted stream delta 後、auth / その他の 4xx / malformed response は再試行しません。upstream `always` mode、policy keying、jitter、retry event の Session v4 import は未実装。 |
 | `session/session-persistence*`, `session/session-projection` | `engine/`, `host/persistence.mjs` | 検証付き復元、atomic snapshot、interruption の終了、no replay を実装済み。保存形式は独自 `dsh.mbt-session-v1`。明示的な read-only v4 JSONL importer は下記の範囲で対応。v0–v3 migration、自動 v4 restore、v4 writer は未実装。 |
 | `fs/tool-fs*`, `fs/tool-str-replace-editor` | `plugins/`, `host/tools.mjs` | read / write / edit / glob / grep を実装済み。workspace 制限、symlink 拒否、bounded regex / output。SSH filesystem、filesystem observation は未実装。 |
 | `shell`, `subprocess` | `host/tools.mjs` | opt-in bash、timeout / cancel、出力上限を実装済み。persistent shell、terminal、PowerShell、OS sandbox は未実装。 |
@@ -29,8 +30,8 @@ MoonBit で agent の基本実行経路を動かす最初の移植です。
 
 - JavaScript output を Node host と browser の双方で使う。portable package の native テストは native GUI の完成を意味しない。
 - 依存を upstream Git revision に固定し、互換性が確認できていない latest へ自動更新しない。
-- SSE は MoonBit で逐次解析し、text / reasoning を host が bounded event batch として永続化して session / browser / scene に投影する。live compaction、spill、retry scheduling は後続作業とする。
-- 自動 HTTP retry は行わない。新しい外部作用を再試行する policy と durable recording は後続作業とする。
+- SSE は MoonBit で逐次解析し、text / reasoning を host が bounded event batch として永続化して session / browser / scene に投影する。live compaction と spill は後続作業とする。
+- retry は同じ active provider effect に限定し、retry schedule と start の checkpoint が成功してから待機・次の request を始める。restore は未完了の retry を interruption として閉じ、再送しない。利用可能な request を使うため retry ごとに provider 側で再課金される場合がある。
 - 1 session 262,144 serialized UTF-16 units、最大 32 sessions。stream projection もこの上限内で、容量超過は provider を停止して既に保存済み partial を保つ。長い会話向け live compaction / spill は未実装。
 - browser host は loopback 専用。認証付き remote service や deployment platform はこの版に含めない。
 
@@ -56,6 +57,8 @@ developer tool addition は過去の request/header から tool 定義を束縛�
 tool object が必要です。upstream snapshot shorthand では名前配列を受理して raw history に保持しますが、
 不足した schema を復元・生成しません。header の optional field は省略で clear され、null 値は受理しません。
 `assistant/attempt` は診断 event のみで、retry schedule/start lifecycle や tool execution を意味しません。
+通常の v1 runtime は限定的な provider retry を実装しますが、この read-only importer は upstream の `llm/retry` /
+`llm/retry-started` event family をまだ受け入れません。
 content array が空の system / developer / assistant event は surface に残しますが、derived transcript message は作りません。
 明示的な空文字 text block がある message は、空文字 content の transcript message として投影します。
 
@@ -85,7 +88,7 @@ raw history に保持し、projection に意味を持たせません。turn 開�
 model-visible user message にならなかった input は `pending_inbox.unadmitted_turn/step` に分離し、
 通常の pending queue に戻したり実行したりしません。
 
-spill / offload、unsupported attachment shape、background workflow、nested fork、retry scheduling lifecycle
+spill / offload、unsupported attachment shape、background workflow、nested fork、upstream retry event family
 など projection の意味を安全に復元できない event は、import 全体を明示的に拒否します。未知の
 PTC / workflow / subagent / team execution-family event は `ignorable: true` があっても拒否します。
 unmodified catalog 25 snapshot はすべて受理しますが、これは全 Session v4 event や runtime feature parity を

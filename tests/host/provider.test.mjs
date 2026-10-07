@@ -102,20 +102,22 @@ test('malformed or oversized streams release handles and surface a bounded failu
   });
   const slowCancelFacade = fixture().facade;
   slowCancelFacade.stream_feed = () => JSON.stringify({ ok: false, error: 'malformed SSE' });
-  const slowCancelProvider = createProvider({ facade: slowCancelFacade, apiKey: 'key', fetchImpl: async () => new Response(slowCancelBody, { headers: { 'content-type': 'text/event-stream' } }) });
+  const slowCancelProvider = createProvider({ facade: slowCancelFacade, apiKey: 'key', timeoutMs: 5, fetchImpl: async () => new Response(slowCancelBody, { headers: { 'content-type': 'text/event-stream' } }) });
   const pendingInvoke = slowCancelProvider.invoke({}).finally(() => { invokeSettled = true; });
   await new Promise((resolve) => setTimeout(resolve, 0));
   assert.equal(cleanupStarted, true);
   assert.equal(invokeSettled, false);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(invokeSettled, false, 'the request deadline does not replace a parser failure during cleanup');
   finishCleanup();
-  await assert.rejects(pendingInvoke, /malformed SSE/);
+  await assert.rejects(pendingInvoke, (error) => error.code === 'MALFORMED' && /malformed SSE/.test(error.message));
   assert.equal(invokeSettled, true);
 
   const oversized = createProvider({ facade: fixture().facade, apiKey: 'key', responseLimit: 12, fetchImpl: async () => new Response('x'.repeat(100), { headers: { 'content-type': 'application/json' } }) });
   await assert.rejects(oversized.invoke({}), /size limit/);
 });
 
-test('timeouts abort fetch and HTTP errors redact the configured secret', async () => {
+test('timeouts and HTTP failures expose stable retry metadata without echoing secrets', async () => {
   const { facade } = fixture();
   let signal;
   const timeout = createProvider({ facade, apiKey: 'test-secret', timeoutMs: 15, fetchImpl: async (_url, init) => {
@@ -125,5 +127,118 @@ test('timeouts abort fetch and HTTP errors redact the configured secret', async 
   await assert.rejects(timeout.invoke({}), /timed out/);
   assert.equal(signal.aborted, true);
   const denied = createProvider({ facade, apiKey: 'test-secret', fetchImpl: async () => new Response('Bad key test-secret', { status: 401 }) });
-  await assert.rejects(denied.invoke({}), (error) => /HTTP 401/.test(error.message) && error.message.includes('[redacted]') && !error.message.includes('test-secret'));
+  await assert.rejects(denied.invoke({}), (error) => /HTTP 401/.test(error.message)
+    && error.code === 'AUTH' && !error.message.includes('Bad key') && !error.message.includes('test-secret'));
+
+  for (const [status, code] of [[408, 'TIMEOUT'], [429, 'RATE_LIMIT'], [503, 'SERVER'], [400, 'HTTP_ERROR']]) {
+    let requests = 0;
+    const provider = createProvider({ facade, apiKey: 'test-secret', fetchImpl: async () => {
+      requests++;
+      return new Response('secret-bearing provider body', { status, headers: { 'retry-after': '0.025' } });
+    } });
+    await assert.rejects(provider.invoke({}), (error) => {
+      assert.equal(error.code, code);
+      assert.equal(error.retryAfterMs, 25);
+      assert.ok(!error.message.includes('secret-bearing'));
+      assert.ok(!error.message.includes('test-secret'));
+      return true;
+    });
+    assert.equal(requests, 1, 'the provider adapter itself remains single-attempt');
+  }
+
+  let emptyRequests = 0;
+  const empty = createProvider({ facade, apiKey: 'test-secret', fetchImpl: async () => {
+    emptyRequests++;
+    return new Response(JSON.stringify({ content: '', tool_calls: [] }), { headers: { 'content-type': 'application/json' } });
+  } });
+  await assert.rejects(empty.invoke({}), (error) => error.code === 'EMPTY_RESPONSE');
+  assert.equal(emptyRequests, 1, 'the host engine owns retry scheduling');
+});
+
+test('delayed HTTP error-body cleanup preserves auth classification after the request deadline', async () => {
+  const { facade } = fixture();
+  let releaseCancellation;
+  let cancellationStarted;
+  const cancelStarted = new Promise((resolve) => { cancellationStarted = resolve; });
+  const body = new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode('secret-bearing error body')); },
+    cancel() {
+      cancellationStarted();
+      return new Promise((resolve) => { releaseCancellation = resolve; });
+    },
+  });
+  const provider = createProvider({ facade, apiKey: 'test-secret', timeoutMs: 5, fetchImpl: async () => new Response(body, { status: 401 }) });
+  const pending = provider.invoke({});
+  await cancelStarted;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  releaseCancellation();
+  await assert.rejects(pending, (error) => error.code === 'AUTH'
+    && error.providerStatus === 401
+    && !error.message.includes('test-secret')
+    && !error.message.includes('secret-bearing'));
+});
+
+test('delayed oversized JSON cleanup preserves the size-limit failure after the request deadline', async () => {
+  const { facade } = fixture();
+  let releaseCancellation;
+  let cancellationStarted;
+  const cancelStarted = new Promise((resolve) => { cancellationStarted = resolve; });
+  const body = new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode('x'.repeat(20))); },
+    cancel() {
+      cancellationStarted();
+      return new Promise((resolve) => { releaseCancellation = resolve; });
+    },
+  });
+  const provider = createProvider({
+    facade,
+    apiKey: 'test-secret',
+    timeoutMs: 5,
+    responseLimit: 12,
+    fetchImpl: async () => new Response(body, { headers: { 'content-type': 'application/json' } }),
+  });
+  let invokeSettled = false;
+  const pending = provider.invoke({}).finally(() => { invokeSettled = true; });
+  await cancelStarted;
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(invokeSettled, false, 'provider invoke awaits response cleanup');
+  releaseCancellation();
+  await assert.rejects(pending, (error) => error.code !== 'TIMEOUT' && /size limit/.test(error.message));
+  assert.equal(invokeSettled, true);
+});
+
+test('only recognized network errors are retryable and malformed UTF-8 is not transport', async () => {
+  const { facade } = fixture();
+  const refused = createProvider({ facade, apiKey: 'key', fetchImpl: async () => {
+    throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('refused'), { code: 'ECONNREFUSED' }) });
+  } });
+  await assert.rejects(refused.invoke({}), (error) => error.code === 'TRANSPORT' && /transport failed/.test(error.message));
+
+  const redirect = createProvider({ facade, apiKey: 'key', fetchImpl: async () => {
+    throw Object.assign(new TypeError('fetch failed'), { cause: Object.assign(new Error('unexpected redirect'), { code: 'ERR_FR_REDIRECTION_FAILURE' }) });
+  } });
+  await assert.rejects(redirect.invoke({}), (error) => error.code === 'PROVIDER_ERROR');
+
+  for (const reason of [
+    Object.assign(new Error('bad port'), {}),
+    Object.assign(new Error('invalid request configuration'), { code: 'ERR_INVALID_ARG_VALUE' }),
+  ]) {
+    const configFailure = createProvider({ facade, apiKey: 'key', fetchImpl: async () => {
+      throw Object.assign(new TypeError('fetch failed'), { cause: reason });
+    } });
+    await assert.rejects(configFailure.invoke({}), (error) => error.code === 'PROVIDER_ERROR');
+  }
+
+  const wrappedNetwork = createProvider({ facade, apiKey: 'key', fetchImpl: async () => {
+    const cause = Object.assign(new Error('connection reset'), { code: 'ECONNRESET' });
+    throw Object.assign(new TypeError('fetch failed'), {
+      code: 'ERR_WRAPPED_FETCH',
+      cause: Object.assign(new Error('carrier wrapper'), { cause }),
+    });
+  } });
+  await assert.rejects(wrappedNetwork.invoke({}), (error) => error.code === 'TRANSPORT');
+
+  const bytes = Uint8Array.from([0x64, 0x61, 0x74, 0x61, 0x3a, 0x20, 0xff, 0x0a, 0x0a]);
+  const malformed = createProvider({ facade, apiKey: 'key', fetchImpl: async () => new Response(bytes, { headers: { 'content-type': 'text/event-stream' } }) });
+  await assert.rejects(malformed.invoke({}), (error) => error.code === 'MALFORMED');
 });

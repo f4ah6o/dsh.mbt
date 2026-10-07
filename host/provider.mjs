@@ -1,6 +1,33 @@
 import { HostError, checkAbort, messageOf, parseEnvelope, unwrap } from './errors.mjs';
 
 const RESPONSE_LIMIT = 16 * 1024 * 1024;
+const MAX_RETRY_DELAY_MS = 10_000;
+const RETRY_AFTER_TOO_LONG_MS = MAX_RETRY_DELAY_MS + 1;
+const TRANSIENT_TRANSPORT_CODES = new Set([
+  'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EHOSTUNREACH', 'ENETUNREACH',
+  'ENOTFOUND', 'EAI_AGAIN', 'UND_ERR_CONNECT_TIMEOUT', 'UND_ERR_SOCKET',
+]);
+const NON_TRANSIENT_TRANSPORT_REASONS = /redirect|invalid url|invalid argument|bad port|unsupported protocol|invalid protocol/;
+
+function isTransportFailure(error) {
+  let current = error;
+  let recognizedNetworkCode = false;
+  let informativeNonTransientCause = false;
+  for (let depth = 0; current && depth < 4; depth++, current = current.cause) {
+    if (TRANSIENT_TRANSPORT_CODES.has(current.code)) recognizedNetworkCode = true;
+    else if (typeof current.code === 'string' && current.code) informativeNonTransientCause = true;
+    if (NON_TRANSIENT_TRANSPORT_REASONS.test(messageOf(current).toLowerCase())) {
+      informativeNonTransientCause = true;
+    }
+  }
+  // A recognized socket/DNS code anywhere in the chain is stronger evidence
+  // than a generic wrapper code or message. Otherwise, config/redirect causes
+  // must not be promoted to transient failures by a root `fetch failed` text.
+  if (recognizedNetworkCode) return true;
+  if (informativeNonTransientCause) return false;
+  const message = messageOf(error).toLowerCase();
+  return error instanceof TypeError && /fetch failed|failed to fetch|network error|network request failed|terminated/.test(message);
+}
 
 export function providerURL(baseURL, providerPath) {
   const base = new URL(baseURL);
@@ -25,7 +52,7 @@ export function createProvider({ facade, mode = 'deepseek', model, baseURL, apiK
     if (demo) return demoResponse(request);
     const url = providerURL(base, mode === 'deepseek' ? '/v1/messages' : '/v1/chat/completions');
     const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
-    if (!apiKey && !local) throw new HostError(`${mode === 'deepseek' ? 'DEEPSEEK_API_KEY' : 'OPENAI_API_KEY'} is required (or use --demo)`);
+    if (!apiKey && !local) throw new HostError(`${mode === 'deepseek' ? 'DEEPSEEK_API_KEY' : 'OPENAI_API_KEY'} is required (or use --demo)`, { code: 'AUTH' });
     const prepared = unwrap(facade.prepare_request(mode, model, JSON.stringify(request)), 'provider.prepare_request');
     if (!prepared || typeof prepared.body !== 'object' || !prepared.body) throw new HostError('Provider returned an invalid request', { status: 500 });
     const endpoint = providerURL(base, prepared.path);
@@ -38,11 +65,30 @@ export function createProvider({ facade, mode = 'deepseek', model, baseURL, apiK
     try {
       const response = await fetchImpl(endpoint, { method: 'POST', headers, body: JSON.stringify(prepared.body), signal: combined, redirect: 'error' });
       if (!response.ok) {
-        const errorBody = await boundedResponseText(response, Math.min(responseLimit, 4096), true);
-        throw new HostError(`Provider HTTP ${response.status}: ${redact(errorBody)}`, { status: 502 });
+        // Error bodies can echo request data. Classification uses the status
+        // and Retry-After header only, keeping credentials and prompt text out
+        // of the durable retry event.
+        clearTimeout(timer);
+        await response.body?.cancel().catch(() => {});
+        const status = response.status;
+        const code = status === 408 || status === 504
+          ? 'TIMEOUT'
+          : status === 429
+            ? 'RATE_LIMIT'
+            : status >= 500
+              ? 'SERVER'
+              : status === 401 || status === 403
+                ? 'AUTH'
+                : 'HTTP_ERROR';
+        throw new HostError(`Provider HTTP ${status}`, {
+          status: 502,
+          code,
+          providerStatus: status,
+          retryAfterMs: parseRetryAfter(response.headers.get('retry-after')),
+        });
       }
       if ((response.headers.get('content-type') ?? '').toLowerCase().includes('text/event-stream')) {
-        if (!response.body) throw new HostError('Provider returned an empty event stream', { status: 502 });
+        if (!response.body) throw new HostError('Provider returned an empty event stream', { status: 502, code: 'MALFORMED' });
         streamHandle = facade.stream_start(mode);
         if (!Number.isSafeInteger(streamHandle) || streamHandle <= 0) throw new HostError('Provider stream decoder capacity is exhausted', { status: 502 });
         const decoder = new TextDecoder('utf-8', { fatal: true });
@@ -70,7 +116,7 @@ export function createProvider({ facade, mode = 'deepseek', model, baseURL, apiK
           // One transport chunk may contain valid frames followed by a bad one.
           // Drain their validated deltas before surfacing the sticky parser error.
           await drainDeltas();
-          if (!result.ok) throw new HostError(typeof result.error === 'string' ? result.error : JSON.stringify(result.error), { status: 502 });
+          if (!result.ok) throw new HostError(typeof result.error === 'string' ? result.error : JSON.stringify(result.error), { status: 502, code: 'MALFORMED' });
         };
         let bytes = 0;
         const reader = response.body.getReader();
@@ -85,14 +131,31 @@ export function createProvider({ facade, mode = 'deepseek', model, baseURL, apiK
         try {
           for (;;) {
             checkAbort(combined);
-            const { done, value } = await reader.read();
+            let read;
+            try { read = await reader.read(); }
+            catch (error) {
+              if (isTransportFailure(error)) throw new HostError('Provider transport failed', { status: 502, code: 'TRANSPORT', cause: error });
+              throw error;
+            }
+            const { done, value } = read;
             checkAbort(combined);
-            if (done) { reachedEof = true; break; }
+            if (done) { reachedEof = true; clearTimeout(timer); break; }
             bytes += value.byteLength;
             if (bytes > responseLimit) throw new HostError('Provider response exceeded its size limit', { status: 502 });
-            await feed(decoder.decode(value, { stream: true }));
+            let decoded;
+            try { decoded = decoder.decode(value, { stream: true }); }
+            catch (cause) { throw new HostError('Provider stream contains invalid UTF-8', { status: 502, code: 'MALFORMED', cause }); }
+            await feed(decoded);
           }
-          await feed(decoder.decode());
+          let decoded;
+          try { decoded = decoder.decode(); }
+          catch (cause) { throw new HostError('Provider stream contains incomplete UTF-8', { status: 502, code: 'MALFORMED', cause }); }
+          await feed(decoded);
+        } catch (error) {
+          // Preserve the established parser/transport failure while awaiting
+          // body cleanup. Caller cancellation still wins in the outer catch.
+          clearTimeout(timer);
+          throw error;
         } finally {
           combined.removeEventListener('abort', cancelRead);
           // A parser error, size-limit failure or rejected projection callback
@@ -116,13 +179,41 @@ export function createProvider({ facade, mode = 'deepseek', model, baseURL, apiK
             throw new HostError('Provider final response differs from its live text/reasoning projection', { status: 502 });
           }
         }
+        if (!result.content && !(result.tool_calls?.length > 0)) {
+          throw new HostError('Provider returned an empty response', { status: 502, code: 'EMPTY_RESPONSE' });
+        }
         return result;
       }
-      const body = await boundedResponseText(response, responseLimit);
-      return unwrap(facade.decode_response(mode, body), 'provider.decode_response');
+      let body;
+      try { body = await boundedResponseText(response, responseLimit, false, () => clearTimeout(timer)); }
+      catch (error) {
+        clearTimeout(timer);
+        if (isTransportFailure(error)) throw new HostError('Provider transport failed', { status: 502, code: 'TRANSPORT', cause: error });
+        throw error;
+      }
+      clearTimeout(timer);
+      const result = unwrap(facade.decode_response(mode, body), 'provider.decode_response');
+      if (!result.content && !(result.tool_calls?.length > 0)) {
+        throw new HostError('Provider returned an empty response', { status: 502, code: 'EMPTY_RESPONSE' });
+      }
+      return result;
     } catch (error) {
-      if (combined.aborted) throw new HostError(redact(messageOf(combined.reason)), { status: 499 });
-      throw new HostError(redact(messageOf(error)), { status: error.status ?? 502 });
+      if (signal?.aborted) throw new HostError('Provider request cancelled', { status: 499, code: 'CANCELLED' });
+      if (timeoutController.signal.aborted) throw new HostError('Provider request timed out', { status: 502, code: 'TIMEOUT' });
+      if (error instanceof HostError) {
+        throw new HostError(redact(messageOf(error)), {
+          status: error.status ?? 502,
+          code: error.code,
+          providerStatus: error.providerStatus,
+          retryAfterMs: error.retryAfterMs,
+        });
+      }
+      // Only recognized network failures are retryable. Malformed facade,
+      // redirect, decoder, and configuration errors fail closed.
+      if (isTransportFailure(error)) {
+        throw new HostError('Provider transport failed', { status: 502, code: 'TRANSPORT' });
+      }
+      throw new HostError('Provider request failed', { status: error.status ?? 502, code: 'PROVIDER_ERROR' });
     } finally {
       clearTimeout(timer);
       if (streamHandle !== undefined) {
@@ -135,21 +226,72 @@ export function createProvider({ facade, mode = 'deepseek', model, baseURL, apiK
   return { invoke, mode: demo ? 'demo' : mode, model, redact };
 }
 
-async function boundedResponseText(response, limit, truncate = false) {
+function parseRetryAfter(value) {
+  if (typeof value !== 'string' || !value.trim()) return undefined;
+  const trimmed = value.trim();
+  let delay;
+  if (/^\d+(?:\.\d+)?$/.test(trimmed)) {
+    const seconds = Number(trimmed);
+    if (!Number.isFinite(seconds) || seconds > MAX_RETRY_DELAY_MS / 1000) {
+      return RETRY_AFTER_TOO_LONG_MS;
+    }
+    delay = Math.ceil(seconds * 1000);
+  }
+  else {
+    const timestamp = Date.parse(trimmed);
+    if (Number.isFinite(timestamp)) delay = Math.max(0, timestamp - Date.now());
+  }
+  if (Number.isFinite(delay) && delay > MAX_RETRY_DELAY_MS) return RETRY_AFTER_TOO_LONG_MS;
+  return Number.isSafeInteger(delay) && delay > 0 ? delay : undefined;
+}
+
+async function boundedResponseText(response, limit, truncate = false, beforeCleanup = () => {}) {
   if (!response.body) return '';
   const chunks = [];
   let bytes = 0;
-  for await (const chunk of response.body) {
-    if (bytes + chunk.byteLength > limit) {
-      if (!truncate) throw new HostError('Provider response exceeded its size limit', { status: 502 });
-      chunks.push(chunk.subarray(0, limit - bytes));
-      bytes = limit;
-      break;
+  const reader = response.body.getReader();
+  let reachedEof = false;
+  let cancelPromise;
+  const cancelRead = (reason) => {
+    if (cancelPromise) return cancelPromise;
+    try { cancelPromise = reader.cancel(reason).catch(() => {}); }
+    catch { cancelPromise = Promise.resolve(); }
+    return cancelPromise;
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        reachedEof = true;
+        break;
+      }
+      if (bytes + value.byteLength > limit) {
+        if (!truncate) {
+          const error = new HostError('Provider response exceeded its size limit', { status: 502 });
+          // Once the bounded parser has established this protocol failure, its
+          // request deadline must not replace it while the source cleans up.
+          beforeCleanup();
+          await cancelRead(error);
+          throw error;
+        }
+        chunks.push(value.subarray(0, limit - bytes));
+        bytes = limit;
+        beforeCleanup();
+        await cancelRead(new Error('Provider response was truncated'));
+        break;
+      }
+      chunks.push(value);
+      bytes += value.byteLength;
     }
-    chunks.push(chunk);
-    bytes += chunk.byteLength;
+    return Buffer.concat(chunks, bytes).toString('utf8');
+  } catch (error) {
+    beforeCleanup();
+    if (!reachedEof) await cancelRead(error);
+    throw error;
+  } finally {
+    if (cancelPromise) await cancelPromise;
+    try { reader.releaseLock(); } catch { /* A cancelled body may still be settling. */ }
   }
-  return Buffer.concat(chunks, bytes).toString('utf8');
 }
 
 /** A disclosed offline fixture. It goes through the real engine/tool boundary. */

@@ -10,6 +10,38 @@ export const defaultModulePath = fileURLToPath(new URL('../_build/js/release/bui
 const ownedFacades = new WeakSet();
 const READ_OPERATIONS = new Set(['session_get', 'session_list', 'plugin_list', 'profile_stats']);
 const MAX_STREAM_UNITS = 16 * 1024 * 1024;
+const RETRYABLE_PROVIDER_CODES = new Set(['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT']);
+
+function resolveRetryPolicy(options) {
+  const configured = options.retryPolicy ?? {};
+  const maxRetries = options.maxRetries ?? configured.maxRetries ?? 5;
+  const initialDelayMs = options.retryInitialDelayMs ?? configured.initialDelayMs ?? 500;
+  const maxDelayMs = options.retryMaxDelayMs ?? configured.maxDelayMs ?? 10_000;
+  if (!Number.isSafeInteger(maxRetries) || maxRetries < 0 || maxRetries > 5) {
+    throw new HostError('maxRetries must be an integer between 0 and 5');
+  }
+  if (!Number.isSafeInteger(initialDelayMs) || initialDelayMs < 0 || initialDelayMs > 10_000
+    || !Number.isSafeInteger(maxDelayMs) || maxDelayMs < 1 || maxDelayMs > 10_000
+    || initialDelayMs > maxDelayMs) {
+    throw new HostError('Provider retry delays must be integers between 0 and 10000 ms, with initialDelayMs no greater than maxDelayMs');
+  }
+  return { maxRetries, initialDelayMs, maxDelayMs };
+}
+
+function cancellableDelay(delayMs, signal) {
+  if (signal.aborted) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve(true);
+    }, delayMs);
+    function onAbort() {
+      clearTimeout(timer);
+      resolve(false);
+    }
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
 
 export async function loadFacade(modulePath = defaultModulePath) {
   try {
@@ -35,6 +67,7 @@ export async function createHost(options = {}) {
 async function initializeHost(options) {
   const facade = options.facade;
   const provider = createProvider({ ...options, facade, baseURL: options.baseURL });
+  const retryPolicy = resolveRetryPolicy(options);
   const workspace = path.resolve(options.workspace ?? process.cwd());
   const persistence = await openPersistence(options.dataDir ?? path.join(workspace, '.dsh.mbt'));
   const changed = new EventEmitter();
@@ -180,6 +213,26 @@ async function initializeHost(options) {
       }
       if (entry.deltaTasks.size > 0) {
         await Promise.all([...entry.deltaTasks]);
+        continue;
+      }
+      return;
+    }
+  }
+
+  async function flushProviderStream(entry) {
+    // Provider callbacks register before returning. Wait for those admitted
+    // tasks, then let requestStreamFlush own the serial queue and checkpoint.
+    for (;;) {
+      if (entry.deltaTasks.size > 0) {
+        await Promise.all([...entry.deltaTasks]);
+        continue;
+      }
+      if (entry.pendingStreamUnits > 0) {
+        await requestStreamFlush(entry);
+        continue;
+      }
+      if (entry.applyPromise) {
+        await entry.applyPromise;
         continue;
       }
       return;
@@ -369,6 +422,7 @@ async function initializeHost(options) {
       entry.controller.abort(entry.streamError);
       throw entry.streamError;
     }
+    if (units > 0) entry.hasObservedDelta = true;
     entry.projectedStreamUnits += units;
     await queueStreamText(entry, 'content', delta.content);
     await queueStreamText(entry, 'reasoning', delta.reasoning);
@@ -431,6 +485,7 @@ async function initializeHost(options) {
         cancelPending: false,
         streamCutoff: false,
         cancelledByEngine: false,
+        hasObservedDelta: false,
       };
       active.set(effect.id, entry);
       entry.promise = Promise.resolve().then(() => perform(entry)).catch((error) => {
@@ -445,21 +500,90 @@ async function initializeHost(options) {
     changed.emit('change');
   }
 
+  function providerFailure(error) {
+    const code = RETRYABLE_PROVIDER_CODES.has(error?.code) ? error.code : (error?.code ?? 'PROVIDER_ERROR');
+    const message = provider.redact(messageOf(error)).slice(0, 512);
+    const failure = { code, message };
+    if (Number.isSafeInteger(error?.providerStatus) && error.providerStatus >= 100 && error.providerStatus <= 599) failure.status = error.providerStatus;
+    if (Number.isSafeInteger(error?.retryAfterMs) && error.retryAfterMs > 0) failure.retry_after_ms = error.retryAfterMs;
+    return { ok: false, error: message, failure };
+  }
+
+  async function scheduleProviderRetry(entry, result) {
+    if (entry.hasObservedDelta || entry.streamError || entry.controller.signal.aborted || closing) return undefined;
+    return serialize(async () => {
+      if (entry.hasObservedDelta || entry.streamError || entry.controller.signal.aborted || closing) return undefined;
+      const current = snapshot().sessions.find((session) => session.id === entry.effect.session_id);
+      if (!current || current.status !== 'running') return undefined;
+      const response = parseEnvelope(facade.retry_schedule(
+        entry.effect.id,
+        JSON.stringify({
+          failure: result.failure,
+          max_retries: retryPolicy.maxRetries,
+          initial_delay_ms: retryPolicy.initialDelayMs,
+          max_delay_ms: retryPolicy.maxDelayMs,
+        }),
+      ), 'retry_schedule');
+      if (!response.ok) throw new HostError(typeof response.error === 'string' ? response.error : JSON.stringify(response.error), { status: 409 });
+      if (!response.result?.scheduled) return undefined;
+      // The scheduled transition is durable before the host begins its wait.
+      await checkpoint();
+      changed.emit('change');
+      return response.result;
+    }, { internal: true });
+  }
+
+  async function startScheduledRetry(entry, scheduled) {
+    if (!await cancellableDelay(scheduled.delay_ms, entry.controller.signal)) return false;
+    if (entry.cancelPending || entry.cancelledByEngine || closing || entry.controller.signal.aborted) return false;
+    return serialize(async () => {
+      if (entry.cancelPending || entry.cancelledByEngine || closing || entry.controller.signal.aborted) return false;
+      const current = snapshot().sessions.find((session) => session.id === entry.effect.session_id);
+      if (!current || current.status !== 'running') return false;
+      const response = parseEnvelope(
+        facade.retry_started(entry.effect.id, scheduled.retry_id),
+        'retry_started',
+      );
+      if (!response.ok) throw new HostError(typeof response.error === 'string' ? response.error : JSON.stringify(response.error), { status: 409 });
+      // Persist the start marker before a billed provider attempt can begin.
+      await checkpoint();
+      changed.emit('change');
+      return response.result?.status === 'running'
+        && !entry.cancelPending && !entry.cancelledByEngine && !closing && !entry.controller.signal.aborted;
+    }, { internal: true });
+  }
+
   async function perform(entry) {
     const { effect, controller } = entry;
     let result;
-    try {
-      result = effect.kind === 'llm'
-        ? await provider.invoke(effect.request, {
-          signal: controller.signal,
-          onDelta: (delta) => trackStreamDeltas(entry, delta),
-        })
-        : await workspaceTools.execute(effect.request, { signal: controller.signal });
-    } catch (error) {
-      result = { ok: false, error: provider.redact(messageOf(entry.streamError ?? error)) };
-    }
-    try { await requestStreamFlush(entry); } catch (error) {
-      result = { ok: false, error: provider.redact(messageOf(entry.streamError ?? error)) };
+    if (effect.kind === 'llm') {
+      for (;;) {
+        try {
+          result = await provider.invoke(effect.request, {
+            signal: controller.signal,
+            onDelta: (delta) => trackStreamDeltas(entry, delta),
+          });
+        } catch (error) {
+          result = providerFailure(entry.streamError ?? error);
+        }
+        try { await flushProviderStream(entry); } catch (error) {
+          result = providerFailure(entry.streamError ?? error);
+        }
+        if (result?.ok === false && !entry.hasObservedDelta && !entry.streamError
+          && !controller.signal.aborted && !closing) {
+          const scheduled = await scheduleProviderRetry(entry, result);
+          if (scheduled) {
+            if (!await startScheduledRetry(entry, scheduled)) return;
+            // Reuse the immutable request and still-active effect. Tool calls
+            // are only admitted after the eventual successful completion.
+            continue;
+          }
+        }
+        break;
+      }
+    } else {
+      try { result = await workspaceTools.execute(effect.request, { signal: controller.signal }); }
+      catch (error) { result = { ok: false, error: provider.redact(messageOf(error)) }; }
     }
     if ((entry.cancelledByEngine && controller.signal.aborted) || closing || fatalError) return;
     await serialize(async () => {

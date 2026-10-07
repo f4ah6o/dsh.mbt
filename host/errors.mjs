@@ -1,9 +1,11 @@
 export class HostError extends Error {
-  constructor(message, { status = 400, code = 'host_error', cause } = {}) {
+  constructor(message, { status = 400, code = 'host_error', providerStatus, retryAfterMs, cause } = {}) {
     super(message, { cause });
     this.name = 'HostError';
     this.status = status;
     this.code = code;
+    this.providerStatus = providerStatus;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 

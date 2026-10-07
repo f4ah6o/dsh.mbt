@@ -196,6 +196,9 @@ fn Engine::project_stream_impl(
     if content.is_empty() && reasoning.is_empty() {
       raise Invalid("Stream delta must contain text or reasoning")
     }
+    if session.pending_retry_id is Some(_) {
+      raise Invalid("Stream delta arrived while a retry was waiting")
+    }
     if content.length() + reasoning.length() > STREAM_DELTA_CAPACITY {
       raise Invalid("Stream delta batch exceeds its 4096-character limit")
     }
@@ -588,6 +591,11 @@ fn Engine::start_step(self : Engine, session : Session) -> Unit {
   }
   session.step += 1
   session.open_step = true
+  session.retry_count = 0
+  session.retry_max_retries = None
+  session.retry_initial_delay_ms = None
+  session.retry_max_delay_ms = None
+  session.pending_retry_id = None
   session.status = Running
   session.append("step/start", object([]))
   self.emit_effect(
@@ -750,6 +758,7 @@ fn Engine::terminate(
     )
   }
   self.retire_effect(session)
+  session.pending_retry_id = None
   session.approval = None
   while session.cursor < session.calls.length() {
     let call = session.calls[session.cursor]
@@ -818,6 +827,9 @@ fn Engine::complete_impl(
       session.turn_id != effect.turn_id ||
       session.step != effect.step {
       raise Invalid("Stale effect completion")
+    }
+    if session.pending_retry_id is Some(_) {
+      raise Invalid("Provider effect completed while a retry was waiting")
     }
     let result = checked_copy(result)
     let ok = bool_value(required_field(result, "ok"), "ok")

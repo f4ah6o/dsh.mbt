@@ -92,7 +92,7 @@ function currentId() {
 }
 
 try {
-  host = await createHost({ workspace, mode: "openai", baseURL: "http://127.0.0.1:1", model: "browser-fixture", fetchImpl: provider });
+  host = await createHost({ workspace, mode: "openai", baseURL: "http://127.0.0.1:1", model: "browser-fixture", maxRetries: 0, fetchImpl: provider });
   const delayedHost = { ...host, async call(operation, input) {
     const result = await host.call(operation, input);
     if (operation === "session_create" || (operation === "session_send" && input.prompt.includes("draft race"))) {

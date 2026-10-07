@@ -17,12 +17,15 @@ test('CLI options preserve explicit provider and approval policy', () => {
   assert.equal(defaults.command, 'web');
   assert.equal(defaults.options.mode, 'deepseek');
   assert.equal(defaults.options.model, 'deepseek-flash');
+  assert.equal(defaults.options.maxRetries, undefined);
   assert.deepEqual(defaults.options.approveTools, []);
   const explicit = parseCLI(['run', 'Hello', '--mode', 'openai', '--model', 'my-model', '--allow-shell', '--approve-tools', 'bash', '--approve-writes', '--json'], { OPENAI_API_KEY: 'from-env' });
   assert.equal(explicit.prompt, 'Hello');
   assert.equal(explicit.options.apiKey, 'from-env');
   assert.deepEqual(explicit.options.approveTools, ['bash', 'write', 'edit']);
   assert.equal(explicit.options.allowShell, true);
+  assert.equal(parseCLI(['--max-retries', '0'], {}).options.maxRetries, 0);
+  assert.throws(() => parseCLI(['--max-retries', '6'], {}), /between 0 and 5/);
   assert.throws(() => parseCLI(['--mode', 'openai'], {}), /--model NAME or DSH_MODEL/);
   assert.equal(parseCLI(['--mode', 'openai'], { DSH_MODEL: 'chosen' }).options.model, 'chosen');
   assert.throws(() => parseCLI(['run'], {}), /requires a prompt/);
