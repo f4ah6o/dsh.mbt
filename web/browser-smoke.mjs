@@ -31,6 +31,7 @@ let signalCapPruneStarted;
 let capPruneResponse;
 const capPruneStarted = new Promise((resolve) => { signalCapPruneStarted = resolve; });
 const capPruneReleased = new Promise((resolve) => { releaseCapPrune = resolve; });
+let forkDelay;
 const encoder = new TextEncoder();
 
 async function freshFacade() {
@@ -168,6 +169,10 @@ try {
       signalCapPruneStarted();
       await capPruneReleased;
     }
+    if (operation === "session_fork" && forkDelay) {
+      forkDelay.started();
+      await forkDelay.released;
+    }
     if (operation === "session_create" || (operation === "session_send" && input.prompt.includes("draft race"))) {
       await new Promise((resolve) => setTimeout(resolve, 350));
     }
@@ -181,7 +186,7 @@ try {
   });
   page = await browser.newPage({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 1 });
   page.on("pageerror", (error) => failures.push(error.message));
-  await page.goto(web.url, { waitUntil: "networkidle" });
+  await page.goto(web.url, { waitUntil: "domcontentloaded" });
   await send("Hello from the browser");
   await waitStatus("Completed");
   assert.match(await page.locator("#text-transcript").textContent(), /MoonBit engine/);
@@ -190,6 +195,52 @@ try {
   await page.locator("#new-session").click();
   await page.waitForFunction((previous) => document.querySelector(".session-option[aria-current='page']")?.dataset.id !== previous, firstId);
   const secondId = await currentId();
+  await page.locator(`.session-option[data-id='${firstId}']`).click();
+  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
+  await waitStatus("Completed");
+
+  const sourceBeforeFork = await host.session(firstId);
+  await page.locator("#fork-session").waitFor({ state: "visible" });
+  await page.waitForFunction(() => !document.getElementById("fork-session").disabled);
+  await page.locator("#fork-session").click();
+  await page.waitForFunction((previous) => document.querySelector(".session-option[aria-current='page']")?.dataset.id !== previous, firstId);
+  const firstForkId = await currentId();
+  const firstFork = await host.session(firstForkId);
+  assert.equal(firstFork.parent_session_id, firstId);
+  assert.equal(firstFork.status, "idle");
+  assert.equal(firstFork.pending_approval, undefined);
+  assert.deepEqual(firstFork.messages, sourceBeforeFork.messages);
+  const sourceRequest = sourceBeforeFork.events.find((event) => event.type === "llm/request");
+  const forkRequest = firstFork.events.find((event) => event.type === "llm/request");
+  assert.ok(sourceRequest && forkRequest);
+  assert.notEqual(forkRequest.data.effect_id, sourceRequest.data.effect_id,
+    "forked durable effects receive branch-local identities");
+  assert.deepEqual(await host.session(firstId), sourceBeforeFork,
+    "fork creation leaves the source session unchanged");
+  assert.ok(firstFork.events.some((event) => event.type === "session/forked"));
+
+  // A delayed durable fork may add its child to the sidebar, but a newer
+  // explicit session selection wins over automatic child selection.
+  await page.locator(`.session-option[data-id='${firstId}']`).click();
+  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
+  let signalForkStarted;
+  let releaseForkResponse;
+  const forkStarted = new Promise((resolve) => { signalForkStarted = resolve; });
+  const forkReleased = new Promise((resolve) => { releaseForkResponse = resolve; });
+  forkDelay = { started: signalForkStarted, released: forkReleased };
+  await page.locator("#fork-session").click();
+  await forkStarted;
+  await page.locator(`.session-option[data-id='${secondId}']`).click();
+  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, secondId);
+  releaseForkResponse();
+  forkDelay = undefined;
+  await page.waitForFunction(() => !document.getElementById("new-session").disabled);
+  assert.equal(await currentId(), secondId);
+  assert.equal(await page.locator("#action-message").isVisible(), false,
+    "a late fork response cannot select its child or show a notice on another session");
+  const forkList = await host.call("session_list", {});
+  assert.equal(forkList.ok, true, forkList.error);
+  assert.equal(forkList.result.filter((session) => session.parent_session_id === firstId).length, 2);
   await page.locator(`.session-option[data-id='${firstId}']`).click();
   await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
   await waitStatus("Completed");
@@ -333,7 +384,7 @@ try {
   const importedSource = await fs.readFile(new URL("../tests/fixtures/upstream-tool-call-turn/session.v4.jsonl", import.meta.url), "utf8");
   const imported = await host.call("session_import", { jsonl: importedSource });
   assert.equal(imported.ok, true, imported.error);
-  await page.reload({ waitUntil: "networkidle" });
+  await page.reload({ waitUntil: "domcontentloaded" });
   await page.waitForFunction(() => document.getElementById("status").textContent === "Read-only · Completed");
   assert.equal(await page.locator("#prompt").isDisabled(), true);
   assert.equal(await page.locator("#send").isDisabled(), true);
@@ -366,7 +417,7 @@ try {
   await page.locator("#connection-error").waitFor({ state: "hidden" });
   assert.equal(await currentId(), firstId);
   assert.deepEqual(failures, []);
-  console.log(JSON.stringify({ status: "PASS", assertions: "startup, create/select, draft preservation, submit, live provisional text/reasoning and final replacement, pruning context projection and success/failure notice session fencing, approval allow/deny, real file write, cancellation, provider error, literal output, scrolling, text-view follow, Session v4 read-only import/no-effect display, same-session create/select race, mobile layout, reconnect", screenshots }));
+  console.log(JSON.stringify({ status: "PASS", assertions: "startup, create/select, draft preservation, submit, settled session fork with immutable source, rekeyed effects and copied transcript, delayed fork/session-switch fencing, live provisional text/reasoning and final replacement, pruning context projection and success/failure notice session fencing, approval allow/deny, real file write, cancellation, provider error, literal output, scrolling, text-view follow, Session v4 read-only import/no-effect display, same-session create/select race, mobile layout, reconnect", screenshots }));
 } catch (error) {
   if (page && !page.isClosed()) await page.screenshot({ path: path.join(screenshots, "failure.png"), fullPage: true }).catch(() => {});
   throw error;

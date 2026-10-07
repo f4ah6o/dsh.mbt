@@ -43,6 +43,7 @@ pub fn Engine::take_typed_effects(Self) -> Array[EngineEffect]
 
 pub(all) enum EngineCommand {
   CreateSession(String?, String, String, Int?)
+  ForkSession(SessionId, String?, String?)
   ListSessions
   ImportSession(String)
   GetSession(SessionId)
@@ -74,6 +75,7 @@ pub fn EngineEvent::turn(Self) -> Int
 
 pub(all) enum EngineEventKind {
   SessionCreated
+  SessionForked
   SessionCancelled
   SessionInterrupted
   TurnStarted

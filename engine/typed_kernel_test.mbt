@@ -108,6 +108,23 @@ test "typed commands drive the engine and typed effects/events match compatibili
       _ => false
     },
   )
+  let forked = typed_test_json(
+    engine.apply(
+      typed_test_command("session_fork", {
+        "session_id": "typed-session",
+        "id": "typed-child",
+        "title": "Typed branch",
+      }),
+    ),
+  )
+  assert_true(
+    match forked {
+      Object(fields) =>
+        fields.get("parent_session_id") == Some("typed-session".to_json()) &&
+        fields.get("status") == Some("idle".to_json())
+      _ => false
+    },
+  )
 }
 
 ///|

@@ -64,6 +64,8 @@ fn operation_schema(operation : String) -> @capability.Schema raise InitError {
         field("system_prompt", string, false),
         field("max_steps", @capability.Schema::int(), false),
       ]
+    "session_fork" =>
+      [session, field("id", string, false), field("title", string, false)]
     "session_import" => [field("jsonl", string, true)]
     "session_get" | "session_cancel" => [session]
     "session_send" => [session, field("prompt", string, true)]
@@ -134,7 +136,10 @@ fn session_summaries(value : Json) -> Json {
         sessions.map(session => {
           let summary : Map[String, Json] = Map([])
           if session is Object(fields) {
-            for key in ["id", "title", "status", "turn_id", "step"] {
+            for
+              key in [
+                "id", "title", "status", "turn_id", "step", "parent_session_id",
+              ] {
               if fields.get(key) is Some(value) {
                 summary[key] = value
               }
@@ -163,6 +168,10 @@ fn create_api() -> HarnessApi raise InitError {
     (name, title, description, is_read_only) in [
       (
         "session_create", "Create session", "Create a conversation with an append-only MoonBit event log.",
+        false,
+      ),
+      (
+        "session_fork", "Fork conversation", "Create an independent conversation from a settled session history.",
         false,
       ),
       (

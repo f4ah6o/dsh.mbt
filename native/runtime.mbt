@@ -333,7 +333,7 @@ fn native_remote_cursor(
 fn native_safe_session(value : Json) -> Json {
   let allowed = [
     "id", "title", "status", "turn_id", "step", "messages", "stream_revision", "pending_approval",
-    "source_format",
+    "source_format", "parent_session_id",
   ]
   let result : Map[String, Json] = Map([])
   match value {
@@ -747,6 +747,7 @@ async fn NativeRuntime::accept_remote_command(
   if command.session_id is Some(session_id) {
     if [
         "tool_approve", "session_send", "session_cancel", "session_prune_tool_results",
+        "session_fork",
       ].contains(command.operation) {
       input_fields["session_id"] = session_id.to_json()
     }
@@ -754,7 +755,7 @@ async fn NativeRuntime::accept_remote_command(
   let input = Json::object(input_fields)
   let allowed = [
     "session_create", "session_import", "session_send", "session_cancel", "session_prune_tool_results",
-    "tool_approve",
+    "session_fork", "tool_approve",
   ]
   let mut status = "accepted"
   let mut error_message : String? = None

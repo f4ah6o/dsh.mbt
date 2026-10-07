@@ -58,6 +58,7 @@ fn Engine::restore_impl(self : Engine, snapshot : Json) -> Result[Unit, String] 
       loaded.set(session.id, session)
       order.push(session.id)
     }
+    validate_fork_lineage(loaded, order)
     // All validation is complete. No operation below can fail or dispatch I/O.
     self.sessions.clear()
     self.order.clear()
@@ -826,6 +827,8 @@ fn restore_session(
           }
           session.status = Cancelled
         }
+        "session/forked" =>
+          session.restore_fork_marker(data, index, turn_id, step, open_turn)
         "session/interrupted" => {
           if !open_turn {
             raise Invalid("Interruption outside an open turn")
@@ -858,6 +861,10 @@ fn restore_session(
   }
   let expected_approval = fields(value).get("pending_approval")
   let actual_approval = fields(session.json()).get("pending_approval")
+  if fields(value).get("parent_session_id") !=
+    fields(session.json()).get("parent_session_id") {
+    raise Invalid("Snapshot fork lineage disagrees with its event log")
+  }
   if expected_approval != actual_approval {
     raise Invalid("Snapshot approval disagrees with the event log")
   }

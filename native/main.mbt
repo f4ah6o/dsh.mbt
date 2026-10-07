@@ -55,6 +55,7 @@ fn native_usage() -> String {
   "  dsh-native --help\n" +
   "  dsh-native --demo --data-dir PATH --workspace PATH\n\n" +
   "  dsh-native --run PROMPT [--session ID] [--demo] --data-dir PATH --workspace PATH\n" +
+  "  dsh-native --fork SESSION_ID [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh-native --session ID --approve-call CALL_ID --approval-revision REV [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh-native --session ID --deny-call CALL_ID --approval-revision REV [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh-native --auth-status|--sign-in|--models|--sign-out|--select-model MODEL --data-dir PATH --workspace PATH\n\n" +
@@ -203,20 +204,55 @@ async fn native_cli_action(
   }
 
   let prompt = native_option(args, "--run")
+  let fork_source = native_option(args, "--fork")
   let approve_call = native_option(args, "--approve-call")
   let deny_call = native_option(args, "--deny-call")
+  let requested_session = native_option(args, "--session")
+  if fork_source is Some(_) &&
+    (
+      prompt is Some(_) ||
+      approve_call is Some(_) ||
+      deny_call is Some(_) ||
+      requested_session is Some(_)
+    ) {
+    return Err(
+      "--fork cannot be combined with run, session, or approval actions",
+    )
+  }
   if prompt is Some(_) && (approve_call is Some(_) || deny_call is Some(_)) {
     return Err("--run cannot be combined with approval flags")
   }
   if approve_call is Some(_) && deny_call is Some(_) {
     return Err("choose either --approve-call or --deny-call")
   }
-  if prompt is None && approve_call is None && deny_call is None {
+  if prompt is None &&
+    fork_source is None &&
+    approve_call is None &&
+    deny_call is None {
     return Err("no native CLI action was selected")
   }
-
-  let mut session_id = native_option(args, "--session")
+  let mut session_id = requested_session
   let mut receipt : Json? = None
+  match fork_source {
+    Some(source_id) => {
+      let fork_receipt = match
+        native_cli_command(runtime, Some(source_id), "session_fork", {}, None) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+      let child = match object_field(fork_receipt, "result") {
+        Some(value) => value
+        None => return Err("native fork receipt has no child session")
+      }
+      session_id = match string_field(child, "id") {
+        Some(value) => Some(value)
+        None => return Err("native fork receipt has no child session ID")
+      }
+      receipt = Some(fork_receipt)
+    }
+    None => ()
+  }
+
   if prompt is Some(_) && session_id is None {
     let generated = match random_uuid() {
       Ok(value) => "session-" + value
@@ -373,6 +409,7 @@ async fn main {
     native_flag(args, "--models") ||
     native_option(args, "--select-model") is Some(_) ||
     native_option(args, "--run") is Some(_) ||
+    native_option(args, "--fork") is Some(_) ||
     native_option(args, "--approve-call") is Some(_) ||
     native_option(args, "--deny-call") is Some(_)
   if cli_action {

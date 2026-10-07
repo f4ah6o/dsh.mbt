@@ -100,6 +100,64 @@ test "tool-result pruning is a validated state-change capability for idle sessio
 }
 
 ///|
+test "session fork is exposed as a validated GUI capability and returns lineage" {
+  let api = @api.HarnessApi::new().unwrap()
+  api.invoke("session_create", { "id": "fork-api", "max_steps": 3 }).unwrap()
+  |> ignore
+  api
+  .invoke("session_send", {
+    "session_id": "fork-api",
+    "prompt": "Create a settled source conversation",
+  })
+  .unwrap()
+  |> ignore
+  let effects = api.take_effects()
+  assert_eq(effects.length(), 1)
+  let effect_id = match get(effects[0], "id") {
+    String(value) => value
+    _ => fail("expected provider effect id")
+  }
+  api
+  .complete(effect_id, {
+    "ok": true,
+    "content": "settled",
+    "tool_calls": [],
+    "finish_reason": "stop",
+  })
+  .unwrap()
+  |> ignore
+  let fork = api
+    .invoke("session_fork", {
+      "session_id": "fork-api",
+      "id": "fork-api-child",
+      "title": "Review branch",
+    })
+    .unwrap()
+  assert_eq(get(fork, "parent_session_id"), "fork-api")
+  assert_eq(get(fork, "title"), "Review branch")
+  assert_eq(get(fork, "status"), "idle")
+  let summaries = api.invoke("session_list", {}).unwrap()
+  match summaries {
+    Array(sessions) => {
+      let mut child_summary : Json? = None
+      for session in sessions {
+        if get(session, "id") == "fork-api-child" {
+          child_summary = Some(session)
+        }
+      }
+      match child_summary {
+        Some(summary) =>
+          assert_eq(get(summary, "parent_session_id"), "fork-api")
+        None => fail("forked child missing from session summaries")
+      }
+    }
+    _ => fail("expected session summaries")
+  }
+  assert_true(api.manifest().contains("session_fork"))
+  api.close()
+}
+
+///|
 test "capability send emits work and cancellation rejects its late settlement" {
   let api = @api.HarnessApi::new().unwrap()
   api.invoke("session_create", { "id": "cancel" }).unwrap() |> ignore

@@ -9,7 +9,7 @@ MoonBit で agent の基本実行経路を動かす最初の移植です。
 
 | upstream の領域 | 移植先 | 状態と差分 |
 | --- | --- | --- |
-| `core/session`, `core/agent-loop`, `core/tools` | `engine/` | 基本 turn / step、event log、messages、follow-up、cancel、late result 拒否、LLM text/reasoning の bounded live projection と Read の bounded parallel tool を実装済み。連続 Read call を最大 4 件で rolling 実行し、Write / Shell / unknown / schema-invalid call は barrier。結果と model context は call 順を維持する。upstream の default pool size 10、動的 policy、その他の agent-loop 機能は未実装。inbox の動的編集、fork の作成も未実装。 |
+| `core/session`, `core/agent-loop`, `core/tools` | `engine/` | 基本 turn / step、event log、messages、follow-up、cancel、late result 拒否、LLM text/reasoning の bounded live projection と Read の bounded parallel tool を実装済み。連続 Read call を最大 4 件で rolling 実行し、Write / Shell / unknown / schema-invalid call は barrier。結果と model context は call 順を維持する。native v1 runtime は settled な非 imported session の fork を作成し、parent prefix と rekey 済み effect / retry identity を snapshot restore で検証する。upstream の default pool size 10、動的 policy、inbox の動的編集、その他の agent-loop 機能は未実装。 |
 | `interaction/user-approval` | `engine/`, `api/`, `web/`, `host/cli.mjs` | read / write / shell 分類、呼出しごとの Allow / Deny、明示的 startup 自動承認を実装済み。upstream permission preset / account authorization の互換は未実装。 |
 | `llm/llm-deepseek` / Responses | `provider/`, `host/provider.mjs`, `native/provider_http.mbt` | DeepSeek Messages、OpenAI Chat Completions / Responses の text・reasoning・function/custom call lifecycle・usage・SSE を実装済み。Responses API-key と SIWC は native host で利用でき、SIWC は account-visible model discovery と protected refresh lifecycle を使う。実アカウント smoke は未実行。画像、Files API、thinking signature の durable replay は未実装。 |
 | `llm/llm-retry`、`llm/retry-policy` | `engine/retry.mbt`, `host/runtime.mjs`, `host/provider.mjs`, `engine/session_v4_retry.mbt` | MoonBit event log に schedule / start を保存する、最大 5 回の bounded retry を実装済み。既定 backoff は 500 ms から 10 秒までの deterministic exponential（jitter なし）。許可する一時 failure は空応答、429、408/504、5xx、識別済み transport error。positive `Retry-After` は上限以内で採用し、上限超過なら retry しません。accepted stream delta 後、auth / その他の 4xx / malformed response は再試行しません。read-only Session v4 importer は `llm/retry` / `llm/retry-started` の schema と相関を検証して raw event として保持します。upstream `always` runtime mode、policy keying、jitter は未実装で、import した retry は再生しません。 |
@@ -36,6 +36,12 @@ MoonBit で agent の基本実行経路を動かす最初の移植です。
 - tool-result pruning は手動操作のみ。upstream の defaults は threshold 8,192 Unicode code points、head 4,096、tail 1,024。pruned event を append するので元 output を保持したまま provider context を縮める一方、canonical storage limit の解消にはならない。
 - 1 session 262,144 serialized UTF-16 units、最大 32 sessions。stream projection と pruning event もこの上限内で、容量超過は candidate 更新を拒否して既存状態を保つ。長い会話向け自動 live compaction / token meter / summary / spill は未実装。
 - Node host は loopback 専用。native service も loopback に bind し、利用者が Tailscale Serve と owner allowlist を設定した場合だけその proxy header を信頼する。実 Tailnet / public hosting はこの実装検証の範囲外。
+
+## Native v1 runtime の settled session fork
+
+`session_fork` は `idle`、`completed`、`failed`、`cancelled` のうち実行状態が settled した native v1 session から独立した child を作ります。Node CLI は `fork-session SESSION_ID`、native CLI は `--fork SESSION_ID`、browser UI は **Fork conversation** を提供します。child は元の transcript、tool call/result identity、pruning の sequence reference を保ちます。effect ID と retry ID は branch ごとに再採番し、pending effect、approval、retry wait、tool dispatch は継承せず、external work を開始しません。child は `idle` で始まり、`parent_session_id` と `session/forked` marker を記録します。
+
+Restore は marker に固定された parent event prefix、session prompt / step limit、effect ID map、lineage graph を全 session の adoption 前に照合します。後続の parent continuation は既存 child の source prefix を変えません。native v1 runtime の forks-of-forks は対応します。Session v4 importer の seeded-fork subset は別仕様で、nested v4 fork と v4 writer は引き続き未対応です。fork は最大 32 session、session 262,144 UTF-16 unit、32,767 source event の既存上限に従い、active/imported session、capacity 超過、ID conflict は変更なしで拒否します。
 
 ## Session v4 の read-only import 範囲
 

@@ -50,6 +50,8 @@ fn Engine::apply_command_impl(
       ListSessions => Json::array(self.order.map(id => self.lookup(id).json()))
       ImportSession(jsonl) => self.import_upstream_v4(jsonl).json()
       GetSession(id) => self.lookup(id.as_string()).json()
+      ForkSession(id, child_id, title) =>
+        self.fork_session(id.as_string(), child_id, title).json()
       SendPrompt(id, prompt) => {
         let session = self.lookup(id.as_string())
         if session.imported {
@@ -535,6 +537,10 @@ fn Session::json(self : Session) -> Json {
           ("arguments", detached(approval.arguments)),
         ]),
       )
+    None => ()
+  }
+  match self.fork_parent_id() {
+    Some(parent_id) => value.set("parent_session_id", Json::string(parent_id))
     None => ()
   }
   Json::object(value)

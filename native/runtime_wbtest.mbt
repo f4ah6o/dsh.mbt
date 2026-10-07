@@ -66,6 +66,29 @@ fn native_runtime_unscoped_command(
 }
 
 ///|
+fn native_runtime_session_operation_command(
+  workspace_id : String,
+  session_id : String,
+  command_id : String,
+  operation : String,
+  input : Json,
+) -> @protocol.RemoteCommand raise {
+  let command : Json = {
+    "protocol_version": @protocol.PROTOCOL_VERSION.to_json(),
+    "workspace_id": workspace_id.to_json(),
+    "command_id": command_id.to_json(),
+    "session_id": session_id.to_json(),
+    "operation": operation.to_json(),
+    "input": input,
+    "approval_revision": Json::null(),
+  }
+  match @protocol.RemoteCommand::parse(command.stringify()) {
+    Ok(value) => value
+    Err(error) => fail(error)
+  }
+}
+
+///|
 async test "native runtime projects exact provider deltas and completes long Unicode output" {
   let fixture = @fs.tmpdir(prefix="dsh-native-stream-deltas")
   @async.with_task_group() <| group => {
@@ -250,6 +273,227 @@ async test "native runtime replays an accepted in-flight command before schedule
       Some("accepted"),
     )
     runtime.scheduler.finish(active)
+  }
+}
+
+///|
+async test "native fork command and CLI receipt replay the same durable child without effects" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-session-fork")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let data = fixture + "/data"
+    let source_id = "native-fork-source"
+    let runtime = match NativeRuntime::open(data, workspace, false, true) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    runtime
+    .invoke("session_create", { "id": source_id, "title": "Native source" })
+    .unwrap()
+    |> ignore
+    let (_, effects) = runtime
+      .invoke("session_send", {
+        "session_id": source_id,
+        "prompt": "Settle a native conversation",
+      })
+      .unwrap()
+    let provider = match
+      native_effect_by_kind(effects, @engine.EffectType::Provider) {
+      Some(value) => value
+      None => fail("expected source provider effect")
+    }
+    let (_, next_effects) = runtime
+      .complete(provider.id(), {
+        "ok": true,
+        "content": "Native answer",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(next_effects.is_empty())
+    let (source_before, _) = runtime
+      .invoke("session_get", { "session_id": source_id })
+      .unwrap()
+
+    let cli = native_cli_action(runtime, ["--fork", source_id])
+    let cli_output = match cli {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    let cli_receipt = object_field(cli_output, "receipt").unwrap()
+    assert_eq(string_field(cli_receipt, "status"), Some("completed"))
+    let cli_child = object_field(cli_receipt, "result").unwrap()
+    assert_eq(string_field(cli_child, "parent_session_id"), Some(source_id))
+    assert_eq(string_field(cli_child, "status"), Some("idle"))
+
+    let command_id = @protocol.uuid_v7_command_id_from_entropy(
+      native_auth_now().to_int64() * 1000L,
+      "00112233445566778899aabbccddeeff",
+    ).unwrap()
+    let command = native_runtime_session_operation_command(
+      runtime.state.workspace_id,
+      source_id,
+      command_id,
+      "session_fork",
+      {},
+    )
+    let identity = runtime.state.identity_key
+    let (accepted, accepted_effects, should_start) = runtime
+      .accept_remote_command(command, identity)
+      .unwrap()
+    assert_eq(string_field(accepted, "status"), Some("accepted"))
+    assert_true(should_start)
+    assert_true(accepted_effects.is_empty())
+    runtime.run_command_job(
+      command_id,
+      identity,
+      int_field(accepted, "accepted_revision").unwrap(),
+      accepted_effects,
+    )
+    let receipt = runtime.find_receipt(command_id, identity).unwrap().unwrap()
+    assert_eq(string_field(receipt, "status"), Some("completed"))
+    let child = object_field(receipt, "result").unwrap()
+    let child_id = string_field(child, "id").unwrap()
+    assert_eq(string_field(child, "parent_session_id"), Some(source_id))
+    assert_eq(string_field(child, "status"), Some("idle"))
+
+    let duplicate = native_runtime_session_operation_command(
+      runtime.state.workspace_id,
+      source_id,
+      command_id,
+      "session_fork",
+      {},
+    )
+    let (replayed, replayed_effects, replayed_accepted) = runtime
+      .accept_remote_command(duplicate, identity)
+      .unwrap()
+    assert_eq(string_field(replayed, "status"), Some("completed"))
+    assert_eq(
+      string_field(object_field(replayed, "result").unwrap(), "id"),
+      Some(child_id),
+    )
+    assert_true(replayed_effects.is_empty())
+    assert_true(!replayed_accepted)
+    let (source_after, _) = runtime
+      .invoke("session_get", { "session_id": source_id })
+      .unwrap()
+    assert_eq(source_after, source_before)
+
+    assert_true(runtime.close() is Ok(_))
+    let reopened = match NativeRuntime::open(data, workspace, false, true) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(reopened.close()))
+    })
+    let durable = reopened.find_receipt(command_id, identity).unwrap().unwrap()
+    assert_eq(string_field(durable, "status"), Some("completed"))
+    assert_eq(
+      string_field(object_field(durable, "result").unwrap(), "id"),
+      Some(child_id),
+    )
+    let after_restart = native_runtime_session_operation_command(
+      reopened.state.workspace_id,
+      source_id,
+      command_id,
+      "session_fork",
+      {},
+    )
+    let (restart_replay, restart_effects, restart_accepted) = reopened
+      .accept_remote_command(after_restart, identity)
+      .unwrap()
+    assert_eq(string_field(restart_replay, "status"), Some("completed"))
+    assert_eq(
+      string_field(object_field(restart_replay, "result").unwrap(), "id"),
+      Some(child_id),
+    )
+    assert_true(restart_effects.is_empty())
+    assert_true(!restart_accepted)
+    let (restored_child, no_effects) = reopened
+      .invoke("session_get", { "session_id": child_id })
+      .unwrap()
+    assert_eq(
+      string_field(restored_child, "parent_session_id"),
+      Some(source_id),
+    )
+    assert_true(no_effects.is_empty())
+  }
+}
+
+///|
+async test "native remote fork rejects a live source without creating a child or effects" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-session-fork-live")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let source_id = "native-fork-live-source"
+    let runtime = match
+      NativeRuntime::open(fixture + "/data", workspace, false, true) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    runtime
+    .invoke("session_create", { "id": source_id, "title": "Live source" })
+    .unwrap()
+    |> ignore
+    let (_, source_effects) = runtime
+      .invoke("session_send", {
+        "session_id": source_id,
+        "prompt": "Keep this native source running",
+      })
+      .unwrap()
+    assert_eq(source_effects.length(), 1)
+    let (source_before, _) = runtime
+      .invoke("session_get", { "session_id": source_id })
+      .unwrap()
+    assert_eq(string_field(source_before, "status"), Some("running"))
+
+    let command_id = @protocol.uuid_v7_command_id_from_entropy(
+      native_auth_now().to_int64() * 1000L,
+      "a0112233445566778899aabbccddeeff",
+    ).unwrap()
+    let command = native_runtime_session_operation_command(
+      runtime.state.workspace_id,
+      source_id,
+      command_id,
+      "session_fork",
+      {},
+    )
+    let (receipt, effects, should_start) = runtime
+      .accept_remote_command(command, runtime.state.identity_key)
+      .unwrap()
+    assert_eq(string_field(receipt, "status"), Some("rejected"))
+    assert_true(
+      string_field(receipt, "error").unwrap_or("").contains("settled"),
+    )
+    assert_true(effects.is_empty())
+    assert_true(!should_start)
+    let (source_after, no_effects) = runtime
+      .invoke("session_get", { "session_id": source_id })
+      .unwrap()
+    assert_eq(source_after, source_before)
+    assert_true(no_effects.is_empty())
+    let (sessions, list_effects) = runtime.invoke("session_list", {}).unwrap()
+    match sessions {
+      Json::Array(rows) => assert_eq(rows.length(), 1)
+      _ => fail("expected one source session after rejected fork")
+    }
+    assert_true(list_effects.is_empty())
+    let command_receipt = runtime
+      .find_receipt(command_id, runtime.state.identity_key)
+      .unwrap()
+      .unwrap()
+    assert_eq(string_field(command_receipt, "status"), Some("rejected"))
   }
 }
 

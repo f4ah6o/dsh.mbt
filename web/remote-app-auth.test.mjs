@@ -80,6 +80,9 @@ function createHarness({
   failPostSignInSnapshot = false,
   failSelectModel = false,
   deferSelectModel = false,
+  initialSessions = [],
+  initialSelectedSession = null,
+  deferForkCommand = false,
 } = {}) {
   const elements = new Map();
   const getElement = (id) => {
@@ -109,6 +112,9 @@ function createHarness({
 
   let currentAuth = structuredClone(initialAuth);
   let backendAuth = structuredClone(initialAuth);
+  const fixtureSessions = initialSessions.map((session) => structuredClone(session));
+  let selectedSession = initialSelectedSession || fixtureSessions[0]?.id || null;
+  let selectedProjection = fixtureSessions.find((session) => session.id === selectedSession) || null;
   let signInRequested = false;
   let signInRequests = 0;
   const selectedModelRequests = [];
@@ -125,15 +131,21 @@ function createHarness({
   const modelRequestStarted = new Promise((resolve) => { signalModelRequestStarted = resolve; });
   let resolveModelResponse;
   const pendingModelResponse = new Promise((resolve) => { resolveModelResponse = resolve; });
+  let signalForkCommandStarted;
+  const forkCommandStarted = new Promise((resolve) => { signalForkCommandStarted = resolve; });
+  let releaseForkCommand;
+  const pendingForkCommand = new Promise((resolve) => { releaseForkCommand = resolve; });
   const client = {
     beginConnect() {},
     connectionFailed() {},
     state() {
       return {
         auth: structuredClone(currentAuth),
-        projection: { sessions: [] },
-        selected_session: null,
-        selected_session_projection: null,
+        projection: { sessions: fixtureSessions.map((session) => structuredClone(session)) },
+        selected_session: selectedSession,
+        selected_session_projection: selectedProjection
+          ? structuredClone(selectedProjection)
+          : null,
         scope_key: "test-scope",
         draft: "",
         connection: "synced",
@@ -153,6 +165,29 @@ function createHarness({
         currentAuth = structuredClone(backendAuth);
       }
       return { result: { status: "applied" } };
+    },
+    select(id) {
+      selectedSession = id;
+      selectedProjection = fixtureSessions.find((session) => session.id === id) || null;
+    },
+    async selectedSession(id) {
+      selectedProjection = fixtureSessions.find((session) => session.id === id) || null;
+      return selectedProjection;
+    },
+    async command(operation, sessionId) {
+      if (operation !== "session_fork") throw new Error("unexpected command: " + operation);
+      signalForkCommandStarted();
+      if (deferForkCommand) await pendingForkCommand;
+      const child = {
+        id: "fork-child",
+        title: "Fork child",
+        parent_session_id: sessionId,
+        status: "idle",
+        messages: [],
+        events: [],
+      };
+      fixtureSessions.push(child);
+      return { status: "completed", result: child };
     },
     subscribe() { return () => {}; },
     async reconcileReceipts() {},
@@ -292,6 +327,10 @@ function createHarness({
     get selectedModelRequests() { return selectedModelRequests; },
     get operations() { return operations; },
     get openedTabs() { return openedTabs; },
+    get selectedSession() { return selectedSession; },
+    get sessions() { return fixtureSessions.map((session) => structuredClone(session)); },
+    forkCommandStarted,
+    releaseForkCommand() { releaseForkCommand(); },
     modelRequestStarted,
     resolveModelResponse,
     selectModelRequestStarted,
@@ -312,6 +351,13 @@ function createHarness({
       const handler = getElement(id).listeners.get("click");
       assert.ok(handler, "expected a click handler for #" + id);
       await handler({ preventDefault() {} });
+    },
+    async clickSession(id) {
+      const button = getElement("sessions").children.find((child) => child.dataset.id === id);
+      assert.ok(button, "expected a session button for " + id);
+      const handler = button.listeners.get("click");
+      assert.ok(handler, "expected a session click handler for " + id);
+      await handler();
     },
     async changeModel(value) {
       const picker = getElement("model-picker");
@@ -532,4 +578,27 @@ test("a stale account refresh error does not hide a newer account model catalog"
   assert.ok(picker.children.some((option) => option.value === "model-b"));
   assert.equal(app.elements.get("auth-models-retry").hidden, true);
   assert.doesNotMatch(app.elements.get("auth-guidance").textContent, /loading|could not be loaded/i);
+});
+
+test("an explicit A to B to A selection wins over a delayed remote fork", async () => {
+  const app = createHarness({
+    initialSessions: [
+      { id: "session-a", title: "Session A", status: "completed", messages: [], events: [] },
+      { id: "session-b", title: "Session B", status: "completed", messages: [], events: [] },
+    ],
+    initialSelectedSession: "session-a",
+    deferForkCommand: true,
+  });
+  await app.start();
+
+  const fork = app.click("fork-session");
+  await app.forkCommandStarted;
+  await app.clickSession("session-b");
+  await app.clickSession("session-a");
+  app.releaseForkCommand();
+  await fork;
+
+  assert.equal(app.selectedSession, "session-a");
+  assert.ok(app.sessions.some((session) => session.id === "fork-child"));
+  assert.equal(app.elements.get("session-title").textContent, "Session A");
 });

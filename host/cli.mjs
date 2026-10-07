@@ -15,6 +15,7 @@ Usage:
   node host/cli.mjs run "prompt" [options]
   node host/cli.mjs import-session SESSION.v4.jsonl [options]
   node host/cli.mjs prune-session SESSION_ID [options]
+  node host/cli.mjs fork-session SESSION_ID [options]
   node host/cli.mjs mcp [options]
 
 Options:
@@ -74,11 +75,12 @@ export function parseCLI(argv, env = process.env) {
     else positionals.push(argument);
   }
   const command = positionals.shift() ?? 'web';
-  if (!['web', 'run', 'import-session', 'prune-session', 'mcp'].includes(command) && !options.help) throw new HostError(`Unknown command: ${command}`);
-  if (!['run', 'import-session', 'prune-session'].includes(command) && positionals.length) throw new HostError('Unexpected positional arguments');
+  if (!['web', 'run', 'import-session', 'prune-session', 'fork-session', 'mcp'].includes(command) && !options.help) throw new HostError(`Unknown command: ${command}`);
+  if (!['run', 'import-session', 'prune-session', 'fork-session'].includes(command) && positionals.length) throw new HostError('Unexpected positional arguments');
   if (command === 'run' && !positionals.length && !options.help) throw new HostError('run requires a prompt');
   if (command === 'import-session' && positionals.length !== 1 && !options.help) throw new HostError('import-session requires one Session v4 JSONL path');
   if (command === 'prune-session' && positionals.length !== 1 && !options.help) throw new HostError('prune-session requires one session ID');
+  if (command === 'fork-session' && positionals.length !== 1 && !options.help) throw new HostError('fork-session requires one session ID');
   if (options.mode === 'openai' && !options.demo && !options.model && !options.help) throw new HostError('OpenAI-compatible mode requires an explicit model: set --model NAME or DSH_MODEL');
   if (options.maxRetries !== undefined && (!Number.isSafeInteger(options.maxRetries) || options.maxRetries < 0 || options.maxRetries > 5)) {
     throw new HostError('--max-retries must be an integer between 0 and 5');
@@ -99,6 +101,7 @@ export function parseCLI(argv, env = process.env) {
     prompt: command === 'run' ? positionals.join(' ') : '',
     sessionPath: command === 'import-session' ? positionals[0] : undefined,
     pruneSessionID: command === 'prune-session' ? positionals[0] : undefined,
+    forkSessionID: command === 'fork-session' ? positionals[0] : undefined,
     options,
   };
 }
@@ -236,8 +239,16 @@ async function pruneSession(host, sessionID, options) {
   }
 }
 
+async function forkSession(host, sessionID, options) {
+  const response = await host.call('session_fork', { session_id: sessionID });
+  if (!response.ok) throw new HostError(response.error);
+  const child = response.result;
+  if (options.json) process.stdout.write(`${JSON.stringify(child)}\n`);
+  else process.stdout.write(`Forked ${sessionID} as ${child.id}: ${child.title}\n`);
+}
+
 export async function main(argv = process.argv.slice(2)) {
-  const { command, prompt, sessionPath, pruneSessionID, options } = parseCLI(argv);
+  const { command, prompt, sessionPath, pruneSessionID, forkSessionID, options } = parseCLI(argv);
   if (options.help) { process.stdout.write(HELP); return; }
   const controller = new AbortController();
   const interrupt = () => { process.exitCode = 130; controller.abort(new Error('Interrupted')); };
@@ -262,6 +273,7 @@ export async function main(argv = process.argv.slice(2)) {
       try { await serveMcp(host); } finally { controller.signal.removeEventListener('abort', abortInput); }
     } else if (command === 'import-session') await importSession(host, sessionPath, options, controller.signal);
     else if (command === 'prune-session') await pruneSession(host, pruneSessionID, options);
+    else if (command === 'fork-session') await forkSession(host, forkSessionID, options);
     else await runPrompt(host, prompt, options, controller.signal);
   } finally {
     try { await web?.close(); } finally {
