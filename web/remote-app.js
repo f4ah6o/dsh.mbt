@@ -8,6 +8,7 @@ import {
   prettyArguments,
   runError,
   displayMessages,
+  authModelRefreshKey,
 } from "./view-model.js";
 
 const $ = (id) => document.getElementById(id);
@@ -33,8 +34,13 @@ const state = {
   authPoll: null,
   receiptPoll: null,
   receiptPollRunning: false,
+  authModelsLoading: false,
+  authModelsError: false,
   installPrompt: null,
 };
+
+let authModelsAttemptedKey = null;
+let authModelsInFlight = null;
 
 function connectionError(error) {
   $("connection-error-text").textContent = error instanceof Error ? error.message : String(error);
@@ -188,6 +194,7 @@ function renderAccount() {
   const account = auth.account?.email || "";
   const connected = auth.state === "connected";
   const profiles = Boolean(auth.account?.profile_id);
+  const models = Array.isArray(auth.models) ? auth.models : [];
   const status = $("auth-status");
   status.dataset.state = auth.state || "signed_out";
   status.textContent = ({
@@ -205,20 +212,27 @@ function renderAccount() {
     ? ` · ${auth.scopes.join(", ")}`
     : "";
   $("auth-detail").textContent = `${usage}${scopes}`;
-  $("auth-guidance").textContent = connected
-    ? "Disconnect to sign out or switch accounts, then sign in with the other account."
-    : auth.state === "signing_in"
+  $("auth-guidance").textContent = !connected
+    ? auth.state === "signing_in"
       ? "Complete sign-in in the host computer’s browser. Remote/headless sign-in is not available yet."
-      : "Sign-in opens the host computer’s browser. Remote/headless sign-in is not available yet.";
+      : "Sign-in opens the host computer’s browser. Remote/headless sign-in is not available yet."
+    : models.length > 0
+      ? "Disconnect to sign out or switch accounts, then sign in with the other account."
+      : state.authModelsLoading
+        ? "Loading models for this ChatGPT account…"
+        : state.authModelsError
+          ? "Models could not be loaded. Select Refresh models to try again."
+          : "No models are currently listed for this account. Select Refresh models to check again.";
   $("usage-link").hidden = !connected || auth.plan_usage === "enabled";
   $("auth-sign-in").hidden = connected;
   $("auth-sign-in").textContent = auth.state === "reauth_required" ? "Sign in again" : "Sign in with ChatGPT";
   $("auth-sign-in").disabled = state.mutation || auth.state === "signing_in";
   $("auth-sign-out").hidden = !connected;
   $("auth-sign-out").disabled = state.mutation || !profiles;
+  $("auth-models-retry").hidden = !connected || models.length > 0;
+  $("auth-models-retry").disabled = state.mutation || state.authModelsLoading;
 
   const picker = $("model-picker");
-  const models = Array.isArray(auth.models) ? auth.models : [];
   picker.replaceChildren();
   if (!models.length) {
     const option = document.createElement("option");
@@ -308,7 +322,7 @@ function resizeComposer() {
   }
 }
 
-async function refreshSnapshot({ reconnect = true } = {}) {
+async function refreshSnapshot({ reconnect = true, refreshAuthModels = true } = {}) {
   client.beginConnect();
   syncFromClient();
   try {
@@ -335,12 +349,54 @@ async function refreshSnapshot({ reconnect = true } = {}) {
       state.actionMessage = "The signed-in account changed. Review the current session before continuing.";
       syncFromClient();
     }
+    if (refreshAuthModels) await refreshAuthCatalog();
     return result;
   } catch (error) {
     client.connectionFailed();
     syncFromClient();
     throw error;
   }
+}
+
+async function refreshAuthCatalog({ force = false } = {}) {
+  const auth = client.state().auth;
+  const key = authModelRefreshKey(auth);
+  if (!key) {
+    authModelsAttemptedKey = null;
+    return;
+  }
+  if (authModelsInFlight) {
+    if (authModelsInFlight.key === key) return authModelsInFlight.promise;
+    await authModelsInFlight.promise;
+    return refreshAuthCatalog({ force });
+  }
+  if (!force && authModelsAttemptedKey === key) return;
+
+  authModelsAttemptedKey = key;
+  state.authModelsLoading = true;
+  state.authModelsError = false;
+  renderAccount();
+
+  let promise;
+  promise = (async () => {
+    try {
+      await localOperation("auth_models");
+      await refreshSnapshot({ reconnect: false, refreshAuthModels: false });
+    } catch {
+      state.authModelsError = true;
+    } finally {
+      state.authModelsLoading = false;
+      if (authModelsInFlight?.promise === promise) authModelsInFlight = null;
+      const activeKey = authModelRefreshKey(client.state().auth);
+      if (activeKey !== key) {
+        authModelsAttemptedKey = null;
+        if (activeKey) void refreshAuthCatalog();
+      }
+      renderAccount();
+    }
+  })();
+  authModelsInFlight = { key, promise };
+  return promise;
 }
 
 let streamCleanup = null;
@@ -481,15 +537,6 @@ async function selectSession(id) {
 
 async function handleAuthRefresh() {
   await refreshSnapshot();
-  const auth = client.state().auth;
-  if (auth?.state === "connected") {
-    try {
-      await localOperation("auth_models");
-      await refreshSnapshot();
-    } catch {
-      // Snapshot remains the display source; model refresh can be retried later.
-    }
-  }
 }
 
 $("new-session").addEventListener("click", () => mutate(async () => {
@@ -552,6 +599,9 @@ for (const [button, approved] of [["approve", true], ["deny", false]]) {
 $("auth-sign-in").addEventListener("click", () => mutate(async () => {
   await localOperation("auth_sign_in", {});
   await handleAuthRefresh();
+}));
+$("auth-models-retry").addEventListener("click", () => mutate(async () => {
+  await refreshAuthCatalog({ force: true });
 }));
 $("auth-sign-out").addEventListener("click", () => mutate(async () => {
   const profileId = client.state().auth?.account?.profile_id;
