@@ -6,12 +6,15 @@
 /// Validated lifecycle events emitted by the incremental Responses decoder.
 /// Function argument deltas are informational; a tool is executable only
 /// after `finish` returns a completed engine result.
-pub enum ResponsesEvent {
+pub(all) enum ResponsesEvent {
   TextDelta(String)
   ReasoningDelta(String)
   FunctionCallStarted(String, String, String)
   FunctionCallArgumentsDelta(String, String)
   FunctionCallArgumentsDone(String, String, String)
+  CustomToolCallStarted(String, String, String)
+  CustomToolInputDelta(String, String)
+  CustomToolInputDone(String, String, String)
   Usage(Json)
   Completed
   Failed(String, String, String?)
@@ -23,6 +26,7 @@ priv struct ResponsesFunctionCall {
   item_id : String
   call_id : String
   name : String
+  is_custom : Bool
   arguments : StringBuilder
   mut arguments_units : Int
   mut settled : Bool
@@ -258,22 +262,30 @@ fn ResponsesStreamDecoder::consume_frame(
       self.record_reasoning_delta(raw)
     "response.function_call_arguments.delta" => self.record_function_delta(raw)
     "response.function_call_arguments.done" => self.record_function_done(raw)
+    "response.custom_tool_call_input.delta" =>
+      self.record_custom_input_delta(raw)
+    "response.custom_tool_call_input.done" => self.record_custom_input_done(raw)
     "response.output_item.done" => self.record_output_item_done(raw)
     "response.completed" => self.record_completed(raw)
     "response.failed" | "error" => self.record_failed(raw)
     "response.incomplete" => self.record_incomplete(raw)
+    // Background execution is outside this preview adapter. A queued response
+    // cannot be treated like an in-progress foreground stream.
+    "response.queued" =>
+      reject(
+        "UNSUPPORTED_CAPABILITY", "queued/background Responses are unsupported",
+      )
     "response.refusal.delta" =>
       reject(
         "REFUSAL",
         optional_text(raw, "delta").unwrap_or("Provider refused the request"),
       )
     // Lifecycle events with no engine-visible content are intentionally ignored.
-    "response.queued"
-    | "response.content_part.added"
+    "response.content_part.added"
     | "response.content_part.done"
     | "response.output_text.done"
     | "response.reasoning_summary_text.done"
     | "response.reasoning_text.done" => ()
-    _ => ()
+    other => reject("UNSUPPORTED_EVENT", "unsupported Responses event " + other)
   }
 }

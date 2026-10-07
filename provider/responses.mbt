@@ -32,7 +32,7 @@ fn prepare_responses_impl(
   }
   let system = optional_text(request, "system").unwrap_or("")
   let input : Array[Json] = []
-  let pending : Map[String, Bool] = Map([])
+  let pending : Map[String, String] = Map([])
   let seen_ids : Map[String, Bool] = Map([])
   for raw in history {
     let message = object(raw, "message")
@@ -49,15 +49,27 @@ fn prepare_responses_impl(
     }
     if role == "tool" {
       let id = identity(message, "tool_call_id")
-      if !pending.contains(id) {
-        reject("INVALID_REQUEST", "tool result has no matching pending call")
+      let kind = match pending.get(id) {
+        Some(kind) => kind
+        None =>
+          reject("INVALID_REQUEST", "tool result has no matching pending call")
       }
       pending.remove(id)
-      input.push({
-        "type": "function_call_output",
-        "call_id": id.to_json(),
-        "output": content.to_json(),
-      })
+      input.push(
+        if kind == "custom" {
+          {
+            "type": "custom_tool_call_output",
+            "call_id": id.to_json(),
+            "output": content.to_json(),
+          }
+        } else {
+          {
+            "type": "function_call_output",
+            "call_id": id.to_json(),
+            "output": content.to_json(),
+          }
+        },
+      )
       continue
     }
     if role != "user" && role != "assistant" {
@@ -71,20 +83,40 @@ fn prepare_responses_impl(
       let id = identity(call, "id")
       let name = identity(call, "name")
       let arguments = text_field(call, "arguments")
+      let kind = optional_text(call, "kind").unwrap_or("function")
       if seen_ids.contains(id) {
         reject("INVALID_REQUEST", "duplicate tool call id")
       }
-      // The engine validates live model arguments. Validate historical values
-      // here too so a restored transcript cannot send malformed tool JSON.
-      ignore(parse_object(arguments, "tool arguments"))
+      match kind {
+        "function" =>
+          // The engine validates live model arguments. Validate historical
+          // values here too so restore cannot send malformed function JSON.
+          ignore(parse_object(arguments, "tool arguments"))
+        "custom" =>
+          if arguments.length() > 65536 {
+            reject("STREAM_LIMIT", "custom tool input exceeds 65536 code units")
+          }
+        _ => reject("INVALID_REQUEST", "unsupported tool call kind " + kind)
+      }
       seen_ids[id] = true
-      pending[id] = true
-      input.push({
-        "type": "function_call",
-        "call_id": id.to_json(),
-        "name": name.to_json(),
-        "arguments": arguments.to_json(),
-      })
+      pending[id] = kind
+      input.push(
+        if kind == "custom" {
+          {
+            "type": "custom_tool_call",
+            "call_id": id.to_json(),
+            "name": name.to_json(),
+            "input": arguments.to_json(),
+          }
+        } else {
+          {
+            "type": "function_call",
+            "call_id": id.to_json(),
+            "name": name.to_json(),
+            "arguments": arguments.to_json(),
+          }
+        },
+      )
     }
   }
   if !pending.is_empty() {
@@ -237,6 +269,12 @@ fn decode_responses_impl(response : Json) -> Json raise ProviderError {
         ignore(parse_object(arguments, "function arguments"))
         calls.push(decoded_call(call_id, name, arguments, seen))
       }
+      "custom_tool_call" => {
+        let call_id = identity(item, "call_id")
+        let name = identity(item, "name")
+        let input = text_field(item, "input")
+        calls.push(decoded_custom_call(call_id, name, input, seen))
+      }
       kind =>
         reject(
           "UNSUPPORTED_CONTENT",
@@ -255,4 +293,26 @@ fn decode_responses_impl(response : Json) -> Json raise ProviderError {
     },
     usage,
   )
+}
+
+///|
+fn decoded_custom_call(
+  id : String,
+  name : String,
+  input : String,
+  seen : Map[String, Bool],
+) -> Json raise ProviderError {
+  if seen.contains(id) {
+    reject("MALFORMED_RESPONSE", "duplicate custom tool call id")
+  }
+  if input.length() > 65536 {
+    reject("STREAM_LIMIT", "custom tool input exceeds 65536 code units")
+  }
+  seen[id] = true
+  {
+    "id": id.to_json(),
+    "name": name.to_json(),
+    "kind": "custom".to_json(),
+    "arguments": input.to_json(),
+  }
 }

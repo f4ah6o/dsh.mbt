@@ -3,8 +3,11 @@ import { existsSync, readdirSync } from 'node:fs';
 import { join, relative, resolve, sep } from 'node:path';
 import { capture, projectRoot, run, verifyEnvironment } from './verify-env.mjs';
 
-const portablePackages = ['engine', 'provider', 'plugins', 'api', 'ui'];
-const ownPackages = [...portablePackages, 'app'];
+const portablePackages = [
+  'engine', 'provider', 'auth', 'protocol', 'client', 'plugins', 'api', 'ui',
+  'verification/retry_math',
+];
+const ownPackages = [...portablePackages, 'app', 'native'];
 
 function checkPackages(packages, target) {
   const result = capture('moon', ['check', ...packages, '--target', target, '--json']);
@@ -68,6 +71,7 @@ try {
   run('moon', ['fmt', '--check', ...ownPackages]);
   checkPackages(portablePackages, 'all');
   checkPackages(['app'], 'js');
+  checkPackages(['native'], 'native');
   const files = ['host', 'web', 'scripts', 'tests']
     .flatMap(directory => javascriptFiles(join(projectRoot, directory)));
   for (const file of files) run(process.execPath, ['--check', file]);

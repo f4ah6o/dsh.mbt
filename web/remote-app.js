@@ -1,3 +1,4 @@
+import * as bridge from "/moonbit/client.js";
 import { createRemoteClient } from "./remote-client.js";
 import { drawSceneSnapshot } from "./canvas-renderer.js";
 import {
@@ -10,7 +11,7 @@ import {
 } from "./view-model.js";
 
 const $ = (id) => document.getElementById(id);
-const client = createRemoteClient();
+const client = createRemoteClient({ bridge });
 const scroll = $("transcript-scroll");
 const canvas = $("transcript-canvas");
 const context = canvas.getContext("2d");
@@ -83,7 +84,17 @@ function syncFromClient({ restoreDraft = false } = {}) {
   renderControls();
   renderAccount();
   renderAccessibleTranscript();
+  syncTextView();
   schedulePaint();
+}
+
+function syncTextView() {
+  const textView = Boolean(state.client?.text_view);
+  $("text-view").setAttribute("aria-pressed", String(textView));
+  $("text-view").textContent = textView ? "Canvas view" : "Text view";
+  scroll.hidden = textView;
+  $("text-transcript").classList.toggle("sr-only", !textView);
+  $("jump-latest").hidden = true;
 }
 
 function renderSessions() {
@@ -555,12 +566,6 @@ $("text-view").addEventListener("click", () => {
   const next = !client.state().text_view;
   client.setTextView(next);
   syncFromClient();
-  $("text-view").setAttribute("aria-pressed", String(next));
-  $("text-view").textContent = next ? "Canvas view" : "Text view";
-  scroll.hidden = next;
-  $("text-transcript").classList.toggle("sr-only", !next);
-  $("jump-latest").hidden = true;
-  if (!next) schedulePaint();
 });
 scroll.addEventListener("scroll", () => {
   const follow = scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 48;

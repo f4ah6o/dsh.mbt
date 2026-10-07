@@ -177,6 +177,7 @@ test "Responses completion normalizes text tools and usage" {
     @provider.decode_responses({
       "id": "resp_1",
       "status": "completed",
+      "error": Json::null(),
       "output": [
         {
           "type": "message",
@@ -218,6 +219,110 @@ test "Responses completion normalizes text tools and usage" {
   assert_true(
     @provider.decode_responses({ "status": "incomplete", "output": [] })
     is Err(_),
+  )
+}
+
+///|
+test "Responses completed and non-streaming payloads accept a null error only" {
+  let decoded = @provider.decode_responses({
+    "id": "resp_null_error",
+    "status": "completed",
+    "error": Json::null(),
+    "output": [
+      {
+        "type": "message",
+        "role": "assistant",
+        "content": [{ "type": "output_text", "text": "Hello" }],
+      },
+    ],
+  })
+  assert_true(decoded is Ok(_))
+  let rejected = @provider.decode_responses({
+    "id": "resp_real_error",
+    "status": "completed",
+    "error": { "type": "invalid_request", "message": "rejected" },
+    "output": [],
+  })
+  assert_true(rejected is Err(_))
+}
+
+///|
+test "Responses preserves custom text tool calls across decode and request history" {
+  let custom = @provider.decode_responses({
+    "id": "resp_custom",
+    "status": "completed",
+    "output": [
+      {
+        "type": "custom_tool_call",
+        "call_id": "custom_1",
+        "name": "run_text",
+        "input": "echo keep this as text",
+      },
+    ],
+  })
+  let completion = responses_value(custom)
+  let calls = match responses_field(completion, "tool_calls") {
+    Array(values) => values
+    _ => fail("custom completion should contain tool calls")
+  }
+  assert_true(
+    calls[0] ==
+    {
+      "id": "custom_1",
+      "name": "run_text",
+      "kind": "custom",
+      "arguments": "echo keep this as text",
+    },
+  )
+
+  let prepared = responses_value(
+    @provider.prepare_responses("gpt-test", {
+      "system": "",
+      "messages": [
+        { "role": "user", "content": "Run this" },
+        {
+          "role": "assistant",
+          "content": "",
+          "tool_calls": [
+            {
+              "id": "custom_1",
+              "name": "run_text",
+              "kind": "custom",
+              "arguments": "echo keep this as text",
+            },
+          ],
+        },
+        {
+          "role": "tool",
+          "tool_call_id": "custom_1",
+          "content": "Unsupported custom tool input",
+          "is_error": true,
+        },
+      ],
+    }),
+  )
+  let input = match
+    responses_field(responses_field(prepared, "body"), "input") {
+    Array(values) => values
+    _ => fail("input should be an array")
+  }
+  assert_true(input.length() == 3)
+  assert_true(
+    input[1] ==
+    {
+      "type": "custom_tool_call",
+      "call_id": "custom_1",
+      "name": "run_text",
+      "input": "echo keep this as text",
+    },
+  )
+  assert_true(
+    input[2] ==
+    {
+      "type": "custom_tool_call_output",
+      "call_id": "custom_1",
+      "output": "Unsupported custom tool input",
+    },
   )
 }
 
@@ -288,6 +393,7 @@ fn responses_stream_fixture() -> String {
     "response": {
       "id": "resp_1",
       "status": "completed",
+      "error": Json::null(),
       "output": [
         {
           "type": "message",
@@ -302,6 +408,46 @@ fn responses_stream_fixture() -> String {
         },
       ],
       "usage": { "input_tokens": 5, "output_tokens": 2, "total_tokens": 7 },
+    },
+  })
+}
+
+///|
+fn responses_text_stream_fixture(text : String) -> String {
+  responses_frame("response.created", {
+    "type": "response.created",
+    "response": { "id": "resp_qc", "status": "in_progress" },
+  }) +
+  responses_frame("response.output_item.added", {
+    "type": "response.output_item.added",
+    "output_index": 0,
+    "item": {
+      "id": "msg_qc",
+      "type": "message",
+      "role": "assistant",
+      "content": [],
+    },
+  }) +
+  responses_frame("response.output_text.delta", {
+    "type": "response.output_text.delta",
+    "item_id": "msg_qc",
+    "output_index": 0,
+    "content_index": 0,
+    "delta": text,
+  }) +
+  responses_frame("response.completed", {
+    "type": "response.completed",
+    "response": {
+      "id": "resp_qc",
+      "status": "completed",
+      "output": [
+        {
+          "type": "message",
+          "role": "assistant",
+          "content": [{ "type": "output_text", "text": text }],
+        },
+      ],
+      "usage": { "input_tokens": 1, "output_tokens": 1, "total_tokens": 2 },
     },
   })
 }
@@ -341,6 +487,40 @@ test "Responses SSE is invariant to every two-chunk split including UTF-8 charac
     assert_true(responses_field(result, "content") == "Hello 🌙")
     assert_true(responses_field(result, "finish_reason") == "tool_calls")
   }
+}
+
+///|
+test "QuickCheck verifies arbitrary Unicode text over every decoded-string SSE split" {
+  @quickcheck.check(
+    (sample : String) => {
+      // Keep a nonempty answer while exercising generated Unicode, escaping,
+      // and embedded line breaks from the pinned official QuickCheck generator.
+      let text = "🌙" + sample + "✓"
+      let wire = responses_text_stream_fixture(text)
+      let mut character_count = 0
+      for _ in wire {
+        character_count += 1
+      }
+      let mut valid = true
+      for split = 0; split <= character_count && valid; split = split + 1 {
+        let (first, second) = split_at_character(wire, split)
+        let decoder = @provider.ResponsesStreamDecoder::new()
+        if decoder.feed(first) is Err(_) || decoder.feed(second) is Err(_) {
+          valid = false
+        } else {
+          match decoder.finish() {
+            Ok(Object(fields)) =>
+              valid = fields.get("content") == Some(text.to_json())
+            _ => valid = false
+          }
+        }
+      }
+      valid
+    },
+    count=40U,
+    max_size=64U,
+    seed=20261007,
+  )
 }
 
 ///|
@@ -386,4 +566,183 @@ test "Responses SSE does not treat EOF or incomplete as success and reports term
     is Ok(_),
   )
   assert_true(failed.finish() is Err(_))
+}
+
+///|
+test "Responses reports typed terminal events and rejects unknown capabilities" {
+  let completed = @provider.ResponsesStreamDecoder::new()
+  assert_true(completed.feed(responses_stream_fixture()) is Ok(_))
+  let completed_events = completed.take_events()
+  let mut saw_completed = false
+  for event in completed_events {
+    match event {
+      @provider.ResponsesEvent::Completed => saw_completed = true
+      _ => ()
+    }
+  }
+  assert_true(saw_completed)
+
+  let failed = @provider.ResponsesStreamDecoder::new()
+  assert_true(
+    failed.feed(
+      responses_frame("response.failed", {
+        "type": "response.failed",
+        "response": {
+          "id": "resp_failed",
+          "error": { "code": "rate_limit_exceeded", "message": "try later" },
+        },
+      }),
+    )
+    is Ok(_),
+  )
+  let failed_events = failed.take_events()
+  let mut saw_failed = false
+  for event in failed_events {
+    match event {
+      @provider.ResponsesEvent::Failed(
+        "rate_limit_exceeded",
+        "try later",
+        Some("resp_failed")
+      ) => saw_failed = true
+      _ => ()
+    }
+  }
+  assert_true(saw_failed)
+
+  let unknown = @provider.ResponsesStreamDecoder::new()
+  match
+    unknown.feed(
+      responses_frame("response.vendor_extension", {
+        "type": "response.vendor_extension",
+      }),
+    ) {
+    Err(error) => assert_true(error.has_prefix("UNSUPPORTED_EVENT:"))
+    Ok(_) => fail("unknown Responses event was ignored")
+  }
+
+  let custom = @provider.ResponsesStreamDecoder::new()
+  assert_true(
+    custom.feed(
+      responses_frame("response.created", {
+        "type": "response.created",
+        "response": { "id": "resp_custom", "status": "in_progress" },
+      }),
+    )
+    is Ok(_),
+  )
+  match
+    custom.feed(
+      responses_frame("response.output_item.added", {
+        "type": "response.output_item.added",
+        "output_index": 0,
+        "item": { "id": "custom_1", "type": "custom_unknown_tool_call" },
+      }),
+    ) {
+    Err(error) => assert_true(error.has_prefix("UNSUPPORTED_CONTENT:"))
+    Ok(_) => fail("unsupported custom tool item was ignored")
+  }
+
+  let queued = @provider.ResponsesStreamDecoder::new()
+  match
+    queued.feed(
+      responses_frame("response.queued", { "type": "response.queued" }),
+    ) {
+    Err(error) => assert_true(error.has_prefix("UNSUPPORTED_CAPABILITY:"))
+    Ok(_) => fail("queued/background response was accepted")
+  }
+}
+
+///|
+test "Responses validates custom tool input delta and terminal lifecycle" {
+  let decoder = @provider.ResponsesStreamDecoder::new()
+  let wire = responses_frame("response.created", {
+      "type": "response.created",
+      "response": { "id": "resp_custom_stream", "status": "in_progress" },
+    }) +
+    responses_frame("response.output_item.added", {
+      "type": "response.output_item.added",
+      "output_index": 0,
+      "item": {
+        "id": "custom_item",
+        "type": "custom_tool_call",
+        "call_id": "custom_1",
+        "name": "run_text",
+        "input": "",
+      },
+    }) +
+    responses_frame("response.custom_tool_call_input.delta", {
+      "type": "response.custom_tool_call_input.delta",
+      "item_id": "custom_item",
+      "output_index": 0,
+      "sequence_number": 2,
+      "delta": "echo ",
+    }) +
+    responses_frame("response.custom_tool_call_input.delta", {
+      "type": "response.custom_tool_call_input.delta",
+      "item_id": "custom_item",
+      "output_index": 0,
+      "sequence_number": 3,
+      "delta": "hello",
+    }) +
+    responses_frame("response.custom_tool_call_input.done", {
+      "type": "response.custom_tool_call_input.done",
+      "item_id": "custom_item",
+      "output_index": 0,
+      "sequence_number": 4,
+      "input": "echo hello",
+    }) +
+    responses_frame("response.output_item.done", {
+      "type": "response.output_item.done",
+      "output_index": 0,
+      "item": {
+        "id": "custom_item",
+        "type": "custom_tool_call",
+        "call_id": "custom_1",
+        "name": "run_text",
+        "input": "echo hello",
+      },
+    }) +
+    responses_frame("response.completed", {
+      "type": "response.completed",
+      "response": {
+        "id": "resp_custom_stream",
+        "status": "completed",
+        "output": [
+          {
+            "type": "custom_tool_call",
+            "call_id": "custom_1",
+            "name": "run_text",
+            "input": "echo hello",
+          },
+        ],
+      },
+    })
+  assert_true(decoder.feed(wire) is Ok(_))
+  let events = decoder.take_events()
+  let mut saw_started = false
+  let mut saw_done = false
+  for event in events {
+    match event {
+      @provider.ResponsesEvent::CustomToolCallStarted(
+        "custom_item",
+        "custom_1",
+        "run_text"
+      ) => saw_started = true
+      @provider.ResponsesEvent::CustomToolInputDone(
+        "custom_1",
+        "run_text",
+        "echo hello"
+      ) => saw_done = true
+      _ => ()
+    }
+  }
+  assert_true(saw_started && saw_done)
+  let completion = responses_value(decoder.finish())
+  assert_true(responses_field(completion, "finish_reason") == "tool_calls")
+  let calls = match responses_field(completion, "tool_calls") {
+    Array(values) => values
+    _ => fail("custom stream should contain a tool call")
+  }
+  assert_true(responses_field(calls[0], "kind") == "custom")
+  assert_true(responses_field(calls[0], "arguments") == "echo hello")
 }

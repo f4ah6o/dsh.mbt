@@ -1,5 +1,3 @@
-import * as bridge from "/moonbit/client.js";
-
 const PREFERENCE_PREFIX = "dsh.client.preferences.v1:";
 
 function decode(value) {
@@ -11,14 +9,16 @@ function randomEntropyHex() {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function createRemoteClient({ fetchImpl = fetch, EventSourceImpl = EventSource } = {}) {
+export function createRemoteClient({ bridge: bridgeImpl, fetchImpl = fetch, EventSourceImpl = EventSource } = {}) {
+  if (!bridgeImpl) throw new Error("The shared client bridge is required.");
+  const bridge = bridgeImpl;
   const handle = bridge.client_init();
   let restoredScope = "";
   let stream = null;
   let persistTimer = null;
 
   function state() {
-    return decode(bridge.client_state(handle)).state;
+    return decode(bridge.client_state(handle));
   }
 
   function beginConnect() {

@@ -132,6 +132,7 @@ fn reject_provider_error(
   fields : Map[String, Json],
 ) -> Unit raise ProviderError {
   match fields.get("error") {
+    None | Some(Null) => ()
     Some(error) => {
       let error = object(error, "provider error")
       let kind = optional_text(error, "type").unwrap_or("provider_error")
@@ -140,7 +141,6 @@ fn reject_provider_error(
       )
       reject("PROVIDER_ERROR", kind + ": " + detail)
     }
-    None => ()
   }
 }
 

@@ -70,6 +70,17 @@ truncated generation cannot execute actions. Usage preserves the provider's
 cumulative counters; OpenAI prompt/completion counters become input/output
 counters, and cached prompt tokens are reported separately.
 
+Responses function calls use the engine's schema-validated JSON path. Custom
+tool calls retain their bounded raw text input and a `kind: "custom"` tag through
+stream validation, engine history, and request replay; they are never coerced
+into a JSON object. The current local tool registry has no custom-input adapter,
+so the engine settles these calls with a visible unsupported-tool result before
+any host tool dispatch, even when the custom call name matches a configured
+function tool. Custom output items and their delta/done lifecycle are recognized;
+unknown event/item types fail explicitly. Background `response.queued` and
+unknown custom execution capabilities are rejected rather than treated as
+successful output.
+
 ## Streaming and limits
 
 The parser accepts CR, LF, CRLF, initial BOMs, comments, and multiline `data`

@@ -7,15 +7,22 @@ import { HostError, messageOf } from './errors.mjs';
 import { defaultModulePath } from './runtime.mjs';
 
 const BODY_LIMIT = 1024 * 1024;
+const defaultClientModulePath = fileURLToPath(new URL('../_build/js/release/build/f4ah6o/dsh/client/client.js', import.meta.url));
 const ASSETS = new Map([
   ['index.html', 'text/html; charset=utf-8'],
   ['app.js', 'text/javascript; charset=utf-8'],
   ['app.mjs', 'text/javascript; charset=utf-8'],
+  ['legacy-app.js', 'text/javascript; charset=utf-8'],
+  ['remote-app.js', 'text/javascript; charset=utf-8'],
+  ['remote-client.js', 'text/javascript; charset=utf-8'],
   ['canvas-renderer.js', 'text/javascript; charset=utf-8'],
   ['view-model.js', 'text/javascript; charset=utf-8'],
   ['style.css', 'text/css; charset=utf-8'],
   ['styles.css', 'text/css; charset=utf-8'],
   ['favicon.svg', 'image/svg+xml'],
+  ['icon.svg', 'image/svg+xml'],
+  ['manifest.webmanifest', 'application/manifest+json; charset=utf-8'],
+  ['sw.js', 'text/javascript; charset=utf-8'],
 ]);
 
 function secureHeaders(response) {
@@ -83,7 +90,7 @@ function errorStatus(response) {
   return 400;
 }
 
-export async function startWebServer({ host, port = 3080, bind = '127.0.0.1', webRoot = fileURLToPath(new URL('../web/', import.meta.url)), modulePath = defaultModulePath, bodyLimit = BODY_LIMIT } = {}) {
+export async function startWebServer({ host, port = 3080, bind = '127.0.0.1', webRoot = fileURLToPath(new URL('../web/', import.meta.url)), modulePath = defaultModulePath, clientModulePath = defaultClientModulePath, bodyLimit = BODY_LIMIT } = {}) {
   if (!host) throw new HostError('A host runtime is required');
   if (!['127.0.0.1', '::1', 'localhost'].includes(bind)) throw new HostError('The web host only binds to loopback addresses');
   if (!Number.isSafeInteger(port) || port < 0 || port > 65535) throw new HostError('port must be between 0 and 65535');
@@ -132,6 +139,9 @@ export async function startWebServer({ host, port = 3080, bind = '127.0.0.1', we
       let contentType;
       if (pathname === '/moonbit/app.js') {
         target = modulePath;
+        contentType = 'text/javascript; charset=utf-8';
+      } else if (pathname === '/moonbit/client.js') {
+        target = clientModulePath;
         contentType = 'text/javascript; charset=utf-8';
       } else {
         const name = pathname === '/' ? 'index.html' : pathname.startsWith('/web/') ? pathname.slice(5) : pathname.slice(1);

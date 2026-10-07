@@ -32,11 +32,14 @@ fn ResponsesStreamDecoder::record_completed(
       )
     }
     let final_call = object(result_calls[index], "normalized function call")
+    let final_kind = optional_text(final_call, "kind").unwrap_or("function")
+    let expected_kind = if call.is_custom { "custom" } else { "function" }
     if text_field(final_call, "id") != call.call_id ||
       text_field(final_call, "name") != call.name ||
+      final_kind != expected_kind ||
       text_field(final_call, "arguments") != call.arguments.to_string() {
       reject(
-        "MALFORMED_RESPONSE", "completed function call differs from streamed lifecycle",
+        "MALFORMED_RESPONSE", "completed tool call differs from streamed lifecycle",
       )
     }
   }
@@ -150,14 +153,15 @@ fn ResponsesStreamDecoder::input_call(
   raw : Map[String, Json],
 ) -> ResponsesFunctionCall raise ProviderError {
   let item_id = identity(raw, "item_id")
-  if self.output_items.get(item_id) != Some("function_call") {
+  if self.output_items.get(item_id) != Some("function_call") &&
+    self.output_items.get(item_id) != Some("custom_tool_call") {
     reject(
-      "MALFORMED_RESPONSE", "function event does not match an open function item",
+      "MALFORMED_RESPONSE", "tool input event does not match an open tool item",
     )
   }
   match self.calls.get(item_id) {
     Some(call) => call
-    None => reject("MALFORMED_RESPONSE", "function event has no matching call")
+    None => reject("MALFORMED_RESPONSE", "tool event has no matching call")
   }
 }
 
