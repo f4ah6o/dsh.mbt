@@ -1,0 +1,131 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "f4ah6o/dsh/engine"
+
+// Values
+
+// Errors
+
+// Types and methods
+pub struct EffectId {
+  // private fields
+} derive(Eq)
+pub fn EffectId::as_string(Self) -> String
+pub fn EffectId::equal(Self, Self) -> Bool
+pub fn EffectId::new(String) -> Result[Self, String]
+pub fn EffectId::not_equal(Self, Self) -> Bool
+
+pub(all) enum EffectType {
+  Provider
+  Tool
+} derive(Eq)
+pub fn EffectType::equal(Self, Self) -> Bool
+pub fn EffectType::not_equal(Self, Self) -> Bool
+
+pub struct Engine {
+  // private fields
+}
+pub fn Engine::apply(Self, EngineCommand) -> Result[Json, String]
+pub fn Engine::complete(Self, String, Json) -> Result[Json, String]
+pub fn Engine::complete_effect(Self, EffectId, Json) -> Result[Json, String]
+pub fn Engine::event_log(Self, SessionId) -> Result[Array[EngineEvent], String]
+pub fn Engine::invoke(Self, String, Json) -> Result[Json, String]
+pub fn Engine::new(Array[Json]) -> Self
+pub fn Engine::project_effect_stream(Self, EffectId, String, String) -> Result[Json, String]
+pub fn Engine::project_stream(Self, String, String, String) -> Result[Json, String]
+pub fn Engine::restore(Self, Json) -> Result[Unit, String]
+pub fn Engine::schedule_effect_retry(Self, EffectId, Json) -> Result[Json, String]
+pub fn Engine::schedule_retry(Self, String, Json) -> Result[Json, String]
+pub fn Engine::snapshot(Self) -> Json
+pub fn Engine::start_effect_retry(Self, EffectId, String) -> Result[Json, String]
+pub fn Engine::start_retry(Self, String, String) -> Result[Json, String]
+pub fn Engine::take_effects(Self) -> Array[Json]
+pub fn Engine::take_typed_effects(Self) -> Array[EngineEffect]
+
+pub(all) enum EngineCommand {
+  CreateSession(String?, String, String, Int?)
+  ListSessions
+  ImportSession(String)
+  GetSession(SessionId)
+  SendPrompt(SessionId, String)
+  CancelSession(SessionId)
+  PruneToolResults(SessionId, ToolResultPruneConfig)
+  ApproveTool(SessionId, ToolCallId, Bool)
+}
+pub fn EngineCommand::from_json(String, Json) -> Result[Self, String]
+
+pub struct EngineEffect {
+  // private fields
+}
+pub fn EngineEffect::id(Self) -> EffectId
+pub fn EngineEffect::json(Self) -> Json
+pub fn EngineEffect::kind(Self) -> EffectType
+pub fn EngineEffect::request(Self) -> Json
+pub fn EngineEffect::session_id(Self) -> SessionId
+
+pub struct EngineEvent {
+  // private fields
+}
+pub fn EngineEvent::data(Self) -> Json
+pub fn EngineEvent::json(Self) -> Json
+pub fn EngineEvent::kind(Self) -> EngineEventKind
+pub fn EngineEvent::sequence(Self) -> Int
+pub fn EngineEvent::step(Self) -> Int
+pub fn EngineEvent::turn(Self) -> Int
+
+pub(all) enum EngineEventKind {
+  SessionCreated
+  SessionCancelled
+  SessionInterrupted
+  TurnStarted
+  TurnEnded
+  UserMessage
+  AssistantMessage
+  AssistantAttempt
+  AssistantStreamDelta
+  StepStarted
+  StepEnded
+  LlmRequest
+  LlmRetry
+  LlmRetryStarted
+  ToolApprovalRequested
+  ToolApprovalResolved
+  ToolCall
+  ToolRequest
+  ToolCompleted
+  ToolResult
+  ToolResultPruned
+  UpstreamHeader
+  UpstreamEvent
+  Other(String)
+} derive(Eq)
+pub fn EngineEventKind::equal(Self, Self) -> Bool
+pub fn EngineEventKind::from_wire(String) -> Self
+pub fn EngineEventKind::not_equal(Self, Self) -> Bool
+pub fn EngineEventKind::wire(Self) -> String
+
+pub struct SessionId {
+  // private fields
+} derive(Eq)
+pub fn SessionId::as_string(Self) -> String
+pub fn SessionId::equal(Self, Self) -> Bool
+pub fn SessionId::new(String) -> Result[Self, String]
+pub fn SessionId::not_equal(Self, Self) -> Bool
+
+pub struct ToolCallId {
+  // private fields
+} derive(Eq)
+pub fn ToolCallId::as_string(Self) -> String
+pub fn ToolCallId::equal(Self, Self) -> Bool
+pub fn ToolCallId::new(String) -> Result[Self, String]
+pub fn ToolCallId::not_equal(Self, Self) -> Bool
+
+pub struct ToolResultPruneConfig {
+  threshold_chars : Int
+  head_chars : Int
+  tail_chars : Int
+}
+pub fn ToolResultPruneConfig::new(Int, Int, Int) -> Result[Self, String]
+
+// Type aliases
+
+// Traits

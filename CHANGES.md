@@ -4,6 +4,9 @@
 
 ### Added
 
+- OpenAI Responses API に API key / ChatGPT SIWC の native provider 経路を追加した。SIWC は OAuth・PKCE・OIDC 検証、保護された credential store、model discovery、refresh rotation を使う。実アカウント smoke は未実行。
+- Node を実行依存としない MoonBit native CLI / loopback service、永続 command receipt、snapshot / SSE 同期、最大 4 件の Read pool、session 単位 cancel、共有 client と SwiftUI + MoonC iOS embedding spike を追加した。gpui iOS host は未実装。
+- typed command / event / effect API、再試行上限の小さな moon prove 対象、native verification の .mbtx entry point を追加した。
 - 完了済み / idle の native session 向けに、元の tool output を保持しながら将来の provider context を縮める手動 pruning を API、CLI、browser UI に追加した。canonical session の保存上限は引き続き適用する。([残りの移植作業](issues/open/0001-upstream-parity.md))
 
 ### Changed
@@ -16,4 +19,8 @@
 
 ### Security
 
+- SIWC credential は native host の owner-only store に保管する。ChatGPT plan request は Platform API key 課金へ自動 fallback しない。
+
 ### Migration
+
+- Native v1 は versioned data envelope と command receipt を保存する。対応する legacy snapshot / Session v4 input は native envelope に一方向更新する。Node host は native envelope を拒否するため、初回 native 起動前に backup し、両 host で同じ data directory を交互利用しない。

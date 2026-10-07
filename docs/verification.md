@@ -314,3 +314,24 @@ restore は成功し、effect の再発行は 0 でした。
 - **対象外:** gpui の全 OS backend / example の検証。portable package の native PASS を native UI の実機 PASS として扱いません。
 
 全機能の対応表は [移植状況](port-status.md)、後続の受入条件は [残りの移植作業](../issues/open/0001-upstream-parity.md) にあります。
+
+## 2026-10-07 issue #9 / #11 implementation candidate
+
+Local checks ran on the macOS arm64 development host with MoonBit compiler/core 0.10.14+7d59c7ec9; Ubuntu CI results are listed separately below. Unless stated otherwise, checks use synthetic identities, local servers, and keyless fixtures.
+
+| Check | Result |
+| --- | --- |
+| Ubuntu 24.04 native-without-node CI | PASS on commit `8dc1ea7744ae7902938afe4b3071fabff0340b51` ([Actions run](https://github.com/f4ah6o/dsh.mbt/actions/runs/37589966829)). The container confirmed Node/npm were absent; native check had zero own warnings, 159 / 159 tests passed, and native/app/client builds, CLI help, and the offline checkpoint/approval/tool/context/reload demo passed. The Linux process fixtures exercised the hard worker resource boundary. |
+| Ubuntu 24.04 portable-and-host CI | PASS on the same commit and Actions run: 128 / 128 MoonBit tests on Wasm, Wasm GC, JS, and native; 31 additional native suite cases; host 42 / 42; web 17 / 17; integration 44 / 44; own warnings 0 and JavaScript syntax 34 files. |
+| Final `npm test` | PASS / exit 0 at source candidate `10d8a6c94eb2d95f2086166e430e63275d82e0bd`: 128 / 128 MoonBit tests on each of Wasm, Wasm GC, JS, and native; 31 additional native suite cases; host 42 / 42; web 17 / 17; integration 44 / 44; own warnings 0; JavaScript syntax 34 files. Log: `/private/tmp/dsh-final-npm-r5-20261007-01a11483.log`. |
+| MoonBit-only native verifier entry point | PASS / exit 0. Format and native package check passed with zero project warnings and three pinned hotpath warnings; native test matrix 159 / 159; native release build and CLI help passed; app and client JS release builds passed; offline native checkpoint/approval/tool/context/reload demo passed. |
+| Native verifier with Node/npm removed from PATH | PASS / exit 0. `/bin/sh` asserted that neither Node nor npm was available with PATH limited to Moon and OS tools. The local verifier passed format/check, 159 / 159 native tests, native/app/client builds, CLI help, and checkpoint/approval/tool/context/reload demo using its warm Moon cache. Cold CI runs only the standalone `.mbtx` wrapper non-frozen to resolve its separate imports; internal repository checks/builds remain `--frozen`. Log: `/private/tmp/dsh-final-no-node-r5-20261007-01a11483.log`. |
+| Native shutdown and uncertain receipt recovery | PASS. SIGINT/SIGTERM fixture exited 0, terminated its TERM-ignoring child, and reopened an uncertain receipt without replaying effects. Included in the 159 native verifier tests. |
+| OAuth/JWKS and credential rotation fixtures | 10 / 10 PASS, including valid and rejected synthetic RS256 claims, callback binding, JWKS rotation, bounded HTTP body/timeouts, and rotated-refresh rollback after sign-in checkpoint failure. Local HTTP fixture execution used elevated loopback access; no OpenAI live credentials were read. |
+| PWA service worker and browser view-model tests | 17 / 17 PASS after the bounded whole-asset refresh fix. Tests cover same-URL update, offline generation fallback, partial refresh rollback, in-flight worker install, stalled body, and API/SSE/command/credential cache exclusions. |
+| Retry bound proof | PASS, 1 package / 1 goal proved with Z3 4.12.6. This proves only the implementation-connected bounded retry helper and its stated assumptions. |
+| Production plugin mutation gate | PASS: 35 mutants, 27 killed, 8 unviable, zero survivors, zero timeouts. Scope is production plugins only, not the typed engine, provider, OAuth, or native runtime. |
+| Engine native benchmark | Typed trace 86.06 ± 1.66 µs; compatibility JSON trace 86.41 ± 1.61 µs; ten samples. The intervals overlap; no speedup is claimed. Whole command max RSS was 286,081,024 bytes, including Moon build/tooling; per-operation allocation was not measured. |
+| Swift / iOS embedding checks | Parent reported the macOS generated-C harness passed three URLProtocol cases plus UTF-8/NUL and stale-handle ABI checks. Xcode Simulator build/install/launch also passed for the current SwiftUI + MoonC embedding spike. These are not physical-iPhone acceptance; the formal gpui iOS host, IME, accessibility, device memory, and lifecycle gates remain unimplemented or unrun. |
+
+The local regression runs and both Ubuntu Actions jobs pass; the Ubuntu results tested commit `8dc1ea7744ae7902938afe4b3071fabff0340b51` ([run](https://github.com/f4ah6o/dsh.mbt/actions/runs/37589966829)). Live SIWC, actual Tailscale Serve, formal gpui iOS host, and physical iPhone gates remain unrun or unimplemented.

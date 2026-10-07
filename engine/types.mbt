@@ -48,6 +48,14 @@ priv enum CallStage {
 } derive(Eq)
 
 ///|
+/// Custom text input remains tagged through engine history. The host executes
+/// only function-shaped calls whose arguments pass the configured schema.
+priv enum ToolCallKind {
+  FunctionCall
+  CustomCall
+} derive(Eq)
+
+///|
 priv struct Tool {
   name : String
   description : String
@@ -60,6 +68,7 @@ priv struct ToolCall {
   id : String
   name : String
   arguments : String
+  kind : ToolCallKind
   mut stage : CallStage
   mut effect_id : String?
   mut completed_content : String?
@@ -76,7 +85,7 @@ priv struct Approval {
 ///|
 priv struct Event {
   seq : Int
-  kind : String
+  kind : EngineEventKind
   turn_id : Int
   step : Int
   data : Json

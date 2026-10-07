@@ -4,6 +4,7 @@ import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import http from 'node:http';
+import { fileURLToPath } from 'node:url';
 import { startWebServer } from '../../host/server.mjs';
 
 async function setup(t, options = {}) {
@@ -54,6 +55,48 @@ test('loopback HTTP serves only fixed UI assets and delegates semantic API reque
   assert.equal(result.status, 200);
   assert.deepEqual(calls, [{ operation: 'session_create', input: { title: 'test' } }]);
   assert.equal(result.headers['access-control-allow-origin'], undefined);
+});
+
+test('Node host legacy API fallback and shared browser bridge assets are served', async (t) => {
+  const host = {
+    backend: { mode: 'test', model: 'fixture' },
+    state: async () => ({ sessions: [] }),
+    call: async () => ({ ok: true }),
+    mcp: async () => '',
+  };
+  const web = await startWebServer({
+    host,
+    port: 0,
+    webRoot: fileURLToPath(new URL('../../web/', import.meta.url)),
+  });
+  t.after(() => web.close());
+
+  const page = await request(web.url);
+  assert.equal(page.status, 200);
+  assert.match(page.text, /src="\/app\.js"/);
+  // The legacy Node host has no versioned snapshot endpoint, so app.js selects
+  // legacy-app.js. Verify the real static carrier serves that entrypoint and
+  // every module it imports, alongside the generated MoonBit client bridge.
+  assert.equal((await request(web.url, { pathname: '/api/v1/snapshot' })).status, 404);
+  for (const pathname of [
+    '/app.js',
+    '/legacy-app.js',
+    '/remote-app.js',
+    '/remote-client.js',
+    '/canvas-renderer.js',
+    '/view-model.js',
+    '/style.css',
+    '/icon.svg',
+    '/manifest.webmanifest',
+    '/sw.js',
+    '/moonbit/client.js',
+  ]) {
+    const asset = await request(web.url, { pathname });
+    assert.equal(asset.status, 200, pathname);
+    assert.ok(asset.text.length > 0, pathname);
+  }
+  const bridge = await request(web.url, { pathname: '/moonbit/client.js' });
+  assert.match(bridge.text, /client_init/);
 });
 
 test('host, origin and fetch-site checks block cross-site side effects', async (t) => {

@@ -59,10 +59,14 @@ test("accessible transcript includes reasoning and tool arguments without system
   const messages = displayMessages({ messages: [
     { role: "system", content: "hidden" },
     { role: "user", content: "hello" },
-    { role: "assistant", content: "answer", reasoning: "reason", tool_calls: [{ name: "read_file", arguments: '{"path":"README.md"}' }] },
+    { role: "assistant", content: "answer", reasoning: "reason", tool_calls: [
+      { name: "read_file", arguments: '{"path":"README.md"}' },
+      { kind: "custom", name: "terminal", arguments: '{"command":"<script>literal</script>"}' },
+    ] },
     { role: "tool", content: "result" },
   ] });
-  assert.deepEqual(messages.map((item) => item.label), ["You", "Reasoning", "Assistant", "Tool request · read_file", "Tool result"]);
+  assert.deepEqual(messages.map((item) => item.label), ["You", "Reasoning", "Assistant", "Tool request · read_file", "Custom call · terminal", "Tool result"]);
+  assert.equal(messages[4].text, '{"command":"<script>literal</script>"}');
   assert.equal(messages.some((item) => item.text === "hidden"), false);
 });
 

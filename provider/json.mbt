@@ -132,6 +132,7 @@ fn reject_provider_error(
   fields : Map[String, Json],
 ) -> Unit raise ProviderError {
   match fields.get("error") {
+    None | Some(Null) => ()
     Some(error) => {
       let error = object(error, "provider error")
       let kind = optional_text(error, "type").unwrap_or("provider_error")
@@ -140,7 +141,6 @@ fn reject_provider_error(
       )
       reject("PROVIDER_ERROR", kind + ": " + detail)
     }
-    None => ()
   }
 }
 
@@ -170,6 +170,12 @@ fn update_usage(
       ("cache_read_input_tokens", "cache_read_input_tokens"),
       ("cache_creation_input_tokens", "cache_creation_input_tokens"),
     ]
+  } else if mode == "responses" {
+    [
+      ("input_tokens", "input_tokens"),
+      ("output_tokens", "output_tokens"),
+      ("total_tokens", "total_tokens"),
+    ]
   } else {
     [
       ("prompt_tokens", "input_tokens"),
@@ -189,6 +195,18 @@ fn update_usage(
       Some(Null) | None => ()
       Some(value) => {
         let details = object(value, "prompt_tokens_details")
+        match details.get("cached_tokens") {
+          None => ()
+          Some(value) =>
+            usage["cache_read_input_tokens"] = integer(value, "cached_tokens").to_json()
+        }
+      }
+    }
+  } else if mode == "responses" {
+    match fields.get("input_tokens_details") {
+      Some(Null) | None => ()
+      Some(value) => {
+        let details = object(value, "input_tokens_details")
         match details.get("cached_tokens") {
           None => ()
           Some(value) =>

@@ -4,7 +4,11 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <meta name="color-scheme" content="light">
+    <meta name="theme-color" content="#f7f8fa">
     <title>dsh.mbt — Agent workspace</title>
+    <link rel="manifest" href="/manifest.webmanifest">
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+    <link rel="apple-touch-icon" href="/icon.svg">
     <link rel="stylesheet" href="/style.css">
     <script type="module" src="/app.js"></script>
   </head>
@@ -22,6 +26,10 @@
           <div class="session-heading"><h1 id="session-title">Agent workspace</h1><div class="status-row"><span id="status" class="status-pill" data-state="idle">Ready</span><span id="progress" class="progress"></span></div></div>
           <div class="header-actions"><button id="text-view" class="quiet-button" type="button" aria-pressed="false">Text view</button><button id="prune-results" class="quiet-button" type="button" hidden>Trim outputs</button><button id="cancel" class="quiet-button" type="button" disabled>Stop</button></div>
         </header>
+        <section class="account-bar" aria-label="ChatGPT account">
+          <div class="account-summary"><span id="auth-status" class="account-status" data-state="signed_out">ChatGPT not connected</span><span id="auth-detail" class="account-detail"></span><span id="auth-guidance" class="account-detail"></span><a id="usage-link" class="account-link" href="https://chatgpt.com" target="_blank" rel="noopener noreferrer" hidden>Open ChatGPT · Settings → Usage</a></div>
+          <div class="account-actions"><label class="model-control" for="model-picker"><span>Model</span><select id="model-picker" disabled><option>Connect ChatGPT to discover models</option></select></label><button id="auth-sign-in" class="quiet-button" type="button">Sign in with ChatGPT</button><button id="auth-sign-out" class="quiet-button" type="button" hidden>Disconnect</button><button id="install-app" class="quiet-button" type="button" hidden>Install</button></div>
+        </section>
         <div id="connection-error" class="notice error-notice" role="alert" hidden><span id="connection-error-text"></span><button id="reconnect" type="button">Reconnect</button></div>
         <div id="run-error" class="notice error-notice" role="alert" hidden></div>
         <div id="action-message" class="notice success-notice" role="status" aria-live="polite" hidden></div>

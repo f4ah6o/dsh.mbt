@@ -1,0 +1,200 @@
+///|
+import {
+  "moonbitlang/async@0.22.4",
+  "moonbitlang/async@0.22.4/io",
+  "moonbitlang/async@0.22.4/process",
+  "moonbitlang/async@0.22.4/stdio",
+  "moonbitlang/async@0.22.4/fs",
+  "moonbitlang/core/json",
+}
+
+///|
+async fn run_moon(
+  args : Array[String],
+  extra_env? : Map[String, String] = Map([]),
+) -> Unit {
+  let command = args.join(" ")
+  println("[native verify] moon " + command)
+  let status = @process.run(
+    "moon",
+    args,
+    extra_env~,
+    stdout=@stdio.stdout,
+    stderr=@stdio.stderr,
+  )
+  if status != 0 {
+    fail("moon " + command + " exited with status " + status.to_string())
+  }
+}
+
+///|
+fn json_field(value : Json, key : String) -> Json? {
+  match value {
+    Object(fields) => fields.get(key)
+    _ => None
+  }
+}
+
+///|
+fn json_text(value : Json?) -> String {
+  match value {
+    Some(String(text)) => text
+    _ => ""
+  }
+}
+
+///|
+fn json_int(value : Json?) -> Int {
+  match value {
+    Some(Number(number, ..)) => number.to_int()
+    _ => 0
+  }
+}
+
+///|
+fn normalize_diagnostic_path(path : String) -> String {
+  let builder = StringBuilder()
+  for character in path {
+    builder.write_char(if character == '\\' { '/' } else { character })
+  }
+  let mut normalized = builder.to_string()
+  while normalized.has_prefix("./") {
+    normalized = normalized[2:].to_owned()
+  }
+  normalized
+}
+
+///|
+async fn check_native_packages() -> Unit {
+  let packages = [
+    "engine", "provider", "auth", "protocol", "client", "plugins", "api", "ui", "native",
+    "verification/retry_math",
+  ]
+  let args = ["check"] + packages + ["--target", "native", "--json", "--frozen"]
+  println("[native verify] moon " + args.join(" "))
+  let (status, stdout, stderr) = @process.collect_output("moon", args)
+  let stdout_data : &@io.Data = stdout
+  let stderr_data : &@io.Data = stderr
+  let stderr_text = stderr_data.text()
+  if !stderr_text.is_empty() {
+    println(stderr_text)
+  }
+  let report = @json.parse(stdout_data.text()) catch {
+    _ => fail("moon check did not return a complete JSON report")
+  }
+  if json_int(json_field(report, "version")) != 1 {
+    fail("moon check report has an unsupported or missing version")
+  }
+  let report_status = json_text(json_field(report, "status"))
+  if report_status != "success" {
+    fail("moon check report status was " + report_status)
+  }
+  let summary = match json_field(report, "summary") {
+    Some(value) => value
+    None => fail("moon check report is missing its summary")
+  }
+  let mut errors = json_int(json_field(summary, "moon_errors"))
+  let mut own_warnings = json_int(json_field(summary, "moon_warnings"))
+  let mut pinned_warnings = 0
+  let diagnostics = match json_field(report, "diagnostics") {
+    Some(Array(values)) => values
+    _ => fail("moon check report is missing diagnostics")
+  }
+  for diagnostic in diagnostics {
+    let level = json_text(json_field(diagnostic, "level"))
+    let path = normalize_diagnostic_path(json_text(json_field(diagnostic, "path")))
+    let message = json_text(json_field(diagnostic, "message"))
+    if level == "error" {
+      errors += 1
+      println("[error] " + path + " " + message)
+    } else if level == "warning" {
+      if path.has_prefix("vendor/hotpath/") ||
+        path.contains("/vendor/hotpath/") {
+        pinned_warnings += 1
+      } else {
+        own_warnings += 1
+        println("[warning] " + path + " " + message)
+      }
+    }
+  }
+  if status != 0 || errors != 0 || own_warnings != 0 {
+    fail(
+      "native MoonBit check failed: " +
+      errors.to_string() +
+      " errors, " +
+      own_warnings.to_string() +
+      " warnings outside pinned hotpath",
+    )
+  }
+  println(
+    "Native MoonBit check passed; own warnings 0, pinned hotpath warnings " +
+    pinned_warnings.to_string() +
+    ".",
+  )
+}
+
+///|
+async fn run_native_demo() -> Unit {
+  let root = @fs.tmpdir(prefix="dsh-native-verify")
+  let data_dir = root + "/data"
+  let workspace = root + "/workspace"
+  try @fs.mkdir(data_dir, permission=0o700) catch {
+    _ => fail("cannot create native demo data directory")
+  }
+  try @fs.mkdir(workspace, permission=0o700) catch {
+    _ => fail("cannot create native demo workspace")
+  }
+  let args = [
+    "run", "native", "--target", "native", "--release", "--frozen", "--",
+    "--demo", "--data-dir", data_dir, "--workspace", workspace,
+  ]
+  println("[native verify] moon " + args.join(" "))
+  let (status, stdout, stderr) = @process.collect_output("moon", args)
+  let stdout_data : &@io.Data = stdout
+  let stderr_data : &@io.Data = stderr
+  let output = stdout_data.text() + stderr_data.text()
+  if status != 0 || !output.contains("native runtime demo passed") {
+    println(output)
+    fail("native checkpoint, tool approval, and persisted reload demo failed")
+  }
+  println("Native runtime checkpoint, approval, tool, context, and reload demo passed.")
+}
+
+///|
+async fn main {
+  run_moon([
+    "fmt", "--check", "engine", "provider", "auth", "protocol", "client", "plugins",
+    "api", "ui", "native", "verification/retry_math",
+  ])
+  check_native_packages()
+  let worker_root = @fs.tmpdir(prefix="dsh-native-worker-build")
+  let worker_target_dir = worker_root + "/target"
+  run_moon([
+    "build", "native", "--target", "native", "--release", "--frozen",
+    "--target-dir", worker_target_dir,
+  ])
+  let worker_binary = worker_target_dir +
+    "/native/release/build/f4ah6o/dsh/native/native.exe"
+  if !@fs.exists(worker_binary) {
+    fail("native worker executable was not produced at its expected build path")
+  }
+  run_moon([
+    "test", "engine", "provider", "auth", "protocol", "client", "plugins", "api",
+    "ui", "native", "verification/retry_math", "--target", "native", "--frozen",
+    "--target-dir", worker_root + "/test",
+  ], extra_env={ "DSH_NATIVE_WORKER_BIN": worker_binary })
+  run_moon([
+    "run", "native", "--target", "native", "--release", "--frozen", "--", "--help",
+  ])
+  run_moon(["build", "app", "--target", "js", "--release", "--frozen"])
+  run_moon(["build", "client", "--target", "js", "--release", "--frozen"])
+  for path in [
+    "_build/js/release/build/f4ah6o/dsh/app/app.js",
+    "_build/js/release/build/f4ah6o/dsh/client/client.js",
+  ] {
+    if !@fs.exists(path) {
+      fail("no-Node web asset build did not produce " + path)
+    }
+  }
+  run_native_demo()
+}

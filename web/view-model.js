@@ -74,7 +74,13 @@ export function displayMessages(session) {
       text: String(message.content),
     });
     for (const call of message.tool_calls || []) {
-      rows.push({ label: `Tool request · ${String(call.name || "")}`, text: prettyArguments(call.arguments) });
+      if (call.kind === "custom") {
+        // Custom call arguments are provider-defined text, not JSON input.
+        // The renderer assigns this string with textContent, so markup stays inert.
+        rows.push({ label: `Custom call · ${String(call.name || "")}`, text: String(call.arguments ?? "") });
+      } else {
+        rows.push({ label: `Tool request · ${String(call.name || "")}`, text: prettyArguments(call.arguments) });
+      }
     }
   }
   if (session?._ui_live_text) rows.push({ label: "Assistant · writing", text: session._ui_live_text });

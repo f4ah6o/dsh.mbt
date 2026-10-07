@@ -5,36 +5,37 @@
 MoonBit で agent の基本実行経路を動かす最初の移植です。
 
 **実装済み**はこの表に記載した範囲を動作させるコードとテストがあることを示します。
-同じ行に対応する upstream package の全機能互換を意味しません。
+同じ行に対応する upstream package の全機能互換を意味しません。今回の native / SIWC increment の受入表は[実装状況](implementation-status.md)を参照してください。
 
 | upstream の領域 | 移植先 | 状態と差分 |
 | --- | --- | --- |
 | `core/session`, `core/agent-loop`, `core/tools` | `engine/` | 基本 turn / step、event log、messages、follow-up、cancel、late result 拒否、LLM text/reasoning の bounded live projection と Read の bounded parallel tool を実装済み。連続 Read call を最大 4 件で rolling 実行し、Write / Shell / unknown / schema-invalid call は barrier。結果と model context は call 順を維持する。upstream の default pool size 10、動的 policy、その他の agent-loop 機能は未実装。inbox の動的編集、fork の作成も未実装。 |
 | `interaction/user-approval` | `engine/`, `api/`, `web/`, `host/cli.mjs` | read / write / shell 分類、呼出しごとの Allow / Deny、明示的 startup 自動承認を実装済み。upstream permission preset / account authorization の互換は未実装。 |
-| `llm/llm-deepseek` | `provider/`, `host/provider.mjs` | Messages / Chat Completions の text、reasoning、function tool、usage、JSON / incremental SSE と host 経由の live text projection を実装済み。画像、Files API、model discovery、thinking signature の durable replay は未実装。 |
+| `llm/llm-deepseek` / Responses | `provider/`, `host/provider.mjs`, `native/provider_http.mbt` | DeepSeek Messages、OpenAI Chat Completions / Responses の text・reasoning・function/custom call lifecycle・usage・SSE を実装済み。Responses API-key と SIWC は native host で利用でき、SIWC は account-visible model discovery と protected refresh lifecycle を使う。実アカウント smoke は未実行。画像、Files API、thinking signature の durable replay は未実装。 |
 | `llm/llm-retry`、`llm/retry-policy` | `engine/retry.mbt`, `host/runtime.mjs`, `host/provider.mjs`, `engine/session_v4_retry.mbt` | MoonBit event log に schedule / start を保存する、最大 5 回の bounded retry を実装済み。既定 backoff は 500 ms から 10 秒までの deterministic exponential（jitter なし）。許可する一時 failure は空応答、429、408/504、5xx、識別済み transport error。positive `Retry-After` は上限以内で採用し、上限超過なら retry しません。accepted stream delta 後、auth / その他の 4xx / malformed response は再試行しません。read-only Session v4 importer は `llm/retry` / `llm/retry-started` の schema と相関を検証して raw event として保持します。upstream `always` runtime mode、policy keying、jitter は未実装で、import した retry は再生しません。 |
-| `session/session-persistence*`, `session/session-projection` | `engine/`, `host/persistence.mjs` | 検証付き復元、atomic snapshot、interruption の終了、no replay を実装済み。保存形式は独自 `dsh.mbt-session-v1`。明示的な read-only v4 JSONL importer は下記の範囲で対応。v0–v3 migration、自動 v4 restore、v4 writer は未実装。 |
-| `fs/tool-fs*`, `fs/tool-str-replace-editor` | `plugins/`, `host/tools.mjs` | read / write / edit / glob / grep を実装済み。workspace 制限、symlink 拒否、bounded regex / output。SSH filesystem、filesystem observation は未実装。 |
-| `shell`, `subprocess` | `host/tools.mjs` | opt-in bash、timeout / cancel、出力上限を実装済み。persistent shell、terminal、PowerShell、OS sandbox は未実装。 |
-| `client/ui-*`, `client/web` | `ui/`, `web/` | gpui scene による transcript、streaming 中の writing / partial 表示、承認、会話一覧、再接続、scroll、Text view、mobile を実装済み。upstream の全設定画面 / sidebar / attachment preview は未実装。 |
-| `api`, `sdk/protocol`, `typert` | `api/`, `app/`, `host/server.mjs` | gpui typed capability / GUI binding / MCP で置換。upstream API / SDK wire compatibility は提供しない。 |
+| `session/session-persistence*`, `session/session-projection` | `engine/`, `host/persistence.mjs`, `native/store.mbt` | Node snapshot の検証付き復元と atomic writer、native versioned envelope / command receipt、interruption の終了、no replay を実装。Native v1 は対応する legacy snapshot / Session v4 input を初回 open 時に一方向更新し、Node reader は native envelope を拒否する。明示的な read-only v4 JSONL import projection は下記の範囲で対応。v0–v3 migration と v4 writer は未実装。 |
+| `fs/tool-fs*`, `fs/tool-str-replace-editor` | `plugins/`, `host/tools.mjs`, `native/tools.mbt` | read / write / edit / glob / grep を実装済み。workspace 制限、symlink 拒否、bounded output。Native glob は documented subset。macOS では hard worker memory limit がないため regex grep を明示的に disabled とする。SSH filesystem、filesystem observation は未実装。 |
+| `shell`, `subprocess` | `host/tools.mjs`, `native/tools.mbt` | opt-in bash、timeout / cancel、出力上限を実装済み。Native worker は dedicated process session を使い、OS memory limit は platform 差がある。persistent shell、terminal、PowerShell、OS sandbox は未実装。 |
+| `client/ui-*`, `client/web` | `client/`, `protocol/`, `presentation/`, `ui/`, `web/`, iOS bridge | 共有 protocol / presentation / client と DOM / iOS adapter、account selector、session receipt lifecycle、PWA shell refresh を実装。gpui scene は transcript、streaming、承認、会話一覧、再接続、scroll、Text view、mobile を提供する。実機 IME / VoiceOver と全 upstream 設定 / sidebar / attachment preview は未実装。 |
+| `native runtime / platform boundary` | `native/`, `.mbtx`, `.github/workflows/ci.yml` | Node 不要の native CLI / loopback service、provider/auth、workspace tool、durable checkpoint、session task pool / cancel と native verification を実装。Ubuntu 24.04 の Node-absent / portable CI は PASS ([Actions run](https://github.com/f4ah6o/dsh.mbt/actions/runs/37589966829)、tested commit `8dc1ea7744ae7902938afe4b3071fabff0340b51`)。 |
+| `api`, `sdk/protocol`, `typert` | `api/`, `app/`, `protocol/`, `host/server.mjs`, `native/` | typed application boundary、remote protocol、native loopback HTTP / SSE carrier と durable receipts を実装。upstream API / SDK wire compatibility は提供しない。実 Tailscale Serve acceptance は未実行。 |
 | `boot/plugin-manager`, `extensions/cordis-*` | `plugins/` | MoonBit startup descriptor の依存・重複・tool 所有権を実装済み。npm / Cordis ABI、runtime code loading、HMR は未実装。 |
 | `session/session-telemetry*`, inspector | `api/` + hotpath | API 呼出し時間の集計を実装済み。OpenTelemetry、CPU / allocation sampling は未実装。 |
 | `test-support/session-snapshot`, `test-support/llm-replay` | `tests/fixtures/`, `tests/integration/` | upstream tool-call-turn fixture の provenance を保持し、実 tool と完了応答を再現。固定 upstream Session v4 catalog の unmodified 25 snapshot は import / reopen、transcript、tool correlation を integration test で確認。別置きの derived retry fixtures は upstream retry bytes と source hashes を専用 `provenance.json` に記録し、25 件の不変 catalog には含めない。 |
 | `compaction`, `spill`, `attachment`, `context` | `engine/` と read-only v4 projection | Native v1 runtime に explicit な tool-result pruning subset を実装済み。完了後に手動で起動し、将来の provider context だけを head / marker / tail に縮約します。original result と raw transcript は保存します。v4 importer は compaction summary/checkpoint と upstream tool-result pruning の一部を表示用に投影します。自動 / token-aware live compaction、summary、spill、attachment binary / preview は未実装。 |
 | `subagent`, `goal`, `plan`, `workflow`, `jobs`, `schedule`, `todo` | `engine/` の read-only v4 projection | 限定的な subagent catalog / foreground workflow lifecycle metadata の相関のみ対応。子 agent、workflow、job の実行や再開は未実装。その他の機能も未実装。 |
 | 外部 MCP client / ACP / hooks / LSP / skill loader | — | 未実装。gpui MCP server の公開とは別機能。 |
-| browser / computer use、SSH、account login、web search、office preview | — | 未実装。 |
+| browser / computer use、SSH、ChatGPT web search、office preview | — | 未実装。Native local SIWC OAuth は実装済みだが、実アカウント smoke は未実行。 |
 
 ## 意図的な初期版の選択
 
-- JavaScript output を Node host と browser の双方で使う。portable package の native テストは native GUI の完成を意味しない。
+- JavaScript output を互換 Node host と browser の双方で使う。native CLI / service は MoonBit native target で動き、portable package の native テストだけでは native GUI の完成を意味しない。
 - 依存を upstream Git revision に固定し、互換性が確認できていない latest へ自動更新しない。
 - SSE は MoonBit で逐次解析し、text / reasoning を host が bounded event batch として永続化して session / browser / scene に投影する。live compaction と spill は後続作業とする。
 - retry は同じ active provider effect に限定し、retry schedule と start の checkpoint が成功してから待機・次の request を始める。restore は未完了の retry を interruption として閉じ、再送しない。利用可能な request を使うため retry ごとに provider 側で再課金される場合がある。
 - tool-result pruning は手動操作のみ。upstream の defaults は threshold 8,192 Unicode code points、head 4,096、tail 1,024。pruned event を append するので元 output を保持したまま provider context を縮める一方、canonical storage limit の解消にはならない。
 - 1 session 262,144 serialized UTF-16 units、最大 32 sessions。stream projection と pruning event もこの上限内で、容量超過は candidate 更新を拒否して既存状態を保つ。長い会話向け自動 live compaction / token meter / summary / spill は未実装。
-- browser host は loopback 専用。認証付き remote service や deployment platform はこの版に含めない。
+- Node host は loopback 専用。native service も loopback に bind し、利用者が Tailscale Serve と owner allowlist を設定した場合だけその proxy header を信頼する。実 Tailnet / public hosting はこの実装検証の範囲外。
 
 ## Session v4 の read-only import 範囲
 

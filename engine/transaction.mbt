@@ -35,6 +35,7 @@ fn Session::copy_state(self : Session) -> Session {
       id: call.id,
       name: call.name,
       arguments: call.arguments,
+      kind: call.kind,
       stage: call.stage,
       effect_id: call.effect_id,
       completed_content: call.completed_content,
@@ -132,7 +133,7 @@ fn Engine::within_capacity(self : Engine) -> Bool {
   }
   let closed = starting.copy_state()
   for _, session in closed.sessions {
-    if session.is_busy() {
+    if session.status == Running {
       session.append(
         "session/interrupted",
         object([
@@ -166,19 +167,38 @@ pub fn Engine::invoke(
   operation : String,
   input : Json,
 ) -> Result[Json, String] {
-  if operation == "session_get" || operation == "session_list" {
-    return self.invoke_impl(operation, input)
-  }
-  let candidate = self.copy_state()
-  match candidate.invoke_impl(operation, input) {
+  match EngineCommand::from_json(operation, input) {
     Err(error) => Err(error)
-    Ok(result) => {
-      if !candidate.within_capacity() {
-        return Err(CAPACITY_ERROR)
+    Ok(command) => self.apply(command)
+  }
+}
+
+///|
+/// Apply one validated typed command atomically. String operation names and
+/// JSON inputs enter through invoke at the compatibility boundary only.
+pub fn Engine::apply(
+  self : Engine,
+  command : EngineCommand,
+) -> Result[Json, String] {
+  match command.validate() {
+    Err(error) => Err(error)
+    Ok(_) =>
+      match command {
+        ListSessions | GetSession(_) => self.apply_command_impl(command)
+        _ => {
+          let candidate = self.copy_state()
+          match candidate.apply_command_impl(command) {
+            Err(error) => Err(error)
+            Ok(result) => {
+              if !candidate.within_capacity() {
+                return Err(CAPACITY_ERROR)
+              }
+              self.adopt(candidate)
+              Ok(result)
+            }
+          }
+        }
       }
-      self.adopt(candidate)
-      Ok(result)
-    }
   }
 }
 
@@ -209,6 +229,16 @@ pub fn Engine::complete(
 }
 
 ///|
+/// Typed counterpart for native runtimes that already hold an effect value.
+pub fn Engine::complete_effect(
+  self : Engine,
+  effect_id : EffectId,
+  result : Json,
+) -> Result[Json, String] {
+  self.complete(effect_id.as_string(), result)
+}
+
+///|
 /// Record a bounded provider retry before the host waits. The engine owns the
 /// retry budget and only accepts transient, unprojected failures.
 pub fn Engine::schedule_retry(
@@ -229,6 +259,15 @@ pub fn Engine::schedule_retry(
         Ok(object([("scheduled", boolean(false))]))
       }
   }
+}
+
+///|
+pub fn Engine::schedule_effect_retry(
+  self : Engine,
+  effect_id : EffectId,
+  policy : Json,
+) -> Result[Json, String] {
+  self.schedule_retry(effect_id.as_string(), policy)
 }
 
 ///|
@@ -258,6 +297,15 @@ pub fn Engine::start_retry(
         Ok(result)
       }
   }
+}
+
+///|
+pub fn Engine::start_effect_retry(
+  self : Engine,
+  effect_id : EffectId,
+  retry_id : String,
+) -> Result[Json, String] {
+  self.start_retry(effect_id.as_string(), retry_id)
 }
 
 ///|

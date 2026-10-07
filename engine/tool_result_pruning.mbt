@@ -16,10 +16,21 @@ const DEFAULT_PRUNE_HEAD : Int = 4096
 const DEFAULT_PRUNE_TAIL : Int = 1024
 
 ///|
-priv struct ToolResultPruneConfig {
+pub struct ToolResultPruneConfig {
   threshold_chars : Int
   head_chars : Int
   tail_chars : Int
+}
+
+///|
+pub fn ToolResultPruneConfig::new(
+  threshold_chars : Int,
+  head_chars : Int,
+  tail_chars : Int,
+) -> Result[ToolResultPruneConfig, String] {
+  Ok(checked_prune_config(threshold_chars, head_chars, tail_chars)) catch {
+    Invalid(message) => Err(message)
+  }
 }
 
 ///|
@@ -144,7 +155,7 @@ fn Session::tool_result_pruning_state(
   let content_by_result : Map[Int, String] = Map([])
   let latest_seq_by_result : Map[Int, Int] = Map([])
   for event in self.events {
-    if event.kind == "tool/result" {
+    if event.kind == EngineEventKind::ToolResult {
       match event.data {
         Json::Object(data) =>
           match data.get("content") {
@@ -155,7 +166,7 @@ fn Session::tool_result_pruning_state(
         _ => ()
       }
       latest_seq_by_result[event.seq] = event.seq
-    } else if event.kind == "tool/result/pruned" {
+    } else if event.kind == EngineEventKind::ToolResultPruned {
       match event.data {
         Json::Object(data) =>
           match (data.get("result_seq"), data.get("content")) {
@@ -204,7 +215,9 @@ fn Session::prune_tool_results(
   let (content_by_result, latest_seq_by_result) = self.tool_result_pruning_state()
   let replacements : Array[Json] = []
   let mut chars_removed = 0
-  let candidates = self.events.filter(event => event.kind == "tool/result")
+  let candidates = self.events.filter(event => {
+    event.kind == EngineEventKind::ToolResult
+  })
   for event in candidates {
     let original = match content_by_result.get(event.seq) {
       Some(content) => content
@@ -265,9 +278,10 @@ fn Session::prune_tool_results(
 ///|
 fn Engine::prune_session_tool_results(
   self : Engine,
-  input : Json,
+  id : SessionId,
+  config : ToolResultPruneConfig,
 ) -> Json raise EngineError {
-  let session = self.input_session(input)
+  let session = self.lookup(id.as_string())
   if session.imported {
     raise Invalid(
       "Imported Session v4 histories are read-only and cannot be pruned",
@@ -282,7 +296,7 @@ fn Engine::prune_session_tool_results(
       "Tool results can only be pruned on an idle or completed session",
     )
   }
-  session.prune_tool_results(prune_config_from_input(input))
+  session.prune_tool_results(config)
 }
 
 ///|
@@ -316,7 +330,7 @@ fn Session::validate_tool_result_prune(
     raise Invalid("Tool result pruning requires a completed closed turn")
   }
   let original = self.events[result_seq]
-  if original.kind != "tool/result" || source_seq < result_seq {
+  if original.kind != EngineEventKind::ToolResult || source_seq < result_seq {
     raise Invalid("Tool result pruning does not cite an original result")
   }
   let call_id = required_string(data, "call_id", max=128)
@@ -328,8 +342,11 @@ fn Session::validate_tool_result_prune(
     raise Invalid("Tool result pruning source is stale or unrelated")
   }
   let source = self.events[source_seq]
-  if (source_seq == result_seq && source.kind != "tool/result") ||
-    (source_seq != result_seq && source.kind != "tool/result/pruned") {
+  if (source_seq == result_seq && source.kind != EngineEventKind::ToolResult) ||
+    (
+      source_seq != result_seq &&
+      source.kind != EngineEventKind::ToolResultPruned
+    ) {
     raise Invalid("Tool result pruning source has the wrong event type")
   }
   let current = match content_by_result.get(result_seq) {

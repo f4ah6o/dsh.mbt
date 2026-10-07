@@ -1,0 +1,57 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "f4ah6o/dsh/client"
+
+// Values
+pub fn client_accept_event(Int, String, String) -> String
+
+pub fn client_accept_session(Int, String) -> String
+
+pub fn client_accept_snapshot(Int, String) -> String
+
+pub fn client_apply_receipt(Int, String) -> String
+
+pub fn client_begin_connect(Int) -> String
+
+pub fn client_connection_failed(Int) -> String
+
+pub fn client_connection_restored(Int) -> String
+
+pub fn client_dispose(Int) -> Bool
+
+pub fn client_init() -> Int
+
+pub fn client_mark_command_sent(Int, String) -> String
+
+pub fn client_mark_command_uncertain(Int, String) -> String
+
+pub fn client_mark_receipt_missing(Int, String) -> String
+
+pub fn client_new_command_id(String, String) -> String
+
+pub fn client_pending_ids(Int) -> String
+
+pub fn client_persisted_state(Int) -> String
+
+pub fn client_queue_command(Int, String, String, String, String, Int) -> String
+
+pub fn client_restore_preferences(Int, String) -> String
+
+pub fn client_set_draft(Int, String) -> String
+
+pub fn client_set_follow_latest(Int, String) -> String
+
+pub fn client_set_scroll_anchor(Int, String) -> String
+
+pub fn client_set_selection(Int, String) -> String
+
+pub fn client_set_text_view(Int, String) -> String
+
+pub fn client_state(Int) -> String
+
+// Errors
+
+// Types and methods
+
+// Type aliases
+
+// Traits

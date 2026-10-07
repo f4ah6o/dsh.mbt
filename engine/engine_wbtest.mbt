@@ -774,6 +774,41 @@ test "restoring an outstanding tool closes interrupted history without replaying
 }
 
 ///|
+test "restoring a quiescent approval preserves it for later approval" {
+  let engine = engine_waiting_on_exclusive_call(
+    "write", "{\"file_path\":\"resumable.txt\",\"content\":\"kept\"}",
+  )
+  let waiting = get_session(engine)
+  assert_eq(get_status(waiting), "awaiting_approval")
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  let resumed = get_session(restored)
+  assert_eq(get_status(resumed), "awaiting_approval")
+  assert_eq(
+    required_field(resumed, "pending_approval"),
+    required_field(waiting, "pending_approval"),
+  )
+  assert_eq(restored.take_effects().length(), 0)
+  let events = array_value(required_field(resumed, "events"), "events", 100)
+  assert_true(
+    !events.any(event => required_string(event, "type") == "session/interrupted"),
+  )
+  ignore(
+    success(
+      restored.invoke(
+        "tool_approve",
+        fixture(
+          "{\"session_id\":\"test\",\"call_id\":\"barrier\",\"approved\":true}",
+        ),
+      ),
+    ),
+  )
+  let approved = restored.take_effects()
+  assert_eq(approved.length(), 1)
+  assert_eq(call_id_of(approved[0]), "barrier")
+}
+
+///|
 test "canceling parallel reads retains staged success and survives repeated restore" {
   let (engine, llm) = started_engine()
   let calls = []
@@ -1509,6 +1544,30 @@ test "restore refuses to detach active work and invalid configuration fails clos
 }
 
 ///|
+test "public typed commands validate direct values before changing state" {
+  let engine = Engine::new(test_tools())
+  let before = engine.snapshot()
+  assert_true(
+    engine.apply(CreateSession(Some("../bad"), "", "", Some(0))) is Err(_),
+  )
+  assert_eq(engine.snapshot(), before)
+  assert_true(
+    engine.apply(SendPrompt(SessionId::new("valid-id").unwrap(), "")) is Err(_),
+  )
+  assert_eq(engine.snapshot(), before)
+  assert_true(engine.apply(ImportSession("x".repeat(262145))) is Err(_))
+  assert_eq(engine.snapshot(), before)
+
+  ignore(
+    engine.apply(CreateSession(Some("direct-id"), "", "", Some(1))).unwrap(),
+  )
+  let saved = engine.snapshot()
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(saved), Ok(()))
+  assert_eq(restored.snapshot(), engine.snapshot())
+}
+
+///|
 test "JSON depth and nonfinite numbers are rejected at the pure boundary" {
   let engine = Engine::new([])
   let cycle : Array[Json] = []
@@ -1634,7 +1693,7 @@ test "oversized model tool batch never publishes a candidate side effect" {
 }
 
 ///|
-test "tool batch reserves room for every interrupted result before approval" {
+test "large tool batch approval survives restore without interruption expansion" {
   let (engine, llm) = started_engine()
   let arguments = object([
     ("file_path", Json::string("a.txt")),
@@ -1644,14 +1703,14 @@ test "tool batch reserves room for every interrupted result before approval" {
   for index = 0; index < 16; index = index + 1 {
     calls.push(("write-\{index}", "write", arguments))
   }
-  // The assistant call list and one pending approval fit individually; closing
-  // all sixteen unfinished calls would overflow the canonical session budget.
+  // This quiescent batch needs no synthetic interrupted results on restore.
   let state = success(engine.complete(id_of(llm), calls_response(calls)))
-  assert_eq(get_status(state), "failed")
-  assert_true(fields(state).get("pending_approval") is None)
+  assert_eq(get_status(state), "awaiting_approval")
+  assert_true(fields(state).get("pending_approval") is Some(_))
   assert_eq(engine.take_effects().length(), 0)
   let restored = Engine::new(test_tools())
   assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_status(get_session(restored)), "awaiting_approval")
   assert_true(get_session(restored).stringify().length() <= 262144)
 }
 

@@ -14,6 +14,38 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-without-node:
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:24.04
+      options: --init
+    timeout-minutes: 30
+    steps:
+      - name: Install native build prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl git libssl-dev pkg-config
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: hustcer/setup-moonbit@1522f9aef02a8ca0187dfc00a41f5dd6b16750f7 # v1.23
+        with:
+          version: 0.10.14+7d59c7ec9
+          core-version: 0.10.14+7d59c7ec9
+      - name: Confirm Node and npm are unavailable
+        run: |
+          if command -v node || command -v npm; then
+            echo "The native verification container must not have Node.js or npm on PATH." >&2
+            exit 1
+          fi
+      - name: Refresh the MoonBit package registry
+        run: moon update
+      - name: Resolve pinned MoonBit dependencies for the verifier
+        run: moon install
+      - name: Verify native build, tests, and CLI without Node (internal gates frozen)
+        run: moon run scripts/native-verify.mbtx --target native
+
   portable-and-host:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -25,6 +57,10 @@ jobs:
         with:
           version: 0.10.14+7d59c7ec9
           core-version: 0.10.14+7d59c7ec9
+      - name: Refresh the MoonBit package registry
+        run: moon update
+      - name: Resolve pinned MoonBit dependencies
+        run: moon install
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24

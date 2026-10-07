@@ -1,0 +1,66 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "f4ah6o/dsh/auth"
+
+// Values
+pub const API_RESOURCE : String = "https://api.openai.com/v1"
+
+pub const AUTHORIZE_ENDPOINT : String = "https://auth.openai.com/api/accounts/authorize"
+
+pub const DIRECT_SCOPE : String = "chatgpt.tokens.use.direct"
+
+pub const REQUESTED_SCOPES : String = "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
+
+pub const TOKEN_ENDPOINT : String = "https://auth.openai.com/api/accounts/oauth/token"
+
+pub fn accept_token_response(LoginAttempt, OAuthCallback, Json, Json, Bool, Int) -> Result[Credential, String]
+
+pub fn classify_refresh_error(String, Int) -> RefreshDisposition
+
+// Errors
+
+// Types and methods
+pub struct Credential {
+  // private fields
+}
+pub fn Credential::accept_refresh(Self, Json, Int) -> Result[Self, String]
+pub fn Credential::access_token_for_transport(Self) -> String
+pub fn Credential::can_use_direct(Self) -> Bool
+pub fn Credential::expires_at_for_native(Self) -> Int
+pub fn Credential::from_storage_json(Json) -> Result[Self, String]
+pub fn Credential::host_id_for_native(Self) -> String
+pub fn Credential::identity_for_native(Self) -> String
+pub fn Credential::public_summary(Self) -> Json
+pub fn Credential::reauth_context(Self) -> ReauthContext
+pub fn Credential::refresh_request(Self) -> Result[Json, String]
+pub fn Credential::storage_json(Self) -> Json
+
+pub struct LoginAttempt {
+  // private fields
+}
+pub fn LoginAttempt::authorization_params(Self) -> Json
+pub fn LoginAttempt::host_id_for_native(Self) -> String
+pub fn LoginAttempt::new(String, String, String?, String?, String?, String?, String, String, String, String) -> Result[Self, String]
+pub fn LoginAttempt::token_exchange_fields(Self, OAuthCallback) -> Result[Json, String]
+pub fn LoginAttempt::validate_callback(Self, Json) -> Result[OAuthCallback, String]
+
+pub enum OAuthCallback {
+  Code(String, String)
+}
+
+pub struct ReauthContext {
+  // private fields
+}
+pub fn ReauthContext::client_id_for_native(Self) -> String
+pub fn ReauthContext::host_id_for_native(Self) -> String
+pub fn ReauthContext::id_token_hint_for_native(Self) -> String
+pub fn ReauthContext::selected_identity_for_native(Self) -> String
+
+pub(all) enum RefreshDisposition {
+  Reauthenticate
+  ConfigurationError
+  Retryable
+}
+
+// Type aliases
+
+// Traits

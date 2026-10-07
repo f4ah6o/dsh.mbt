@@ -20,6 +20,29 @@ fn validate_retry_fields(
 }
 
 ///|
+fn validate_provider_request_id(value : Json?) -> Unit raise EngineError {
+  match value {
+    None => ()
+    Some(String(id)) => {
+      if id.is_empty() || id.length() > 128 {
+        raise Invalid("Provider request id must contain 1 to 128 characters")
+      }
+      for character in id {
+        if !((character >= 'a' && character <= 'z') ||
+          (character >= 'A' && character <= 'Z') ||
+          (character >= '0' && character <= '9') ||
+          character == '_' ||
+          character == '-' ||
+          character == '.') {
+          raise Invalid("Provider request id contains an invalid character")
+        }
+      }
+    }
+    _ => raise Invalid("Provider request id must be a string")
+  }
+}
+
+///|
 /// Persist an eligible retry schedule before the host waits. The original LLM
 /// effect remains active, so cancellation and late-result fencing still apply.
 fn Engine::schedule_retry_impl(
@@ -50,8 +73,9 @@ fn Engine::schedule_retry_impl(
     }
     let failure = required_field(policy, "failure")
     validate_retry_fields(failure, [
-      "code", "message", "status", "retry_after_ms",
+      "code", "message", "status", "retry_after_ms", "request_id",
     ])
+    validate_provider_request_id(fields(failure).get("request_id"))
     let code = required_string(failure, "code", max=32)
     let message = required_string(failure, "message", max=512)
     if !retryable_provider_code(code) {
@@ -98,13 +122,10 @@ fn Engine::schedule_retry_impl(
     let retry = session.retry_count + 1
     let delay_ms = match provider_retry_after_ms {
       Some(delay) if delay > 0 => delay
-      _ => {
-        let mut exponential = initial_delay_ms
-        for _ in 0..<(retry - 1) {
-          exponential = Int::min(exponential * 2, max_delay_ms)
-        }
-        Int::min(exponential, max_delay_ms)
-      }
+      _ =>
+        @retry_math.capped_exponential_delay(
+          initial_delay_ms, retry, max_delay_ms,
+        )
     }
     let retry_id = "retry-\{effect_id}-\{retry}"
     let durable_failure = Map::from_array([
@@ -121,6 +142,10 @@ fn Engine::schedule_retry_impl(
     }
     match provider_retry_after_ms {
       Some(delay) => durable_failure.set("retry_after_ms", integer(delay))
+      None => ()
+    }
+    match fields(failure).get("request_id") {
+      Some(value) => durable_failure.set("request_id", value)
       None => ()
     }
     session.append(

@@ -315,3 +315,19 @@ test('invalid saved data is preserved and releases both lock and facade ownershi
   hosts.push(host);
   assert.equal((await host.state()).sessions.length, 0);
 });
+
+test('native receipt envelope is refused without retaining lock or facade ownership', async (t) => {
+  const { workspace, hosts, dataDir } = await temporary(t);
+  await fs.mkdir(dataDir);
+  const snapshotPath = path.join(dataDir, 'sessions.json');
+  const lockPath = path.join(dataDir, 'host.lock');
+  await fs.writeFile(snapshotPath, JSON.stringify({ schema: 'dsh.native-host-v1', receipts: [] }));
+  const facade = await loadFacade();
+  await assert.rejects(createHost({ workspace, dataDir, facade, demo: true }), /native receipt envelope/i);
+  await assert.rejects(fs.stat(lockPath), { code: 'ENOENT' });
+
+  await fs.unlink(snapshotPath);
+  const host = await createHost({ workspace, dataDir, facade, demo: true });
+  hosts.push(host);
+  assert.equal((await host.state()).sessions.length, 0);
+});

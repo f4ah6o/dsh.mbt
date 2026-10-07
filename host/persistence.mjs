@@ -25,6 +25,16 @@ async function readRegular(target, limit = SNAPSHOT_LIMIT) {
   } finally { await file.close(); }
 }
 
+function refuseNativeEnvelope(snapshot) {
+  let value;
+  try { value = JSON.parse(snapshot); } catch {
+    throw new HostError('Persistence snapshot contains invalid JSON');
+  }
+  if (value?.schema === 'dsh.native-host-v1') {
+    throw new HostError('This data directory uses the native receipt envelope; start the native host to preserve remote command receipts.', { status: 409 });
+  }
+}
+
 /** One host owns this local directory. Snapshots are fsynced before effects run. */
 export async function openPersistence(dataDir) {
   const requested = path.resolve(dataDir);
@@ -104,6 +114,7 @@ export async function openPersistence(dataDir) {
     await verifyDirectory();
     if (typeof snapshot !== 'string' || Buffer.byteLength(snapshot) > SNAPSHOT_LIMIT) throw new HostError('Snapshot exceeds the persistence size limit', { status: 500 });
     JSON.parse(snapshot);
+    refuseNativeEnvelope(snapshot);
     const temporary = path.join(directory, `.sessions-${token}-${randomUUID()}.tmp`);
     let file;
     try {
@@ -124,7 +135,11 @@ export async function openPersistence(dataDir) {
 
   async function load() {
     await verifyDirectory();
-    try { return await readRegular(snapshotPath); } catch (error) {
+    try {
+      const snapshot = await readRegular(snapshotPath);
+      refuseNativeEnvelope(snapshot);
+      return snapshot;
+    } catch (error) {
       if (error.code === 'ENOENT') return undefined;
       throw error;
     }

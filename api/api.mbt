@@ -356,6 +356,18 @@ pub fn HarnessApi::take_effects(self : HarnessApi) -> Array[Json] {
 }
 
 ///|
+/// Drain host work as typed engine effects for native in-process runtimes.
+pub fn HarnessApi::take_typed_effects(
+  self : HarnessApi,
+) -> Array[@engine.EngineEffect] {
+  if self.registry.is_alive() {
+    self.engine.take_typed_effects()
+  } else {
+    []
+  }
+}
+
+///|
 pub fn HarnessApi::complete(
   self : HarnessApi,
   id : String,
@@ -366,6 +378,21 @@ pub fn HarnessApi::complete(
   }
   self.profiler.measure("engine.complete", () => {
     self.engine.complete(id, result)
+  })
+}
+
+///|
+/// Typed effect settlement for native runtimes that retain the effect identity.
+pub fn HarnessApi::complete_effect(
+  self : HarnessApi,
+  id : @engine.EffectId,
+  result : Json,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.complete", () => {
+    self.engine.complete_effect(id, result)
   })
 }
 
@@ -414,6 +441,34 @@ pub fn HarnessApi::project_stream(
 }
 
 ///|
+/// Typed stream projection for hosts holding an admitted provider effect.
+pub fn HarnessApi::project_effect_stream(
+  self : HarnessApi,
+  effect_id : @engine.EffectId,
+  content : String,
+  reasoning : String,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.project_stream", () => {
+    self.engine.project_effect_stream(effect_id, content, reasoning)
+  })
+}
+
+///|
+/// Typed append-only event view for in-process native consumers.
+pub fn HarnessApi::event_log(
+  self : HarnessApi,
+  session_id : @engine.SessionId,
+) -> Result[Array[@engine.EngineEvent], String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.event_log(session_id)
+}
+
+///|
 pub fn HarnessApi::snapshot(self : HarnessApi) -> Json {
   self.engine.snapshot()
 }
@@ -438,7 +493,7 @@ pub fn HarnessApi::close(self : HarnessApi) -> Unit {
     Ok(Array(sessions)) =>
       for session in sessions {
         if session is { "id": String(id), "status": String(status), .. } {
-          if status == "running" || status == "awaiting_approval" {
+          if status == "running" {
             self.engine.invoke("session_cancel", { "session_id": id.to_json() })
             |> ignore
           }

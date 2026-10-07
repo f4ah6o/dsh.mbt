@@ -1,0 +1,25 @@
+import {
+  "f4ah6o/dsh/api",
+  "f4ah6o/dsh/engine",
+  "f4ah6o/dsh/provider",
+  "f4ah6o/dsh/auth",
+  "f4ah6o/dsh/protocol",
+  "moonbitlang/core/json",
+  "moonbitlang/core/env",
+  "moonbitlang/core/encoding/utf8",
+  "moonbitlang/async",
+  "moonbitlang/async/fs",
+  "moonbitlang/async/process",
+  "moonbitlang/async/http",
+  "moonbitlang/async/socket",
+  "moonbitlang/async/aqueue",
+  "moonbitlang/async/signal",
+}
+
+supported_targets = "+native"
+
+pkgtype(kind: "executable")
+
+options(
+  "native-stub": [ "host_os.c", "oauth_os.c", "signal_os.c" ],
+)

@@ -1,0 +1,73 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "f4ah6o/dsh/provider"
+
+// Values
+pub fn decode(String, Json) -> Result[Json, String]
+
+pub fn decode_models(Json) -> Result[Array[Json], String]
+
+pub fn decode_responses(Json) -> Result[Json, String]
+
+pub fn decode_sse(String, String) -> Result[Json, String]
+
+pub fn prepare(String, String, Json) -> Result[Json, String]
+
+pub fn prepare_responses(String, Json) -> Result[Json, String]
+
+// Errors
+
+// Types and methods
+pub(all) enum ResponsesEvent {
+  TextDelta(String)
+  ReasoningDelta(String)
+  FunctionCallStarted(String, String, String)
+  FunctionCallArgumentsDelta(String, String)
+  FunctionCallArgumentsDone(String, String, String)
+  CustomToolCallStarted(String, String, String)
+  CustomToolInputDelta(String, String)
+  CustomToolInputDone(String, String, String)
+  Usage(Json)
+  Completed
+  Failed(String, String, String?)
+  Incomplete(String)
+}
+
+type ResponsesStreamDecoder
+pub fn ResponsesStreamDecoder::feed(Self, String) -> Result[Unit, String]
+pub fn ResponsesStreamDecoder::finish(Self) -> Result[Json, String]
+pub fn ResponsesStreamDecoder::new() -> Self
+pub fn ResponsesStreamDecoder::take_events(Self) -> Array[ResponsesEvent]
+
+type StreamBlock
+
+pub struct StreamDecoder {
+  mode : String
+  line : StringBuilder
+  mut line_units : Int
+  data : StringBuilder
+  mut data_units : Int
+  mut has_data : Bool
+  mut event : String
+  mut ignore_lf : Bool
+  mut at_start : Bool
+  mut total_units : Int
+  mut failure : String?
+  mut closed : Bool
+  mut terminal : Bool
+  mut started : Bool
+  mut reason : String?
+  blocks : Map[Int, StreamBlock]
+  block_order : Array[Int]
+  content : StringBuilder
+  reasoning : StringBuilder
+  pending_deltas : Array[Json]
+  usage : Map[String, Json]
+}
+pub fn StreamDecoder::feed(Self, String) -> Result[Unit, String]
+pub fn StreamDecoder::finish(Self) -> Result[Json, String]
+pub fn StreamDecoder::new(String) -> Self
+pub fn StreamDecoder::take_deltas(Self) -> Array[Json]
+
+// Type aliases
+
+// Traits

@@ -6,6 +6,7 @@ node_modules/
 coverage/
 test-results/
 .turtles/
+ios/ClientEmbedding/DshClientEmbedding.xcodeproj/
 *.log
 .env
 .env.*

@@ -1,9 +1,9 @@
 # dsh.mbt
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) の MoonBit 移植。
-セッション、イベントログ、LLM / tool loop、承認、provider wire protocol を MoonBit で実装し、
+セッション、イベントログ、LLM / tool loop、承認、provider wire protocol、共有 client を MoonBit で実装し、
 UI と capability API に [gpui-mbt/gpui.mbt](https://github.com/gpui-mbt/gpui.mbt) を使います。
-ネットワーク・ファイル・子プロセス・永続化の I/O は Node.js host が担当します。
+Node.js host と native MoonBit host の両方を提供します。native service / CLI は Node.js を実行依存にしません。
 
 **現在は最初の動作する移植版です。** ブラウザ / CLI から会話し、ローカルツールを実行して履歴を保存できます。
 upstream 全機能の互換移植は進行中です。Session v4 は明示的な read-only import に限って対応し、
@@ -11,8 +11,9 @@ Cordis / npm plugin 互換、subagent、live compaction、native window など�
 importer は一部の compaction checkpoint と transcript pruning を履歴表示用に復元しますが、
 agent の context 管理や長い会話の継続には使いません。
 詳細な対応範囲は [移植状況](docs/port-status.md) に記載しています。
+今回の native / SIWC / iOS 実装と A01–A18 の受入状況は[実装状況](docs/implementation-status.md)を参照してください。
 
-## 起動
+## Node.js host を起動
 
 Node.js **24 以上**、Git、固定版の MoonBit toolchain を使用します。native テストと turtles には C compiler が必要です。
 
@@ -24,6 +25,8 @@ cd dsh.mbt
 curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s -- '0.10.14+7d59c7ec9'
 export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 
+moon update
+moon install
 npm run verify:env
 npm run demo
 ```
@@ -71,6 +74,13 @@ node host/cli.mjs --help
 保存先は `--data-dir` で指定できます。同一データディレクトリを複数プロセスから同時に開くことはできません。
 `import-session` は upstream Session v4 を検証して、再開できない読み取り専用履歴として保存します。
 記録された tool、inbox、permission、preset は履歴に残しますが、実行や権限設定には使いません。
+
+Node.js を使わない native host を起動する場合は [native runtime guide](docs/native-runtime.md) を参照してください。
+ガイドには offline demo、ChatGPT SIWC の任意の実アカウント smoke、Tailnet Serve の設定があります。
+Native v1 の data directory は新しい versioned envelope と receipt を保存します。Node host はそれを拒否するため、
+native host は対応する legacy snapshot / Session v4 input を読み込んで native envelope に更新できますが、変換は一方向です。
+初回 native 起動前に data directory を backup し、同じ directory を Node / native host 間で切り替えないでください。
+native iOS / 実機の tailnet 接続は別途受入確認が必要です。
 
 `prune-session` は完了済みまたは idle の native session で、長い tool result の今後の model context を縮めます。
 既定の trigger は 8,192 Unicode code points、保持する先頭 / 末尾は 4,096 / 1,024 code points です。
