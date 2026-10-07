@@ -306,6 +306,7 @@ async fn native_cli_action(
 ///|
 async fn main {
   let args = @env.args()
+  native_configure_service_signal_policy()
   if native_flag(args, "--internal-worker") {
     let payload = match native_worker_payload(args) {
       Ok(value) => value
@@ -354,10 +355,16 @@ async fn main {
       Ok(runtime) => runtime
     }
     let service = match NativeService::new(runtime, source_root, port) {
-      Err(error) => abort("native service could not start: " + error)
+      Err(error) => {
+        ignore(runtime.close())
+        abort("native service could not start: " + error)
+      }
       Ok(service) => service
     }
-    service.run()
+    match service.run() {
+      Ok(_) => ()
+      Err(error) => abort("native service failed: " + error)
+    }
     return
   }
   let cli_action = native_flag(args, "--auth-status") ||

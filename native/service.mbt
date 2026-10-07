@@ -5,6 +5,26 @@ const NATIVE_HTTP_BODY_LIMIT : Int = 1048576
 const NATIVE_HTTP_CONNECTION_LIMIT : Int = 64
 
 ///|
+extern "C" fn c_service_signals_install() -> Int = "dsh_service_signals_install"
+
+///|
+extern "C" fn c_service_signals_requested() -> Int = "dsh_service_signals_requested"
+
+///|
+extern "C" fn c_service_signals_restore() -> Int = "dsh_service_signals_restore"
+
+///|
+fn native_configure_service_signal_policy() -> Unit {
+  if @env.args().any(value => value == "--serve") {
+    // async's default event-loop signal waiter consumes SIGINT/SIGTERM and
+    // re-raises them after cancelling main. Reconfigure the existing waiter
+    // before the service starts accepting requests so the native sig_atomic_t
+    // handler below owns those two shutdown signals instead.
+    @signal.set_global_cancellation_signals([])
+  }
+}
+
+///|
 struct NativeService {
   runtime : NativeRuntime
   source_root : String
@@ -80,11 +100,55 @@ async fn NativeService::new(
 }
 
 ///|
-async fn NativeService::run(self : NativeService) -> Unit {
+async fn NativeService::run(self : NativeService) -> Result[Unit, String] {
+  if c_service_signals_install() != 0 {
+    let close_result = @async.protect_from_cancel(async fn() {
+      self.runtime.close()
+    })
+    return match close_result {
+      Ok(_) => Err("native service could not install shutdown signal handlers")
+      Err(error) =>
+        Err(
+          "native service could not install shutdown signal handlers; checkpoint failed: " +
+          error,
+        )
+    }
+  }
+  defer (if c_service_signals_restore() != 0 {
+    eprintln("native service could not restore shutdown signal handlers")
+  })
+  println("native service shutdown signal handlers installed")
+  native_flush_stdout()
+  let service_result = @async.handle_cancellation(async fn() {
+    self.run_listener() catch {
+      _ => Err("native service HTTP listener failed unexpectedly")
+    }
+  })
+  let close_result = @async.protect_from_cancel(async fn() {
+    self.runtime.close()
+  })
+  match (service_result, close_result) {
+    (None, Ok(_)) => Err("native service was cancelled")
+    (None, Err(error)) =>
+      Err("native service was cancelled; shutdown checkpoint failed: " + error)
+    (Some(Err(error)), Ok(_)) => Err(error)
+    (Some(Err(error)), Err(close_error)) =>
+      Err(error + "; shutdown checkpoint failed: " + close_error)
+    (Some(Ok(_)), Ok(_)) => Ok(())
+    (Some(Ok(_)), Err(error)) =>
+      Err("native service shutdown checkpoint failed: " + error)
+  }
+}
+
+///|
+async fn NativeService::run_listener(
+  self : NativeService,
+) -> Result[Unit, String] {
   let address = @socket.Addr::parse(
     "127.0.0.1:" + self.requested_port.to_string(),
   )
   let server = @http.Server(address)
+  defer server.close()
   let port = server.addr.port()
   let local_url = "http://127.0.0.1:" + port.to_string()
   println("native service listening at " + local_url)
@@ -106,16 +170,46 @@ async fn NativeService::run(self : NativeService) -> Unit {
   }
   native_flush_stdout()
   @async.with_task_group <| group => {
-    server.run_forever(max_connections=NATIVE_HTTP_CONNECTION_LIMIT) <| ((
-      request,
-      _body,
-      connection,
-    ) => self.handle(request, connection, group, port))
+    let listener = group.spawn(no_wait=true, allow_failure=true, async fn() {
+      server.run_forever(max_connections=NATIVE_HTTP_CONNECTION_LIMIT) <| ((
+        request,
+        _body,
+        connection,
+      ) => self.handle(request, connection, group, port))
+    })
+    let mut finished = false
+    while !finished {
+      let shutdown_signal = c_service_signals_requested()
+      if shutdown_signal != 0 {
+        let signal_name = if shutdown_signal == 2 {
+          "SIGINT"
+        } else {
+          "SIGTERM"
+        }
+        println("native service received " + signal_name + "; shutting down")
+        native_flush_stdout()
+        server.close()
+        finished = true
+      } else {
+        let listener_state = Some(listener.try_wait()) catch { _ => None }
+        match listener_state {
+          Some(Some(_)) => {
+            server.close()
+            finished = true
+          }
+          None => {
+            server.close()
+            finished = true
+          }
+          Some(None) => @async.sleep(25)
+        }
+      }
+    }
   }
-  match self.runtime.close() {
-    Ok(_) => ()
-    Err(error) =>
-      eprintln("native service shutdown checkpoint failed: " + error)
+  if c_service_signals_requested() != 0 {
+    Ok(())
+  } else {
+    Err("native service HTTP listener stopped unexpectedly")
   }
 }
 
