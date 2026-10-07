@@ -169,5 +169,42 @@ async test "native workspace tools preserve file and process behavior" {
     assert_true(!safety_tool_ok(timeout_result))
     @async.sleep(900)
     assert_true(!@fs.exists(workspace + "/descendant-alive.txt"))
+
+    // Explicit caller cancellation must finish the same process-group cleanup
+    // as timeout cancellation. The child ignores TERM, so only group KILL can
+    // prevent its delayed marker from appearing.
+    let cancellation_task = group.spawn(
+      async fn() {
+        tools.execute(
+          safety_tool_request(
+            "bash",
+            Json::object({
+              "command": Json::string(
+                "printf started > cancel-started.txt; (trap '' TERM; sleep 2; printf escaped > cancel-descendant-alive.txt) & wait",
+              ),
+              "timeout": Json::number(10000.0),
+            }),
+          ),
+        )
+      },
+      no_wait=true,
+      allow_failure=true,
+    )
+    let mut cancellation_started = false
+    for _ in 0..<100 {
+      if @fs.exists(workspace + "/cancel-started.txt") {
+        cancellation_started = true
+        break
+      }
+      @async.sleep(10)
+    }
+    assert_true(cancellation_started)
+    cancellation_task.cancel()
+    ignore(cancellation_task.wait()) catch {
+      @async.WaitedTaskAlreadyCancelled => ()
+      _ => ()
+    }
+    @async.sleep(2300)
+    assert_true(!@fs.exists(workspace + "/cancel-descendant-alive.txt"))
   }
 }

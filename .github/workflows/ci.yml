@@ -14,6 +14,35 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-without-node:
+    runs-on: ubuntu-24.04
+    container:
+      image: ubuntu:24.04
+    timeout-minutes: 30
+    steps:
+      - name: Install native build prerequisites
+        run: |
+          apt-get update
+          DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            build-essential ca-certificates curl git libssl-dev pkg-config
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: hustcer/setup-moonbit@1522f9aef02a8ca0187dfc00a41f5dd6b16750f7 # v1.23
+        with:
+          version: 0.10.14+7d59c7ec9
+          core-version: 0.10.14+7d59c7ec9
+      - name: Confirm Node and npm are unavailable
+        run: |
+          if command -v node || command -v npm; then
+            echo "The native verification container must not have Node.js or npm on PATH." >&2
+            exit 1
+          fi
+      - name: Resolve pinned MoonBit dependencies for the verifier
+        run: moon install
+      - name: Verify native build, tests, and CLI without Node
+        run: moon run scripts/native-verify.mbtx --target native --frozen
+
   portable-and-host:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
