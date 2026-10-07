@@ -14,6 +14,26 @@ const NATIVE_PROVIDER_BODY_LIMIT : Int = 16777216
 const NATIVE_PROVIDER_REQUEST_LIMIT : Int = 16777216
 
 ///|
+fn native_provider_mime_essence(content_type : String) -> String {
+  let normalized = content_type.trim().to_lower()
+  match normalized.find(";") {
+    Some(index) => normalized[:index].trim().to_owned()
+    None => normalized.to_owned()
+  }
+}
+
+///|
+fn native_provider_responses_mime_is_allowed(content_type : String?) -> Bool {
+  match content_type {
+    None => true
+    Some(value) =>
+      value.trim() != "" &&
+      value.find(",") is None &&
+      native_provider_mime_essence(value) == "text/event-stream"
+  }
+}
+
+///|
 enum NativeProviderRead {
   Data(Bytes)
   End
@@ -62,6 +82,79 @@ async fn native_provider_read_chunk_with_timeout(
 }
 
 ///|
+fn native_provider_finalize_responses_stream(
+  utf8 : Utf8StreamDecoder,
+  decoder : @provider.ResponsesStreamDecoder,
+) -> Json {
+  match utf8.finish() {
+    Ok(_) => ()
+    Err(error) => return native_provider_failure_json("MALFORMED", error)
+  }
+  match decoder.finish() {
+    Ok(completion) => completion
+    Err(error) => native_provider_stream_failure(error)
+  }
+}
+
+///|
+async fn native_provider_receive_responses_stream(
+  response : @http.Response,
+  client : @http.Client,
+  dispatch : async (@provider.ResponsesStreamDecoder) -> Result[Unit, String],
+) -> Result[Json, String] {
+  if !native_provider_responses_mime_is_allowed(
+      response.headers.get("content-type"),
+    ) {
+    return Ok(
+      native_provider_failure_json(
+        "MALFORMED", "Responses stream content type is invalid",
+      ),
+    )
+  }
+  let utf8 = Utf8StreamDecoder::new()
+  let decoder = @provider.ResponsesStreamDecoder::new()
+  let mut received_bytes = 0
+  for ;; {
+    match native_provider_read_chunk(client, received_bytes) {
+      NativeProviderRead::End => break
+      NativeProviderRead::IdleTimeout =>
+        return Ok(
+          native_provider_timeout_failure(
+            "Provider response stream exceeded the idle time limit",
+          ),
+        )
+      NativeProviderRead::TooLarge =>
+        return Ok(
+          native_provider_failure_json(
+            "RESPONSE_TOO_LARGE", "Provider response exceeds the 16 MiB limit",
+          ),
+        )
+      NativeProviderRead::Data(bytes) => {
+        received_bytes += bytes.length()
+        let text = match utf8.feed(bytes[:]) {
+          Ok(value) => value
+          Err(error) =>
+            return Ok(native_provider_failure_json("MALFORMED", error))
+        }
+        match decoder.feed(text) {
+          Ok(_) => ()
+          Err(error) =>
+            return Ok(native_provider_failure_json("MALFORMED", error))
+        }
+        match dispatch(decoder) {
+          Ok(_) => ()
+          Err(error) => return Err(error)
+        }
+        if decoder.has_completed_result() {
+          return Ok(native_provider_finalize_responses_stream(utf8, decoder))
+        }
+      }
+    }
+  }
+  Ok(native_provider_finalize_responses_stream(utf8, decoder))
+}
+
+///|
 fn native_provider_body_limit_exceeded(
   already_read : Int,
   next_chunk_bytes : Int,
@@ -74,6 +167,14 @@ fn native_provider_body_limit_exceeded(
 ///|
 fn native_provider_timeout_failure(message : String) -> Json {
   native_provider_failure_json("TIMEOUT", message)
+}
+
+///|
+fn native_provider_is_failure_json(value : Json) -> Bool {
+  match value {
+    Object(fields) => fields.get("ok") == Some(false.to_json())
+    _ => false
+  }
 }
 
 ///|
@@ -170,59 +271,17 @@ async fn NativeAuth::run_responses_inner(
       native_provider_http_failure(response.code, response.headers, "Responses"),
     )
   }
-  let content_type = response.headers.get("content-type").unwrap_or("")
-  if !content_type.to_lower().contains("text/event-stream") {
-    return Ok(
-      native_provider_failure_json(
-        "MALFORMED", "Responses stream content type is invalid",
-      ),
-    )
-  }
-  let utf8 = Utf8StreamDecoder::new()
-  let decoder = @provider.ResponsesStreamDecoder::new()
-  let mut received_bytes = 0
-  for ;; {
-    match native_provider_read_chunk(client, received_bytes) {
-      NativeProviderRead::End => break
-      NativeProviderRead::IdleTimeout =>
-        return Ok(
-          native_provider_timeout_failure(
-            "Provider response stream exceeded the idle time limit",
-          ),
-        )
-      NativeProviderRead::TooLarge =>
-        return Ok(
-          native_provider_failure_json(
-            "RESPONSE_TOO_LARGE", "Provider response exceeds the 16 MiB limit",
-          ),
-        )
-      NativeProviderRead::Data(bytes) => {
-        received_bytes += bytes.length()
-        let text = match utf8.feed(bytes[:]) {
-          Ok(value) => value
-          Err(error) =>
-            return Ok(native_provider_failure_json("MALFORMED", error))
-        }
-        match decoder.feed(text) {
-          Ok(_) => ()
-          Err(error) =>
-            return Ok(native_provider_failure_json("MALFORMED", error))
-        }
-        match
-          native_provider_dispatch_events(self, selection, decoder, on_event) {
-          Ok(_) => ()
-          Err(error) => return Err(error)
-        }
-      }
-    }
-  }
-  match utf8.finish() {
-    Ok(_) => ()
-    Err(error) => return Ok(native_provider_failure_json("MALFORMED", error))
-  }
-  let completion = match decoder.finish() {
+  let completion = match
+    native_provider_receive_responses_stream(response, client, async fn(
+      decoder,
+    ) {
+      native_provider_dispatch_events(self, selection, decoder, on_event)
+    }) {
     Ok(value) => value
-    Err(error) => return Ok(native_provider_stream_failure(error))
+    Err(error) => return Err(error)
+  }
+  if native_provider_is_failure_json(completion) {
+    return Ok(completion)
   }
   match self.validate_generation(selection) {
     Ok(_) if native_provider_empty_completion(completion) =>

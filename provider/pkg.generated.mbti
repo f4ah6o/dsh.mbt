@@ -35,6 +35,7 @@ pub(all) enum ResponsesEvent {
 type ResponsesStreamDecoder
 pub fn ResponsesStreamDecoder::feed(Self, String) -> Result[Unit, String]
 pub fn ResponsesStreamDecoder::finish(Self) -> Result[Json, String]
+pub fn ResponsesStreamDecoder::has_completed_result(Self) -> Bool
 pub fn ResponsesStreamDecoder::new() -> Self
 pub fn ResponsesStreamDecoder::take_events(Self) -> Array[ResponsesEvent]
 

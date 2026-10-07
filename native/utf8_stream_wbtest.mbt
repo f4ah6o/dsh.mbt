@@ -78,3 +78,22 @@ test "native byte transport rejects malformed and truncated UTF-8" {
   assert_true(Utf8StreamDecoder::feed(truncated, partial_bytes[:]) is Ok(_))
   assert_true(truncated.finish() is Err(_))
 }
+
+///|
+test "native Responses rejects an incomplete UTF-8 tail after completion" {
+  let raw_bytes = @utf8.encode(native_responses_fixture()).to_array()
+  raw_bytes.push(b'\xf0')
+  let bytes = Bytes::from_array(raw_bytes[:])
+  let utf8 = Utf8StreamDecoder::new()
+  let decoder = @provider.ResponsesStreamDecoder::new()
+  let text = match utf8.feed(bytes[:]) {
+    Ok(value) => value
+    Err(error) => fail(error)
+  }
+  assert_true(decoder.feed(text) is Ok(_))
+  assert_true(decoder.has_completed_result())
+  let result = native_provider_finalize_responses_stream(utf8, decoder)
+  assert_true(native_provider_is_failure_json(result))
+  let failure = object_field(result, "failure").unwrap()
+  assert_eq(string_field(failure, "code"), Some("MALFORMED"))
+}

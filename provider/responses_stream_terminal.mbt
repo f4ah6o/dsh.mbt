@@ -7,7 +7,43 @@ fn ResponsesStreamDecoder::record_completed(
 ) -> Unit raise ProviderError {
   self.require_started()
   let response = field(raw, "response")
-  let result = decode_responses_impl(response)
+  let response_fields = object(response, "completed response")
+  let completed_id = identity(response_fields, "id")
+  if self.response_id != Some(completed_id) {
+    reject(
+      "MALFORMED_RESPONSE", "completed response id differs from created id",
+    )
+  }
+  let response_for_decode = match response_fields.get("output") {
+    Some(Array(items)) if items.is_empty() => {
+      let completed_items = []
+      for item_id in self.output_item_order {
+        match self.completed_output_items.get(item_id) {
+          Some(item) => {
+            let fields = object(item, "completed output item")
+            match fields.get("status") {
+              None | Some(Null) => ()
+              Some(String("completed")) => ()
+              Some(_) =>
+                reject(
+                  "MALFORMED_RESPONSE", "empty terminal output contains an unfinished output item",
+                )
+            }
+            completed_items.push(item)
+          }
+          None =>
+            reject(
+              "MALFORMED_RESPONSE", "empty terminal output has an unfinished output item",
+            )
+        }
+      }
+      let reconstructed = response_fields.copy()
+      reconstructed["output"] = Json::array(completed_items)
+      Json::object(reconstructed)
+    }
+    _ => response
+  }
+  let result = decode_responses_impl(response_for_decode)
   let result_fields = object(result, "normalized completion")
   if text_field(result_fields, "content") != self.content.to_string() {
     reject("MALFORMED_RESPONSE", "completed text differs from streamed deltas")
@@ -140,10 +176,19 @@ fn ResponsesStreamDecoder::require_output_item(
 ) -> Unit raise ProviderError {
   self.require_started()
   let item_id = identity(raw, "item_id")
+  let output_index = integer(field(raw, "output_index"), "output_index")
+  if self.completed_output_items.contains(item_id) {
+    reject(
+      "MALFORMED_RESPONSE", "content delta followed output item completion",
+    )
+  }
   if self.output_items.get(item_id) != Some(expected) {
     reject(
       "MALFORMED_RESPONSE", "content delta does not match an open output item",
     )
+  }
+  if self.output_indices.get(item_id) != Some(output_index) {
+    reject("MALFORMED_RESPONSE", "content delta output item index changed")
   }
 }
 
@@ -153,11 +198,20 @@ fn ResponsesStreamDecoder::input_call(
   raw : Map[String, Json],
 ) -> ResponsesFunctionCall raise ProviderError {
   let item_id = identity(raw, "item_id")
+  let output_index = integer(field(raw, "output_index"), "output_index")
+  if self.completed_output_items.contains(item_id) {
+    reject(
+      "MALFORMED_RESPONSE", "tool input changed after output item completion",
+    )
+  }
   if self.output_items.get(item_id) != Some("function_call") &&
     self.output_items.get(item_id) != Some("custom_tool_call") {
     reject(
       "MALFORMED_RESPONSE", "tool input event does not match an open tool item",
     )
+  }
+  if self.output_indices.get(item_id) != Some(output_index) {
+    reject("MALFORMED_RESPONSE", "tool input output item index changed")
   }
   match self.calls.get(item_id) {
     Some(call) => call

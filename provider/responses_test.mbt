@@ -453,6 +453,216 @@ fn responses_text_stream_fixture(text : String) -> String {
 }
 
 ///|
+fn responses_empty_terminal_fixture(
+  text : String,
+  done_text : String,
+  done_count : Int,
+  add_index : Int,
+  delta_index : Int,
+  done_index : Int,
+  completed_id : String,
+  post_done_delta : Bool,
+  done_status : String,
+  done_item_id : String,
+) -> String {
+  let added = responses_frame("response.output_item.added", {
+    "type": "response.output_item.added",
+    "output_index": add_index,
+    "item": {
+      "id": "msg_empty_terminal",
+      "type": "message",
+      "role": "assistant",
+      "content": [],
+    },
+  })
+  let delta = responses_frame("response.output_text.delta", {
+    "type": "response.output_text.delta",
+    "item_id": "msg_empty_terminal",
+    "output_index": delta_index,
+    "content_index": 0,
+    "delta": text,
+  })
+  let content_part_done = responses_frame("response.content_part.done", {
+    "type": "response.content_part.done",
+    "item_id": "msg_empty_terminal",
+    "output_index": add_index,
+    "content_index": 0,
+    "part": { "type": "output_text", "text": done_text },
+  })
+  let text_done = responses_frame("response.output_text.done", {
+    "type": "response.output_text.done",
+    "item_id": "msg_empty_terminal",
+    "output_index": add_index,
+    "content_index": 0,
+    "text": done_text,
+  })
+  let done = responses_frame("response.output_item.done", {
+    "type": "response.output_item.done",
+    "output_index": done_index,
+    "item": if done_status.is_empty() {
+      {
+        "id": done_item_id,
+        "type": "message",
+        "role": "assistant",
+        "content": [{ "type": "output_text", "text": done_text }],
+      }
+    } else {
+      {
+        "id": done_item_id,
+        "type": "message",
+        "role": "assistant",
+        "status": done_status,
+        "content": [{ "type": "output_text", "text": done_text }],
+      }
+    },
+  })
+  let mut wire = responses_frame("response.created", {
+      "type": "response.created",
+      "response": { "id": "resp_empty_terminal", "status": "in_progress" },
+    }) +
+    added +
+    delta
+  if done_count > 0 {
+    wire += content_part_done + text_done + done
+  }
+  if done_count > 1 {
+    wire += done
+  }
+  if post_done_delta {
+    wire += responses_frame("response.output_text.delta", {
+      "type": "response.output_text.delta",
+      "item_id": "msg_empty_terminal",
+      "output_index": delta_index,
+      "content_index": 0,
+      "delta": "late",
+    })
+  }
+  wire +
+  responses_frame("response.completed", {
+    "type": "response.completed",
+    "response": { "id": completed_id, "status": "completed", "output": [] },
+  })
+}
+
+///|
+fn assert_empty_terminal_stream_rejected(wire : String) -> Unit raise {
+  let decoder = @provider.ResponsesStreamDecoder::new()
+  match decoder.feed(wire) {
+    Err(error) => assert_true(error.has_prefix("MALFORMED_RESPONSE:"))
+    Ok(_) => fail("unverified empty terminal output was accepted")
+  }
+}
+
+///|
+test "Responses reconstructs empty terminal output from validated done items" {
+  let text = "Hello 🌙"
+  let decoder = @provider.ResponsesStreamDecoder::new()
+  assert_true(!decoder.has_completed_result())
+  assert_true(
+    decoder.feed(
+      responses_empty_terminal_fixture(
+        text, text, 1, 0, 0, 0, "resp_empty_terminal", false, "", "msg_empty_terminal",
+      ),
+    )
+    is Ok(_),
+  )
+  assert_true(decoder.has_completed_result())
+  let result = responses_value(decoder.finish())
+  assert_true(!decoder.has_completed_result())
+  assert_true(responses_field(result, "content") == text.to_json())
+}
+
+///|
+test "Responses empty terminal output rejects missing or duplicate done items" {
+  assert_empty_terminal_stream_rejected(
+    responses_empty_terminal_fixture(
+      "answer", "answer", 0, 0, 0, 0, "resp_empty_terminal", false, "", "msg_empty_terminal",
+    ),
+  )
+  assert_empty_terminal_stream_rejected(
+    responses_empty_terminal_fixture(
+      "answer", "answer", 2, 0, 0, 0, "resp_empty_terminal", false, "", "msg_empty_terminal",
+    ),
+  )
+}
+
+///|
+test "Responses empty terminal output binds done item identity index and content" {
+  assert_empty_terminal_stream_rejected(
+    responses_empty_terminal_fixture(
+      "answer", "answer", 1, 0, 0, 1, "resp_empty_terminal", false, "", "msg_empty_terminal",
+    ),
+  )
+  assert_empty_terminal_stream_rejected(
+    responses_empty_terminal_fixture(
+      "answer", "answer", 1, 1, 1, 1, "resp_empty_terminal", false, "", "msg_empty_terminal",
+    ),
+  )
+  assert_empty_terminal_stream_rejected(
+    responses_empty_terminal_fixture(
+      "answer", "different", 1, 0, 0, 0, "resp_empty_terminal", false, "", "msg_empty_terminal",
+    ),
+  )
+  assert_empty_terminal_stream_rejected(
+    responses_empty_terminal_fixture(
+      "answer", "answer", 1, 0, 0, 0, "resp_other", false, "", "msg_empty_terminal",
+    ),
+  )
+  assert_empty_terminal_stream_rejected(
+    responses_empty_terminal_fixture(
+      "answer", "answer", 1, 0, 0, 0, "resp_empty_terminal", false, "in_progress",
+      "msg_empty_terminal",
+    ),
+  )
+  assert_empty_terminal_stream_rejected(
+    responses_empty_terminal_fixture(
+      "answer", "answer", 1, 0, 0, 0, "resp_empty_terminal", false, "", "other_item",
+    ),
+  )
+  assert_empty_terminal_stream_rejected(
+    responses_empty_terminal_fixture(
+      "answer", "answer", 1, 0, 1, 0, "resp_empty_terminal", false, "", "msg_empty_terminal",
+    ),
+  )
+}
+
+///|
+test "Responses rejects text deltas after output item completion" {
+  assert_empty_terminal_stream_rejected(
+    responses_empty_terminal_fixture(
+      "answer", "answer", 1, 0, 0, 0, "resp_empty_terminal", true, "", "msg_empty_terminal",
+    ),
+  )
+}
+
+///|
+test "Responses finalization rejects trailing SSE data in the same chunk" {
+  let completed = responses_empty_terminal_fixture(
+    "answer", "answer", 1, 0, 0, 0, "resp_empty_terminal", false, "", "msg_empty_terminal",
+  )
+  let extra_event = responses_frame("response.output_text.delta", {
+    "type": "response.output_text.delta",
+    "item_id": "msg_empty_terminal",
+    "output_index": 0,
+    "content_index": 0,
+    "delta": "late",
+  })
+  let extra_decoder = @provider.ResponsesStreamDecoder::new()
+  assert_true(extra_decoder.feed(completed + extra_event) is Err(_))
+
+  let partial_decoder = @provider.ResponsesStreamDecoder::new()
+  assert_true(
+    partial_decoder.feed(completed + "event: response.output_text.delta")
+    is Ok(_),
+  )
+  assert_true(partial_decoder.has_completed_result())
+  match partial_decoder.finish() {
+    Err(error) => assert_true(error.has_prefix("STREAM_CLOSED:"))
+    Ok(_) => fail("partial SSE tail after completion was accepted")
+  }
+}
+
+///|
 fn split_at_character(value : String, offset : Int) -> (String, String) {
   let before = StringBuilder()
   let after = StringBuilder()
