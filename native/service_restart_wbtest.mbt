@@ -1,9 +1,10 @@
 ///|
 async test "native service listener rebinds a fixed port after TIME_WAIT" {
   let mut port = 0
+  let mut ready_generation = 0
   @async.with_task_group() <| group => {
     group.spawn_bg() <| () => {
-      for _ in 0..<2 {
+      for index in 0..<2 {
         let server = native_service_listener(
           @socket.Addr::parse("127.0.0.1:" + port.to_string()),
         )
@@ -19,6 +20,7 @@ async test "native service listener rebinds a fixed port after TIME_WAIT" {
           _ => false
         }
         assert_true(!duplicate_bind_succeeded)
+        ready_generation = index + 1
         let (connection, _) = server.accept()
         let request = connection.read_request()
         assert_eq(request.path, "/restart")
@@ -31,13 +33,15 @@ async test "native service listener rebinds a fixed port after TIME_WAIT" {
         connection.close()
       }
     }
-    for _ in 0..<2 {
+    for index in 0..<2 {
+      let expected_generation = index + 1
       for _ in 0..<200 {
-        if port != 0 {
+        if ready_generation == expected_generation {
           break
         }
         @async.sleep(5)
       }
+      assert_eq(ready_generation, expected_generation)
       assert_true(port != 0)
       let client = @socket.Tcp::connect(
         @socket.Addr::parse("127.0.0.1:" + port.to_string()),
