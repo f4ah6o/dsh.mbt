@@ -23,6 +23,16 @@ retry delay や failure metadata も保存しますが、imported retry は待�
 runtime には別途、限定的な provider retry lifecycle を追加しました。import history は
 再開しない。v0–v3 migration、v4 writer、catalog 外の全 event semantics は引き続き本 issue の対象。
 
+Native v1 runtime fork の部分対応（2026-10-07）: `session_fork` は idle / completed / failed / cancelled の settled な
+非 imported session から新しい idle child を作り、履歴を保ったまま effect ID と retry ID を branch-local に再採番します。
+approval / pending retry / active tool/provider work は受け付けず、fork や restore から external effect は発行しません。
+`session/forked` marker は parent ID、固定 event prefix、source status / turn / step、effect map を保存します。
+restore は全 session の adoption 前に親 prefix、creation settings、effect/retry metadata、missing parent、lineage cycle を
+検証するため、親が後から続行しても既存 child は当時の prefix に結び付いたままです。fork-of-fork、fork後の tool-result pruning、
+interrupted history、Node/native CLI、browser selection race、native durable command receipt replay を keyless test で確認します。
+新機能は native v1 の settled runtime fork であり、Session v4 importer の seeded-fork subset を拡張せず、v4 writer / arbitrary
+upstream branch semantics は実装しません。本 issue は open のままです。
+
 受入条件:
 
 - upstream の snapshot fixture を変更せずに読み、user / assistant / tool と相関情報を再構築する。

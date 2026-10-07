@@ -83,11 +83,14 @@ function renderControls() {
   const approval = session.pending_approval;
   const canPrune = !readOnly && !busy && ["idle", "completed"].includes(session.status)
     && (session.events || []).some((event) => event.type === "tool/result");
+  const canFork = Boolean(state.id) && !readOnly && !busy
+    && ["idle", "completed", "failed", "cancelled"].includes(session.status);
   $("session-title").textContent = state.id ? session.title || "Untitled session" : "Agent workspace";
   $("status").textContent = statusLabel(session);
   $("status").dataset.state = approval ? "approval" : session.status || "idle";
   $("progress").textContent = session.turn_id > 0 ? `Turn ${session.turn_id} · Step ${session.step || 0}` : "";
   $("cancel").disabled = state.mutation || !busy;
+  $("fork-session").disabled = state.mutation || !canFork;
   $("prune-results").hidden = !canPrune;
   $("prune-results").disabled = state.mutation || !canPrune;
   $("new-session").disabled = state.mutation;
@@ -248,6 +251,22 @@ async function createSession(title) {
 $("new-session").addEventListener("click", () => mutate(async () => {
   const session = await createSession(`Session ${state.sessions.length + 1}`);
   if (session.id === state.id) $("prompt").focus();
+}));
+$("fork-session").addEventListener("click", () => mutate(async () => {
+  const sourceId = state.id;
+  const selection = state.selection;
+  if (!sourceId) return;
+  const child = await api("session_fork", { session_id: sourceId });
+  if (!state.sessions.some((row) => row.id === child.id)) state.sessions.push(child);
+  if (state.id === sourceId && state.selection === selection) {
+    state.id = child.id;
+    state.selection += 1;
+    state.follow = true;
+    state.actionMessage = `Forked ${sourceId} as an independent conversation.`;
+    acceptSnapshot(child);
+  } else {
+    renderSessions();
+  }
 }));
 $("prune-results").addEventListener("click", () => mutate(async () => {
   const id = state.id;

@@ -98,6 +98,7 @@ priv struct Session {
   system_prompt : String
   max_steps : Int
   mut imported : Bool
+  mut fork_source : ForkSource?
   mut status : Status
   mut turn_id : Int
   mut step : Int
@@ -121,6 +122,16 @@ priv struct Session {
   mut retry_initial_delay_ms : Int?
   mut retry_max_delay_ms : Int?
   mut pending_retry_id : String?
+}
+
+///|
+priv struct ForkSource {
+  parent_session_id : String
+  source_event_count : Int
+  source_status : String
+  source_turn_id : Int
+  source_step : Int
+  effect_map : Array[(String, String)]
 }
 
 ///|
@@ -187,6 +198,7 @@ fn fresh_session(
     system_prompt,
     max_steps,
     imported: false,
+    fork_source: None,
     status: Idle,
     turn_id: 0,
     step: 0,

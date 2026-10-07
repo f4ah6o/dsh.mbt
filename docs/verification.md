@@ -315,6 +315,29 @@ restore は成功し、effect の再発行は 0 でした。
 
 全機能の対応表は [移植状況](port-status.md)、後続の受入条件は [残りの移植作業](../issues/open/0001-upstream-parity.md) にあります。
 
+## 2026-10-07 Native v1 settled session fork increment
+
+The session_fork command forks a settled, non-imported native v1 session into an independent idle session. This is a scoped runtime feature, not full Session v4 writer or upstream runtime parity. All checks use local or synthetic fixtures; no live provider account, API key, Tailnet, or external tool was used.
+
+| Gate | Result |
+| --- | --- |
+| npm test | PASS / exit 0. MoonBit tests: 140 / 140 on Wasm, Wasm GC, JS, and native; additional native runtime suite: 48 / 48; host: 42 / 42; web: 33 / 33; integration: 44 / 44. |
+| npm run check | PASS. Formatting, all-target MoonBit checks, and JavaScript syntax checks passed; project-owned warnings: 0. The pinned vendor/hotpath dependency emits its existing deprecation warnings. |
+| npm run build | PASS. App and shared client JavaScript release bundles built. |
+| moon info engine api --frozen | PASS. Updated engine/pkg.generated.mbti exposes EngineCommand::ForkSession and EngineEventKind::SessionForked. |
+| node --test web/remote-app-auth.test.mjs | PASS, 15 / 15. Includes explicit A→B→A selection intent winning over a delayed remote fork response. |
+| web/browser-smoke.mjs | PASS with real cached Chromium and Playwright; fixture provider only. Covers forked transcript, immutable parent, remapped effect identity, delayed response/session-switch fencing, and the existing browser acceptance flow. |
+
+The browser smoke command on this macOS arm64 workstation was:
+
+```sh
+env NODE_PATH='/Users/fu2hito/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules' PLAYWRIGHT_CHROMIUM_EXECUTABLE='/Users/fu2hito/Library/Caches/ms-playwright/chromium-1228/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing' node web/browser-smoke.mjs
+```
+
+The two executable paths identify this machine's bundled Playwright and cached Chromium; use the equivalent local paths elsewhere. The smoke test serves the local browser app and uses a temporary workspace plus deterministic provider responses. Its file-write fixtures stay inside that temporary workspace, which the test removes on exit. npm test does not require Playwright or a browser and does not include this optional smoke.
+
+Fork creation copies the validated fixed source prefix, transcript, tool correlation, and pruning references. Effect and retry identities are branch-local; approval, active work, retry waits, and imported histories are not inherited. Restore validates marker boundaries, parent settings, the effect map, missing parents, and lineage cycles before adopting a snapshot. The native remote command receipt is replayed after reopen without re-executing effects. The local upstream-parity issue remains open; seeded Session v4 forks, v4 writing, and the other listed runtime features remain separate work.
+
 ## 2026-10-07 issue #9 / #11 implementation candidate
 
 Local checks ran on the macOS arm64 development host with MoonBit compiler/core 0.10.14+7d59c7ec9; Ubuntu CI results are listed separately below. Unless stated otherwise, checks use synthetic identities, local servers, and keyless fixtures.

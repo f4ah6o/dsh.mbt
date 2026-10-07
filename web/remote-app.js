@@ -22,6 +22,7 @@ const state = {
   moon: null,
   sessions: [],
   id: null,
+  selection: 0,
   snapshot: { messages: [], events: [] },
   client: null,
   mutation: false,
@@ -149,7 +150,7 @@ function renderSessions() {
       const status = document.createElement("span");
       status.className = "session-option-state";
       button.append(title, status);
-      button.addEventListener("click", () => selectSession(session.id));
+      button.addEventListener("click", () => selectSession(session.id, { explicit: true }));
     }
     button.children[0].textContent = session.title || "Untitled session";
     button.children[1].textContent = statusLabel(session);
@@ -167,11 +168,15 @@ function renderControls() {
   const busy = isBusy(session);
   const readOnly = isReadOnly(session);
   const approval = session.pending_approval;
+  const canFork = Boolean(state.id) && !readOnly && !busy
+    && ["idle", "completed", "failed", "cancelled"].includes(session.status)
+    && state.client?.connection === "synced";
   $("session-title").textContent = state.id ? session.title || "Untitled session" : "Agent workspace";
   $("status").textContent = statusLabel(session);
   $("status").dataset.state = approval ? "approval" : session.status || "idle";
   $("progress").textContent = session.turn_id > 0 ? `Turn ${session.turn_id} · Step ${session.step || 0}` : "";
   $("cancel").disabled = state.mutation || !busy || !state.id;
+  $("fork-session").disabled = state.mutation || !canFork;
   $("prune-results").hidden = true;
   $("new-session").disabled = state.mutation || state.client?.connection !== "synced";
   $("prompt").disabled = readOnly || state.client?.connection !== "synced";
@@ -541,7 +546,9 @@ async function createSession(title) {
   if (sessionId) await selectSession(sessionId);
 }
 
-async function selectSession(id) {
+async function selectSession(id, { explicit = false } = {}) {
+  if (explicit) state.selection += 1;
+  const selection = state.selection;
   if (!id || id === state.id) return;
   client.select(id);
   state.actionError = "";
@@ -549,10 +556,12 @@ async function selectSession(id) {
   syncFromClient();
   try {
     await client.selectedSession(id);
+    if (selection !== state.selection) return;
     syncFromClient();
     startStream();
     clearConnectionError();
   } catch (error) {
+    if (selection !== state.selection) return;
     connectionError(error);
     await recoverSnapshot();
   }
@@ -565,6 +574,26 @@ async function handleAuthRefresh() {
 $("new-session").addEventListener("click", () => mutate(async () => {
   await createSession(`Session ${state.sessions.length + 1}`);
   $("prompt").focus();
+}));
+
+$("fork-session").addEventListener("click", () => mutate(async () => {
+  const sourceId = state.id;
+  const selection = state.selection;
+  if (!sourceId) return;
+  const receipt = await runCommand("session_fork", sourceId, {});
+  const child = receipt.result?.session || receipt.result;
+  if (typeof child?.id !== "string") {
+    throw new Error("The host did not return the forked conversation.");
+  }
+  // Selecting the fork is a convenience. A newer explicit user selection
+  // always wins while the durable command is in flight.
+  if (state.id === sourceId && state.selection === selection && client.state().selected_session === sourceId) {
+    await selectSession(child.id);
+    if (state.id === child.id) {
+      state.actionMessage = `Forked ${sourceId} as an independent conversation.`;
+      syncFromClient();
+    }
+  }
 }));
 
 $("composer").addEventListener("submit", (event) => {

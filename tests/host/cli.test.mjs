@@ -40,6 +40,10 @@ test('CLI options preserve explicit provider and approval policy', () => {
   assert.deepEqual(pruner.options.pruneConfig, { threshold_chars: 8000, head_chars: 4000, tail_chars: 1000 });
   assert.throws(() => parseCLI(['prune-session'], {}), /requires one session ID/);
   assert.throws(() => parseCLI(['prune-session', 'session-7', '--threshold-chars', '1.5'], {}), /must be an integer/);
+  const forker = parseCLI(['fork-session', 'session-7', '--json'], {});
+  assert.equal(forker.forkSessionID, 'session-7');
+  assert.equal(forker.options.json, true);
+  assert.throws(() => parseCLI(['fork-session'], {}), /requires one session ID/);
   assert.throws(() => parseCLI(['run', 'Hello', '--head-chars', '1'], {}), /require the prune-session command/);
 });
 
@@ -88,9 +92,18 @@ test('CLI offline run completes the real tool turn and leaves no live host lock'
   const pruneResult = JSON.parse(prune.stdout);
   assert.equal(pruneResult.session.status, 'completed');
   assert.deepEqual(pruneResult.pruned, []);
+  const fork = await execute(process.execPath, [
+    'host/cli.mjs', 'fork-session', final.id, '--demo', '--workspace', workspace, '--json',
+  ], { cwd: repository, timeout: 15_000, env: process.env });
+  const child = JSON.parse(fork.stdout);
+  assert.equal(child.parent_session_id, final.id);
+  assert.equal(child.status, 'idle');
+  assert.deepEqual(child.messages, final.messages);
+  assert.ok(child.events.some((event) => event.type === 'session/forked'));
   await assert.rejects(fs.stat(path.join(workspace, '.dsh.mbt/host.lock')), { code: 'ENOENT' });
   const saved = JSON.parse(await fs.readFile(path.join(workspace, '.dsh.mbt/sessions.json'), 'utf8'));
   assert.equal(saved.sessions[0].status, 'completed');
+  assert.equal(saved.sessions[1].parent_session_id, final.id);
 });
 
 test('CLI Session v4 import creates a read-only history without provider or tool I/O', async (t) => {

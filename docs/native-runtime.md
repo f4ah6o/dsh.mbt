@@ -36,6 +36,14 @@ moon run native --target native --release -- \
   --workspace /absolute/path/to/project
 ```
 
+Create an independent branch from a settled native v1 conversation with `--fork SESSION_ID`. It returns a completed command receipt containing the new idle session. The child preserves the validated transcript and parent link; it does not resume or replay provider, approval, retry, or tool work.
+
+```sh
+moon run native --target native --release -- \
+  --fork SESSION_ID --data-dir /absolute/path/to/dsh-demo-data \
+  --workspace /absolute/path/to/project
+```
+
 `--deny-call` follows the same flow but rejects the tool. Provider account lifecycle actions are also available locally with `--auth-status`, `--sign-in`, `--models`, `--select-model MODEL`, and `--sign-out`; each action requires `--data-dir` and `--workspace`. CLI `--sign-in` opens the host operating system's default browser. Sign-in from the local browser UI opens a new tab in that same browser. In both cases, the callback flow and tokens stay on the host in the protected native store.
 
 ## Data directory compatibility

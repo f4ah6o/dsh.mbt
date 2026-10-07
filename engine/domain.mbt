@@ -98,6 +98,7 @@ fn validate_domain_id(value : String, name : String) -> Result[String, String] {
 /// Semantic engine operations accepted by the legacy JSON operation adapter.
 pub(all) enum EngineCommand {
   CreateSession(String?, String, String, Int?)
+  ForkSession(SessionId, String?, String?)
   ListSessions
   ImportSession(String)
   GetSession(SessionId)
@@ -135,6 +136,19 @@ pub fn EngineCommand::from_json(
             Some(identifier(string_value(value, "id", max=128), "id"))
         }
         CreateSession(id, title, system_prompt, max_steps)
+      }
+      "session_fork" => {
+        let session_id = decode_session_id(input)
+        let id = match fields(input).get("id") {
+          None => None
+          Some(value) =>
+            Some(identifier(string_value(value, "id", max=128), "id"))
+        }
+        let title = match fields(input).get("title") {
+          None => None
+          Some(value) => Some(string_value(value, "title", max=512))
+        }
+        ForkSession(session_id, id, title)
       }
       "session_list" => ListSessions
       "session_import" =>
@@ -203,6 +217,21 @@ fn EngineCommand::validate(self : EngineCommand) -> Result[Unit, String] {
       }
       Ok(())
     }
+    ForkSession(_, id, title) => {
+      match id {
+        Some(value) =>
+          match SessionId::new(value) {
+            Ok(_) => ()
+            Err(error) => return Err(error)
+          }
+        None => ()
+      }
+      match title {
+        Some(value) if value.length() > 512 =>
+          Err("title exceeds the length limit")
+        _ => Ok(())
+      }
+    }
     ImportSession(jsonl) if jsonl.length() > 262144 =>
       Err("jsonl exceeds the length limit")
     SendPrompt(_, prompt) if prompt.is_empty() =>
@@ -238,6 +267,7 @@ fn SessionId::from_validated(value : String) -> SessionId {
 ///|
 pub(all) enum EngineEventKind {
   SessionCreated
+  SessionForked
   SessionCancelled
   SessionInterrupted
   TurnStarted
@@ -270,6 +300,7 @@ pub extend EngineEventKind with Eq::{not_equal, equal}
 pub fn EngineEventKind::from_wire(value : String) -> EngineEventKind {
   match value {
     "session/created" => SessionCreated
+    "session/forked" => SessionForked
     "session/cancelled" => SessionCancelled
     "session/interrupted" => SessionInterrupted
     "turn/start" => TurnStarted
@@ -300,6 +331,7 @@ pub fn EngineEventKind::from_wire(value : String) -> EngineEventKind {
 pub fn EngineEventKind::wire(self : EngineEventKind) -> String {
   match self {
     SessionCreated => "session/created"
+    SessionForked => "session/forked"
     SessionCancelled => "session/cancelled"
     SessionInterrupted => "session/interrupted"
     TurnStarted => "turn/start"

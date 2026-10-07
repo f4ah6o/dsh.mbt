@@ -322,12 +322,12 @@ fn Session::validate_tool_result_prune(
   if result_seq >= self.events.length() || source_seq >= self.events.length() {
     raise Invalid("Tool result pruning references a future event")
   }
-  if self.status != Completed ||
+  if (self.status != Idle && self.status != Completed) ||
     self.open_step ||
     self.active_effect is Some(_) ||
     self.active_tool_effect_count() > 0 ||
     self.approval is Some(_) {
-    raise Invalid("Tool result pruning requires a completed closed turn")
+    raise Invalid("Tool result pruning requires a settled closed turn")
   }
   let original = self.events[result_seq]
   if original.kind != EngineEventKind::ToolResult || source_seq < result_seq {
