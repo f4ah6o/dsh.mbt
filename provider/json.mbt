@@ -170,6 +170,12 @@ fn update_usage(
       ("cache_read_input_tokens", "cache_read_input_tokens"),
       ("cache_creation_input_tokens", "cache_creation_input_tokens"),
     ]
+  } else if mode == "responses" {
+    [
+      ("input_tokens", "input_tokens"),
+      ("output_tokens", "output_tokens"),
+      ("total_tokens", "total_tokens"),
+    ]
   } else {
     [
       ("prompt_tokens", "input_tokens"),
@@ -189,6 +195,18 @@ fn update_usage(
       Some(Null) | None => ()
       Some(value) => {
         let details = object(value, "prompt_tokens_details")
+        match details.get("cached_tokens") {
+          None => ()
+          Some(value) =>
+            usage["cache_read_input_tokens"] = integer(value, "cached_tokens").to_json()
+        }
+      }
+    }
+  } else if mode == "responses" {
+    match fields.get("input_tokens_details") {
+      Some(Null) | None => ()
+      Some(value) => {
+        let details = object(value, "input_tokens_details")
         match details.get("cached_tokens") {
           None => ()
           Some(value) =>
