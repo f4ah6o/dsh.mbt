@@ -44,8 +44,16 @@ flowchart TD
 7. host は承認の記録も保存してから実行する。結果を `complete` に戻し、次の LLM step に進む。
 8. tool のない最終応答で `completed`。cancel、provider error、step / token / capacity 上限は明示的に終了する。
 
-tool は呼出し順に直列実行します。unknown tool、不正な引数、承認拒否は対応する tool result にエラーとして残り、
-モデルが次の step で回復を試みられます。truncated tool arguments は実行しません。
+`effect: "read"` として登録した連続 call は、最大 4 件の bounded rolling pool で並列実行します。host は
+すべての `tool/request` を checkpoint してから IO を開始します。読み取りが返る順は自由ですが、受理した completion は
+call ID と effect ID の組として永続化し、tool result と次の model context には元の call 順で追加します。pool が空くと
+同じ Read group の次の call を開始します。最大数は upstream の既定 10 ではなく、この port の 4 です。
+
+`Write` と `Shell` は 1 call ごとの承認 barrier です。unknown tool と schema-invalid call も fail-closed barrier とし、
+先行 Read group を drain してから error result を記録します。別々の plugin effect を Read に分類するかどうかは
+startup descriptor の静的 policy です。truncated arguments や未登録 tool は IO しません。cancel は新しい Read の補充を止め、
+既に受理した成功結果を保ちながら実行中・未開始 call を結果不明の error として閉じます。restore は中断時の不明な IO を
+再実行しません。
 
 SSE decoder は分割された text / reasoning / tool arguments を逐次解析します。完全に検証された text / reasoning frame
 だけが stream event になり、tool arguments や reasoning signature は projection しません。host は有限の 16 Mi-unit

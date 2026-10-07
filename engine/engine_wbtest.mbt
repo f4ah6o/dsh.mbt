@@ -69,6 +69,13 @@ fn id_of(effect : Json) -> String {
 }
 
 ///|
+fn call_id_of(effect : Json) -> String {
+  required_string(required_field(effect, "request"), "call_id") catch {
+    _ => abort("Missing tool effect call id")
+  }
+}
+
+///|
 fn get_status(value : Json) -> String {
   required_string(value, "status") catch {
     _ => abort("Missing status")
@@ -172,7 +179,7 @@ test "upstream tool-call-turn distilled transcript preserves correlation and fol
 }
 
 ///|
-test "sequential read calls preserve order and tool-call identity" {
+test "read calls overlap while durable results stay in model order" {
   let (engine, llm) = started_engine()
   ignore(
     success(
@@ -186,29 +193,27 @@ test "sequential read calls preserve order and tool-call identity" {
     ),
   )
   let first = engine.take_effects()
-  assert_eq(first.length(), 1)
-  assert_eq(
-    required_string(required_field(first[0], "request"), "call_id"),
-    "first",
+  assert_eq(first.length(), 2)
+  assert_eq(call_id_of(first[0]), "first")
+  assert_eq(call_id_of(first[1]), "second")
+  ignore(
+    success(
+      engine.complete(
+        id_of(first[1]),
+        fixture("{\"ok\":true,\"content\":\"two\"}"),
+      ),
+    ),
   )
   assert_eq(engine.take_effects().length(), 0)
+  let early = get_session(engine)
+  assert_eq(
+    array_value(required_field(early, "messages"), "messages", 100).length(),
+    2,
+  )
   ignore(
     success(
       engine.complete(
         id_of(first[0]),
-        fixture("{\"ok\":true,\"content\":\"one\"}"),
-      ),
-    ),
-  )
-  let second = engine.take_effects()[0]
-  assert_eq(
-    required_string(required_field(second, "request"), "call_id"),
-    "second",
-  )
-  ignore(
-    success(
-      engine.complete(
-        id_of(second),
         fixture("{\"ok\":false,\"error\":\"Missing file\"}"),
       ),
     ),
@@ -220,8 +225,224 @@ test "sequential read calls preserve order and tool-call identity" {
     100,
   )
   assert_eq(required_string(messages[2], "tool_call_id"), "first")
+  assert_eq(required_field(messages[2], "is_error"), boolean(true))
   assert_eq(required_string(messages[3], "tool_call_id"), "second")
+  assert_eq(required_field(messages[3], "is_error"), boolean(false))
+  assert_eq(required_string(messages[3], "content"), "two")
+}
+
+///|
+test "read pool is bounded and replenishes as individual effects settle" {
+  let (engine, llm) = started_engine()
+  let calls = []
+  for index = 0; index < 6; index = index + 1 {
+    calls.push(("read-\{index}", "read", "{\"file_path\":\"f\{index}.txt\"}"))
+  }
+  ignore(success(engine.complete(id_of(llm), calls_response(calls))))
+  let initial = engine.take_effects()
+  assert_eq(initial.length(), 4)
+  for index = 0; index < 4; index = index + 1 {
+    assert_eq(call_id_of(initial[index]), "read-\{index}")
+  }
+  ignore(
+    success(
+      engine.complete(
+        id_of(initial[3]),
+        fixture("{\"ok\":true,\"content\":\"three\"}"),
+      ),
+    ),
+  )
+  let fifth = engine.take_effects()
+  assert_eq(fifth.length(), 1)
+  assert_eq(call_id_of(fifth[0]), "read-4")
+  ignore(
+    success(
+      engine.complete(
+        id_of(fifth[0]),
+        fixture("{\"ok\":true,\"content\":\"four\"}"),
+      ),
+    ),
+  )
+  let sixth = engine.take_effects()
+  assert_eq(sixth.length(), 1)
+  assert_eq(call_id_of(sixth[0]), "read-5")
+  ignore(
+    success(
+      engine.complete(
+        id_of(sixth[0]),
+        fixture("{\"ok\":true,\"content\":\"five\"}"),
+      ),
+    ),
+  )
+  assert_eq(engine.take_effects().length(), 0)
+  ignore(
+    success(
+      engine.complete(
+        id_of(initial[0]),
+        fixture("{\"ok\":true,\"content\":\"zero\"}"),
+      ),
+    ),
+  )
+  ignore(
+    success(
+      engine.complete(
+        id_of(initial[2]),
+        fixture("{\"ok\":true,\"content\":\"two\"}"),
+      ),
+    ),
+  )
+  ignore(
+    success(
+      engine.complete(
+        id_of(initial[1]),
+        fixture("{\"ok\":true,\"content\":\"one\"}"),
+      ),
+    ),
+  )
+  let next = engine.take_effects()[0]
+  let history = array_value(
+    required_field(required_field(next, "request"), "messages"),
+    "messages",
+    100,
+  )
+  assert_eq(history.length(), 8)
+  for index = 0; index < 6; index = index + 1 {
+    assert_eq(
+      required_string(history[index + 2], "tool_call_id"),
+      "read-\{index}",
+    )
+  }
+}
+
+///|
+test "read groups drain before an approved write barrier and later reads" {
+  let (engine, llm) = started_engine()
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([
+          ("read-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("read-b", "read", "{\"file_path\":\"b.txt\"}"),
+          ("write", "write", "{\"file_path\":\"c.txt\",\"content\":\"c\"}"),
+          ("read-c", "read", "{\"file_path\":\"c.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let reads = engine.take_effects()
+  assert_eq(reads.length(), 2)
+  ignore(
+    success(
+      engine.complete(
+        id_of(reads[1]),
+        fixture("{\"ok\":true,\"content\":\"b\"}"),
+      ),
+    ),
+  )
+  assert_eq(get_status(get_session(engine)), "running")
+  assert_eq(engine.take_effects().length(), 0)
+  let waiting = success(
+    engine.complete(id_of(reads[0]), fixture("{\"ok\":true,\"content\":\"a\"}")),
+  )
+  assert_eq(get_status(waiting), "awaiting_approval")
+  assert_eq(engine.take_effects().length(), 0)
+  ignore(
+    success(
+      engine.invoke(
+        "tool_approve",
+        fixture(
+          "{\"session_id\":\"test\",\"call_id\":\"write\",\"approved\":true}",
+        ),
+      ),
+    ),
+  )
+  let write = engine.take_effects()
+  assert_eq(write.length(), 1)
+  assert_eq(call_id_of(write[0]), "write")
+  ignore(
+    success(
+      engine.complete(
+        id_of(write[0]),
+        fixture("{\"ok\":true,\"content\":\"written\"}"),
+      ),
+    ),
+  )
+  let last_read = engine.take_effects()
+  assert_eq(last_read.length(), 1)
+  assert_eq(call_id_of(last_read[0]), "read-c")
+  ignore(
+    success(
+      engine.complete(
+        id_of(last_read[0]),
+        fixture("{\"ok\":true,\"content\":\"c\"}"),
+      ),
+    ),
+  )
+  let next = engine.take_effects()[0]
+  let history = array_value(
+    required_field(required_field(next, "request"), "messages"),
+    "messages",
+    100,
+  )
+  for index = 0; index < 4; index = index + 1 {
+    let expected = ["read-a", "read-b", "write", "read-c"][index]
+    assert_eq(required_string(history[index + 2], "tool_call_id"), expected)
+  }
+}
+
+///|
+test "unknown and schema-invalid calls drain reads before local failures" {
+  let (engine, llm) = started_engine()
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([
+          ("read-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("unknown", "unregistered", "{}"),
+          ("invalid", "read", "{\"file_path\":7}"),
+          ("read-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let first = engine.take_effects()
+  assert_eq(first.length(), 1)
+  assert_eq(call_id_of(first[0]), "read-a")
+  let before = array_value(
+    required_field(get_session(engine), "events"),
+    "events",
+    100,
+  )
+  assert_true(
+    !before.any(event => {
+      required_string(event, "type") == "tool/call" &&
+      required_string(required_field(event, "data"), "id") == "unknown"
+    }),
+  )
+  ignore(
+    success(
+      engine.complete(
+        id_of(first[0]),
+        fixture("{\"ok\":true,\"content\":\"a\"}"),
+      ),
+    ),
+  )
+  let next = engine.take_effects()
+  assert_eq(next.length(), 1)
+  assert_eq(call_id_of(next[0]), "read-b")
+  let messages = array_value(
+    required_field(get_session(engine), "messages"),
+    "messages",
+    100,
+  )
+  assert_eq(messages.length(), 5)
+  assert_eq(required_string(messages[2], "tool_call_id"), "read-a")
+  assert_eq(required_string(messages[3], "tool_call_id"), "unknown")
   assert_eq(required_field(messages[3], "is_error"), boolean(true))
+  assert_eq(required_string(messages[4], "tool_call_id"), "invalid")
+  assert_eq(required_field(messages[4], "is_error"), boolean(true))
 }
 
 ///|
@@ -444,6 +665,184 @@ test "restoring an outstanding tool closes interrupted history without replaying
   )
   let fresh = restored.take_effects()[0]
   assert_true(id_of(fresh) != id_of(outstanding))
+}
+
+///|
+test "canceling parallel reads retains staged success and survives repeated restore" {
+  let (engine, llm) = started_engine()
+  let calls = []
+  for index = 0; index < 5; index = index + 1 {
+    calls.push(("read-\{index}", "read", "{\"file_path\":\"f\{index}.txt\"}"))
+  }
+  ignore(success(engine.complete(id_of(llm), calls_response(calls))))
+  let in_flight = engine.take_effects()
+  assert_eq(in_flight.length(), 4)
+  ignore(
+    success(
+      engine.complete(
+        id_of(in_flight[2]),
+        fixture("{\"ok\":true,\"content\":\"accepted\"}"),
+      ),
+    ),
+  )
+  let cancelled = success(
+    engine.invoke("session_cancel", fixture("{\"session_id\":\"test\"}")),
+  )
+  assert_eq(get_status(cancelled), "cancelled")
+  let history = array_value(
+    required_field(cancelled, "messages"),
+    "messages",
+    100,
+  )
+  assert_eq(history.length(), 7)
+  for index = 0; index < 5; index = index + 1 {
+    assert_eq(
+      required_string(history[index + 2], "tool_call_id"),
+      "read-\{index}",
+    )
+    if index == 2 {
+      assert_eq(required_string(history[index + 2], "content"), "accepted")
+      assert_eq(required_field(history[index + 2], "is_error"), boolean(false))
+    } else {
+      assert_eq(required_field(history[index + 2], "is_error"), boolean(true))
+    }
+  }
+  assert_eq(engine.take_effects().length(), 0)
+  assert_true(
+    engine.complete(
+      id_of(in_flight[0]),
+      fixture("{\"ok\":true,\"content\":\"late\"}"),
+    )
+    is Err(_),
+  )
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session(restored), cancelled)
+  let restored_again = Engine::new(test_tools())
+  assert_eq(restored_again.restore(restored.snapshot()), Ok(()))
+  assert_eq(get_session(restored_again), cancelled)
+  assert_eq(restored_again.take_effects().length(), 0)
+}
+
+///|
+test "restore preserves a staged read result and closes unknown siblings once" {
+  let (engine, llm) = started_engine()
+  let calls = []
+  for index = 0; index < 5; index = index + 1 {
+    calls.push(("read-\{index}", "read", "{\"file_path\":\"f\{index}.txt\"}"))
+  }
+  ignore(success(engine.complete(id_of(llm), calls_response(calls))))
+  let in_flight = engine.take_effects()
+  ignore(
+    success(
+      engine.complete(
+        id_of(in_flight[2]),
+        fixture("{\"ok\":true,\"content\":\"accepted\"}"),
+      ),
+    ),
+  )
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  let state = get_session(restored)
+  assert_eq(get_status(state), "failed")
+  let history = array_value(required_field(state, "messages"), "messages", 100)
+  assert_eq(history.length(), 7)
+  for index = 0; index < 5; index = index + 1 {
+    assert_eq(
+      required_string(history[index + 2], "tool_call_id"),
+      "read-\{index}",
+    )
+    if index == 2 {
+      assert_eq(required_string(history[index + 2], "content"), "accepted")
+      assert_eq(required_field(history[index + 2], "is_error"), boolean(false))
+    } else {
+      assert_eq(required_field(history[index + 2], "is_error"), boolean(true))
+    }
+  }
+  assert_eq(restored.take_effects().length(), 0)
+  let restored_again = Engine::new(test_tools())
+  assert_eq(restored_again.restore(restored.snapshot()), Ok(()))
+  assert_eq(get_session(restored_again), state)
+  assert_eq(restored_again.take_effects().length(), 0)
+}
+
+///|
+test "restore rejects parallel IO when the configured tool policy is exclusive" {
+  let (engine, llm) = started_engine()
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([
+          ("read-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("read-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  assert_eq(engine.take_effects().length(), 2)
+  let tools = test_tools()
+  tools[0] = fixture(
+    "{\"name\":\"read\",\"description\":\"Read text\",\"input_schema\":{\"type\":\"object\",\"required\":[\"file_path\"],\"properties\":{\"file_path\":{\"type\":\"string\"}},\"additionalProperties\":false},\"effect\":\"write\"}",
+  )
+  let exclusive = Engine::new(tools)
+  assert_true(exclusive.restore(engine.snapshot()) is Err(_))
+  assert_eq(
+    exclusive.snapshot(),
+    object([
+      ("schema", Json::string("dsh.mbt-session-v1")),
+      ("next_session", integer(1)),
+      ("next_effect", integer(1)),
+      ("sessions", Json::array([])),
+    ]),
+  )
+}
+
+///|
+test "capacity closure keeps an admitted staged read and retires the group" {
+  let (engine, llm) = started_engine()
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([
+          ("read-0", "read", "{\"file_path\":\"a.txt\"}"),
+          ("read-1", "read", "{\"file_path\":\"b.txt\"}"),
+          ("read-2", "read", "{\"file_path\":\"c.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let effects = engine.take_effects()
+  assert_eq(effects.length(), 3)
+  let large_success = object([
+    ("ok", boolean(true)),
+    ("content", Json::string("x".repeat(65536))),
+  ])
+  ignore(success(engine.complete(id_of(effects[1]), large_success)))
+  let closed = success(engine.complete(id_of(effects[2]), large_success))
+  assert_eq(get_status(closed), "failed")
+  let messages = array_value(
+    required_field(closed, "messages"),
+    "messages",
+    100,
+  )
+  assert_eq(messages.length(), 5)
+  assert_eq(required_string(messages[2], "tool_call_id"), "read-0")
+  assert_eq(required_field(messages[2], "is_error"), boolean(true))
+  assert_eq(required_string(messages[3], "tool_call_id"), "read-1")
+  assert_eq(required_string(messages[3], "content").length(), 65536)
+  assert_eq(required_field(messages[3], "is_error"), boolean(false))
+  assert_eq(required_string(messages[4], "tool_call_id"), "read-2")
+  assert_eq(required_field(messages[4], "is_error"), boolean(true))
+  assert_eq(engine.take_effects().length(), 0)
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session(restored), closed)
+  let restored_again = Engine::new(test_tools())
+  assert_eq(restored_again.restore(restored.snapshot()), Ok(()))
+  assert_eq(get_session(restored_again), closed)
+  assert_eq(restored_again.take_effects().length(), 0)
 }
 
 ///|

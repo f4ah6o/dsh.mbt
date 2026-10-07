@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as fs from 'node:fs/promises';
+import { mkdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createHost, loadFacade } from '../../host/runtime.mjs';
@@ -33,6 +34,21 @@ async function until(predicate) {
     if (Date.now() > deadline) throw new Error('Condition did not become true');
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+}
+
+function parallelReadCalls(count = 6) {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `parallel-grep-${index}`,
+    name: 'grep',
+    arguments: { path: '.', pattern: 'not-in-this-workspace' },
+  }));
+}
+
+async function seedSearchWorkspace(workspace, count = 500) {
+  const directory = path.join(workspace, 'parallel-files');
+  await fs.mkdir(directory);
+  await Promise.all(Array.from({ length: count }, (_, index) =>
+    fs.writeFile(path.join(directory, `item-${index}.txt`), `searchable fixture ${index}\n`)));
 }
 
 test('offline fixture performs a real tool turn and restores the completed transcript', async (t) => {
@@ -107,6 +123,101 @@ test('cancel aborts the in-flight provider and rejects a late settlement', async
   const state = await host.session(id);
   assert.equal(state.status, 'cancelled');
   assert.ok(!state.messages.some((message) => message.content?.includes('Late content')));
+});
+
+test('cancel and shutdown fence a four-effect read pool without replaying queued siblings', async (t) => {
+  const { workspace, hosts, dataDir } = await temporary(t);
+  await seedSearchWorkspace(workspace);
+  let requests = 0;
+  const calls = parallelReadCalls();
+  const options = {
+    workspace, dataDir, mode: 'openai', model: 'test-model', baseURL: 'http://127.0.0.1:1',
+    fetchImpl: async () => {
+      requests++;
+      return response('', calls);
+    },
+  };
+  const host = await createHost(options);
+  hosts.push(host);
+
+  const cancelledID = await send(host, 'cancel the parallel search');
+  await until(() => host.activeCount === 4);
+  const launched = JSON.parse(readFileSync(path.join(dataDir, 'sessions.json'), 'utf8'))
+    .sessions.find((session) => session.id === cancelledID);
+  const launchedRequests = launched.events.filter((event) => event.type === 'tool/request');
+  assert.equal(launchedRequests.length, 4, 'the durable read pool is capped at four before cancellation');
+  assert.equal(host.activeCount, 4);
+  const cancelled = await host.call('session_cancel', { session_id: cancelledID });
+  assert.equal(cancelled.ok, true, cancelled.error);
+  assert.equal(cancelled.result.status, 'cancelled');
+  await until(() => host.activeCount === 0);
+  const cancelledState = await host.session(cancelledID);
+  assert.equal(cancelledState.messages.filter((message) => message.role === 'tool').length, 6);
+  assert.equal(cancelledState.events.filter((event) => event.type === 'tool/request').length, 4);
+  assert.equal(requests, 1, 'cancellation cannot start a new model step');
+
+  const shutdownID = await send(host, 'shut down the parallel search');
+  await until(() => host.activeCount === 4);
+  const beforeShutdown = JSON.parse(readFileSync(path.join(dataDir, 'sessions.json'), 'utf8'))
+    .sessions.find((session) => session.id === shutdownID);
+  assert.equal(beforeShutdown.events.filter((event) => event.type === 'tool/request').length, 4);
+  await host.close();
+  const finalDisk = JSON.parse(await fs.readFile(path.join(dataDir, 'sessions.json'), 'utf8'));
+  const shutdownState = finalDisk.sessions.find((session) => session.id === shutdownID);
+  assert.equal(shutdownState.status, 'cancelled');
+  assert.equal(shutdownState.events.filter((event) => event.type === 'tool/request').length, 4);
+  assert.equal(shutdownState.messages.filter((message) => message.role === 'tool').length, 6);
+  assert.equal(requests, 2, 'shutdown cannot start a follow-up model request');
+
+  let replayedRequests = 0;
+  const reopened = await createHost({ ...options, fetchImpl: async () => { replayedRequests++; throw new Error('unexpected replay'); } });
+  hosts.push(reopened);
+  assert.equal((await reopened.session(cancelledID)).status, 'cancelled');
+  assert.equal((await reopened.session(shutdownID)).status, 'cancelled');
+  assert.equal(reopened.activeCount, 0);
+  assert.equal(replayedRequests, 0);
+});
+
+test('parallel tool effects are not launched when their shared checkpoint fails', async (t) => {
+  const { workspace, hosts, dataDir } = await temporary(t);
+  let requests = 0;
+  let toolEffectsSeen;
+  let toolSnapshot;
+  let activeAtToolCheckpoint;
+  const baseFacade = await loadFacade();
+  let host;
+  const facade = new Proxy(baseFacade, {
+    get(target, property) {
+      if (property === 'take_effects') return () => {
+        const serialized = target.take_effects();
+        const effects = JSON.parse(serialized);
+        if (effects.some((effect) => effect.kind === 'tool')) {
+          toolEffectsSeen = effects;
+          activeAtToolCheckpoint = host.activeCount;
+          toolSnapshot = JSON.parse(target.snapshot()).sessions[0];
+          const snapshotPath = path.join(dataDir, 'sessions.json');
+          rmSync(snapshotPath, { force: true, recursive: true });
+          mkdirSync(snapshotPath);
+        }
+        return serialized;
+      };
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  host = await createHost({
+    facade, workspace, dataDir, mode: 'openai', model: 'test-model', baseURL: 'http://127.0.0.1:1',
+    fetchImpl: async () => { requests++; return response('', parallelReadCalls()); },
+  });
+  hosts.push(host);
+  await send(host, 'fail the parallel checkpoint');
+  await until(() => host.status === 'failed' && host.activeCount === 0);
+  assert.equal(toolEffectsSeen.length, 4);
+  assert.equal(toolSnapshot.events.filter((event) => event.type === 'tool/request').length, 4);
+  assert.equal(activeAtToolCheckpoint, 1, 'only the provider remained active before the four tool effects were checkpointed');
+  assert.equal(requests, 1, 'the failed tool checkpoint cannot lead to a follow-up provider request');
+  await host.close();
+  rmSync(path.join(dataDir, 'sessions.json'), { force: true, recursive: true });
 });
 
 test('restoring an interrupted approved tool fails the turn without replaying IO', async (t) => {

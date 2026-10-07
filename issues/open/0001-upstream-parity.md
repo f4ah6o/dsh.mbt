@@ -65,6 +65,14 @@ MoonBit の typed service / lifetime を定義して、startup metadata から�
 external MCP client、ACP、hooks、LSP、skills、subagent の順に相関と終了条件を仕様化する。
 Cordis / npm plugin をそのまま動かす場合は別の互換 host を設計し、MoonBit-only plugin とは区別する。
 
+部分対応（2026-10-07）: `effect: "read"` に静的分類した連続 tool call は最大 4 件の rolling pool で並列実行し、
+各 `tool/request` の checkpoint 後に host IO を始めます。out-of-order completion は call / effect ID とともに durable staging し、
+`tool/result` と次の model context は call 順を保ちます。Write / Shell、unknown tool、schema-invalid call は先行 read group を drain する barrier
+です。cancel / restore は新しい work の dispatch を止め、既知の成功を保持し、unknown outcome を再生しません。pinned upstream
+parallel-tool-calls fixture の keyless runtime 経路と、pool refill、barrier、approval、cancel、capacity、reopen を検証します。
+upstream default pool size 10 ではなく 4 に制限し、dynamic safety classification、parallel write / shell、full upstream tool policy は
+引き続き未実装です。本 issue 全体は open のままです。
+
 受入条件:
 
 - plugin mount / teardown 中の依存、保有リソース、tool 呼出しを一貫して扱う。

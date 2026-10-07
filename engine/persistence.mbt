@@ -51,7 +51,7 @@ fn Engine::restore_impl(self : Engine, snapshot : Json) -> Result[Unit, String] 
     let effect_ids : Map[String, Bool] = Map([])
     for
       value in array_value(required_field(snapshot, "sessions"), "sessions", 32) {
-      let session = restore_session(value, effect_ids, next_effect)
+      let session = restore_session(value, self.tools, effect_ids, next_effect)
       if loaded.get(session.id) is Some(_) {
         raise Invalid("Duplicate snapshot session id")
       }
@@ -118,7 +118,15 @@ fn effect_index(id : String) -> Int raise EngineError {
 }
 
 ///|
-fn current_call(session : Session) -> ToolCall raise EngineError {
+fn scheduled_call(session : Session) -> ToolCall raise EngineError {
+  if session.schedule_cursor >= session.calls.length() {
+    raise Invalid("Tool call event without an unadmitted call")
+  }
+  session.calls[session.schedule_cursor]
+}
+
+///|
+fn result_call(session : Session) -> ToolCall raise EngineError {
   if session.cursor >= session.calls.length() {
     raise Invalid("Tool event without a pending call")
   }
@@ -137,8 +145,29 @@ fn expect_call_id(
 }
 
 ///|
+fn replay_tool(tools : Array[Tool], name : String) -> Tool? {
+  for tool in tools {
+    if tool.name == name {
+      return Some(tool)
+    }
+  }
+  None
+}
+
+///|
+fn replay_arguments_are_valid(tool : Tool, call : ToolCall) -> Bool {
+  try {
+    validate_arguments(tool.input_schema, parse_arguments(call.arguments))
+    true
+  } catch {
+    Invalid(_) => false
+  }
+}
+
+///|
 fn restore_session(
   value : Json,
+  tools : Array[Tool],
   effect_ids : Map[String, Bool],
   next_effect : Int,
 ) -> Session raise EngineError {
@@ -242,8 +271,8 @@ fn restore_session(
           admitted_user = true
         }
         "llm/request" | "tool/request" => {
-          if !session.open_step || session.active_effect is Some(_) {
-            raise Invalid("Overlapping or misplaced effect request")
+          if !session.open_step {
+            raise Invalid("Effect request outside an open step")
           }
           let effect_id = required_string(data, "effect_id", max=128)
           if effect_index(effect_id) >= next_effect ||
@@ -251,20 +280,50 @@ fn restore_session(
             raise Invalid("Invalid snapshot effect counter or duplicate id")
           }
           effect_ids.set(effect_id, true)
-          session.active_effect = Some(effect_id)
           if kind == "llm/request" {
-            if assistant_recorded || !session.calls.is_empty() {
+            if session.active_effect is Some(_) ||
+              session.active_tool_effect_count() > 0 ||
+              assistant_recorded ||
+              !session.calls.is_empty() {
               raise Invalid("Repeated LLM request in one step")
             }
+            session.active_effect = Some(effect_id)
             session.active_kind = Some(Llm)
           } else {
-            let call = current_call(session)
-            if call.stage != Called {
+            let call_id = required_string(data, "call_id", max=128)
+            let call = match session.call_by_id(call_id) {
+              Some(call) => call
+              None => raise Invalid("Tool dispatch references an unknown call")
+            }
+            let tool = match replay_tool(tools, call.name) {
+              Some(tool) => tool
+              None =>
+                raise Invalid("Unknown tool cannot have a dispatched effect")
+            }
+            if !replay_arguments_are_valid(tool, call) {
+              raise Invalid(
+                "Invalid tool arguments cannot have a dispatched effect",
+              )
+            }
+            let call_index = session.call_index(call.id).unwrap()
+            let eligible = if tool.effect == Read {
+              call.stage == Called &&
+              session.parallel_group &&
+              session.active_tool_effect_count() < 4
+            } else {
+              call.stage == Approved &&
+              session.active_tool_effect_count() == 0 &&
+              session.cursor == call_index
+            }
+            if !assistant_recorded ||
+              session.active_effect is Some(_) ||
+              !eligible {
               raise Invalid("Tool dispatch without an admitted call")
             }
             expect_call_id(data, "call_id", call)
             call.stage = Dispatched
-            session.active_kind = Some(ToolExecution)
+            call.effect_id = Some(effect_id)
+            session.active_tool_effects.set(effect_id, call.id)
           }
         }
         "llm/retry" => {
@@ -493,9 +552,26 @@ fn restore_session(
           if !session.open_step || !assistant_recorded {
             raise Invalid("Tool call outside an assistant step")
           }
-          let call = current_call(session)
+          let call = scheduled_call(session)
           if call.stage != Pending {
             raise Invalid("Duplicate tool call event")
+          }
+          let is_read = match replay_tool(tools, call.name) {
+            Some(tool) =>
+              replay_arguments_are_valid(tool, call) && tool.effect == Read
+            None => false
+          }
+          if is_read {
+            if session.active_tool_effect_count() >= 4 {
+              raise Invalid("Read pool exceeded its configured capacity")
+            }
+            session.parallel_group = true
+          } else {
+            if session.active_tool_effect_count() > 0 ||
+              session.cursor != session.schedule_cursor {
+              raise Invalid("Exclusive or invalid call crossed a read barrier")
+            }
+            session.parallel_group = false
           }
           expect_call_id(data, "id", call)
           if required_string(data, "name", max=128) != call.name ||
@@ -503,17 +579,32 @@ fn restore_session(
             raise Invalid("Tool call payload differs from the model message")
           }
           call.stage = Called
+          session.schedule_cursor += 1
         }
         "tool/approval/requested" => {
-          let call = current_call(session)
+          let call_id = required_string(data, "call_id", max=128)
+          let call = match session.call_by_id(call_id) {
+            Some(call) => call
+            None => raise Invalid("Approval references an unknown call")
+          }
           if call.stage != Called ||
             session.approval is Some(_) ||
-            session.active_effect is Some(_) {
+            session.active_effect is Some(_) ||
+            session.active_tool_effect_count() > 0 ||
+            session.cursor >= session.calls.length() ||
+            session.calls[session.cursor].id != call.id {
             raise Invalid("Invalid tool approval request")
           }
           expect_call_id(data, "call_id", call)
           if required_string(data, "name", max=128) != call.name {
             raise Invalid("Approval tool name mismatch")
+          }
+          let tool = match replay_tool(tools, call.name) {
+            Some(tool) => tool
+            None => raise Invalid("Unknown tool cannot require approval")
+          }
+          if tool.effect == Read || !replay_arguments_are_valid(tool, call) {
+            raise Invalid("Read or invalid call cannot request approval")
           }
           let arguments = required_field(data, "arguments")
           if arguments != parse_arguments(call.arguments) {
@@ -528,18 +619,105 @@ fn restore_session(
           })
         }
         "tool/approval/resolved" => {
-          let call = current_call(session)
+          let call_id = required_string(data, "call_id", max=128)
+          let call = match session.call_by_id(call_id) {
+            Some(call) => call
+            None =>
+              raise Invalid("Approval decision references an unknown call")
+          }
           if call.stage != Waiting || session.approval is None {
             raise Invalid("Approval decision without a request")
           }
           expect_call_id(data, "call_id", call)
-          ignore(bool_value(required_field(data, "approved"), "approved"))
-          call.stage = Called
+          call.stage = if bool_value(
+              required_field(data, "approved"),
+              "approved",
+            ) {
+            Approved
+          } else {
+            Denied
+          }
           session.approval = None
           session.status = Running
         }
+        "tool/completed" => {
+          let call_id = required_string(data, "call_id", max=128)
+          let call = match session.call_by_id(call_id) {
+            Some(call) => call
+            None => raise Invalid("Tool completion references an unknown call")
+          }
+          let source = required_string(data, "source", max=16)
+          let content = required_string(data, "content")
+          let is_error = bool_value(
+            required_field(data, "is_error"),
+            "is_error",
+          )
+          match source {
+            "effect" => {
+              let effect_id = required_string(data, "effect_id", max=128)
+              if call.stage != Dispatched ||
+                call.effect_id != Some(effect_id) ||
+                session.active_tool_effects.get(effect_id) != Some(call.id) {
+                raise Invalid(
+                  "Tool completion does not match an active call effect",
+                )
+              }
+              session.active_tool_effects.remove(effect_id)
+              call.effect_id = None
+            }
+            "interrupted" => {
+              if !is_error {
+                raise Invalid("Interrupted tool result must be an error")
+              }
+              match fields(data).get("effect_id") {
+                Some(raw_effect_id) => {
+                  let effect_id = string_value(
+                    raw_effect_id,
+                    "effect_id",
+                    max=128,
+                  )
+                  if call.stage != Dispatched ||
+                    call.effect_id != Some(effect_id) ||
+                    session.active_tool_effects.get(effect_id) != Some(call.id) {
+                    raise Invalid(
+                      "Interrupted result does not match an active tool effect",
+                    )
+                  }
+                  session.active_tool_effects.remove(effect_id)
+                  call.effect_id = None
+                }
+                None =>
+                  if call.stage != Called &&
+                    call.stage != Waiting &&
+                    call.stage != Approved {
+                    raise Invalid("Unstarted interruption has no live call")
+                  }
+              }
+            }
+            "local" => {
+              if fields(data).get("effect_id") is Some(_) {
+                raise Invalid("Local tool completion cannot name an effect")
+              }
+              let local_failure = match replay_tool(tools, call.name) {
+                None => true
+                Some(tool) => !replay_arguments_are_valid(tool, call)
+              }
+              if call.stage == Denied {
+                if !is_error {
+                  raise Invalid("Denied tool result must be an error")
+                }
+              } else if call.stage != Called || !local_failure || !is_error {
+                raise Invalid("Local tool completion without a local failure")
+              }
+            }
+            _ => raise Invalid("Unknown tool completion source")
+          }
+          call.stage = Completed
+          call.completed_content = Some(content)
+          call.completed_error = Some(is_error)
+        }
         "tool/result" => {
-          let call = current_call(session)
+          let call = result_call(session)
           if call.stage == Pending || call.stage == Settled {
             raise Invalid("Tool result without a started call")
           }
@@ -547,8 +725,37 @@ fn restore_session(
           if required_string(data, "role", max=16) != "tool" {
             raise Invalid("Invalid tool result role")
           }
-          ignore(required_string(data, "content"))
-          ignore(bool_value(required_field(data, "is_error"), "is_error"))
+          let content = required_string(data, "content")
+          let is_error = bool_value(
+            required_field(data, "is_error"),
+            "is_error",
+          )
+          if call.stage == Completed {
+            if call.completed_content != Some(content) ||
+              call.completed_error != Some(is_error) {
+              raise Invalid("Tool result differs from its durable completion")
+            }
+            call.completed_content = None
+            call.completed_error = None
+          } else if call.stage == Dispatched {
+            // Older snapshots wrote tool/result directly after tool/request.
+            let effect_id = match call.effect_id {
+              Some(effect_id) => effect_id
+              None => raise Invalid("Legacy tool result has no active effect")
+            }
+            if session.active_tool_effects.get(effect_id) != Some(call.id) {
+              raise Invalid(
+                "Legacy tool result does not match its active effect",
+              )
+            }
+            session.active_tool_effects.remove(effect_id)
+            call.effect_id = None
+          } else if call.stage != Called &&
+            call.stage != Waiting &&
+            call.stage != Approved &&
+            call.stage != Denied {
+            raise Invalid("Tool result without a completed call")
+          }
           call.stage = Settled
           session.cursor += 1
           session.active_effect = None
@@ -561,6 +768,8 @@ fn restore_session(
           if !session.open_step ||
             !assistant_recorded ||
             session.cursor != session.calls.length() ||
+            session.schedule_cursor != session.calls.length() ||
+            session.active_tool_effect_count() > 0 ||
             session.active_effect is Some(_) ||
             session.pending_retry_id is Some(_) {
             raise Invalid("Step ended with unsettled work")
@@ -568,12 +777,15 @@ fn restore_session(
           ignore(required_string(data, "reason", max=64))
           session.calls.clear()
           session.cursor = 0
+          session.schedule_cursor = 0
+          session.parallel_group = false
           session.open_step = false
         }
         "turn/end" => {
           if !open_turn ||
             session.open_step ||
             session.active_effect is Some(_) ||
+            session.active_tool_effect_count() > 0 ||
             session.approval is Some(_) ||
             session.pending_retry_id is Some(_) {
             raise Invalid("Turn ended with unsettled work")
@@ -626,7 +838,10 @@ fn restore_session(
   if expected_approval != actual_approval {
     raise Invalid("Snapshot approval disagrees with the event log")
   }
-  if open_turn && session.active_effect is None && session.approval is None {
+  if open_turn &&
+    session.active_effect is None &&
+    session.active_tool_effect_count() == 0 &&
+    session.approval is None {
     raise Invalid("Snapshot captured an impossible in-between transition")
   }
   if open_turn && session.events.length() + 40 > 32768 {

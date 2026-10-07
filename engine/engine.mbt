@@ -79,6 +79,9 @@ fn Engine::invoke_impl(
         session.status = Running
         session.calls.clear()
         session.cursor = 0
+        session.schedule_cursor = 0
+        session.parallel_group = false
+        session.active_tool_effects.clear()
         session.append("turn/start", object([]))
         session.append(
           "user/message",
@@ -116,7 +119,10 @@ fn Engine::invoke_impl(
         if session.status != AwaitingApproval || call_id != approval.call_id {
           raise Invalid("Approval does not match the pending call")
         }
-        let call = session.calls[session.cursor]
+        let call = match session.call_by_id(approval.call_id) {
+          Some(call) => call
+          None => raise Invalid("Pending approval call is missing")
+        }
         session.append(
           "tool/approval/resolved",
           object([
@@ -126,11 +132,15 @@ fn Engine::invoke_impl(
         )
         session.approval = None
         session.status = Running
-        call.stage = Called
         if approved {
-          self.dispatch_tool(session, call, approval.arguments)
+          call.stage = Approved
+          self.start_approved_tool(session, call, approval.arguments)
         } else {
-          session.tool_result(call, "Tool execution denied by user", true)
+          call.stage = Denied
+          session.stage_local_tool_result(
+            call, "Tool execution denied by user", true,
+          )
+          session.commit_ready_tool_results()
           self.advance_tools(session)
         }
         session.json()
@@ -548,7 +558,8 @@ fn Engine::emit_effect(
   session : Session,
   kind : EffectKind,
   request : Json,
-) -> Unit {
+  call_id : String?,
+) -> String {
   let id = "effect-\{self.next_effect}"
   self.next_effect += 1
   let effect = {
@@ -557,21 +568,32 @@ fn Engine::emit_effect(
     session_id: session.id,
     turn_id: session.turn_id,
     step: session.step,
+    call_id,
     request,
   }
   self.effects.set(id, effect)
   self.queued.push(id)
-  session.active_effect = Some(id)
-  session.active_kind = Some(kind)
+  match kind {
+    Llm => {
+      session.active_effect = Some(id)
+      session.active_kind = Some(kind)
+    }
+    ToolExecution =>
+      match call_id {
+        Some(call_id) => session.active_tool_effects.set(id, call_id)
+        None => abort("Tool effect is missing its call identity")
+      }
+  }
   let kind_name = match kind {
     Llm => "llm/request"
     ToolExecution => "tool/request"
   }
   let data = Map::from_array([("effect_id", Json::string(id))])
   if kind == ToolExecution {
-    data.set("call_id", Json::string(session.calls[session.cursor].id))
+    data.set("call_id", Json::string(call_id.unwrap()))
   }
   session.append(kind_name, Json::object(data))
+  id
 }
 
 ///|
@@ -598,14 +620,17 @@ fn Engine::start_step(self : Engine, session : Session) -> Unit {
   session.pending_retry_id = None
   session.status = Running
   session.append("step/start", object([]))
-  self.emit_effect(
-    session,
-    Llm,
-    object([
-      ("system", Json::string(session.system_prompt)),
-      ("messages", Json::array(session.model_messages())),
-      ("tools", Json::array(self.tools.map(Tool::json))),
-    ]),
+  ignore(
+    self.emit_effect(
+      session,
+      Llm,
+      object([
+        ("system", Json::string(session.system_prompt)),
+        ("messages", Json::array(session.model_messages())),
+        ("tools", Json::array(self.tools.map(Tool::json))),
+      ]),
+      None,
+    ),
   )
 }
 
@@ -635,98 +660,6 @@ fn Session::begin_tool(self : Session, call : ToolCall) -> Unit {
 }
 
 ///|
-fn Session::tool_result(
-  self : Session,
-  call : ToolCall,
-  content : String,
-  is_error : Bool,
-) -> Unit {
-  self.append(
-    "tool/result",
-    object([
-      ("role", Json::string("tool")),
-      ("tool_call_id", Json::string(call.id)),
-      ("content", Json::string(content)),
-      ("is_error", boolean(is_error)),
-    ]),
-  )
-  call.stage = Settled
-  self.cursor += 1
-}
-
-///|
-fn Engine::dispatch_tool(
-  self : Engine,
-  session : Session,
-  call : ToolCall,
-  arguments : Json,
-) -> Unit {
-  if self.next_effect >= 1000000000 {
-    self.terminate(
-      session,
-      Failed,
-      "effect_limit",
-      "Effect identifier limit reached",
-    )
-    return
-  }
-  call.stage = Dispatched
-  self.emit_effect(
-    session,
-    ToolExecution,
-    object([
-      ("name", Json::string(call.name)),
-      ("arguments", detached(arguments)),
-      ("call_id", Json::string(call.id)),
-    ]),
-  )
-}
-
-///|
-fn Engine::advance_tools(self : Engine, session : Session) -> Unit {
-  while session.cursor < session.calls.length() {
-    let call = session.calls[session.cursor]
-    session.begin_tool(call)
-    let tool = match self.find_tool(call.name) {
-      Some(tool) => tool
-      None => {
-        session.tool_result(call, "Unknown tool: \{call.name}", true)
-        continue
-      }
-    }
-    let arguments = try {
-      let arguments = parse_arguments(call.arguments)
-      validate_arguments(tool.input_schema, arguments)
-      arguments
-    } catch {
-      Invalid(message) => {
-        session.tool_result(call, "Invalid tool arguments: \{message}", true)
-        continue
-      }
-    }
-    if tool.effect == Read {
-      self.dispatch_tool(session, call, arguments)
-    } else {
-      call.stage = Waiting
-      session.approval = Some({ call_id: call.id, name: call.name, arguments, })
-      session.status = AwaitingApproval
-      session.append(
-        "tool/approval/requested",
-        object([
-          ("call_id", Json::string(call.id)),
-          ("name", Json::string(call.name)),
-          ("arguments", detached(arguments)),
-        ]),
-      )
-    }
-    return
-  }
-  session.calls.clear()
-  session.cursor = 0
-  session.append("step/end", object([("reason", Json::string("tool_calls"))]))
-  session.open_step = false
-  self.start_step(session)
-}
 
 ///|
 fn Engine::retire_effect(self : Engine, session : Session) -> Unit {
@@ -736,6 +669,19 @@ fn Engine::retire_effect(self : Engine, session : Session) -> Unit {
   }
   session.active_effect = None
   session.active_kind = None
+  let kept = self.queued.filter(id => self.effects.get(id) is Some(_))
+  self.queued.clear()
+  for id in kept {
+    self.queued.push(id)
+  }
+}
+
+///|
+fn Engine::retire_tool_effects(self : Engine, session : Session) -> Unit {
+  for effect_id, _ in session.active_tool_effects {
+    self.effects.remove(effect_id)
+  }
+  session.active_tool_effects.clear()
   let kept = self.queued.filter(id => self.effects.get(id) is Some(_))
   self.queued.clear()
   for id in kept {
@@ -758,17 +704,37 @@ fn Engine::terminate(
     )
   }
   self.retire_effect(session)
+  self.retire_tool_effects(session)
   session.pending_retry_id = None
   session.approval = None
   while session.cursor < session.calls.length() {
     let call = session.calls[session.cursor]
     if call.stage == Pending {
       session.begin_tool(call)
+      session.schedule_cursor = Int::max(
+        session.schedule_cursor,
+        session.cursor + 1,
+      )
     }
-    session.tool_result(call, error, true)
+    if call.stage == Completed {
+      session.commit_completed_tool_result(call)
+    } else {
+      if call.stage == Dispatched {
+        let effect_id = match call.effect_id {
+          Some(effect_id) => effect_id
+          None => abort("Dispatched tool call is missing its effect identity")
+        }
+        session.stage_interrupted_tool_result(call, Some(effect_id), error)
+      } else {
+        session.stage_interrupted_tool_result(call, None, error)
+      }
+      session.commit_completed_tool_result(call)
+    }
   }
   session.calls.clear()
   session.cursor = 0
+  session.schedule_cursor = 0
+  session.parallel_group = false
   if session.open_step {
     session.append("step/end", object([("reason", Json::string(reason))]))
     session.open_step = false
@@ -822,13 +788,22 @@ fn Engine::complete_impl(
       None => raise Invalid("Unknown or settled effect: \{effect_id}")
     }
     let session = self.lookup(effect.session_id)
+    let live_effect = match effect.kind {
+      Llm => session.active_effect == Some(effect_id)
+      ToolExecution =>
+        match effect.call_id {
+          Some(call_id) =>
+            session.active_tool_effects.get(effect_id) == Some(call_id)
+          None => false
+        }
+    }
     if session.status != Running ||
-      session.active_effect != Some(effect_id) ||
+      !live_effect ||
       session.turn_id != effect.turn_id ||
       session.step != effect.step {
       raise Invalid("Stale effect completion")
     }
-    if session.pending_retry_id is Some(_) {
+    if effect.kind == Llm && session.pending_retry_id is Some(_) {
       raise Invalid("Provider effect completed while a retry was waiting")
     }
     let result = checked_copy(result)
@@ -839,11 +814,8 @@ fn Engine::complete_impl(
         Llm =>
           // terminate still sees the live LLM effect and logs its failed attempt.
           self.terminate(session, Failed, "provider_error", error)
-        ToolExecution => {
-          self.retire_effect(session)
-          session.tool_result(session.calls[session.cursor], error, true)
-          self.advance_tools(session)
-        }
+        ToolExecution =>
+          self.complete_tool_effect(session, effect, effect_id, result)
       }
     } else {
       match effect.kind {
@@ -914,12 +886,8 @@ fn Engine::complete_impl(
             self.advance_tools(session)
           }
         }
-        ToolExecution => {
-          let content = required_string(result, "content")
-          self.retire_effect(session)
-          session.tool_result(session.calls[session.cursor], content, false)
-          self.advance_tools(session)
-        }
+        ToolExecution =>
+          self.complete_tool_effect(session, effect, effect_id, result)
       }
     }
     Ok(session.json())
@@ -940,7 +908,15 @@ fn parse_calls(value : Json) -> Array[ToolCall] raise EngineError {
       raise Invalid("Duplicate tool call id: \{id}")
     }
     seen.set(id, true)
-    { id, name, arguments, stage: Pending, }
+    {
+      id,
+      name,
+      arguments,
+      stage: Pending,
+      effect_id: None,
+      completed_content: None,
+      completed_error: None,
+    }
   })
 }
 

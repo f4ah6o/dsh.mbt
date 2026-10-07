@@ -209,6 +209,25 @@ node web/browser-smoke.mjs
 browser / host / HTTP server / test workspace は終了時に後片付けします。
 画像は `_build/browser-smoke/` に生成し、desktop approval と mobile transcript を目視確認しています。
 
+## Bounded parallel read-tool increment
+
+2026-10-07、pinned upstream の parallel dispatch を bounded Read pool として実装した差分で `npm test` **PASS / exit 0**。
+すべて keyless fixture で実行し、外部 provider API は呼び出していません。
+
+| gate | 結果 |
+| --- | --- |
+| `npm run check` | PASS。all-target MoonBit check、own warnings 0、JavaScript syntax 28 files。固定 hotpath diagnostics のみ。 |
+| `npm run test:moon` | Wasm、Wasm GC、JS、native それぞれ 82 / 82 PASS。 |
+| `npm run build` | PASS。compiled MoonBit ESM を生成。 |
+| `npm run test:host` | 40 / 40 PASS。4-effect read pool の共有 checkpoint、cancel、shutdown と no-replay を確認。 |
+| `npm run test:web` | 9 / 9 PASS。 |
+| `npm run test:integration` | 44 / 44 PASS。pinned upstream parallel-tool-calls fixture の runtime/read/result/context/reopen 経路を含む。 |
+
+MoonBit tests は rolling 4-effect cap、pool refill、out-of-order completion 後の call-order projection、write approval barrier、unknown / schema-invalid barrier、
+cancel/restore/double-reopen、容量終了時に保存済み成功を保つこと、異なる tool safety policy で restore を拒否することを確認します。
+Host tests は一括 checkpoint 失敗時に 4 個の tool effect を起動しないこと、実行中 pool の cancel / shutdown と queued sibling の no-replay を確認します。
+この差分は `plugins/` を変更していないため、`npm run mutation` は再実行していません。同コマンドは production plugin package のみが対象で、engine mutation coverage は含みません。
+
 ## turtles.mbt mutation gate
 
 `npm run mutation` **PASS / exit 0**。
