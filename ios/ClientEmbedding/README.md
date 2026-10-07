@@ -57,11 +57,10 @@ objects.
 ## Validation record
 
 On 2026-10-07, the host ABI smoke passed, and Xcode built, installed, and
-launched the arm64 iOS Simulator sample with the iOS 18.5 runtime and Xcode
-26.5 SDK. The simulator showed the initial connection screen with its
+launched the current arm64 iOS Simulator sample with the iOS 18.5 runtime and
+Xcode 26.5 SDK. The simulator showed the initial connection screen with its
 safe-area layout. The Swift model integration harness builds and runs against
-fresh generated MoonBit C and passes all three lifecycle scenarios. The latest
-model and view changes still need the final Xcode Simulator rebuild.
+fresh generated MoonBit C and passes all three lifecycle scenarios.
 
 This is not physical-device acceptance. A connected iPhone, Japanese IME
 composition, VoiceOver, real tailnet TLS/API behavior, and a native gpui.mbt
