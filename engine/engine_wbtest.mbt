@@ -114,6 +114,112 @@ fn calls_response(calls : Array[(String, String, String)]) -> Json {
 }
 
 ///|
+fn engine_waiting_on_exclusive_call(
+  name : String,
+  arguments : String,
+) -> Engine {
+  let (engine, llm) = started_engine()
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([
+          ("barrier", name, arguments),
+          ("read-after", "read", "{\"file_path\":\"after.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  engine
+}
+
+///|
+fn append_forged_read_dispatch(snapshot : Json) -> Json raise EngineError {
+  let session = array_value(
+      required_field(snapshot, "sessions"),
+      "sessions",
+      32,
+    )[0]
+  let events = array_value(required_field(session, "events"), "events", 32768)
+  let turn_id = required_field(session, "turn_id")
+  let step = required_field(session, "step")
+  let call_id = "read-after"
+  let arguments = "{\"file_path\":\"after.txt\"}"
+  events.push(
+    object([
+      ("seq", integer(events.length())),
+      ("type", Json::string("tool/call")),
+      ("turn_id", turn_id),
+      ("step", step),
+      (
+        "data",
+        object([
+          ("id", Json::string(call_id)),
+          ("name", Json::string("read")),
+          ("arguments", Json::string(arguments)),
+        ]),
+      ),
+    ]),
+  )
+  let effect_number = int_value(
+    required_field(snapshot, "next_effect"),
+    "next_effect",
+    1,
+    999999999,
+  )
+  let effect_id = "effect-\{effect_number}"
+  events.push(
+    object([
+      ("seq", integer(events.length())),
+      ("type", Json::string("tool/request")),
+      ("turn_id", turn_id),
+      ("step", step),
+      (
+        "data",
+        object([
+          ("effect_id", Json::string(effect_id)),
+          ("call_id", Json::string(call_id)),
+        ]),
+      ),
+    ]),
+  )
+  fields(session).set("events", Json::array(events))
+  fields(snapshot).set("next_effect", integer(effect_number + 1))
+  snapshot
+}
+
+///|
+fn remove_last_snapshot_event(
+  snapshot : Json,
+  expected_kind : String,
+  status : String?,
+) -> Json raise EngineError {
+  let session = array_value(
+      required_field(snapshot, "sessions"),
+      "sessions",
+      32,
+    )[0]
+  let events = array_value(required_field(session, "events"), "events", 32768)
+  if events.is_empty() ||
+    required_string(events[events.length() - 1], "type") != expected_kind {
+    abort("Unexpected final event while constructing a barrier probe")
+  }
+  let kept = []
+  for index = 0; index < events.length() - 1; index = index + 1 {
+    kept.push(events[index])
+  }
+  fields(session).set("events", Json::array(kept))
+  match status {
+    Some(status) => {
+      fields(session).set("status", Json::string(status))
+      fields(session).remove("pending_approval")
+    }
+    None => ()
+  }
+  snapshot
+}
+
+///|
 test "upstream tool-call-turn distilled transcript preserves correlation and follow-up history" {
   // Source: deepseek-ai/deepseek-harness @
   // 5badb15009ae1756c3afe0ae0cef1faafc290ccc,
@@ -795,6 +901,97 @@ test "restore rejects parallel IO when the configured tool policy is exclusive" 
       ("next_effect", integer(1)),
       ("sessions", Json::array([])),
     ]),
+  )
+}
+
+///|
+test "restore rejects reads appended after an active write or shell effect" {
+  let names = ["write", "bash"]
+  let arguments = [
+    "{\"file_path\":\"blocked.txt\",\"content\":\"blocked\"}", "{\"command\":\"echo blocked\"}",
+  ]
+  for index = 0; index < names.length(); index = index + 1 {
+    let engine = engine_waiting_on_exclusive_call(
+      names[index],
+      arguments[index],
+    )
+    assert_eq(get_status(get_session(engine)), "awaiting_approval")
+    ignore(
+      success(
+        engine.invoke(
+          "tool_approve",
+          fixture(
+            "{\"session_id\":\"test\",\"call_id\":\"barrier\",\"approved\":true}",
+          ),
+        ),
+      ),
+    )
+    let active = engine.take_effects()
+    assert_eq(active.length(), 1)
+    assert_eq(call_id_of(active[0]), "barrier")
+    let forged = append_forged_read_dispatch(engine.snapshot())
+    let destination = Engine::new(test_tools())
+    assert_true(destination.restore(forged) is Err(_))
+    assert_eq(
+      destination.snapshot(),
+      object([
+        ("schema", Json::string("dsh.mbt-session-v1")),
+        ("next_session", integer(1)),
+        ("next_effect", integer(1)),
+        ("sessions", Json::array([])),
+      ]),
+    )
+  }
+}
+
+///|
+test "restore rejects reads after called waiting and approved exclusive barriers" {
+  let waiting = engine_waiting_on_exclusive_call(
+    "write", "{\"file_path\":\"blocked.txt\",\"content\":\"blocked\"}",
+  )
+  assert_true(
+    Engine::new(test_tools()).restore(
+      append_forged_read_dispatch(waiting.snapshot()),
+    )
+    is Err(_),
+  )
+
+  let called = engine_waiting_on_exclusive_call(
+    "write", "{\"file_path\":\"blocked.txt\",\"content\":\"blocked\"}",
+  )
+  let called_state = remove_last_snapshot_event(
+    called.snapshot(),
+    "tool/approval/requested",
+    Some("running"),
+  )
+  assert_true(
+    Engine::new(test_tools()).restore(append_forged_read_dispatch(called_state))
+    is Err(_),
+  )
+
+  let approved = engine_waiting_on_exclusive_call(
+    "write", "{\"file_path\":\"blocked.txt\",\"content\":\"blocked\"}",
+  )
+  ignore(
+    success(
+      approved.invoke(
+        "tool_approve",
+        fixture(
+          "{\"session_id\":\"test\",\"call_id\":\"barrier\",\"approved\":true}",
+        ),
+      ),
+    ),
+  )
+  let approved_state = remove_last_snapshot_event(
+    approved.snapshot(),
+    "tool/request",
+    None,
+  )
+  assert_true(
+    Engine::new(test_tools()).restore(
+      append_forged_read_dispatch(approved_state),
+    )
+    is Err(_),
   )
 }
 

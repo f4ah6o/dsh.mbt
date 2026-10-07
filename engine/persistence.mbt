@@ -562,6 +562,17 @@ fn restore_session(
             None => false
           }
           if is_read {
+            // A new read group may start only after every earlier call has
+            // committed. An existing group can admit additional reads while
+            // its effects settle, but it must not be reopened across a write,
+            // shell, approval, or local-failure barrier.
+            if !session.parallel_group &&
+              (
+                session.active_tool_effect_count() > 0 ||
+                session.cursor != session.schedule_cursor
+              ) {
+              raise Invalid("Read call crossed an unsettled exclusive barrier")
+            }
             if session.active_tool_effect_count() >= 4 {
               raise Invalid("Read pool exceeded its configured capacity")
             }
