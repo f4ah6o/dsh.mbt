@@ -1,0 +1,111 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "f4ah6o/dsh/protocol"
+
+// Values
+pub const PROTOCOL_VERSION : Int = 1
+
+pub fn canonical_command_payload(RemoteCommand) -> String
+
+pub fn is_uuid_v7_command_id(String) -> Bool
+
+pub fn uuid_v7_command_id_from_entropy(Int64, String) -> Result[String, String]
+
+pub fn uuid_v7_command_timestamp_ms(String) -> Int64?
+
+pub fn validate_uuid_v7_command_id_time(String, Int64, Int64, Int64) -> Bool
+
+// Errors
+
+// Types and methods
+pub struct AuthAccount {
+  email : String?
+  profile_id : String?
+}
+
+pub struct AuthProjection {
+  state : String
+  account : AuthAccount?
+  plan_usage : String
+  scopes : Array[String]
+  models : Array[ModelProjection]
+  selected_model : String?
+}
+pub fn AuthProjection::json(Self) -> Json
+
+pub struct ClientScope {
+  server_id : String
+  identity_key : String
+  workspace_id : String
+  auth_revision : Int
+}
+pub fn ClientScope::storage_key(Self) -> String
+
+pub struct CommandReceipt {
+  protocol_version : Int
+  workspace_id : String
+  command_id : String
+  payload_fingerprint : String
+  status : String
+  accepted_revision : Int?
+  result : Json?
+  error : String?
+}
+pub fn CommandReceipt::parse(String) -> Result[Self, String]
+
+pub struct ModelProjection {
+  slug : String
+  display_name : String
+}
+
+pub struct ProjectionEvent {
+  protocol_version : Int
+  identity_key : String
+  auth_revision : Int
+  workspace_id : String
+  epoch : String
+  revision : Int
+  cursor : String
+  kind : String
+  projection : Json?
+}
+pub fn ProjectionEvent::parse(String) -> Result[Self, String]
+
+pub(all) struct RemoteCommand {
+  protocol_version : Int
+  workspace_id : String
+  command_id : String
+  session_id : String?
+  operation : String
+  input : Json
+  approval_revision : Int?
+}
+pub fn RemoteCommand::json(Self) -> Json
+pub fn RemoteCommand::parse(String) -> Result[Self, String]
+
+pub struct RemoteSessionProjection {
+  protocol_version : Int
+  identity_key : String
+  auth_revision : Int
+  workspace_id : String
+  epoch : String
+  revision : Int
+  cursor : String
+  session : Json
+}
+pub fn RemoteSessionProjection::parse(String) -> Result[Self, String]
+
+pub struct RemoteSnapshot {
+  protocol_version : Int
+  scope : ClientScope
+  epoch : String
+  revision : Int
+  cursor : String
+  auth : AuthProjection
+  projection : Json
+}
+pub fn RemoteSnapshot::json(Self) -> Json
+pub fn RemoteSnapshot::parse(String) -> Result[Self, String]
+
+// Type aliases
+
+// Traits
