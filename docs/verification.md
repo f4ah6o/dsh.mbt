@@ -1,5 +1,19 @@
 # 検証記録
 
+## iOS client lifecycle fencing increment
+
+2026-10-07、macOS arm64、Xcode 26.6 / iOS Simulator SDK 26.5、Node.js
+`24.21.0`、MoonBit compiler `0.10.14+7d59c7ec9` で選択 gate を実行しました。
+
+| command | 結果 |
+| --- | --- |
+| `sh ios/ClientEmbedding/test-model.sh` | PASS。13 scenarios。遅延 snapshot / session / POST / receipt / SSE response、suspend 中の deferred reconnect、host switch / identity-scope snapshot injection / selection intent、uncertain ID no-replay、user-scroll `follow_latest` policy を確認。SSE body 自体は fixture stream から注入していません。 |
+| `sh ios/ClientEmbedding/verify-abi.sh` | PASS。MoonBit C ABI lifecycle と UTF-8 smoke。 |
+| `npm run check` | PASS。MoonBit all-target checks、app JS check、JavaScript syntax 35 files、自身の warning 0。固定 hotpath deprecation diagnostics のみ。 |
+| `xcodebuild -project ios/ClientEmbedding/DshClientEmbedding.xcodeproj -scheme DshClientEmbedding -sdk iphonesimulator26.5 -derivedDataPath _build/ios-client-derived build` | PASS。arm64 / x86_64 Simulator app build。Generic destination resolution was unavailable because the active Xcode had no matching installed runtime; selecting the installed Simulator SDK built successfully. |
+
+The URLProtocol host is synthetic and deterministic. This run did not install or launch a Simulator, contact a live dsh host, sign into ChatGPT, use Tailscale Serve, or test a physical iPhone. Those remain separate acceptance gates.
+
 2026-10-06、macOS arm64、Node.js `24.21.0`、MoonBit compiler / core
 `0.10.14+7d59c7ec9`、固定 moon / moonrun で実行。
 以下は実行して終了を確認した local の結果です。GitHub Actions の状態は対象 PR の Checks を参照してください。

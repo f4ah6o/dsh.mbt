@@ -1,8 +1,15 @@
 import SwiftUI
 
+private struct ConversationScrollMetrics: Equatable {
+    let contentOffsetY: CGFloat
+    let isNearLatest: Bool
+}
+
 struct ClientHomeView: View {
     @ObservedObject var model: DshClientModel
     @Environment(\.scenePhase) private var scenePhase
+    @State private var userScrollInProgress = false
+    @State private var isNearLatest = true
 
     var body: some View {
         NavigationSplitView {
@@ -126,9 +133,47 @@ struct ClientHomeView: View {
                         }
                         .padding()
                     }
-                    .onChange(of: model.messages.count) { _, _ in
-                        guard let lastID = model.messages.last?.id else { return }
-                        proxy.scrollTo(lastID, anchor: .bottom)
+                    .onScrollGeometryChange(for: ConversationScrollMetrics.self) { geometry in
+                        ConversationScrollMetrics(
+                            contentOffsetY: geometry.contentOffset.y,
+                            isNearLatest: geometry.contentOffset.y + geometry.containerSize.height >=
+                                geometry.contentSize.height - 24
+                        )
+                    } action: { oldMetrics, newMetrics in
+                        isNearLatest = newMetrics.isNearLatest
+                        guard abs(oldMetrics.contentOffsetY - newMetrics.contentOffsetY) > 0.5 else { return }
+                        model.updateFollowLatestFromUserScroll(
+                            isNearLatest: newMetrics.isNearLatest,
+                            isUserScrolling: userScrollInProgress
+                        )
+                    }
+                    .onScrollPhaseChange { _, phase in
+                        let wasUserScrolling = userScrollInProgress
+                        let isUserDriven = phase == .interacting || phase == .decelerating
+                        if wasUserScrolling && !isUserDriven {
+                            model.updateFollowLatestFromUserScroll(
+                                isNearLatest: isNearLatest,
+                                isUserScrolling: true
+                            )
+                        }
+                        userScrollInProgress = isUserDriven
+                    }
+                    .onChange(of: model.messages.count, initial: true) { _, _ in
+                        scrollToLatest(using: proxy)
+                    }
+                    .onChange(of: model.messages.last?.content ?? "", initial: true) { _, _ in
+                        scrollToLatest(using: proxy)
+                    }
+                    .overlay(alignment: .bottomTrailing) {
+                        if !model.followLatest, let lastID = model.messages.last?.id {
+                            Button("Jump to latest", systemImage: "arrow.down.to.line") {
+                                model.setFollowLatest(true)
+                                proxy.scrollTo(lastID, anchor: .bottom)
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .padding()
+                            .accessibilityLabel("Jump to latest message")
+                        }
                     }
                 }
                 if let pending = model.pendingApproval {
@@ -156,6 +201,11 @@ struct ClientHomeView: View {
         }
         .navigationTitle(model.sessions.first(where: { $0.id == model.selectedSessionID })?.title ?? "Conversation")
         .navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func scrollToLatest(using proxy: ScrollViewProxy) {
+        guard model.followLatest, let lastID = model.messages.last?.id else { return }
+        proxy.scrollTo(lastID, anchor: .bottom)
     }
 
     private func approvalCard(_ approval: [String: Any]) -> some View {

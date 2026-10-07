@@ -31,9 +31,12 @@ sh ios/ClientEmbedding/test-model.sh
 ```
 
 This covers rejected receipts, persistence before command submission, draft
-edits during a stalled request, duplicate taps, and reconnect lookup of
-accepted, missing, and expired receipts. Missing receipts remain unconfirmed;
-the client never replays a saved command automatically.
+edits during a stalled request, duplicate taps, accepted/missing/expired
+receipt recovery, suspension and endpoint-switch races across snapshots,
+session reads, POSTs, receipt reads, and event streams, and `follow_latest`
+preference persistence. Missing receipts remain unconfirmed; the client never
+replays a saved command automatically. The delayed HTTP callbacks are
+deterministic local fixtures, not live tailnet or device evidence.
 
 Generate the Xcode project and build for an installed simulator destination:
 
@@ -56,11 +59,17 @@ objects.
 
 ## Validation record
 
+The current lifecycle-fencing increment passes the 13-scenario model/C bridge
+harness, the C ABI smoke, and an Xcode iOS Simulator SDK build. The model
+scenarios use delayed local URLProtocol responses and a synthetic account-scope
+snapshot injected through the generated C bridge; no live host, ChatGPT
+account, Tailscale network, or physical iPhone is involved.
+
 On 2026-10-07, the host ABI smoke passed, and Xcode built, installed, and
 launched the current arm64 iOS Simulator sample with the iOS 18.5 runtime and
 Xcode 26.5 SDK. The simulator showed the initial connection screen with its
-safe-area layout. The Swift model integration harness builds and runs against
-fresh generated MoonBit C and passes all three lifecycle scenarios.
+safe-area layout. An earlier model harness iteration passed its three initial
+lifecycle scenarios; the current 13-scenario result is recorded above.
 
 This is not physical-device acceptance. A connected iPhone, Japanese IME
 composition, VoiceOver, real tailnet TLS/API behavior, and a native gpui.mbt

@@ -17,6 +17,7 @@
 
 ### Fixed
 
+- iOS shared-client integration fences late snapshot, session, receipt, and event-stream results after suspension or endpoint/account changes. A host change during a submitted command retains its uncertain receipt ID and draft without replay; multi-step sends stop before crossing an account-scope change. The conversation view follows new messages only while near the latest position and offers an explicit jump action.
 - ChatGPT Responses の SSE で Content-Type 省略を許容し、completed.output が空でも completed status と output_item.done の内容が streamed delta と一致した場合だけ完了扱いにする。検証済みの completed event が届いた後は HTTP EOF を待たず応答を返す。また native host は各 provider の text / reasoning delta を重複なく投影し、大きな delta を Unicode scalar の境界で分割する。
 - ChatGPT の model picker で選んだ model が確実に有効になるようにした。
 - native service を停止した直後に、同じ loopback port で再起動できるようにした。
