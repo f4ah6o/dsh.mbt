@@ -71,8 +71,9 @@ effect ID は engine 内の単調増加 ID に app incarnation を付けて公�
 古い `stop` / `start` 間の完了通知、cancel 後の応答、重複した完了通知は新しい turn を進めません。
 同じ JavaScript facade を複数 host が同時に所有することも拒否します。
 
-host の state mutation と checkpoint は直列化します。shutdown は新しい I/O の開始を止め、
-fetch / subprocess を abort して終了を待ち、最後に lock と gpui 所有オブジェクトを解放します。
+host の state mutation と checkpoint は直列化します。shutdown は新しい delta callback の登録を止め、
+すでに受理した callback と queue の全 batch を serialized owner が drain してから engine の cancel と最終
+checkpoint を行います。fetch / subprocess も abort して終了を待ち、最後に lock と gpui 所有オブジェクトを解放します。
 checkpoint に失敗した場合は新しい外部作用を続行せず、host を失敗状態にします。
 
 ## 永続化と容量

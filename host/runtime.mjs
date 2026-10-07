@@ -168,47 +168,77 @@ async function initializeHost(options) {
     }
   }
 
-  async function flushBeforeCancellation(sessionID) {
+  async function drainStreamEntry(entry) {
+    for (;;) {
+      if (entry.applyPromise) {
+        await entry.applyPromise;
+        continue;
+      }
+      if (entry.pendingStreamUnits > 0) {
+        await flushStreamInline(entry);
+        continue;
+      }
+      if (entry.deltaTasks.size > 0) {
+        await Promise.all([...entry.deltaTasks]);
+        continue;
+      }
+      return;
+    }
+  }
+
+  async function discardUndurableStream(entry, error) {
+    entry.streamCutoff = true;
+    await Promise.allSettled([
+      ...entry.deltaTasks,
+      ...(entry.applyPromise ? [entry.applyPromise] : []),
+    ]);
+    entry.pendingStream = [];
+    entry.pendingStreamHead = 0;
+    entry.pendingStreamUnits = 0;
+    entry.streamError = report(error);
+  }
+
+  async function flushAndDispatchCancellation(sessionID, dispatch) {
     const streaming = [...active.values()].filter((entry) => entry.effect.session_id === sessionID);
     for (const entry of streaming) {
       entry.cancelPending = true;
       clearStreamTimer(entry);
-      try {
-        // Provider callbacks only enqueue bounded segments; all checkpointing
-        // stays inside this serialized owner. Wait for both current IO and any
-        // callback that is still splitting a large validated delta.
-        for (;;) {
-          if (entry.applyPromise) {
-            await entry.applyPromise;
-            continue;
-          }
-          if (entry.pendingStreamUnits > 0) {
-            await flushStreamInline(entry);
-            continue;
-          }
-          if (entry.deltaTasks.size > 0) {
-            await Promise.all([...entry.deltaTasks]);
-            continue;
-          }
-          // No async gap follows this check before cancellation dispatch.
-          entry.streamCutoff = true;
-          break;
-        }
-      } catch (error) {
-        // Capacity refusal ends this provider effect through the normal engine
-        // cancellation path. Earlier committed batches remain durable.
-        entry.streamCutoff = true;
-        await Promise.allSettled([
-          ...entry.deltaTasks,
-          ...(entry.applyPromise ? [entry.applyPromise] : []),
-        ]);
-        entry.pendingStream = [];
-        entry.pendingStreamHead = 0;
-        entry.pendingStreamUnits = 0;
-        entry.streamError = report(error);
-      }
     }
-    return streaming;
+    try {
+      // Keep intake open while draining. New validated callbacks can arrive in
+      // the await gap, and a rejected cancel must not discard them.
+      for (;;) {
+        for (const entry of streaming) {
+          if (entry.streamError) continue;
+          try { await drainStreamEntry(entry); } catch (error) {
+            // Capacity refusal ends this provider effect through the normal
+            // cancellation path. Previously committed batches stay durable.
+            await discardUndurableStream(entry, error);
+          }
+        }
+        const pending = streaming.some((entry) => !entry.streamError
+          && (entry.applyPromise || entry.pendingStreamUnits > 0 || entry.deltaTasks.size > 0));
+        if (!pending) break;
+      }
+      if (closing) throw new HostError('Host is closing', { status: 503 });
+
+      // This last synchronous check, cutoff, and dispatch share one JS stack;
+      // no awaited helper return can create a gap that drops a rejected-cancel delta.
+      for (const entry of streaming) if (!entry.streamError) entry.streamCutoff = true;
+      const outcome = dispatch();
+      if (outcome.accepted) {
+        for (const entry of streaming) {
+          entry.cancelledByEngine = true;
+          entry.cancelPending = true;
+          clearStreamTimer(entry);
+          entry.controller.abort(new Error('Session was cancelled'));
+        }
+      } else resumeAfterRejectedCancellation(streaming);
+      return outcome.value;
+    } catch (error) {
+      resumeAfterRejectedCancellation(streaming);
+      throw error;
+    }
   }
 
   function resumeAfterRejectedCancellation(entries) {
@@ -276,7 +306,7 @@ async function initializeHost(options) {
   }
 
   function queueStreamBatch(entry, content, reasoning) {
-    if (entry.streamCutoff || entry.cancelledByEngine || closing) return;
+    if (entry.streamCutoff || entry.cancelledByEngine) return;
     const units = content.length + reasoning.length;
     if (units === 0) return;
     if (content) entry.pendingStream.push({ channel: 'content', text: content });
@@ -303,7 +333,7 @@ async function initializeHost(options) {
       if (units + point.length > 4096) {
         const part = points.join('');
         queueStreamBatch(entry, channel === 'content' ? part : '', channel === 'reasoning' ? part : '');
-        if (entry.streamError || entry.streamCutoff || entry.cancelledByEngine || closing) return;
+        if (entry.streamError || entry.streamCutoff || entry.cancelledByEngine) return;
         points = [];
         units = 0;
         chunks++;
@@ -314,7 +344,7 @@ async function initializeHost(options) {
       if (units === 4096) {
         const part = points.join('');
         queueStreamBatch(entry, channel === 'content' ? part : '', channel === 'reasoning' ? part : '');
-        if (entry.streamError || entry.streamCutoff || entry.cancelledByEngine || closing) return;
+        if (entry.streamError || entry.streamCutoff || entry.cancelledByEngine) return;
         points = [];
         units = 0;
         chunks++;
@@ -329,7 +359,7 @@ async function initializeHost(options) {
 
   async function queueStreamDeltas(entry, delta) {
     if (entry.streamError) throw entry.streamError;
-    if (entry.streamCutoff || entry.cancelledByEngine || closing) return;
+    if (entry.streamCutoff || entry.cancelledByEngine) return;
     if (!delta || typeof delta.content !== 'string' || typeof delta.reasoning !== 'string') {
       throw new HostError('Provider returned malformed projected text', { status: 502 });
     }
@@ -464,24 +494,13 @@ async function initializeHost(options) {
 
   async function call(operation, input = {}) {
     return serialize(async () => {
-      let cancellationEntries = [];
+      let response;
       if (operation === 'session_cancel' && typeof input.session_id === 'string') {
-        cancellationEntries = await flushBeforeCancellation(input.session_id);
-        if (closing) {
-          resumeAfterRejectedCancellation(cancellationEntries);
-          throw new HostError('Host is closing', { status: 503 });
-        }
-      }
-      const response = parseEnvelope(facade.dispatch(JSON.stringify({ operation, input })), 'dispatch');
-      if (operation === 'session_cancel' && !response.ok) resumeAfterRejectedCancellation(cancellationEntries);
-      if (operation === 'session_cancel' && response.ok) {
-        for (const entry of active.values()) if (entry.effect.session_id === input.session_id) {
-          entry.cancelledByEngine = true;
-          entry.cancelPending = true;
-          clearStreamTimer(entry);
-          entry.controller.abort(new Error('Session was cancelled'));
-        }
-      }
+        response = await flushAndDispatchCancellation(input.session_id, () => {
+          const value = parseEnvelope(facade.dispatch(JSON.stringify({ operation, input })), 'dispatch');
+          return { accepted: value.ok, value };
+        });
+      } else response = parseEnvelope(facade.dispatch(JSON.stringify({ operation, input })), 'dispatch');
       if (response.ok && !READ_OPERATIONS.has(operation)) await transition();
       return response;
     });
@@ -490,20 +509,16 @@ async function initializeHost(options) {
   async function mcp(line) {
     return serialize(async () => {
       const cancelID = mcpCancellation(line);
-      const cancellationEntries = cancelID ? await flushBeforeCancellation(cancelID) : [];
-      if (cancelID && closing) {
-        resumeAfterRejectedCancellation(cancellationEntries);
-        throw new HostError('Host is closing', { status: 503 });
-      }
-      const response = facade.mcp_handle(line);
-      if (typeof response !== 'string') throw new HostError('MoonBit returned an invalid MCP response', { status: 500 });
+      let response;
       if (cancelID) {
-        if (mcpCallSucceeded(response)) for (const entry of cancellationEntries) {
-          entry.cancelledByEngine = true;
-          entry.cancelPending = true;
-          clearStreamTimer(entry);
-          entry.controller.abort(new Error('Session was cancelled'));
-        } else resumeAfterRejectedCancellation(cancellationEntries);
+        response = await flushAndDispatchCancellation(cancelID, () => {
+          const value = facade.mcp_handle(line);
+          if (typeof value !== 'string') throw new HostError('MoonBit returned an invalid MCP response', { status: 500 });
+          return { accepted: mcpCallSucceeded(value), value };
+        });
+      } else response = facade.mcp_handle(line);
+      if (typeof response !== 'string') {
+        throw new HostError('MoonBit returned an invalid MCP response', { status: 500 });
       }
       await transition();
       return response;
@@ -554,13 +569,30 @@ async function initializeHost(options) {
         await Promise.allSettled(stopping.map((entry) => entry.promise));
         await serial;
         if (!fatalError) {
-          for (const current of snapshot().sessions) {
-            if (['running', 'awaiting_approval'].includes(current.status)) {
-              unwrap(facade.dispatch(JSON.stringify({ operation: 'session_cancel', input: { session_id: current.id } })), 'session_cancel');
+          await serialize(async () => {
+            // closing blocks new onDelta registrations, while callbacks that
+            // were already admitted are allowed to finish. Drain their full
+            // queue in this serialized owner before recording interruption;
+            // perform() may have returned after only one batch because shutdown
+            // suppresses its normal recursive timer flush.
+            for (const entry of stopping) {
+              try {
+                await drainStreamEntry(entry);
+                entry.streamCutoff = true;
+              } catch (error) {
+                await discardUndurableStream(entry, error);
+              }
             }
-          }
-          drainEffects();
-          await checkpoint();
+            if (!fatalError) {
+              for (const current of snapshot().sessions) {
+                if (['running', 'awaiting_approval'].includes(current.status)) {
+                  unwrap(facade.dispatch(JSON.stringify({ operation: 'session_cancel', input: { session_id: current.id } })), 'session_cancel');
+                }
+              }
+              drainEffects();
+              await checkpoint();
+            }
+          }, { internal: true });
         }
       } finally {
         // Even a failed final checkpoint must not release ownership while an

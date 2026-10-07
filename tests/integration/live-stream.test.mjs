@@ -324,6 +324,109 @@ function assertCompleteOverflowProjection(fixture, expected) {
   assert.equal(fixture.projectionCheckpoints.at(-1).streamRevision, expected.length);
 }
 
+async function closeDuringAcceptedDelta(context, content) {
+  const initial = encoder.encode(openAIChunk({ role: 'assistant', content }));
+  const pendingRead = deferred();
+  const closeStarted = deferred();
+  const projects = [];
+  const snapshots = [];
+  let host;
+  let closePromise;
+  let sessionID;
+  let cancelDispatchSeen = false;
+  let readCount = 0;
+  const reader = {
+    read() {
+      if (readCount++ === 0) return Promise.resolve({ done: false, value: initial });
+      return pendingRead.promise;
+    },
+    cancel() {
+      pendingRead.resolve({ done: true });
+      return Promise.resolve();
+    },
+    releaseLock() {},
+  };
+  const rawFacade = await freshFacade();
+  const facade = new Proxy(rawFacade, {
+    get(target, property) {
+      if (property === 'snapshot') {
+        return () => {
+          const raw = target.snapshot();
+          const session = JSON.parse(raw).sessions.find((item) => item.id === sessionID);
+          if (session) snapshots.push(session);
+          return raw;
+        };
+      }
+      if (property === 'stream_project') {
+        return (effectID, projectedContent, reasoning) => {
+          const result = target.stream_project(effectID, projectedContent, reasoning);
+          if (JSON.parse(result).ok) {
+            projects.push({ content: projectedContent, afterCancelDispatch: cancelDispatchSeen });
+            if (projects.length === 1) {
+              // The projection has been applied. The host reaches persistence.save
+              // before this microtask starts shutdown during that checkpoint.
+              queueMicrotask(() => {
+                closePromise = host.close();
+                closeStarted.resolve();
+              });
+            }
+          }
+          return result;
+        };
+      }
+      if (property === 'dispatch') {
+        return (raw) => {
+          const request = JSON.parse(raw);
+          if (request.operation === 'session_cancel') cancelDispatchSeen = true;
+          return target.dispatch(raw);
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+  host = await context.host(async () => ({
+    ok: true,
+    headers: new Headers({ 'content-type': 'text/event-stream' }),
+    body: { getReader: () => reader },
+  }), facade);
+  context.addCleanup(() => pendingRead.resolve({ done: true }));
+
+  const created = await host.call('session_create', {});
+  assert.equal(created.ok, true, created.error);
+  sessionID = created.result.id;
+  const sending = host.call('session_send', { session_id: sessionID, prompt: 'Stop during an accepted large live delta.' });
+  const sent = await within(sending, 'the large streamed request to start', 10000);
+  assert.equal(sent.ok, true, sent.error);
+  await within(closeStarted.promise, 'shutdown to start during the first projection checkpoint');
+  await within(closePromise, 'shutdown to drain and persist the complete accepted delta', 10000);
+
+  const live = snapshots.at(-1);
+  assert.ok(live, 'the closing host captured a final engine snapshot');
+  const snapshot = JSON.parse(await readFile(path.join(context.dataDir, 'sessions.json'), 'utf8'));
+  const disk = snapshot.sessions.find((session) => session.id === sessionID);
+  assert.ok(disk, `expected persisted session ${sessionID}`);
+  return { host, sessionID, content, projects, live, disk };
+}
+
+async function assertShutdownProjectionDrained(context, fixture) {
+  const { host, sessionID, content, projects, live, disk } = fixture;
+  assert.equal(host.activeCount, 0);
+  assert.deepEqual(disk, live, 'the persisted shutdown snapshot matches the final engine snapshot');
+  assert.equal(live.status, 'cancelled');
+  const partial = live.messages.find((message) => message.provisional === true);
+  assert.ok(partial, 'shutdown keeps the accepted stream as a provisional partial');
+  assert.equal(partial.stream_status, 'partial');
+  assert.equal(partial.content, content);
+  assert.equal(live.events.filter((event) => event.type === 'assistant/stream_delta').map((event) => event.data.content).join(''), content);
+  assert.equal(projects.map((project) => project.content).join(''), content);
+  assert.equal(projects.every((project) => !project.afterCancelDispatch), true, 'shutdown does not project after engine cancellation');
+
+  await new Promise((resolve) => setImmediate(resolve));
+  const later = JSON.parse(await readFile(path.join(context.dataDir, 'sessions.json'), 'utf8'));
+  assert.deepEqual(later.sessions.find((session) => session.id === sessionID), live, 'no delayed checkpoint overwrites or extends the final shutdown state');
+}
+
 test('text and reasoning are durable before SSE EOF, then the final message replaces the provisional projection', async (t) => {
   const context = await temporary(t);
   const initial = [
@@ -606,6 +709,74 @@ test('a rejected cancel retains a delta received during its preflight checkpoint
   assert.equal(host.status, 'running');
 });
 
+test('a delta arriving after rejected cancel is queued survives the preflight cutoff gap', async (t) => {
+  const context = await temporary(t);
+  const firstText = 'A'.repeat(600);
+  const duringText = 'VALID_FRAME_DURING_REJECTED_CANCEL';
+  const first = encoder.encode(openAIChunk({ role: 'assistant', content: firstText }));
+  const during = encoder.encode(openAIChunk({ content: duringText }));
+  const terminal = encoder.encode([openAIChunk({}, 'stop'), 'data: [DONE]\n\n'].join(''));
+  const nextRead = deferred();
+  const terminalRead = deferred();
+  const secondReadStarted = deferred();
+  const thirdReadStarted = deferred();
+  let readCount = 0;
+  const reader = {
+    read() {
+      const index = readCount++;
+      if (index === 0) return Promise.resolve({ done: false, value: first });
+      if (index === 1) {
+        secondReadStarted.resolve();
+        return nextRead.promise;
+      }
+      if (index === 2) {
+        thirdReadStarted.resolve();
+        return terminalRead.promise;
+      }
+      return Promise.resolve({ done: true });
+    },
+    cancel() {
+      nextRead.resolve({ done: true });
+      terminalRead.resolve({ done: true });
+      return Promise.resolve();
+    },
+    releaseLock() {},
+  };
+  const host = await context.host(async () => ({
+    ok: true,
+    headers: new Headers({ 'content-type': 'text/event-stream' }),
+    body: { getReader: () => reader },
+  }));
+  context.addCleanup(() => {
+    nextRead.resolve({ done: true });
+    terminalRead.resolve({ done: true });
+  });
+
+  const id = await within(send(host, 'Keep the provider stream alive if cancellation validation rejects.'), 'the streamed request to start');
+  await within(secondReadStarted.promise, 'the provider to enter its second read');
+  const before = await waitUntil(() => host.session(id), (session) =>
+    session.events.some((event) => event.type === 'assistant/stream_delta'));
+  assert.equal(before.messages.find((message) => message.provisional === true)?.content, firstText);
+
+  // Queue the real engine call and release the next validated frame in the
+  // same stack, before the serialized preflight can finish and resume on error.
+  const cancellation = host.call('session_cancel', { session_id: id, unexpected: true });
+  nextRead.resolve({ done: false, value: during });
+  const rejected = await within(cancellation, 'invalid cancellation to be rejected');
+  assert.equal(rejected.ok, false);
+  await within(thirdReadStarted.promise, 'the provider to continue after cancellation rejection');
+  terminalRead.resolve({ done: false, value: terminal });
+
+  await within(host.waitForSession(id, { signal: AbortSignal.timeout(5000) }), 'the resumed stream to complete');
+  await waitUntil(() => host.activeCount, (activeCount) => activeCount === 0);
+  const live = await assertDiskMatchesLive(context, host, id);
+  const expected = `${firstText}${duringText}`;
+  assert.equal(live.status, 'completed');
+  assert.equal(live.messages.at(-1).content, expected);
+  assert.equal(live.events.filter((event) => event.type === 'assistant/stream_delta').map((event) => event.data.content).join(''), expected);
+  assert.equal(host.status, 'running');
+});
+
 test('a timed stream flush queued behind cancellation becomes harmless after the preflight owns its batch', async (t) => {
   const context = await temporary(t);
   t.mock.timers.enable({ apis: ['setTimeout'] });
@@ -735,6 +906,20 @@ test('rejected cancellation checkpoints the full overflow callback, resumes, and
   } finally {
     t.mock.timers.reset();
   }
+});
+
+test('shutdown drains the complete 5000-unit delta when it starts during the first save', async (t) => {
+  const context = await temporary(t);
+  const content = 'B'.repeat(5000);
+  const fixture = await closeDuringAcceptedDelta(context, content);
+  await assertShutdownProjectionDrained(context, fixture);
+});
+
+test('shutdown lets an accepted delta larger than 64 Ki units finish splitting before cancellation', async (t) => {
+  const context = await temporary(t);
+  const content = 'S'.repeat(70 * 1024);
+  const fixture = await closeDuringAcceptedDelta(context, content);
+  await assertShutdownProjectionDrained(context, fixture);
 });
 
 test('cancellation queued behind a snapshot does not wait on a provider flush queued behind cancellation', async (t) => {
