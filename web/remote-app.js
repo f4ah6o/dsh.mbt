@@ -663,14 +663,16 @@ $("auth-sign-out").addEventListener("click", () => mutate(async () => {
   await localOperation("auth_sign_out", { profile_id: profileId });
   await refreshSnapshot();
 }));
-$("model-picker").addEventListener("change", () => mutate(async () => {
+$("model-picker").addEventListener("change", () => {
   const model = $("model-picker").value;
   if (!model) return;
-  await localOperation("auth_select_model", { model });
-  await refreshSnapshot();
-  state.actionMessage = `Using ${client.state().auth?.models?.find((entry) => entry.slug === model)?.display_name || model}.`;
-  syncFromClient();
-}));
+  return mutate(async () => {
+    await localOperation("auth_select_model", { model });
+    await refreshSnapshot();
+    state.actionMessage = `Using ${client.state().auth?.models?.find((entry) => entry.slug === model)?.display_name || model}.`;
+    syncFromClient();
+  });
+});
 
 $("text-view").addEventListener("click", () => {
   const next = !client.state().text_view;
