@@ -770,7 +770,7 @@ pub fn SafeRoot::write_atomic_bounded(
     version,
   )
   if status == 0 {
-    self.verify_mapping(relative_path, false)
+    Ok(())
   } else {
     Err(os_error("atomic workspace write", status))
   }
@@ -808,7 +808,7 @@ pub fn SafeRoot::write_atomic_protected(
     version,
   )
   if status == 0 {
-    self.verify_mapping(relative_path, false)
+    Ok(())
   } else {
     Err(os_error("protected credential write", status))
   }

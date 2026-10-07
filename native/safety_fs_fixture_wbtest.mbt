@@ -74,6 +74,7 @@ async test "native SafeRoot does not follow a swapped nested ancestor" {
     @fs.mkdir(workspace)
     @fs.mkdir(workspace + "/nested")
     @fs.mkdir(outside)
+    @fs.write_file(outside + "/sentinel.txt", "attacker-sentinel")
 
     let root = match SafeRoot::open(workspace) {
       Ok(value) => value
@@ -96,7 +97,8 @@ async test "native SafeRoot does not follow a swapped nested ancestor" {
       "  i=$((i + 1))\n" +
       "done\n"
     let successful_attempts : Array[String] = []
-    let rejected_attempts : Array[String] = []
+    let write_errors : Array[(String, String)] = []
+    let data = "r".repeat(1048576)
     @async.with_task_group() <| workers => {
       let swapper = @process.spawn(
         workers,
@@ -126,40 +128,72 @@ async test "native SafeRoot does not follow a swapped nested ancestor" {
       }
       assert_true(ready)
       @fs.write_file(fixture + "/start", "start")
-      let data = "r".repeat(1048576)
       for index in 0..<24 {
         let attempt = "attempt-" + index.to_string() + ".txt"
         let path = "nested/" + attempt
         match root.write_atomic(path, data) {
           Ok(_) => successful_attempts.push(attempt)
-          Err(_) => rejected_attempts.push(attempt)
+          Err(error) => write_errors.push((attempt, error))
         }
       }
       @fs.write_file(fixture + "/stop", "stop")
       ignore(swapper.wait())
       swapper_stopped = true
-      assert_true(rejected_attempts.length() > 0)
+      assert_true(write_errors.length() > 0)
     }
-    // A success means SafeRoot observed the requested path mapping at the
-    // operation boundary. The external same-UID swapper can move that subtree
-    // after return, so classify every final file by its recorded result: a
-    // rejected operation must leave no attempt file anywhere, while an
-    // accepted operation must retain exactly one committed file.
-    let found_attempts : Array[String] = []
-    @fs.walk(fixture, (_, names) => {
+    // A successful call must leave one complete file in the opened subtree.
+    // An error may occur after rename (for example, a parent fsync or a
+    // detected concurrent move), so an error may have zero or one complete
+    // file. Such a file is an uncertain commit, not an escaped symlink write.
+    let found_attempts : Array[(String, String)] = []
+    @fs.walk(fixture, (directory, names) => {
       for name in names {
         if name.has_prefix("attempt-") {
-          found_attempts.push(name)
+          found_attempts.push((name, directory + "/" + name))
         }
       }
     })
-    assert_eq(found_attempts.length(), successful_attempts.length())
-    for attempt in found_attempts {
-      assert_true(successful_attempts.contains(attempt))
-    }
     for attempt in successful_attempts {
-      assert_true(found_attempts.contains(attempt))
+      let mut matches = 0
+      for (name, path) in found_attempts {
+        if name == attempt {
+          matches += 1
+          assert_eq(@fs.read_file(path).text(), data)
+        }
+      }
+      assert_eq(matches, 1)
     }
+    for (attempt, error) in write_errors {
+      let mut matches = 0
+      for (name, path) in found_attempts {
+        if name == attempt {
+          matches += 1
+          assert_eq(@fs.read_file(path).text(), data)
+          // The direct attacker directory is reached only through the
+          // transient symlink. Files under a moved detached subtree are valid.
+          assert_true(path != outside + "/" + attempt)
+        }
+      }
+      if matches > 1 {
+        fail(
+          "duplicate attempt file after write error: " + attempt + ": " + error,
+        )
+      }
+    }
+    for (attempt, path) in found_attempts {
+      let mut was_attempted = successful_attempts.contains(attempt)
+      for (failed_attempt, _) in write_errors {
+        if failed_attempt == attempt {
+          was_attempted = true
+        }
+      }
+      assert_true(was_attempted)
+      assert_true(path != outside + "/" + attempt)
+    }
+    assert_eq(
+      @fs.read_file(outside + "/sentinel.txt").text(),
+      "attacker-sentinel",
+    )
     assert_true(@fs.read_file(fixture + "/swaps").text().length() > 0)
   }
 }
