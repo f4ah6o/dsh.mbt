@@ -70,6 +70,19 @@ node host/cli.mjs --help
 `import-session` は upstream Session v4 を検証して、再開できない読み取り専用履歴として保存します。
 記録された tool、inbox、permission、preset は履歴に残しますが、実行や権限設定には使いません。
 
+### Provider retry
+
+一時的な provider failure では、同じ未完了 request を最大 5 回まで再試行します。既定の backoff は 500 ms から始まり、
+最大 10 秒まで倍増します。`--max-retries 0` で無効化でき、CLI と host API の上限は 5 です。
+retry は各 provider request を新たに送信するため、provider 側では再度課金される場合があります。
+
+対象は空応答、HTTP 408 / 429 / 5xx、timeout、および識別できた一時的な transport failure です。
+HTTP 4xx（408 / 429 を除く）、authentication、malformed response は retry しません。正の `Retry-After` は 10 秒以内のときだけ
+backoff を置き換え、上限を超える値は retry を止めます。受理した stream delta が一つでもある request は再試行しません。
+MoonBit は retry schedule と開始を event log に記録してから host が待機・再接続し、shutdown や reopen で provider / tool を
+重複実行しません。upstream と異なり jitter は使わず、`Session v4` read-only importer は upstream retry event family を受理しません。
+実装範囲と差分は [移植状況](docs/port-status.md) を参照してください。
+
 ## ツールと承認
 
 | ツール | 主な引数 | 実行条件 |

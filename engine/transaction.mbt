@@ -9,6 +9,12 @@ const SESSION_CAPACITY : Int = 262144
 const STREAM_DELTA_CAPACITY : Int = 4096
 
 ///|
+const MAX_PROVIDER_RETRIES : Int = 5
+
+///|
+const MAX_PROVIDER_RETRY_DELAY_MS : Int = 10000
+
+///|
 const CAPACITY_ERROR : String = "Session capacity reached; create a new session"
 
 ///|
@@ -37,6 +43,11 @@ fn Session::copy_state(self : Session) -> Session {
     active_effect: self.active_effect,
     active_kind: self.active_kind,
     open_step: self.open_step,
+    retry_count: self.retry_count,
+    retry_max_retries: self.retry_max_retries,
+    retry_initial_delay_ms: self.retry_initial_delay_ms,
+    retry_max_delay_ms: self.retry_max_delay_ms,
+    pending_retry_id: self.pending_retry_id,
   }
 }
 
@@ -90,7 +101,30 @@ fn Engine::within_capacity(self : Engine) -> Bool {
       return false
     }
   }
-  let closed = self.copy_state()
+  // A durable retry schedule must also have room for its future start marker.
+  // Other admitted operations preserve this reservation while the wait is
+  // pending, so the host cannot be stranded after recording `llm/retry`.
+  let starting = self.copy_state()
+  for id in starting.order.copy() {
+    let pending = match starting.sessions.get(id) {
+      Some(session) => (session.active_effect, session.pending_retry_id)
+      None => (None, None)
+    }
+    match pending {
+      (Some(effect_id), Some(retry_id)) =>
+        match starting.start_retry_impl(effect_id, retry_id) {
+          Ok(_) => ()
+          Err(_) => return false
+        }
+      _ => ()
+    }
+  }
+  for _, session in starting.sessions {
+    if session.json().stringify().length() > SESSION_CAPACITY {
+      return false
+    }
+  }
+  let closed = starting.copy_state()
   for _, session in closed.sessions {
     if session.is_busy() {
       session.append(
@@ -164,6 +198,58 @@ pub fn Engine::complete(
         let session = self.sessions.get(effect.session_id).unwrap()
         self.terminate(session, Failed, "session_capacity", CAPACITY_ERROR)
         Ok(session.json())
+      }
+  }
+}
+
+///|
+/// Record a bounded provider retry before the host waits. The engine owns the
+/// retry budget and only accepts transient, unprojected failures.
+pub fn Engine::schedule_retry(
+  self : Engine,
+  effect_id : String,
+  policy : Json,
+) -> Result[Json, String] {
+  let candidate = self.copy_state()
+  match candidate.schedule_retry_impl(effect_id, policy) {
+    Err(error) => Err(error)
+    Ok(value) =>
+      if candidate.within_capacity() {
+        self.adopt(candidate)
+        Ok(value)
+      } else {
+        // Decline retry admission without changing the active effect. The host
+        // can then complete it through the normal per-session capacity path.
+        Ok(object([("scheduled", boolean(false))]))
+      }
+  }
+}
+
+///|
+/// Mark a completed retry wait before the host issues the next provider call.
+pub fn Engine::start_retry(
+  self : Engine,
+  effect_id : String,
+  retry_id : String,
+) -> Result[Json, String] {
+  let candidate = self.copy_state()
+  match candidate.start_retry_impl(effect_id, retry_id) {
+    Err(error) => Err(error)
+    Ok(value) =>
+      if candidate.within_capacity() {
+        self.adopt(candidate)
+        Ok(value)
+      } else {
+        // The schedule was already durable. If state changed enough to defeat
+        // the reserved start marker, fail just this turn and prevent the host
+        // from launching another provider request.
+        let effect = self.effects.get(effect_id).unwrap()
+        let failed = self.copy_state()
+        let session = failed.sessions.get(effect.session_id).unwrap()
+        failed.terminate(session, Failed, "session_capacity", CAPACITY_ERROR)
+        let result = session.json()
+        self.adopt(failed)
+        Ok(result)
       }
   }
 }

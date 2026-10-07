@@ -359,6 +359,34 @@ pub fn HarnessApi::complete(
 }
 
 ///|
+pub fn HarnessApi::schedule_retry(
+  self : HarnessApi,
+  id : String,
+  policy : Json,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.schedule_retry", () => {
+    self.engine.schedule_retry(id, policy)
+  })
+}
+
+///|
+pub fn HarnessApi::start_retry(
+  self : HarnessApi,
+  id : String,
+  retry_id : String,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.start_retry", () => {
+    self.engine.start_retry(id, retry_id)
+  })
+}
+
+///|
 /// Admit provider text/reasoning progress under the active LLM effect identity.
 pub fn HarnessApi::project_stream(
   self : HarnessApi,

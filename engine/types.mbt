@@ -94,6 +94,11 @@ priv struct Session {
   mut active_effect : String?
   mut active_kind : EffectKind?
   mut open_step : Bool
+  mut retry_count : Int
+  mut retry_max_retries : Int?
+  mut retry_initial_delay_ms : Int?
+  mut retry_max_delay_ms : Int?
+  mut pending_retry_id : String?
 }
 
 ///|
@@ -170,5 +175,10 @@ fn fresh_session(
     active_effect: None,
     active_kind: None,
     open_step: false,
+    retry_count: 0,
+    retry_max_retries: None,
+    retry_initial_delay_ms: None,
+    retry_max_delay_ms: None,
+    pending_retry_id: None,
   }
 }

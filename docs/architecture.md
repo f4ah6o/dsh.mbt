@@ -58,8 +58,27 @@ quiescence まで drain してから engine cancellation を記録するため�
 provisional row は accessible name と Canvas scene label で writing / partial と示し、final row が同じ turn / step
 を置き換えるため duplicate transcript はできません。restore は stream event を検証して partial を再表示しますが、
 effect は再発行しません。通常 CLI text stdout は final assistant message のみを表示し、`--json` は session snapshot
-を返すため partial / failed / cancelled turn の provisional row も含むことがあります。live compaction、spill、retry は
-後続 parity work です。
+を返すため partial / failed / cancelled turn の provisional row も含むことがあります。live compaction と spill は後続 parity work です。
+
+### Durable provider retry
+
+`engine/retry.mbt` が retry eligibility、attempt budget、delay、effect / turn / step identity を決めます。host は provider error を
+stable code に分類し、`llm/retry` を append して atomic snapshot に保存した後だけ cancellable backoff を始めます。
+backoff が完了したら MoonBit が `llm/retry-started` を append し、2 回目の checkpoint が成功した後だけ次の request を送ります。
+途中の failure や保存失敗では次の provider call を開始しません。restore 時の pending retry は通常の interrupted turn として閉じ、
+未確定の provider outcome を再送しません。
+
+default は最大 5 retries、500 ms 初期遅延、10,000 ms 上限です。delay は deterministic exponential で、upstream の jitter は
+実装していません。positive `Retry-After` が上限以内ならその delay を使い、上限を超えた場合は retry を中止します。
+`EMPTY_RESPONSE`, `RATE_LIMIT`, `SERVER`, `TIMEOUT`, `TRANSPORT` だけを対象にし、auth、HTTP 408 / 429 以外の 4xx、malformed response は
+再試行しません。stream callback で text / reasoning が観測された request も retry しません。再試行は同一の immutable request と
+active LLM effect 上で行い、tool dispatch は provider response が正常に得られてから一度だけ行います。各再試行は新しい provider
+request であり、再度課金される場合があります。CLI は `--max-retries 0..5` を公開します。
+
+この narrow port は upstream [retry executor](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/llm/llm-retry/src/index.ts)
+と [retry policy](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/llm/llm/src/retry-policy.ts)
+の lifecycle / transient categories を参照していますが、`always` mode、policy keying、jitter、downstream composition は移植していません。
+read-only Session v4 importer も upstream `llm/retry` / `llm/retry-started` event family を受け入れません。
 
 ### 所有権と終了処理
 
@@ -84,7 +103,8 @@ Session v4 の自動 restore migration や v4 writer はありません。read-o
 inbox splice と第一階層 fork に加え、限定的な developer/header 更新、current-surface replacement、compaction
 checkpoint/pruning、診断用 assistant attempt、inert skill/image references、correlated PTC/subagent/foreground-workflow
 history を扱います。image bytes は解決せず placeholder を表示し、workflow background mode は拒否します。
-live compaction、retry scheduling、tool/subagent/workflow execution は実装しません。2026-10-07 の catalog regression は
+live compaction と tool/subagent/workflow execution は実装しません。限定的な provider retry は v1 runtime にありますが、
+read-only importer は upstream retry event family を受け入れません。2026-10-07 の catalog regression は
 unmodified upstream snapshot 25 件すべての import / reopen、transcript/correlation、effect がないことを検証します。
 詳細な受理範囲と拒否条件は
 [移植状況](port-status.md) を参照してください。全 session の event log と派生
@@ -199,5 +219,7 @@ mutation 用に簡略化した別実装を保守することはありません�
 - [Upstream agent loop](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/core/agent-loop)
 - [Upstream session](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/core/session)
 - [Upstream provider](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/llm/llm-deepseek)
+- [Upstream retry executor](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/llm/llm-retry/src/index.ts)
+- [Upstream retry policy](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/llm/llm/src/retry-policy.ts)
 - [gpui fixed revision](https://github.com/gpui-mbt/gpui.mbt/tree/7335e13abe85c65d2a0f60571adc68faa8e64cdd)
 - [Engine contract](../engine/README.md)、[Provider contract](../provider/README.md)

@@ -23,6 +23,7 @@ Options:
   --mode deepseek|openai  Provider protocol (default: deepseek)
   --model NAME            Model (DeepSeek default: deepseek-flash; required for openai)
   --base-url URL          Provider API root (supports a trailing /v1)
+  --max-retries NUMBER    Bounded transient provider retries (default: 5, maximum: 5)
   --port NUMBER           Web port (default: 3080)
   --host ADDRESS          Loopback only (default: 127.0.0.1)
   --allow-shell           Enable bash capability; approval is still required
@@ -46,7 +47,7 @@ export function parseCLI(argv, env = process.env) {
   const positionals = [];
   const values = new Map([
     ['--workspace', 'workspace'], ['--data-dir', 'dataDir'], ['--mode', 'mode'], ['--model', 'model'],
-    ['--base-url', 'baseURL'], ['--port', 'port'], ['--host', 'bind'], ['--session', 'sessionID'], ['--title', 'title'],
+    ['--base-url', 'baseURL'], ['--port', 'port'], ['--max-retries', 'maxRetries'], ['--host', 'bind'], ['--session', 'sessionID'], ['--title', 'title'],
   ]);
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
@@ -55,7 +56,7 @@ export function parseCLI(argv, env = process.env) {
       const value = argv[++index];
       if (value === undefined || value.startsWith('--')) throw new HostError(`Missing value for ${argument}`);
       if (argument === '--approve-tools') options.approveTools.push(...value.split(',').map((item) => item.trim()).filter(Boolean));
-      else options[values.get(argument)] = argument === '--port' ? Number(value) : value;
+      else options[values.get(argument)] = argument === '--port' || argument === '--max-retries' ? Number(value) : value;
     } else if (argument === '--approve-writes') options.approveTools.push('write', 'edit');
     else if (argument === '--demo') options.demo = true;
     else if (argument === '--allow-shell') options.allowShell = true;
@@ -70,6 +71,9 @@ export function parseCLI(argv, env = process.env) {
   if (command === 'run' && !positionals.length && !options.help) throw new HostError('run requires a prompt');
   if (command === 'import-session' && positionals.length !== 1 && !options.help) throw new HostError('import-session requires one Session v4 JSONL path');
   if (options.mode === 'openai' && !options.demo && !options.model && !options.help) throw new HostError('OpenAI-compatible mode requires an explicit model: set --model NAME or DSH_MODEL');
+  if (options.maxRetries !== undefined && (!Number.isSafeInteger(options.maxRetries) || options.maxRetries < 0 || options.maxRetries > 5)) {
+    throw new HostError('--max-retries must be an integer between 0 and 5');
+  }
   if (options.mode === 'deepseek') options.model ??= 'deepseek-flash';
   options.apiKey = env.DSH_API_KEY ?? (options.mode === 'openai' ? env.OPENAI_API_KEY : env.DEEPSEEK_API_KEY);
   return { command, prompt: command === 'run' ? positionals.join(' ') : '', sessionPath: command === 'import-session' ? positionals[0] : undefined, options };

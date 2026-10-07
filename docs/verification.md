@@ -106,6 +106,30 @@ final snapshot を保存するため、checkpoint 中に開始された shutdown
 provider / engine / persistence tests は malformed/final divergence,
 event identity and replay validation, capacity refusal, legacy v1 restore を検証します。
 
+## Durable provider retry increment
+
+2026-10-07、durable retry lifecycle を追加した差分で `npm test` **PASS / exit 0**。
+すべての provider regression は keyless fixture で実行し、実 API request は行っていません。
+
+| gate | 結果 |
+| --- | --- |
+| `npm run check` | PASS。MoonBit format / all-target check、自身の warning 0、JavaScript syntax 27 files。固定 hotpath diagnostics のみ。 |
+| `npm run test:moon` | Wasm、Wasm GC、JS、native それぞれ 74 / 74 PASS。 |
+| `npm run build` | PASS。compiled MoonBit ESM を生成。 |
+| `npm run test:host` | 38 / 38 PASS。 |
+| `npm run test:web` | 9 / 9 PASS。 |
+| `npm run test:integration` | 41 / 41 PASS。 |
+| `npm run mutation` | PASS。plugins production gate は viable 27 / 27 mutants killed、score 100%。 |
+
+`tests/integration/provider-retry.test.mjs` は schedule と start の checkpoint が次の provider I/O より先に保存されること、
+retry 時の frozen body 同一性、過去に完了した tool を再実行しないこと、queued partial delta が retry を止めること、
+backoff cancel と reopen の no-replay、start checkpoint 中の shutdown、checkpoint failure 後に provider I/O が始まらないこと、
+retry marker の容量拒否後も host / restore が使えること、大きすぎる numeric/date `Retry-After` の安全な拒否、
+実 HTTP redirect / blocked-port failure の非 retry 分類を確認します。Host provider tests は delayed response cleanup 中に
+AUTH、malformed SSE、response size-limit failure が TIMEOUT に上書きされないことを確認します。MoonBit retry tests は
+retry budget、step 内での policy 固定、schedule/start identity、pending wait 中の stream delta 拒否、start marker を欠く forged
+replay の atomic rejection を確認します。
+
 ## upstream の実記録を使う結合テスト
 
 `tests/fixtures/upstream-tool-call-turn.json` は upstream の

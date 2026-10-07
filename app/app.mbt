@@ -129,6 +129,40 @@ pub fn complete(id : String, raw : String) -> String {
 }
 
 ///|
+#export_name("retry_schedule")
+pub fn retry_schedule(id : String, raw : String) -> String {
+  let prefix = incarnation.val.to_string() + ":"
+  let internal_id = match id.strip_prefix(prefix) {
+    None =>
+      return response(Err("effect belongs to a different application lifetime"))
+    Some(value) => value.to_owned()
+  }
+  let policy = match parse(raw) {
+    Ok(value) => value
+    Err(error) => return response(Err(error))
+  }
+  match active() {
+    Ok(api) => response(api.schedule_retry(internal_id, policy))
+    Err(error) => response(Err(error))
+  }
+}
+
+///|
+#export_name("retry_started")
+pub fn retry_started(id : String, retry_id : String) -> String {
+  let prefix = incarnation.val.to_string() + ":"
+  let internal_id = match id.strip_prefix(prefix) {
+    None =>
+      return response(Err("effect belongs to a different application lifetime"))
+    Some(value) => value.to_owned()
+  }
+  match active() {
+    Ok(api) => response(api.start_retry(internal_id, retry_id))
+    Err(error) => response(Err(error))
+  }
+}
+
+///|
 #export_name("stream_project")
 pub fn stream_project(
   id : String,
