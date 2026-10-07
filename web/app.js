@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const state = {
   moon: null, sessions: [], id: null, snapshot: { messages: [] },
   selection: 0, mutation: false, poll: null, polling: false, lastList: 0,
-  follow: true, textView: false, frame: null, transcriptKey: "", statusKey: "", actionError: "",
+  follow: true, textView: false, frame: null, transcriptKey: "", statusKey: "", actionError: "", actionMessage: "",
 };
 const scroll = $("transcript-scroll");
 const canvas = $("transcript-canvas");
@@ -81,11 +81,15 @@ function renderControls() {
   const busy = isBusy(session);
   const readOnly = isReadOnly(session);
   const approval = session.pending_approval;
+  const canPrune = !readOnly && !busy && ["idle", "completed"].includes(session.status)
+    && (session.events || []).some((event) => event.type === "tool/result");
   $("session-title").textContent = state.id ? session.title || "Untitled session" : "Agent workspace";
   $("status").textContent = statusLabel(session);
   $("status").dataset.state = approval ? "approval" : session.status || "idle";
   $("progress").textContent = session.turn_id > 0 ? `Turn ${session.turn_id} · Step ${session.step || 0}` : "";
   $("cancel").disabled = state.mutation || !busy;
+  $("prune-results").hidden = !canPrune;
+  $("prune-results").disabled = state.mutation || !canPrune;
   $("new-session").disabled = state.mutation;
   $("prompt").disabled = readOnly;
   $("prompt").placeholder = readOnly ? "Imported history is read-only" : "What would you like to work on?";
@@ -102,6 +106,8 @@ function renderControls() {
   const error = state.actionError || runError(session);
   $("run-error").hidden = !error;
   $("run-error").textContent = error;
+  $("action-message").hidden = !state.actionMessage;
+  $("action-message").textContent = state.actionMessage;
   const statusKey = `${state.id}:${session.status}:${approval?.call_id || ""}`;
   if (state.statusKey !== statusKey) {
     $("announcement").textContent = approval ? `Approval required for ${approval.name}.` : statusLabel(session);
@@ -205,9 +211,10 @@ async function poll() {
 
 async function selectSession(id) {
   const alreadySelected = id === state.id;
-  state.selection += 1; state.follow = true; state.actionError = "";
-  if (alreadySelected) return;
+  state.selection += 1; state.follow = true; state.actionError = ""; state.actionMessage = "";
+  if (alreadySelected) { renderControls(); return; }
   state.id = id;
+  renderControls();
   const selection = state.selection;
   const cached = state.sessions.find((row) => row.id === id);
   if (cached) acceptSnapshot(cached);
@@ -219,7 +226,7 @@ async function selectSession(id) {
 
 async function mutate(body) {
   if (state.mutation) return;
-  state.mutation = true; state.actionError = ""; renderControls();
+  state.mutation = true; state.actionError = ""; state.actionMessage = ""; renderControls();
   try { await body(); clearConnectionError(); }
   catch (error) { state.actionError = error instanceof Error ? error.message : String(error); }
   finally { state.mutation = false; renderControls(); schedulePoll(100); }
@@ -241,6 +248,22 @@ async function createSession(title) {
 $("new-session").addEventListener("click", () => mutate(async () => {
   const session = await createSession(`Session ${state.sessions.length + 1}`);
   if (session.id === state.id) $("prompt").focus();
+}));
+$("prune-results").addEventListener("click", () => mutate(async () => {
+  const id = state.id;
+  const selection = state.selection;
+  let result;
+  try { result = await api("session_prune_tool_results", { session_id: id }); }
+  catch (error) {
+    if (state.id !== id || state.selection !== selection) return;
+    throw error;
+  }
+  if (state.id !== id || state.selection !== selection) return;
+  if (result.session.id === id) acceptSnapshot(result.session);
+  const count = result.pruned.length;
+  state.actionMessage = count > 0
+    ? `Trimmed ${count} tool result${count === 1 ? "" : "s"} for future model requests. Full original output remains in this session's event history.`
+    : "No oversized tool results needed trimming.";
 }));
 $("composer").addEventListener("submit", (event) => {
   event.preventDefault();

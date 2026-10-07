@@ -68,6 +68,31 @@ provisional row は accessible name と Canvas scene label で writing / partial
 effect は再発行しません。通常 CLI text stdout は final assistant message のみを表示し、`--json` は session snapshot
 を返すため partial / failed / cancelled turn の provisional row も含むことがあります。live compaction と spill は後続 parity work です。
 
+### Manual tool-result pruning
+
+`session_prune_tool_results` は、idle または completed の native v1 session に対する明示的な state-change operation です。
+active turn、approval 待ち、read-only Session v4 import には適用できません。browser の **Trim outputs**、HTTP / gpui API、
+または `node host/cli.mjs prune-session SESSION_ID` から実行できます。
+
+この処理は upstream の pinned
+[compaction-tool-result-pruner](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/compaction/compaction-tool-result-pruner)
+の head / marker / tail policy を参照しています。既定値は trigger 8,192 code points、head 4,096、tail 1,024 で、
+marker は `\n\n[... tool result middle pruned ...]\n\n` です。API の任意 field
+`threshold_chars`、`head_chars`、`tail_chars` は整数として厳密に検証し、marker を含む出力長が threshold 以下であることを要求します。
+CLI はそれぞれ `--threshold-chars`、`--head-chars`、`--tail-chars` を受け付けます。切り出しは MoonBit の Unicode code point
+境界で行うため surrogate pair を分割しません。同じ policy の再適用は idempotent で、より小さい policy は現在の projection から続けます。
+
+pruning は original `tool/result` を変更せず、source / call identity、budgets、code point counts、projected content を持つ
+`tool/result/pruned` event を追加します。restore は参照 sequence、call identity、budgets、counts、再計算した content を照合します。
+`Session.messages()` と transcript には full original output を残し、browser は該当する行に “trimmed for model context” と表示します。
+次の provider request は replay 検証済み event から組み立てた projection を使います。host の既存 serialized mutation path が
+成功した操作を checkpoint してから応答するため、保存失敗は session update を公開せず、provider/tool I/O も開始しません。
+
+これは手動の bounded projection です。token meter、pressure trigger、summary generation、自動 live compaction、spill は含みません。
+pruning event は保存量を増やし、canonical session の 262,144 UTF-16 code unit 上限と 32,768 event 上限は引き続き適用されます。
+capacity refusal は candidate snapshot を採用せず、元の transcript / event queue を保ちます。運用上の条件は
+[次の移植作業](../issues/open/0001-upstream-parity.md) を参照してください。
+
 ### Durable provider retry
 
 `engine/retry.mbt` が retry eligibility、attempt budget、delay、effect / turn / step identity を決めます。host は provider error を
@@ -167,6 +192,7 @@ public deployment や multi-user authentication は未実装です。
 | `session_list` | `{}` | `id`, `title`, `status`, `turn_id`, `step` の要約配列 |
 | `session_get` | `session_id` | events / messages / pending approval を含む session |
 | `session_send` | `session_id`, `prompt` | 受理後の session |
+| `session_prune_tool_results` | `session_id` と任意の pruning budgets | session、pruned result summary、removed code point 数 |
 | `session_cancel` | `session_id` | 停止した session |
 | `tool_approve` | `session_id`, `call_id`, `approved` | 判定後の session |
 | `plugin_list` | `{}` | startup composition と tool 所有者 |
@@ -174,7 +200,7 @@ public deployment や multi-user authentication は未実装です。
 
 各操作の入力は additional properties を認めません。typed GUI binding にも同じ検証を適用します。
 `session_send` は実行中の session への重複投入を拒否します。
-import 済み history は `session_send` と `session_cancel` を拒否します。permission preset、approval policy、sandbox mode は
+import 済み history は `session_send`、`session_prune_tool_results`、`session_cancel` を拒否します。permission preset、approval policy、sandbox mode は
 元の履歴としてだけ保持し、host の設定や capability admission に反映しません。
 クライアントが再送する create には明示的な `id` を使用できます。
 JSON-RPC の `id` は応答の相関用であり、同じ ID の request を自動 deduplicate するものではありません。

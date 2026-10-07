@@ -108,6 +108,7 @@ fn Engine::invoke_impl(
         }
         session.json()
       }
+      "session_prune_tool_results" => self.prune_session_tool_results(input)
       "tool_approve" => {
         let session = self.input_session(input)
         let call_id = required_string(input, "call_id", max=128)
@@ -437,9 +438,11 @@ fn Session::model_messages(self : Session) -> Array[Json] {
   if self.imported {
     return imported_messages(self.events)
   }
+  let (content_by_result, _) = self.tool_result_pruning_state()
   self.events.filter_map(event => {
     match event.kind {
-      "user/message" | "tool/result" => Some(detached(event.data))
+      "user/message" => Some(detached(event.data))
+      "tool/result" => Some(projected_tool_result(event, content_by_result))
       "assistant/message" =>
         match event.data {
           Json::Object(data) => data.get("message").map(detached)

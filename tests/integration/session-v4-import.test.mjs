@@ -1081,6 +1081,12 @@ test('tool-result pruning rewrites an earlier turn without replaying its tool li
   assert.ok(!session.messages.some((message) => message.content === 'alpha\n'));
   assert.equal(session.pending_tool_calls.length, 0);
   assert.ok(session.messages.some((message) => message.source_event_seq === rewritten.replacementSeq));
+  const beforePruneAttempt = await host.session(session.id);
+  const attemptedPrune = await host.call('session_prune_tool_results', { session_id: session.id });
+  assert.equal(attemptedPrune.ok, false);
+  assert.match(attemptedPrune.error, /read-only/i);
+  assert.deepEqual(await host.session(session.id), beforePruneAttempt,
+    'the native pruning operation cannot mutate imported Session v4 history');
   assert.equal(host.activeCount, 0);
   assert.equal(fetchCalls(), 0);
 });

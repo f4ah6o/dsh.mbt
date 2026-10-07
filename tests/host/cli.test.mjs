@@ -35,6 +35,12 @@ test('CLI options preserve explicit provider and approval policy', () => {
   assert.equal(importer.sessionPath, '/tmp/session.v4.jsonl');
   assert.equal(importer.options.json, true);
   assert.throws(() => parseCLI(['import-session'], {}), /requires one Session v4 JSONL path/);
+  const pruner = parseCLI(['prune-session', 'session-7', '--threshold-chars', '8000', '--head-chars', '4000', '--tail-chars', '1000'], {});
+  assert.equal(pruner.pruneSessionID, 'session-7');
+  assert.deepEqual(pruner.options.pruneConfig, { threshold_chars: 8000, head_chars: 4000, tail_chars: 1000 });
+  assert.throws(() => parseCLI(['prune-session'], {}), /requires one session ID/);
+  assert.throws(() => parseCLI(['prune-session', 'session-7', '--threshold-chars', '1.5'], {}), /must be an integer/);
+  assert.throws(() => parseCLI(['run', 'Hello', '--head-chars', '1'], {}), /require the prune-session command/);
 });
 
 test('stdio MCP separates lines, handles UTF-8 chunks and emits no notification bytes', async () => {
@@ -76,6 +82,12 @@ test('CLI offline run completes the real tool turn and leaves no live host lock'
   assert.equal(final.status, 'completed');
   assert.ok(final.messages.some((message) => message.role === 'tool' && message.content.includes('demo.mbt')));
   assert.ok(!(stdout + stderr).includes('never-display-this-secret'));
+  const prune = await execute(process.execPath, [
+    'host/cli.mjs', 'prune-session', final.id, '--demo', '--workspace', workspace, '--json',
+  ], { cwd: repository, timeout: 15_000, env: process.env });
+  const pruneResult = JSON.parse(prune.stdout);
+  assert.equal(pruneResult.session.status, 'completed');
+  assert.deepEqual(pruneResult.pruned, []);
   await assert.rejects(fs.stat(path.join(workspace, '.dsh.mbt/host.lock')), { code: 'ENOENT' });
   const saved = JSON.parse(await fs.readFile(path.join(workspace, '.dsh.mbt/sessions.json'), 'utf8'));
   assert.equal(saved.sessions[0].status, 'completed');

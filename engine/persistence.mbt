@@ -775,6 +775,7 @@ fn restore_session(
           session.approval = None
           session.status = Running
         }
+        "tool/result/pruned" => session.validate_tool_result_prune(data)
         "step/end" => {
           if !session.open_step ||
             !assistant_recorded ||

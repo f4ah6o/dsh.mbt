@@ -14,6 +14,7 @@ Usage:
   node host/cli.mjs [web] [options]
   node host/cli.mjs run "prompt" [options]
   node host/cli.mjs import-session SESSION.v4.jsonl [options]
+  node host/cli.mjs prune-session SESSION_ID [options]
   node host/cli.mjs mcp [options]
 
 Options:
@@ -30,6 +31,9 @@ Options:
   --approve-tools NAMES   Explicit auto-approval for write,edit,bash (comma list)
   --approve-writes        Explicit auto-approval for write and edit
   --session ID            Send the run prompt to an existing session
+  --threshold-chars N     Pruning trigger size for prune-session (default: 8192)
+  --head-chars N          Leading code points retained (default: 4096)
+  --tail-chars N          Trailing code points retained (default: 1024)
   --json                  Print the final or imported session as JSON
   --title TEXT            Title for a new run session
   --help                  Show this help
@@ -43,19 +47,23 @@ The MCP carrier passes gpui.mbt JSON-RPC messages through without protocol trans
 `;
 
 export function parseCLI(argv, env = process.env) {
-  const options = { mode: env.DSH_MODE ?? 'deepseek', model: env.DSH_MODEL, baseURL: env.DSH_BASE_URL, approveTools: [] };
+  const options = { mode: env.DSH_MODE ?? 'deepseek', model: env.DSH_MODEL, baseURL: env.DSH_BASE_URL, approveTools: [], pruneConfig: {} };
   const positionals = [];
   const values = new Map([
     ['--workspace', 'workspace'], ['--data-dir', 'dataDir'], ['--mode', 'mode'], ['--model', 'model'],
     ['--base-url', 'baseURL'], ['--port', 'port'], ['--max-retries', 'maxRetries'], ['--host', 'bind'], ['--session', 'sessionID'], ['--title', 'title'],
   ]);
+  const pruneValues = new Map([
+    ['--threshold-chars', 'threshold_chars'], ['--head-chars', 'head_chars'], ['--tail-chars', 'tail_chars'],
+  ]);
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
     if (argument === '--') { positionals.push(...argv.slice(index + 1)); break; }
-    if (values.has(argument) || argument === '--approve-tools') {
+    if (values.has(argument) || pruneValues.has(argument) || argument === '--approve-tools') {
       const value = argv[++index];
       if (value === undefined || value.startsWith('--')) throw new HostError(`Missing value for ${argument}`);
       if (argument === '--approve-tools') options.approveTools.push(...value.split(',').map((item) => item.trim()).filter(Boolean));
+      else if (pruneValues.has(argument)) options.pruneConfig[pruneValues.get(argument)] = Number(value);
       else options[values.get(argument)] = argument === '--port' || argument === '--max-retries' ? Number(value) : value;
     } else if (argument === '--approve-writes') options.approveTools.push('write', 'edit');
     else if (argument === '--demo') options.demo = true;
@@ -66,17 +74,33 @@ export function parseCLI(argv, env = process.env) {
     else positionals.push(argument);
   }
   const command = positionals.shift() ?? 'web';
-  if (!['web', 'run', 'import-session', 'mcp'].includes(command) && !options.help) throw new HostError(`Unknown command: ${command}`);
-  if (command !== 'run' && command !== 'import-session' && positionals.length) throw new HostError('Unexpected positional arguments');
+  if (!['web', 'run', 'import-session', 'prune-session', 'mcp'].includes(command) && !options.help) throw new HostError(`Unknown command: ${command}`);
+  if (!['run', 'import-session', 'prune-session'].includes(command) && positionals.length) throw new HostError('Unexpected positional arguments');
   if (command === 'run' && !positionals.length && !options.help) throw new HostError('run requires a prompt');
   if (command === 'import-session' && positionals.length !== 1 && !options.help) throw new HostError('import-session requires one Session v4 JSONL path');
+  if (command === 'prune-session' && positionals.length !== 1 && !options.help) throw new HostError('prune-session requires one session ID');
   if (options.mode === 'openai' && !options.demo && !options.model && !options.help) throw new HostError('OpenAI-compatible mode requires an explicit model: set --model NAME or DSH_MODEL');
   if (options.maxRetries !== undefined && (!Number.isSafeInteger(options.maxRetries) || options.maxRetries < 0 || options.maxRetries > 5)) {
     throw new HostError('--max-retries must be an integer between 0 and 5');
   }
+  for (const [name, value] of Object.entries(options.pruneConfig)) {
+    const minimum = name === 'threshold_chars' ? 1 : 0;
+    if (!Number.isSafeInteger(value) || value < minimum || value > 262144) {
+      throw new HostError(`--${name.replaceAll('_', '-')} must be an integer between ${minimum} and 262144`);
+    }
+  }
+  if (Object.keys(options.pruneConfig).length && command !== 'prune-session') {
+    throw new HostError('Tool-result pruning budget options require the prune-session command');
+  }
   if (options.mode === 'deepseek') options.model ??= 'deepseek-flash';
   options.apiKey = env.DSH_API_KEY ?? (options.mode === 'openai' ? env.OPENAI_API_KEY : env.DEEPSEEK_API_KEY);
-  return { command, prompt: command === 'run' ? positionals.join(' ') : '', sessionPath: command === 'import-session' ? positionals[0] : undefined, options };
+  return {
+    command,
+    prompt: command === 'run' ? positionals.join(' ') : '',
+    sessionPath: command === 'import-session' ? positionals[0] : undefined,
+    pruneSessionID: command === 'prune-session' ? positionals[0] : undefined,
+    options,
+  };
 }
 
 export async function serveMcp(host, input = process.stdin, output = process.stdout) {
@@ -193,8 +217,27 @@ async function importSession(host, sourcePath, options, signal) {
   else process.stdout.write(`Imported Session v4 as ${imported.result.id}: ${imported.result.title}\nRead-only history (${imported.result.status}); recorded tools were not executed.\n`);
 }
 
+async function pruneSession(host, sessionID, options) {
+  const response = await host.call('session_prune_tool_results', {
+    session_id: sessionID,
+    ...options.pruneConfig,
+  });
+  if (!response.ok) throw new HostError(response.error);
+  const result = response.result;
+  if (options.json) process.stdout.write(`${JSON.stringify(result)}\n`);
+  else {
+    const count = result.pruned.length;
+    const noun = count === 1 ? 'result' : 'results';
+    process.stdout.write(
+      count > 0
+        ? `Trimmed ${count} tool ${noun}; removed ${result.chars_removed} Unicode code points. Full originals remain in session history.\n`
+        : `No oversized tool results needed trimming. Full originals remain in session history.\n`,
+    );
+  }
+}
+
 export async function main(argv = process.argv.slice(2)) {
-  const { command, prompt, sessionPath, options } = parseCLI(argv);
+  const { command, prompt, sessionPath, pruneSessionID, options } = parseCLI(argv);
   if (options.help) { process.stdout.write(HELP); return; }
   const controller = new AbortController();
   const interrupt = () => { process.exitCode = 130; controller.abort(new Error('Interrupted')); };
@@ -218,6 +261,7 @@ export async function main(argv = process.argv.slice(2)) {
       controller.signal.addEventListener('abort', abortInput, { once: true });
       try { await serveMcp(host); } finally { controller.signal.removeEventListener('abort', abortInput); }
     } else if (command === 'import-session') await importSession(host, sessionPath, options, controller.signal);
+    else if (command === 'prune-session') await pruneSession(host, pruneSessionID, options);
     else await runPrompt(host, prompt, options, controller.signal);
   } finally {
     try { await web?.close(); } finally {

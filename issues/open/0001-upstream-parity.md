@@ -53,6 +53,20 @@ upstream の jitter / `always` runtime mode / retry policy keying は未実装�
 validation のみで runtime replay ではありません。compaction、spill と
 retry 可能な長い conversation を追加する設計・受入条件は残ります。
 
+manual tool-result pruning の部分対応（2026-10-07）: pinned
+[compaction-tool-result-pruner](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/compaction/compaction-tool-result-pruner)
+の head / marker / tail policy を native v1 runtime に移し、idle / completed session 向けの
+`session_prune_tool_results`、`prune-session` CLI、browser の **Trim outputs** を追加しました。
+既定値は threshold 8,192、head 4,096、tail 1,024 Unicode code points です。projection は durable pruning event として保存し、
+restore は source/result sequence、call identity、budgets、counts、projected content を再検証します。
+元の `tool/result` と transcript は変更せず、次の provider context だけを projection します。imported / active session は拒否します。
+keyless provider integration は 10,000-character parallel Read outputs が実 request で縮むこと、call order、reopen 後の同じ projection、
+tool の no-replay を確認します。Browser smoke は同一 selection と遅延した prune response / session switch を確認します。
+
+これは明示的な手動操作であり、token meter、pressure trigger、summary generation、自動 live compaction、spill は含みません。
+pruning event 自体が保存量を増やすため、262,144 UTF-16 code unit の canonical session limit は維持されます。従って長い会話を
+この上限を越えて継続する要件や capacity increase は満たしていません。本 issue 全体は open のままです。
+
 受入条件:
 
 - 旧上限を超える複数 turn の会話が継続し、縮約前後の履歴が説明可能である。

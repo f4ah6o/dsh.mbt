@@ -78,6 +78,28 @@ test "MCP explicit session identity prevents duplicate session creation" {
 }
 
 ///|
+test "tool-result pruning is a validated state-change capability for idle sessions" {
+  let api = @api.HarnessApi::new().unwrap()
+  api.invoke("session_create", { "id": "prune-api" }).unwrap() |> ignore
+  let result = api
+    .invoke("session_prune_tool_results", { "session_id": "prune-api" })
+    .unwrap()
+  assert_eq(get(result, "chars_unit"), "unicode_code_points")
+  match get(result, "pruned") {
+    Array(entries) => assert_eq(entries.length(), 0)
+    _ => fail("expected a pruning summary")
+  }
+  assert_true(
+    api.invoke("session_prune_tool_results", {
+      "session_id": "prune-api",
+      "threshold": 10,
+    })
+    is Err(_),
+  )
+  api.close()
+}
+
+///|
 test "capability send emits work and cancellation rejects its late settlement" {
   let api = @api.HarnessApi::new().unwrap()
   api.invoke("session_create", { "id": "cancel" }).unwrap() |> ignore

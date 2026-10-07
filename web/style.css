@@ -57,6 +57,7 @@ h1 { font-size: 18px; letter-spacing: -.35px; margin: 0 0 9px; overflow: hidden;
 .composer-footer p { font-size: 10px; color: #8791a1; margin: 0; }
 .notice { margin: 12px 28px 0; padding: 11px 14px; font-size: 12px; line-height: 1.55; display: flex; gap: 12px; justify-content: space-between; align-items: center; overflow-wrap: anywhere; }
 .error-notice { border: 1px solid #ebcec9; border-radius: 7px; color: #874238; background: #fff7f5; }
+.success-notice { border: 1px solid #cfe3d3; border-radius: 7px; color: #356147; background: #f4fbf5; }
 .notice button { flex-shrink: 0; color: #874238; }
 .approval { margin: 8px 28px 16px; padding: 16px; background: #fffbf0; border: 1px solid #e9d9aa; border-radius: 9px; max-height: 40dvh; overflow: auto; }
 .approval-heading { display: flex; justify-content: space-between; gap: 15px; align-items: start; }

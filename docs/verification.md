@@ -228,6 +228,36 @@ cancel/restore/double-reopen、容量終了時に保存済み成功を保つこ�
 Host tests は一括 checkpoint 失敗時に 4 個の tool effect を起動しないこと、実行中 pool の cancel / shutdown と queued sibling の no-replay を確認します。
 この差分は `plugins/` を変更していないため、`npm run mutation` は再実行していません。同コマンドは production plugin package のみが対象で、engine mutation coverage は含みません。
 
+## Manual tool-result pruning increment
+
+2026-10-07、pinned upstream tool-result pruner の explicit v1 subset を追加した状態で `npm test` **PASS / exit 0**。
+すべて keyless fixture で実行し、外部 provider API は呼び出していません。
+
+| gate | 結果 |
+| --- | --- |
+| `npm run check` | PASS。all-target MoonBit check、own warnings 0、JavaScript syntax 28 files。固定 hotpath diagnostics のみ。 |
+| `npm run test:moon` | Wasm、Wasm GC、JS、native 各 target で 89 / 89 PASS。app JS に test entry はありません。 |
+| `npm run build` | PASS。 |
+| `npm run test:host` | 40 / 40 PASS。 |
+| `npm run test:web` | 10 / 10 PASS。 |
+| `npm run test:integration` | 44 / 44 PASS。 |
+| `web/browser-smoke.mjs` | PASS。実 Chromium、local host、fixture provider response を使用。 |
+
+`tests/integration/upstream-parallel-tools.test.mjs` は実際の local HTTP provider body を capture し、2 件の 10,000-character Read result が
+call order を維持したまま bounded request context になることを確認します。full original は `Session.messages()` と persisted snapshot に残り、
+prune operation は host の serialized checkpoint path を通ってから返ります。completed session を reopen した後の provider context も同じで、
+read tool が再実行されないことを確認します。Session v4 importer に対する mutation は read-only error として拒否します。
+MoonBit white-box tests は Unicode code point / marker-only budget、idempotence / tighter chained budget、invalid input、event capacity、
+wrong call / forward or unrelated result reference、forged content / count / budget、duplicate pruning event の restore rejection を確認します。
+全拒否ケースで live snapshot または restore target は部分更新されません。
+
+Browser smoke は **Trim outputs** の原文表示と context projection を確認し、session 切替時に古い notice を消します。
+成功した idempotent prune の遅延応答と、保存容量で失敗する prune の遅延応答の両方を別 session への切替と競合させ、
+元 session 向けの success / error notice が選択中の session に表示されないことを確認します。
+この機能は manual trigger のみで、token meter、pressure trigger、自動 compaction、summary、spill は実装しません。pruning event が追加保存量を使うため、
+262,144 UTF-16 code unit / 32,768 event の上限は維持されます。mutation gate の production scope は `plugins/plugins.mbt` のみで、
+今回その plugin source を変更していないため再実行していません。
+
 ## turtles.mbt mutation gate
 
 `npm run mutation` **PASS / exit 0**。
