@@ -11,6 +11,9 @@
 
 ### Changed
 
+- native host の Tailscale Serve は `DSH_TAILNET_PORT` で HTTPS port を指定できる。未指定時は 443 を使う。
+- ローカル browser UI の ChatGPT sign-in は同じ browser の新しい tab で完了する。Tailnet client の sign-in や account 切り替えは host Mac 上の dsh から開始する。
+
 ### Fixed
 
 - ChatGPT へのサインイン完了後にモデル一覧を自動取得し、取得失敗時は再試行できるようにした。

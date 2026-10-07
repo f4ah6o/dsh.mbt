@@ -32,14 +32,28 @@ struct NativeService {
   requested_port : Int
   tailnet_host : String?
   tailnet_owner : String?
+  tailnet_port : Int
 }
 
 ///|
-fn service_tailnet_owner_from_env() -> Result[(String, String)?, String] {
-  let host = @env.get_env_var("DSH_TAILNET_HOST")
-  let users = @env.get_env_var("DSH_TAILNET_ALLOWED_USERS")
+fn service_tailnet_config_from_settings(
+  host : String?,
+  users : String?,
+  raw_port : String?,
+) -> Result[(String, String, Int)?, String] {
+  let port = match service_tailnet_port_from_setting(raw_port) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
   match (host, users) {
-    (None, None) => Ok(None)
+    (None, None) =>
+      match raw_port {
+        None => Ok(None)
+        Some(_) =>
+          Err(
+            "DSH_TAILNET_PORT requires DSH_TAILNET_HOST and DSH_TAILNET_ALLOWED_USERS",
+          )
+      }
     (Some(raw_host), Some(raw_users)) => {
       let normalized_host = raw_host.trim().to_lower().to_owned()
       if normalized_host.is_empty() ||
@@ -63,10 +77,32 @@ fn service_tailnet_owner_from_env() -> Result[(String, String)?, String] {
           "DSH_TAILNET_ALLOWED_USERS must name exactly one owner login",
         )
       }
-      Ok(Some((normalized_host, owners[0])))
+      Ok(Some((normalized_host, owners[0], port)))
     }
     _ =>
       Err("DSH_TAILNET_HOST and DSH_TAILNET_ALLOWED_USERS must be set together")
+  }
+}
+
+///|
+fn service_tailnet_config_from_env() -> Result[(String, String, Int)?, String] {
+  service_tailnet_config_from_settings(
+    @env.get_env_var("DSH_TAILNET_HOST"),
+    @env.get_env_var("DSH_TAILNET_ALLOWED_USERS"),
+    @env.get_env_var("DSH_TAILNET_PORT"),
+  )
+}
+
+///|
+fn service_tailnet_port_from_setting(raw_port : String?) -> Result[Int, String] {
+  match raw_port {
+    None => Ok(443)
+    Some(value) if value.length() <= 5 =>
+      match service_parse_int(value) {
+        Some(port) if port >= 1 && port <= 65535 => Ok(port)
+        _ => Err("DSH_TAILNET_PORT must be an integer between 1 and 65535")
+      }
+    Some(_) => Err("DSH_TAILNET_PORT must be an integer between 1 and 65535")
   }
 }
 
@@ -79,7 +115,7 @@ async fn NativeService::new(
   if requested_port < 0 || requested_port > 65535 {
     return Err("HTTP port must be between 0 and 65535")
   }
-  let tailnet_owner = match service_tailnet_owner_from_env() {
+  let tailnet_config = match service_tailnet_config_from_env() {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -94,8 +130,9 @@ async fn NativeService::new(
     source_root: root,
     web_root,
     requested_port,
-    tailnet_host: tailnet_owner.map(pair => pair.0),
-    tailnet_owner: tailnet_owner.map(pair => pair.1),
+    tailnet_host: tailnet_config.map(config => config.0),
+    tailnet_owner: tailnet_config.map(config => config.1),
+    tailnet_port: tailnet_config.map(config => config.2).unwrap_or(443),
   })
 }
 
@@ -161,7 +198,12 @@ async fn NativeService::run_listener(
   match (self.tailnet_host, self.tailnet_owner) {
     (Some(host), Some(owner)) => {
       ignore(owner)
-      println("Tailscale Serve mode: https://" + host)
+      let authority = if self.tailnet_port == 443 {
+        host
+      } else {
+        host + ":" + self.tailnet_port.to_string()
+      }
+      println("Tailscale Serve mode: https://" + authority)
     }
     _ =>
       println(
@@ -225,7 +267,8 @@ async fn NativeService::handle(
     Some((path, query)) => (path.to_owned(), query.to_owned())
     None => (request.path, "")
   }
-  let identity_key = match self.request_identity(request, port) {
+  let (identity_key, is_local_request) = match
+    self.request_identity(request, port) {
     Ok(value) => value
     Err(_) => {
       self.respond_json(connection, 403, {
@@ -239,7 +282,9 @@ async fn NativeService::handle(
       self.handle_get(path, query, connection, group, port, identity_key)
     @http.Head => self.handle_head(path, connection, port)
     @http.Post =>
-      self.handle_post(path, request, connection, group, identity_key)
+      self.handle_post(
+        path, request, connection, group, identity_key, is_local_request,
+      )
     _ =>
       self.respond_json(connection, 405, { "error": "method is not allowed" }, extra_headers={
         "Allow": "GET, HEAD, POST",
@@ -252,8 +297,8 @@ fn NativeService::request_identity(
   self : NativeService,
   request : @http.Request,
   port : Int,
-) -> Result[String, String] {
-  let identity = match
+) -> Result[(String, Bool), String] {
+  let (identity, is_local_request) = match
     service_request_identity(
       request.headers.get("host").unwrap_or(""),
       request.headers.get("origin"),
@@ -261,6 +306,7 @@ fn NativeService::request_identity(
       port,
       self.tailnet_host,
       self.tailnet_owner,
+      self.tailnet_port,
       self.runtime.state.identity_key,
     ) {
     Ok(value) => value
@@ -269,7 +315,7 @@ fn NativeService::request_identity(
   if identity != self.runtime.state.identity_key {
     return Err("caller identity scope changed")
   }
-  Ok(identity)
+  Ok((identity, is_local_request))
 }
 
 ///|
@@ -280,8 +326,9 @@ fn service_request_identity(
   port : Int,
   tailnet_host : String?,
   tailnet_owner : String?,
+  tailnet_port : Int,
   local_identity : String,
-) -> Result[String, String] {
+) -> Result[(String, Bool), String] {
   let expected_ip = "127.0.0.1:" + port.to_string()
   let expected_localhost = "localhost:" + port.to_string()
   let host = host_header.trim().to_lower().to_owned()
@@ -297,14 +344,27 @@ fn service_request_identity(
         "Tailscale identity headers are invalid on a local-origin request",
       )
     }
-    return Ok(local_identity)
+    return Ok((local_identity, true))
   }
   match (tailnet_host, tailnet_owner) {
-    (Some(expected_host), Some(owner)) if host == expected_host ||
-      host == expected_host + ":443" => {
+    (Some(expected_host), Some(owner)) => {
+      let expected_authority = if tailnet_port == 443 {
+        expected_host
+      } else {
+        expected_host + ":" + tailnet_port.to_string()
+      }
+      let host_matches = if tailnet_port == 443 {
+        host == expected_authority || host == expected_authority + ":443"
+      } else {
+        host == expected_authority
+      }
+      if !host_matches {
+        return Err("request Host is not an authorized local or Serve origin")
+      }
+      let expected_origin = "https://" + expected_authority
       match origin {
         None => ()
-        Some(value) if value == "https://" + expected_host => ()
+        Some(value) if value == expected_origin => ()
         _ => return Err("Tailscale request origin is not allowed")
       }
       let login = tailscale_login.unwrap_or("").trim().to_lower().to_owned()
@@ -312,7 +372,7 @@ fn service_request_identity(
         return Err("Tailscale user is missing or not on the owner allowlist")
       }
       let identity_key = "tailscale:" + owner
-      Ok(identity_key)
+      Ok((identity_key, false))
     }
     _ => Err("request Host is not an authorized local or Serve origin")
   }
@@ -416,6 +476,7 @@ async fn NativeService::handle_post(
   connection : @http.ServerConnection,
   group : @async.TaskGroup[Unit],
   identity_key : String,
+  is_local_request : Bool,
 ) -> Unit {
   let site = request.headers.get("sec-fetch-site").unwrap_or("")
   if site == "cross-site" {
@@ -453,7 +514,7 @@ async fn NativeService::handle_post(
   if path == "/api/v1/commands" {
     self.handle_command(body, connection, group, identity_key)
   } else if path == "/api/call" {
-    self.handle_call(body, connection, group)
+    self.handle_call(body, connection, group, is_local_request)
   } else {
     self.respond_json(connection, 404, { "error": "not found" })
   }
@@ -499,6 +560,7 @@ async fn NativeService::handle_call(
   body : String,
   connection : @http.ServerConnection,
   group : @async.TaskGroup[Unit],
+  is_local_request : Bool,
 ) -> Unit {
   let value = @json.parse(body) catch {
     _ => {
@@ -518,18 +580,57 @@ async fn NativeService::handle_call(
         "result": self.runtime.auth.status(),
       })
     "auth_sign_in" =>
-      match self.runtime.auth.begin_sign_in() {
-        Err(error) => self.auth_error(connection, error)
-        Ok(started) => {
-          if native_json_true(object_field(started, "started")) {
+      if !is_local_request {
+        self.respond_json(connection, 403, {
+          "ok": false,
+          "error": "Open dsh on the host computer to start or switch ChatGPT sign-in.",
+        })
+      } else {
+        match self.runtime.auth.begin_sign_in() {
+          Err(error) => self.auth_error(connection, error)
+          Ok(started) => {
+            if native_json_true(object_field(started, "started")) {
+              group.spawn_bg(no_wait=true) <| () => {
+                match self.runtime.auth.sign_in() {
+                  Ok(_) => ignore(self.runtime.touch_projection())
+                  Err(_) => ignore(self.runtime.touch_projection())
+                }
+              }
+            }
+            self.respond_json(connection, 202, { "ok": true, "result": started })
+          }
+        }
+      }
+    "auth_sign_in_browser" =>
+      if !is_local_request {
+        self.respond_json(connection, 403, {
+          "ok": false,
+          "error": "Open dsh on the host computer to start or switch ChatGPT sign-in.",
+        })
+      } else {
+        match self.runtime.auth.prepare_browser_sign_in() {
+          Err(error) => self.auth_error(connection, error)
+          Ok(None) =>
+            self.respond_json(connection, 202, {
+              "ok": true,
+              "result": { "started": false },
+            })
+          Ok(Some(prepared)) => {
+            let authorization_url = prepared.authorization_url
             group.spawn_bg(no_wait=true) <| () => {
-              match self.runtime.auth.sign_in() {
+              match self.runtime.auth.finish_browser_sign_in(prepared) {
                 Ok(_) => ignore(self.runtime.touch_projection())
                 Err(_) => ignore(self.runtime.touch_projection())
               }
             }
+            self.respond_json(connection, 202, {
+              "ok": true,
+              "result": {
+                "started": true,
+                "authorization_url": authorization_url,
+              },
+            })
           }
-          self.respond_json(connection, 202, { "ok": true, "result": started })
         }
       }
     "auth_sign_out" => {

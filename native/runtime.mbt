@@ -161,14 +161,14 @@ async fn NativeRuntime::open(
       return Err(error)
     }
   }
-  let identity_key = match service_tailnet_owner_from_env() {
+  let identity_key = match service_tailnet_config_from_env() {
     Err(error) => {
       api.close()
       ignore(store.close())
       workspace_root.close()
       return Err(error)
     }
-    Ok(Some((_, login))) => "tailscale:" + login
+    Ok(Some((_, login, _))) => "tailscale:" + login
     Ok(None) => "local:" + @env.get_env_var("USER").unwrap_or("owner")
   }
   let auth_revision = if identity_key == loaded.identity_key {

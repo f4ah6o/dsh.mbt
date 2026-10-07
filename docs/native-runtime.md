@@ -36,7 +36,7 @@ moon run native --target native --release -- \
   --workspace /absolute/path/to/project
 ```
 
-`--deny-call` follows the same flow but rejects the tool. Provider account lifecycle actions are also available locally with `--auth-status`, `--sign-in`, `--models`, `--select-model MODEL`, and `--sign-out`; each action requires `--data-dir` and `--workspace`. Sign-in opens the host browser and keeps all tokens in the protected native store.
+`--deny-call` follows the same flow but rejects the tool. Provider account lifecycle actions are also available locally with `--auth-status`, `--sign-in`, `--models`, `--select-model MODEL`, and `--sign-out`; each action requires `--data-dir` and `--workspace`. CLI `--sign-in` opens the host operating system's default browser. Sign-in from the local browser UI opens a new tab in that same browser. In both cases, the callback flow and tokens stay on the host in the protected native store.
 
 ## Data directory compatibility
 
@@ -61,7 +61,7 @@ moon run native --target native --release -- --select-model MODEL_SLUG --data-di
 moon run native --target native --release -- --run 'Reply with exactly: SIWC smoke passed.' --data-dir /absolute/path/to/dsh-siwc-smoke-data --workspace /absolute/path/to/project
 ~~~~
 
-The smoke passes only when the returned session reaches completed after a validated response.completed event. For account disconnect or switching, run --sign-out before starting a new sign-in. If plan usage is disabled, open ChatGPT in the host browser and check **Settings → Usage**; the native host does not grant or change account eligibility. A remote browser cannot complete this initial host-browser sign-in flow.
+The smoke passes only when the returned session reaches completed after a validated response.completed event. For account disconnect or switching, run --sign-out before starting a new sign-in. If plan usage is disabled, open ChatGPT in the host browser and check **Settings → Usage**; the native host does not grant or change account eligibility. Tailnet browser clients can use the account already connected on the Mac, but sign-in and account switching must be started from dsh on the host Mac.
 
 ## Tailscale Serve
 
@@ -70,18 +70,19 @@ Configure the exact MagicDNS HTTPS hostname and one owner login before starting 
 ```sh
 export DSH_TAILNET_HOST='machine.example-tailnet.ts.net'
 export DSH_TAILNET_ALLOWED_USERS='owner@example.com'
+export DSH_TAILNET_PORT=8443 # optional; defaults to 443
 moon run native --target native --release -- \
   --serve --data-dir /absolute/path/to/dsh-data \
   --workspace /absolute/path/to/project --port 3210
 ```
 
-In another terminal, configure Tailscale Serve to proxy to that loopback port:
+The service accepts the configured HTTPS authority and Origin only when the `Tailscale-User-Login` header matches the configured owner. The HTTPS port defaults to 443; when `DSH_TAILNET_PORT` is set, use that port in both the request Host and HTTPS Origin. For example, configure Tailscale Serve on 8443 to proxy to the loopback port:
 
 ```sh
-tailscale serve 3210
+tailscale serve --https=8443 http://127.0.0.1:3210
 ```
 
-The service accepts that configured Host and HTTPS Origin only when the `Tailscale-User-Login` header matches the configured owner. Requests without that identity, requests from tagged devices, and other logins are rejected. The initial policy grants the one configured owner full access; it does not implement multi-user roles. To revoke or replace the owner, update the environment and restart the native host. The restart changes the authorization scope and invalidates previous cursors and receipt access.
+Requests without that identity, requests from tagged devices, and other logins are rejected. The initial policy grants the one configured owner full access; it does not implement multi-user roles. To revoke or replace the owner, update the environment and restart the native host. The restart changes the authorization scope and invalidates previous cursors and receipt access.
 
 The identity-header trust boundary assumes a managed, single-user host. The service binds to loopback, as Tailscale recommends, but another process running as that host user can forge loopback headers. Do not expose the native port on a LAN or public interface, and do not use Tailscale Funnel.
 
@@ -91,6 +92,6 @@ Process tools run in a dedicated session with a CPU limit and bounded captured o
 
 Native workspace glob supports literals, `*`, `?`, and `**`; `**/` can match zero directory components, so `**/*.txt` matches a root-level `a.txt`. Character classes and brace alternatives are rejected. Traversal stops after depth 32 or 10,000 visited entries, matching is bounded to 20 million pattern/path steps per call, and results are capped at 1,000 paths / 64 KiB. This is a documented subset rather than full `path.matchesGlob` compatibility.
 
-API-key mode uses `DSH_MODE=deepseek|openai|openai-responses`, `DSH_MODEL`, and optional `DSH_BASE_URL`; keys come from `DSH_API_KEY` or the provider-specific environment variable. ChatGPT sign-in is selected with `DSH_MODE=openai-responses DSH_AUTH=chatgpt`; the OAuth token stays in the host's protected store. Sign-in opens a browser on the host and is not a remote token-delivery flow.
+API-key mode uses `DSH_MODE=deepseek|openai|openai-responses`, `DSH_MODEL`, and optional `DSH_BASE_URL`; keys come from `DSH_API_KEY` or the provider-specific environment variable. ChatGPT sign-in is selected with `DSH_MODE=openai-responses DSH_AUTH=chatgpt`; the OAuth token stays in the host's protected store. A Tailnet page uses the Mac-owned credential and cannot start a remote OAuth flow or receive tokens.
 
 The iOS bridge and physical-device/Tailscale end-to-end checks remain separate acceptance gates.

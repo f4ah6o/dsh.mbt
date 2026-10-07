@@ -12,6 +12,8 @@ import {
 } from "./view-model.js";
 
 const $ = (id) => document.getElementById(id);
+const isLocalDshOrigin = window.location.protocol === "http:" &&
+  ["127.0.0.1", "localhost"].includes(window.location.hostname);
 const client = createRemoteClient({ bridge });
 const scroll = $("transcript-scroll");
 const canvas = $("transcript-canvas");
@@ -49,6 +51,22 @@ function connectionError(error) {
 
 function clearConnectionError() {
   $("connection-error").hidden = true;
+}
+
+function isTrustedAuthorizationUrl(value) {
+  if (typeof value !== "string") return false;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" &&
+      url.hostname === "auth.openai.com" &&
+      url.port === "" &&
+      url.pathname === "/api/accounts/authorize" &&
+      url.username === "" &&
+      url.password === "" &&
+      url.hash === "";
+  } catch {
+    return false;
+  }
 }
 
 async function localOperation(operation, input = {}) {
@@ -213,9 +231,13 @@ function renderAccount() {
     : "";
   $("auth-detail").textContent = `${usage}${scopes}`;
   $("auth-guidance").textContent = !connected
-    ? auth.state === "signing_in"
-      ? "Complete sign-in in the host computer’s browser. Remote/headless sign-in is not available yet."
-      : "Sign-in opens the host computer’s browser. Remote/headless sign-in is not available yet."
+    ? !isLocalDshOrigin
+      ? auth.state === "signing_in"
+        ? "Complete sign-in in the host Mac’s browser. This page will refresh when it finishes."
+        : "Open dsh on the host Mac to start or switch ChatGPT sign-in."
+      : auth.state === "signing_in"
+        ? "Complete sign-in in the new tab in this browser."
+        : "Sign-in opens a new tab in this browser. Credentials stay on the host."
     : models.length > 0
       ? "Disconnect to sign out or switch accounts, then sign in with the other account."
       : state.authModelsLoading
@@ -226,7 +248,8 @@ function renderAccount() {
   $("usage-link").hidden = !connected || auth.plan_usage === "enabled";
   $("auth-sign-in").hidden = connected;
   $("auth-sign-in").textContent = auth.state === "reauth_required" ? "Sign in again" : "Sign in with ChatGPT";
-  $("auth-sign-in").disabled = state.mutation || auth.state === "signing_in";
+  $("auth-sign-in").disabled = state.mutation || auth.state === "signing_in" ||
+    !isLocalDshOrigin;
   $("auth-sign-out").hidden = !connected;
   $("auth-sign-out").disabled = state.mutation || !profiles;
   $("auth-models-retry").hidden = !connected || models.length > 0;
@@ -596,10 +619,41 @@ for (const [button, approved] of [["approve", true], ["deny", false]]) {
   });
 }
 
-$("auth-sign-in").addEventListener("click", () => mutate(async () => {
-  await localOperation("auth_sign_in", {});
-  await handleAuthRefresh();
-}));
+$("auth-sign-in").addEventListener("click", () => {
+  if (!isLocalDshOrigin) {
+    state.actionError = "Open dsh on the host Mac to start or switch ChatGPT sign-in.";
+    syncFromClient();
+    return;
+  }
+  if (state.mutation || client.state().auth?.state === "signing_in") return;
+  const signInTab = window.open("about:blank", "_blank");
+  if (!signInTab) {
+    state.actionError = "Your browser blocked the sign-in tab. Allow pop-ups for this local dsh page and try again.";
+    syncFromClient();
+    return;
+  }
+  signInTab.opener = null;
+  return mutate(async () => {
+    try {
+      const result = await localOperation("auth_sign_in_browser", {});
+      if (result?.started === false) {
+        signInTab.close();
+        state.actionMessage = "A sign-in attempt is already in progress. Complete it in the browser tab that was opened.";
+        await handleAuthRefresh();
+        return;
+      }
+      if (result?.started !== true ||
+        !isTrustedAuthorizationUrl(result.authorization_url)) {
+        throw new Error("The host returned an invalid ChatGPT authorization URL.");
+      }
+      signInTab.location.replace(result.authorization_url);
+    } catch (error) {
+      signInTab.close();
+      throw error;
+    }
+    await handleAuthRefresh();
+  });
+});
 $("auth-models-retry").addEventListener("click", () => mutate(async () => {
   await refreshAuthCatalog({ force: true });
 }));

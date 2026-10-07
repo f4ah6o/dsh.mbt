@@ -738,3 +738,97 @@ fn native_object_field(value : Json, name : String) -> Json? {
     _ => None
   }
 }
+
+///|
+async test "browser sign-in handoff never exposes the stored ID token hint" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-browser-handoff")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let data_dir = fixture + "/data"
+    @fs.mkdir(data_dir, permission=0o700)
+    let store = match NativeStore::open(data_dir) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => ignore(store.close()))
+    let auth = match NativeAuth::open(store) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => auth.close())
+    let credential = match
+      @auth.Credential::from_storage_json({
+        "version": 1,
+        "host_id": store.host_id(),
+        "client_id": "fixture-client",
+        "subject": "fixture-account",
+        "email": "user@example.test",
+        "profile_id": "fixture-account",
+        "id_token": "synthetic-id-token",
+        "access_token": "synthetic-access-token",
+        "refresh_token": "synthetic-refresh-token",
+        "scopes": Json::array([
+          "openid".to_json(),
+          "profile".to_json(),
+          "email".to_json(),
+          "offline_access".to_json(),
+          "resource.invoke".to_json(),
+          "chatgpt.tokens.use.direct".to_json(),
+        ]),
+        "expires_at": (native_auth_now() + 7200).to_json(),
+      }) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    auth.credential = Some(credential)
+    auth.generation = "fixture-browser-handoff-generation"
+    auth.model_identity = Some(credential.identity_for_native())
+    auth.login_state = "connected"
+    let prepared = match auth.prepare_sign_in_attempt(false) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    assert_true(!prepared.authorization_url.contains("id_token_hint"))
+    assert_true(!prepared.authorization_url.contains("synthetic-id-token"))
+    prepared.server.close()
+  }
+}
+
+///|
+async test "duplicate browser sign-in returns promptly and cancellation closes callback" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-browser-duplicate")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let data_dir = fixture + "/data"
+    @fs.mkdir(data_dir, permission=0o700)
+    let store = match NativeStore::open(data_dir) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => ignore(store.close()))
+    let auth = match NativeAuth::open(store) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => auth.close())
+    let prepared = match auth.prepare_browser_sign_in() {
+      Ok(Some(value)) => value
+      Ok(None) => fail("first browser sign-in did not start")
+      Err(error) => fail(error)
+    }
+    let finisher = group.spawn(async fn() {
+      ignore(auth.finish_browser_sign_in(prepared)) catch {
+        _ => ()
+      }
+    })
+    @async.sleep(0)
+    let duplicate = auth.prepare_browser_sign_in()
+    assert_true(duplicate is Ok(None))
+    finisher.cancel()
+    ignore(finisher.wait()) catch {
+      _ => ()
+    }
+    assert_true(auth.pending_browser_sign_in_server is None)
+    assert_eq(auth.login_state, "signed_out")
+  }
+}
