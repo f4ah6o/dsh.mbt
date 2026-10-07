@@ -67,6 +67,13 @@ fn operation_schema(operation : String) -> @capability.Schema raise InitError {
     "session_import" => [field("jsonl", string, true)]
     "session_get" | "session_cancel" => [session]
     "session_send" => [session, field("prompt", string, true)]
+    "session_prune_tool_results" =>
+      [
+        session,
+        field("threshold_chars", @capability.Schema::int(), false),
+        field("head_chars", @capability.Schema::int(), false),
+        field("tail_chars", @capability.Schema::int(), false),
+      ]
     "tool_approve" =>
       [
         session,
@@ -172,6 +179,10 @@ fn create_api() -> HarnessApi raise InitError {
       ),
       (
         "session_send", "Send prompt", "Begin a turn. Returns immediately; query the session until it settles.",
+        false,
+      ),
+      (
+        "session_prune_tool_results", "Trim tool results", "Durably project oversized tool results to bounded head and tail text for future provider requests. The full original results remain in session history.",
         false,
       ),
       (

@@ -20,10 +20,11 @@
       <main class="workspace">
         <header class="session-header">
           <div class="session-heading"><h1 id="session-title">Agent workspace</h1><div class="status-row"><span id="status" class="status-pill" data-state="idle">Ready</span><span id="progress" class="progress"></span></div></div>
-          <div class="header-actions"><button id="text-view" class="quiet-button" type="button" aria-pressed="false">Text view</button><button id="cancel" class="quiet-button" type="button" disabled>Stop</button></div>
+          <div class="header-actions"><button id="text-view" class="quiet-button" type="button" aria-pressed="false">Text view</button><button id="prune-results" class="quiet-button" type="button" hidden>Trim outputs</button><button id="cancel" class="quiet-button" type="button" disabled>Stop</button></div>
         </header>
         <div id="connection-error" class="notice error-notice" role="alert" hidden><span id="connection-error-text"></span><button id="reconnect" type="button">Reconnect</button></div>
         <div id="run-error" class="notice error-notice" role="alert" hidden></div>
+        <div id="action-message" class="notice success-notice" role="status" aria-live="polite" hidden></div>
         <div id="transcript-area" class="transcript-area">
           <div id="transcript-scroll" class="transcript-scroll" tabindex="0" role="region" aria-label="Conversation transcript" aria-describedby="transcript-help">
             <canvas id="transcript-canvas" aria-hidden="true"></canvas><div id="scene-spacer" aria-hidden="true"></div>

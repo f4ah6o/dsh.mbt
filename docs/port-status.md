@@ -21,7 +21,7 @@ MoonBit で agent の基本実行経路を動かす最初の移植です。
 | `boot/plugin-manager`, `extensions/cordis-*` | `plugins/` | MoonBit startup descriptor の依存・重複・tool 所有権を実装済み。npm / Cordis ABI、runtime code loading、HMR は未実装。 |
 | `session/session-telemetry*`, inspector | `api/` + hotpath | API 呼出し時間の集計を実装済み。OpenTelemetry、CPU / allocation sampling は未実装。 |
 | `test-support/session-snapshot`, `test-support/llm-replay` | `tests/fixtures/`, `tests/integration/` | upstream tool-call-turn fixture の provenance を保持し、実 tool と完了応答を再現。固定 upstream Session v4 catalog の unmodified 25 snapshot は import / reopen、transcript、tool correlation を integration test で確認。別置きの derived retry fixtures は upstream retry bytes と source hashes を専用 `provenance.json` に記録し、25 件の不変 catalog には含めない。 |
-| `compaction`, `spill`, `attachment`, `context` | `engine/` の read-only v4 projection | v4 importer は compaction summary/checkpoint と tool result pruning の一部を現在の transcript surface に反映し、画像参照を unresolved placeholder として表示。live context compaction、spill、attachment binary / preview は未実装。 |
+| `compaction`, `spill`, `attachment`, `context` | `engine/` と read-only v4 projection | Native v1 runtime に explicit な tool-result pruning subset を実装済み。完了後に手動で起動し、将来の provider context だけを head / marker / tail に縮約します。original result と raw transcript は保存します。v4 importer は compaction summary/checkpoint と upstream tool-result pruning の一部を表示用に投影します。自動 / token-aware live compaction、summary、spill、attachment binary / preview は未実装。 |
 | `subagent`, `goal`, `plan`, `workflow`, `jobs`, `schedule`, `todo` | `engine/` の read-only v4 projection | 限定的な subagent catalog / foreground workflow lifecycle metadata の相関のみ対応。子 agent、workflow、job の実行や再開は未実装。その他の機能も未実装。 |
 | 外部 MCP client / ACP / hooks / LSP / skill loader | — | 未実装。gpui MCP server の公開とは別機能。 |
 | browser / computer use、SSH、account login、web search、office preview | — | 未実装。 |
@@ -32,7 +32,8 @@ MoonBit で agent の基本実行経路を動かす最初の移植です。
 - 依存を upstream Git revision に固定し、互換性が確認できていない latest へ自動更新しない。
 - SSE は MoonBit で逐次解析し、text / reasoning を host が bounded event batch として永続化して session / browser / scene に投影する。live compaction と spill は後続作業とする。
 - retry は同じ active provider effect に限定し、retry schedule と start の checkpoint が成功してから待機・次の request を始める。restore は未完了の retry を interruption として閉じ、再送しない。利用可能な request を使うため retry ごとに provider 側で再課金される場合がある。
-- 1 session 262,144 serialized UTF-16 units、最大 32 sessions。stream projection もこの上限内で、容量超過は provider を停止して既に保存済み partial を保つ。長い会話向け live compaction / spill は未実装。
+- tool-result pruning は手動操作のみ。upstream の defaults は threshold 8,192 Unicode code points、head 4,096、tail 1,024。pruned event を append するので元 output を保持したまま provider context を縮める一方、canonical storage limit の解消にはならない。
+- 1 session 262,144 serialized UTF-16 units、最大 32 sessions。stream projection と pruning event もこの上限内で、容量超過は candidate 更新を拒否して既存状態を保つ。長い会話向け自動 live compaction / token meter / summary / spill は未実装。
 - browser host は loopback 専用。認証付き remote service や deployment platform はこの版に含めない。
 
 ## Session v4 の read-only import 範囲

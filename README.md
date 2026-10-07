@@ -61,6 +61,8 @@ node host/cli.mjs run "この workspace のファイルを確認してくださ�
 node host/cli.mjs run "README を確認してください" --workspace /absolute/path/to/project
 node host/cli.mjs run "続きを進めてください" --session SESSION_ID
 node host/cli.mjs import-session /path/to/session.v4.jsonl --json
+node host/cli.mjs prune-session SESSION_ID
+# budgets are optional: --threshold-chars 8192 --head-chars 4096 --tail-chars 1024
 node host/cli.mjs --help
 ```
 
@@ -69,6 +71,13 @@ node host/cli.mjs --help
 保存先は `--data-dir` で指定できます。同一データディレクトリを複数プロセスから同時に開くことはできません。
 `import-session` は upstream Session v4 を検証して、再開できない読み取り専用履歴として保存します。
 記録された tool、inbox、permission、preset は履歴に残しますが、実行や権限設定には使いません。
+
+`prune-session` は完了済みまたは idle の native session で、長い tool result の今後の model context を縮めます。
+既定の trigger は 8,192 Unicode code points、保持する先頭 / 末尾は 4,096 / 1,024 code points です。
+元の tool output と transcript はそのまま保存し、次の provider request だけに marker 付き projection を使います。
+browser の **Trim outputs** と `session_prune_tool_results` API でも実行できます。これは手動操作であり、
+自動 context compaction、token meter、summary、spill は実装しません。pruning event も保存領域を使うため、
+1 session の 262,144 UTF-16 code unit 上限は変わりません。詳細は [アーキテクチャ](docs/architecture.md) を参照してください。
 
 ### Provider retry
 
@@ -137,8 +146,10 @@ curl -sS http://127.0.0.1:3080/api/call \
 返却形式は `{ "ok": true, "result": ... }` または `{ "ok": false, "error": "..." }`。
 `session_send` は処理の受付を返します。完了は `session_get` で確認します。
 
-公開操作は `session_create`、`session_import`、`session_list`、`session_get`、`session_send`、`session_cancel`、
-`tool_approve`、`plugin_list`、`profile_stats`。`session_list` は一覧用の要約を返します。
+公開操作は `session_create`、`session_import`、`session_list`、`session_get`、`session_send`、
+`session_prune_tool_results`、`session_cancel`、`tool_approve`、`plugin_list`、`profile_stats`。
+`session_prune_tool_results` は完了済み / idle の native session にだけ使え、budgets は
+`threshold_chars`、`head_chars`、`tail_chars` で指定できます。`session_list` は一覧用の要約を返します。
 HTTP carrier は loopback に限定します。
 
 `session_import` は `jsonl` に Session v4 archive 全体を受け取ります。import は read-only で、
@@ -163,7 +174,8 @@ MoonBit の portable package は JS / native / Wasm / Wasm GC の全 target で�
 用意した package selector を使ってください。
 
 テストは API key を使いません。pinned upstream の tool-call-turn と parallel-tool-calls fixture を keyless なローカル HTTP provider に流し、
-承認済みの `echo SNAPSHOT_OK`、2 件の Read call と call-order の tool result、次のモデル応答 `DONE`、保存と再読込まで再現します。
+承認済みの `echo SNAPSHOT_OK`、2 件の Read call と call-order の tool result、手動 pruning 後の縮んだ request context、
+元の tool output の保持、次のモデル応答 `DONE`、保存と再読込まで再現します。
 任意の実 Chromium 検証は `web/browser-smoke.mjs` にあります。
 Session v4 importer の対応 event と明示的な制約は [移植状況](docs/port-status.md) を参照してください。
 詳細な結果と再実行方法は [検証記録](docs/verification.md) を参照してください。

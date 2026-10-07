@@ -5,24 +5,68 @@ import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
-import { fileURLToPath } from "node:url";
-import { createHost } from "../host/runtime.mjs";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { randomUUID } from "node:crypto";
+import { createHost, defaultModulePath } from "../host/runtime.mjs";
 import { startWebServer } from "../host/server.mjs";
 
 const { chromium } = createRequire(import.meta.url)("playwright");
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const screenshots = path.resolve(process.env.DSH_SCREENSHOT_DIR || path.join(repo, "_build/browser-smoke"));
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "dsh-browser-"));
+await fs.writeFile(path.join(workspace, "large.txt"), `${"A".repeat(12_000)}😀 tail\n`);
 await fs.mkdir(screenshots, { recursive: true });
 let callNumber = 0;
 let providerCalls = 0;
+const providerRequests = [];
 let browser;
+let facade;
 let host;
 let web;
 let page;
 const failures = [];
 let releaseLiveStream;
+let releaseCapPrune;
+let signalCapPruneStarted;
+let capPruneResponse;
+const capPruneStarted = new Promise((resolve) => { signalCapPruneStarted = resolve; });
+const capPruneReleased = new Promise((resolve) => { releaseCapPrune = resolve; });
 const encoder = new TextEncoder();
+
+async function freshFacade() {
+  return import(`${pathToFileURL(defaultModulePath).href}?browser-smoke=${randomUUID()}`);
+}
+
+function engineCall(runtime, operation, input) {
+  const response = JSON.parse(runtime.dispatch(JSON.stringify({ operation, input })));
+  assert.equal(response.ok, true, response.error);
+  return response.result;
+}
+
+function engineComplete(runtime, effect, result) {
+  const response = JSON.parse(runtime.complete(effect.id, JSON.stringify(result)));
+  assert.equal(response.ok, true, response.error);
+  return response.result;
+}
+
+function seedNearCapacityPruneSession(runtime) {
+  runtime.start();
+  engineCall(runtime, "session_create", { id: "cap", title: "Near-capacity result" });
+  engineCall(runtime, "session_send", { session_id: "cap", prompt: "Seed a completed tool result." });
+  const request = JSON.parse(runtime.take_effects())[0];
+  engineComplete(runtime, request, {
+    ok: true, content: "", tool_calls: [{
+      id: "cap-read", name: "read", arguments: JSON.stringify({ file_path: "large.txt" }),
+    }], finish_reason: "tool_calls",
+  });
+  const tool = JSON.parse(runtime.take_effects())[0];
+  engineComplete(runtime, tool, { ok: true, content: "\n".repeat(41_800) });
+  const followup = JSON.parse(runtime.take_effects())[0];
+  engineComplete(runtime, followup, {
+    ok: true, content: "complete", tool_calls: [], finish_reason: "stop",
+  });
+  engineCall(runtime, "session_create", { id: "other", title: "Other session" });
+}
 
 function completion(content, toolCalls) {
   return new Response(JSON.stringify({
@@ -35,6 +79,7 @@ function completion(content, toolCalls) {
 async function provider(_url, options) {
   providerCalls += 1;
   const request = JSON.parse(options.body);
+  providerRequests.push(request);
   const messages = request.messages;
   const prompt = [...messages].reverse().find((message) => message.role === "user")?.content || "";
   const last = messages.at(-1);
@@ -67,6 +112,11 @@ async function provider(_url, options) {
     }), { headers: { "content-type": "text/event-stream" } });
   }
   if (prompt.includes("provider failure")) return new Response("Fixture provider unavailable", { status: 503 });
+  if (prompt.includes("prune browser output") && last.role !== "tool") {
+    return completion("", [{ id: `browser-call-${++callNumber}`, type: "function", function: {
+      name: "read", arguments: JSON.stringify({ file_path: "large.txt" }),
+    } }]);
+  }
   if ((prompt.includes("approved.txt") || prompt.includes("denied.txt")) && last.role !== "tool") {
     const target = prompt.includes("approved.txt") ? "approved.txt" : "denied.txt";
     return completion("", [{ id: `browser-call-${++callNumber}`, type: "function", function: {
@@ -82,6 +132,22 @@ async function waitStatus(value) {
   await page.waitForFunction((expected) => document.getElementById("status").textContent === expected, value, { timeout: 15_000 });
 }
 
+async function waitForNewTurn(sessionID, previousTurn) {
+  const deadline = Date.now() + 15_000;
+  let session;
+  while (Date.now() < deadline) {
+    session = await host.session(sessionID);
+    if (session.turn_id > previousTurn) break;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.ok(session && session.turn_id > previousTurn, "the browser must admit the requested new turn");
+  if (session.status === "running") {
+    session = await host.waitForSession(sessionID, { signal: AbortSignal.timeout(15_000) });
+  }
+  assert.equal(session.status, "completed");
+  return session;
+}
+
 async function send(prompt) {
   await page.locator("#prompt").fill(prompt);
   await page.locator("#send").click();
@@ -92,9 +158,16 @@ function currentId() {
 }
 
 try {
-  host = await createHost({ workspace, mode: "openai", baseURL: "http://127.0.0.1:1", model: "browser-fixture", maxRetries: 0, fetchImpl: provider });
+  facade = await freshFacade();
+  seedNearCapacityPruneSession(facade);
+  host = await createHost({ facade, workspace, mode: "openai", baseURL: "http://127.0.0.1:1", model: "browser-fixture", maxRetries: 0, fetchImpl: provider });
   const delayedHost = { ...host, async call(operation, input) {
     const result = await host.call(operation, input);
+    if (operation === "session_prune_tool_results" && input.session_id === "cap") {
+      capPruneResponse = result;
+      signalCapPruneStarted();
+      await capPruneReleased;
+    }
     if (operation === "session_create" || (operation === "session_send" && input.prompt.includes("draft race"))) {
       await new Promise((resolve) => setTimeout(resolve, 350));
     }
@@ -114,6 +187,12 @@ try {
   assert.match(await page.locator("#text-transcript").textContent(), /MoonBit engine/);
   assert.equal(await page.locator("#text-transcript script").count(), 0);
   const firstId = await currentId();
+  await page.locator("#new-session").click();
+  await page.waitForFunction((previous) => document.querySelector(".session-option[aria-current='page']")?.dataset.id !== previous, firstId);
+  const secondId = await currentId();
+  await page.locator(`.session-option[data-id='${firstId}']`).click();
+  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
+  await waitStatus("Completed");
 
   const finalAssistantRowsBefore = await page.locator("#text-transcript h2").filter({ hasText: /^Assistant$/ }).count();
   await send("live stream smoke");
@@ -129,6 +208,77 @@ try {
   await waitStatus("Completed");
   assert.equal(await page.locator("#text-transcript h2").filter({ hasText: /^Assistant$/ }).count(), finalAssistantRowsBefore + 1);
   assert.doesNotMatch(await page.locator("#text-transcript").textContent(), /Assistant · writing/);
+
+  await send("prune browser output");
+  await waitStatus("Completed");
+  await page.locator("#prune-results").waitFor({ state: "visible" });
+  const beforePrune = await host.session(firstId);
+  const fullOutput = beforePrune.messages.find((message) => message.role === "tool");
+  assert.ok(fullOutput.content.length > 8192);
+  await page.locator("#prune-results").click();
+  await page.locator("#action-message").waitFor({ state: "visible" });
+  assert.match(await page.locator("#action-message").textContent(), /Trimmed 1 tool result/);
+  assert.match(await page.locator("#text-transcript").textContent(), /Tool result · trimmed for model context/);
+  const afterPrune = await host.session(firstId);
+  assert.equal(afterPrune.messages.find((message) => message.role === "tool").content, fullOutput.content);
+  assert.ok(afterPrune.events.some((event) => event.type === "tool/result/pruned"));
+  await page.locator(`.session-option[data-id='${secondId}']`).click();
+  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, secondId);
+  assert.equal(await page.locator("#action-message").isVisible(), false,
+    "selecting another session clears the previous pruning success notice");
+  await page.locator(`.session-option[data-id='${firstId}']`).click();
+  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
+  await waitStatus("Completed");
+  const turnBeforeContinue = (await host.session(firstId)).turn_id;
+  const providerCallsBeforeContinue = providerCalls;
+  await send("continue after browser pruning");
+  await waitForNewTurn(firstId, turnBeforeContinue);
+  assert.ok(providerCalls > providerCallsBeforeContinue, "the continuation reaches the OpenAI adapter");
+  const projectedTool = providerRequests.at(-1).messages.find((message) => message.role === "tool");
+  assert.ok(projectedTool.content.includes("[... tool result middle pruned ...]"),
+    `expected the next OpenAI request to use the pruned result, got ${projectedTool.content.length} chars`);
+  assert.ok(projectedTool.content.length <= 8192);
+
+  let pruneRequestStarted;
+  const pruneRequest = new Promise((resolve) => { pruneRequestStarted = resolve; });
+  await page.route("**/api/call", async (route) => {
+    if (route.request().postDataJSON()?.operation === "session_prune_tool_results") {
+      pruneRequestStarted();
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    await route.continue();
+  });
+  await page.locator("#prune-results").click();
+  await pruneRequest;
+  await page.locator(`.session-option[data-id='${secondId}']`).click();
+  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, secondId);
+  await page.waitForFunction(() => !document.getElementById("new-session").disabled);
+  assert.equal(await page.locator("#action-message").isVisible(), false,
+    "a delayed prune response cannot restore a notice for the session that is no longer selected");
+  await page.unroute("**/api/call");
+  await page.locator(`.session-option[data-id='${firstId}']`).click();
+  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
+  await waitStatus("Completed");
+
+  await page.locator(".session-option[data-id='cap']").click();
+  await page.waitForFunction(() => document.querySelector(".session-option[aria-current='page']")?.dataset.id === "cap");
+  await waitStatus("Completed");
+  await page.locator("#prune-results").click();
+  await capPruneStarted;
+  assert.equal(capPruneResponse.ok, false);
+  assert.match(capPruneResponse.error, /capacity/i);
+  assert.equal((await host.session("cap")).events.filter((event) => event.type === "tool/result/pruned").length, 0);
+  await page.locator(".session-option[data-id='other']").click();
+  await page.waitForFunction(() => document.querySelector(".session-option[aria-current='page']")?.dataset.id === "other");
+  releaseCapPrune();
+  await page.waitForFunction(() => !document.getElementById("new-session").disabled);
+  assert.equal(await page.locator("#run-error").isVisible(), false,
+    "a delayed failed prune cannot show an error on the newly selected session");
+  assert.equal(await page.locator("#action-message").isVisible(), false);
+  assert.equal(await currentId(), "other");
+  await page.locator(`.session-option[data-id='${firstId}']`).click();
+  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
+  await waitStatus("Completed");
 
   // Successful responses must preserve edits made to the next draft in flight.
   await send("draft race");
@@ -216,11 +366,12 @@ try {
   await page.locator("#connection-error").waitFor({ state: "hidden" });
   assert.equal(await currentId(), firstId);
   assert.deepEqual(failures, []);
-  console.log(JSON.stringify({ status: "PASS", assertions: "startup, create/select, draft preservation, submit, live provisional text/reasoning and final replacement, approval allow/deny, real file write, cancellation, provider error, literal output, scrolling, text-view follow, Session v4 read-only import/no-effect display, same-session create/select race, mobile layout, reconnect", screenshots }));
+  console.log(JSON.stringify({ status: "PASS", assertions: "startup, create/select, draft preservation, submit, live provisional text/reasoning and final replacement, pruning context projection and success/failure notice session fencing, approval allow/deny, real file write, cancellation, provider error, literal output, scrolling, text-view follow, Session v4 read-only import/no-effect display, same-session create/select race, mobile layout, reconnect", screenshots }));
 } catch (error) {
   if (page && !page.isClosed()) await page.screenshot({ path: path.join(screenshots, "failure.png"), fullPage: true }).catch(() => {});
   throw error;
 } finally {
+  releaseCapPrune?.();
   if (browser) await browser.close();
   if (web) await web.close();
   if (host) await host.close();

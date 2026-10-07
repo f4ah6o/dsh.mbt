@@ -66,6 +66,17 @@ test("accessible transcript includes reasoning and tool arguments without system
   assert.equal(messages.some((item) => item.text === "hidden"), false);
 });
 
+test("transcript keeps original tool output visible and labels its model projection", () => {
+  const messages = displayMessages({
+    events: [{ type: "tool/result/pruned", data: { call_id: "c1", result_seq: 4 } }],
+    messages: [{ role: "tool", tool_call_id: "c1", content: "full original output" }],
+  });
+  assert.deepEqual(messages, [{
+    label: "Tool result · trimmed for model context",
+    text: "full original output",
+  }]);
+});
+
 test("accessible transcript labels provisional reasoning and partial answer explicitly", () => {
   const rows = displayMessages({ messages: [
     { role: "assistant", content: "kept text", reasoning: "working it out", provisional: true, stream_status: "partial" },

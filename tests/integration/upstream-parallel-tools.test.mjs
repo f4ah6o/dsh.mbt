@@ -38,12 +38,12 @@ function messageResponse(normalized) {
   };
 }
 
-test('upstream parallel tool fixture: read calls settle into model history in call order', async (t) => {
+test('parallel tool results can be pruned for future requests without changing history or replaying IO', async (t) => {
   assert.equal(parallelCalls.length, 2);
   assert.ok(parallelCalls.every((tool) => tool.name === 'read'));
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'dsh-upstream-parallel-'));
-  await writeFile(path.join(temporary, 'a.txt'), 'alpha\n');
-  await writeFile(path.join(temporary, 'b.txt'), 'beta\n');
+  await writeFile(path.join(temporary, 'a.txt'), `${'a'.repeat(10_000)}\n`);
+  await writeFile(path.join(temporary, 'b.txt'), `${'b'.repeat(10_000)}\n`);
   let host;
   let server;
   t.after(async () => {
@@ -60,6 +60,8 @@ test('upstream parallel tool fixture: read calls settle into model history in ca
   const completions = [
     { content: '', tool_calls: parallelCalls, finish_reason: 'tool_calls' },
     { content: finalText, tool_calls: [], finish_reason: 'stop' },
+    { content: 'continued after pruning', tool_calls: [], finish_reason: 'stop' },
+    { content: 'continued after reload', tool_calls: [], finish_reason: 'stop' },
   ];
   server = http.createServer(async (request, response) => {
     try {
@@ -97,8 +99,9 @@ test('upstream parallel tool fixture: read calls settle into model history in ca
   assert.equal(completed.messages.at(-1).content, finalText);
   const results = completed.messages.filter((message) => message.role === 'tool');
   assert.deepEqual(results.map((message) => message.tool_call_id), parallelCalls.map((tool) => tool.id));
-  assert.ok(results[0].content.includes('1: alpha'));
-  assert.ok(results[1].content.includes('1: beta'));
+  assert.ok(results[0].content.includes(`1: ${'a'.repeat(100)}`));
+  assert.ok(results[1].content.includes(`1: ${'b'.repeat(100)}`));
+  assert.ok(results.every((message) => [...message.content].length > 8192));
 
   const callIndexes = parallelCalls.map((tool) => completed.events.findIndex((event) =>
     event.type === 'tool/call' && event.data.id === tool.id));
@@ -117,12 +120,78 @@ test('upstream parallel tool fixture: read calls settle into model history in ca
     parallelCalls.map((tool) => tool.id),
   );
 
-  const originalMessages = completed.messages;
+  const threshold = 120;
+  const head = 30;
+  const tail = 20;
+  const pruned = await host.call('session_prune_tool_results', {
+    session_id: 'upstream-parallel',
+    threshold_chars: threshold,
+    head_chars: head,
+    tail_chars: tail,
+  });
+  assert.equal(pruned.ok, true, pruned.error);
+  assert.equal(pruned.result.pruned.length, 2);
+  assert.deepEqual(
+    pruned.result.pruned.map((entry) => entry.call_id),
+    parallelCalls.map((tool) => tool.id),
+  );
+  assert.equal(consumed, 2, 'the manual pruning operation must not contact the provider');
+
+  const rawAfterPrune = await host.session('upstream-parallel');
+  const rawResults = rawAfterPrune.messages.filter((message) => message.role === 'tool');
+  assert.deepEqual(rawResults, results, 'raw transcript keeps each full original tool result');
+  assert.ok(rawResults.every((message) => [...message.content].length > 8192));
+  const persisted = JSON.parse(await readFile(path.join(temporary, '.dsh.mbt', 'sessions.json'), 'utf8'));
+  const durable = persisted.sessions.find((session) => session.id === 'upstream-parallel');
+  assert.equal(durable.events.filter((event) => event.type === 'tool/result/pruned').length, 2,
+    'host.call resolves only after the pruning events are checkpointed');
+
+  assert.equal((await host.call('session_send', {
+    session_id: 'upstream-parallel', prompt: 'Continue with the shortened tool results.',
+  })).ok, true);
+  const afterPrune = await host.waitForSession('upstream-parallel', { signal: AbortSignal.timeout(10_000) });
+  assert.equal(afterPrune.status, 'completed');
+  assert.equal(consumed, 3);
+  const postPruneBlocks = requests[2].messages.flatMap((message) => message.content ?? []);
+  const projectedResults = postPruneBlocks.filter((block) => block.type === 'tool_result');
+  assert.deepEqual(projectedResults.map((block) => block.tool_use_id), parallelCalls.map((tool) => tool.id));
+  assert.equal(projectedResults.length, 2);
+  assert.ok(projectedResults.every((block) => [...block.content[0].text].length <= threshold));
+  assert.ok(projectedResults.every((block) => block.content[0].text.includes('\n\n[... tool result middle pruned ...]\n\n')));
+  assert.ok(projectedResults[0].content[0].text.startsWith(rawResults[0].content.slice(0, head)));
+  assert.ok(projectedResults[1].content[0].text.endsWith(rawResults[1].content.slice(-tail)));
+  assert.deepEqual(
+    (await host.session('upstream-parallel')).messages.filter((message) => message.role === 'tool'),
+    results,
+    'provider projection does not replace raw transcript content',
+  );
+
+  const originalMessages = afterPrune.messages;
   await host.close();
   host = await createHost(options);
   const reopened = await host.session('upstream-parallel');
   assert.equal(reopened.status, 'completed');
   assert.deepEqual(reopened.messages, originalMessages);
   assert.equal(host.activeCount, 0);
-  assert.equal(consumed, 2, 'reopen must not contact the provider or rerun either read');
+  assert.equal(consumed, 3, 'reopen must not contact the provider or rerun either read');
+
+  assert.equal((await host.call('session_send', {
+    session_id: 'upstream-parallel', prompt: 'Check the saved projection after reload.',
+  })).ok, true);
+  const afterReload = await host.waitForSession('upstream-parallel', { signal: AbortSignal.timeout(10_000) });
+  assert.equal(afterReload.status, 'completed');
+  assert.equal(consumed, 4);
+  const afterReloadBlocks = requests[3].messages.flatMap((message) => message.content ?? []);
+  const reloadedResults = afterReloadBlocks.filter((block) => block.type === 'tool_result');
+  assert.deepEqual(
+    reloadedResults.map((block) => block.content[0].text),
+    projectedResults.map((block) => block.content[0].text),
+    'restore reconstructs the same provider-only projection',
+  );
+  assert.deepEqual(
+    afterReload.events.filter((event) => event.type === 'tool/call').map((event) => event.data.id),
+    parallelCalls.map((tool) => tool.id),
+    'neither initial parallel read is replayed after reload',
+  );
+  assert.equal(afterReload.events.filter((event) => event.type === 'tool/result/pruned').length, 2);
 });

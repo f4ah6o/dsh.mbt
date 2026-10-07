@@ -56,6 +56,10 @@ export function runError(session) {
 
 export function displayMessages(session) {
   const rows = [];
+  const prunedCallIds = new Set((session?.events || [])
+    .filter((event) => event.type === "tool/result/pruned")
+    .map((event) => event.data?.call_id)
+    .filter((callId) => typeof callId === "string"));
   for (const message of session?.messages || []) {
     if (!message || ["system", "developer"].includes(message.role)) continue;
     const provisional = message.provisional === true;
@@ -64,6 +68,8 @@ export function displayMessages(session) {
     if (message.content) rows.push({
       label: provisional && message.role === "assistant"
         ? `Assistant · ${status}`
+        : message.role === "tool" && prunedCallIds.has(message.tool_call_id)
+          ? "Tool result · trimmed for model context"
         : ({ user: "You", assistant: "Assistant", tool: "Tool result" })[message.role] || "Message",
       text: String(message.content),
     });
