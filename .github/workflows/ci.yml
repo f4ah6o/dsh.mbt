@@ -43,6 +43,8 @@ jobs:
         run: moon update
       - name: Resolve pinned MoonBit dependencies for the verifier
         run: moon install
+      - name: Sync standalone verifier dependencies before frozen execution
+        run: moon check scripts/native-verify.mbtx --target native
       - name: Verify native build, tests, and CLI without Node
         run: moon run scripts/native-verify.mbtx --target native --frozen
 
