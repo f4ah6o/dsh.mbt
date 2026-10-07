@@ -17,8 +17,10 @@ current-position surface replacement、限定的な compaction checkpoint / prun
 2026-10-07 の increment では unmodified upstream catalog 25 件すべてを fixture と regression に追加し、import / reopen
 後の raw source、transcript と call correlation を確認する。追加した image reference、skill provenance、mod append、
 PTC / subagent / foreground workflow lifecycle は inert projection metadata に限り、background workflow、実行、nested fork、
-spill/offload は引き続き拒否または未実装。read-only importer は upstream retry event family を拒否しますが、通常の v1
-runtime には限定的な provider retry lifecycle を追加しました。import history は
+spill/offload は引き続き拒否または未実装。2026-10-07 の retry import increment では native / shorthand の
+`llm/retry` と `llm/retry-started` を strict schema と turn/step/provider/policy/attempt correlation で検証し、raw history に保持します。
+retry delay や failure metadata も保存しますが、imported retry は待機も provider request も行いません。通常の v1
+runtime には別途、限定的な provider retry lifecycle を追加しました。import history は
 再開しない。v0–v3 migration、v4 writer、catalog 外の全 event semantics は引き続き本 issue の対象。
 
 受入条件:
@@ -47,7 +49,8 @@ wait と次の provider request を始めます。既定は最大 5 retries、de
 対象は empty response、408/429/5xx、timeout、識別済み transport failure。accepted stream delta 後、auth、HTTP 408 / 429 以外の 4xx、
 malformed response は再試行せず、Retry-After が上限を超える場合も retry しません。request body の同一性、ツールの重複実行なし、
 backoff cancellation、start checkpoint failure、restore no-replay を keyless integration で確認しています。
-upstream の jitter / `always` mode / retry policy keying と Session v4 retry event import は未実装です。compaction、spill と
+upstream の jitter / `always` runtime mode / retry policy keying は未実装です。v4 retry event import は schema / history
+validation のみで runtime replay ではありません。compaction、spill と
 retry 可能な長い conversation を追加する設計・受入条件は残ります。
 
 受入条件:

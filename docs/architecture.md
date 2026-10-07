@@ -78,7 +78,8 @@ request であり、再度課金される場合があります。CLI は `--max-
 この narrow port は upstream [retry executor](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/llm/llm-retry/src/index.ts)
 と [retry policy](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/llm/llm/src/retry-policy.ts)
 の lifecycle / transient categories を参照していますが、`always` mode、policy keying、jitter、downstream composition は移植していません。
-read-only Session v4 importer も upstream `llm/retry` / `llm/retry-started` event family を受け入れません。
+read-only Session v4 importer は upstream `llm/retry` / `llm/retry-started` の schema と lifecycle correlation を検証し、
+native / shorthand archive の raw history に保持します。これは metadata import のみで、retry wait や provider request は再生しません。
 
 ### 所有権と終了処理
 
@@ -103,8 +104,9 @@ Session v4 の自動 restore migration や v4 writer はありません。read-o
 inbox splice と第一階層 fork に加え、限定的な developer/header 更新、current-surface replacement、compaction
 checkpoint/pruning、診断用 assistant attempt、inert skill/image references、correlated PTC/subagent/foreground-workflow
 history を扱います。image bytes は解決せず placeholder を表示し、workflow background mode は拒否します。
-live compaction と tool/subagent/workflow execution は実装しません。限定的な provider retry は v1 runtime にありますが、
-read-only importer は upstream retry event family を受け入れません。2026-10-07 の catalog regression は
+live compaction と tool/subagent/workflow execution は実装しません。限定的な provider retry は v1 runtime にあります。
+read-only importer は upstream retry event の schema / correlation を検証して raw rows として保持し、assistant-less step の後に
+schedule/start が続く upstream terminal ordering も受理します。これらの event を再生しません。2026-10-07 の catalog regression は
 unmodified upstream snapshot 25 件すべての import / reopen、transcript/correlation、effect がないことを検証します。
 詳細な受理範囲と拒否条件は
 [移植状況](port-status.md) を参照してください。全 session の event log と派生

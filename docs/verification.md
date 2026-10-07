@@ -130,6 +130,27 @@ AUTH、malformed SSE、response size-limit failure が TIMEOUT に上書きさ�
 retry budget、step 内での policy 固定、schedule/start identity、pending wait 中の stream delta 拒否、start marker を欠く forged
 replay の atomic rejection を確認します。
 
+## Session v4 provider retry import increment
+
+2026-10-07、native v4 retry lifecycle import を追加した状態で `npm test` **PASS / exit 0**。
+専用 retry wbtest も portable MoonBit の全 target で実行しています。retry archive は read-only history として保持し、
+restore は source row と derived projection を再検証しますが provider / tool effect は発生しません。
+
+| gate | 結果 |
+| --- | --- |
+| `npm run check` | PASS。engine/provider/plugins/api/ui all-target checks、app JS check、JavaScript syntax 27 files、自身の warning 0。固定 hotpath diagnostics のみ。 |
+| `npm run test:moon` | Wasm、Wasm GC、JS、native 各 target 75 / 75 PASS。app JS test entry なし。 |
+| `npm run build` | PASS。 |
+| `npm run test:host` | 38 / 38 PASS。 |
+| `npm run test:web` | 9 / 9 PASS。 |
+| `npm run test:integration` | 43 / 43 PASS。 |
+
+Native JSONL と shorthand の derived fixtures は個別 provenance 付きで追加し、unmodified upstream 25-snapshot catalog から分離しています。
+Integration は完了・terminal・interrupted schedule、assistant-less `step/end` 後に続く valid schedule/start、started と未 started attempt、
+fractional / 10 秒超 delay、failure / policy raw metadata、restore integrity、invalid schema / correlation の atomic rejection を検証します。
+Mutation gate の対象は `plugins/plugins.mbt` のみで、
+この increment は `engine/session_v4_retry.mbt` を変更するため該当 scope 外として実行していません。
+
 ## upstream の実記録を使う結合テスト
 
 `tests/fixtures/upstream-tool-call-turn.json` は upstream の

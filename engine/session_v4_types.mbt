@@ -58,6 +58,18 @@ priv struct ImportedSubagentCatalog {
 }
 
 ///|
+priv struct ImportedRetryChain {
+  retry_id : String
+  retry : Int
+}
+
+///|
+priv struct ImportedRetrySchedule {
+  turn : Int
+  step : Int
+}
+
+///|
 priv struct V4Replay {
   mut turn : Int
   mut step : Int
@@ -87,6 +99,10 @@ priv struct V4Replay {
   ptc_dispatches : Map[String, ImportedPtcDispatch]
   workflow_runs : Map[String, ImportedWorkflowRun]
   subagents : Map[String, ImportedSubagentCatalog]
+  retry_chains : Map[String, ImportedRetryChain]
+  retry_ids : Map[String, String]
+  retry_schedules : Map[String, ImportedRetrySchedule]
+  started_retries : Map[String, Bool]
   inbox : InboxReplay
 }
 

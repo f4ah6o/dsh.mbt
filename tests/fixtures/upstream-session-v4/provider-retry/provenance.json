@@ -1,0 +1,31 @@
+{
+  "repository": "https://github.com/deepseek-ai/deepseek-harness",
+  "commit": "5badb15009ae1756c3afe0ae0cef1faafc290ccc",
+  "license": "MIT, Copyright (c) 2026 DeepSeek",
+  "sources": [
+    {
+      "path": "snapshots/session/empty-response-retry-current/session.v3.jsonl",
+      "sha256": "95ad6c3a2dc2282e1eb421578cc9124b8e6734c1d22edffd4e9f65c606b74a9d",
+      "note": "The assistant/attempt stream, llm/retry payload, and llm/retry-started payload are copied from this upstream snapshot. The fixture adapts its header and event envelope to the native Session v4 and snapshot shorthand forms."
+    },
+    {
+      "path": "packages/llm/llm-retry/tests/persistence.spec.ts",
+      "sha256": "40d43f525d2da93e1a696a79e769af91806dbab77311789676f44e19e49fb45d",
+      "note": "The terminal scheduled retry without a retry-started row is based on the upstream lossless persistence example."
+    },
+    {
+      "path": "packages/session/session-format-v3-to-v4/src/relationships.ts",
+      "note": "Pinned native v4 retry relationship source: sequential policy-chain attempts, stable retry identity, request-provider correlation, and unique retry-started correlation."
+    }
+  ],
+  "fixtures": {
+    "native/session.v4.jsonl": {
+      "sha256": "3dd52ad692667928e683b8640562aa8edd466d5923439102c2f078cd9fc9d2ab",
+      "note": "Session v4 physical JSONL with contiguous seq/time fields."
+    },
+    "shorthand/session.v4.jsonl": {
+      "sha256": "af9ab76e1b189b8e402e03adb7b21c9cc145c1aadec3cf78bd384cdddb0f3447",
+      "note": "Same source history in upstream snapshot shorthand form with seq/time omitted."
+    }
+  }
+}
