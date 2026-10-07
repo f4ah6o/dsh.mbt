@@ -184,7 +184,7 @@ async fn NativeService::run_listener(
   let address = @socket.Addr::parse(
     "127.0.0.1:" + self.requested_port.to_string(),
   )
-  let server = @http.Server(address)
+  let server = native_service_listener(address)
   defer server.close()
   let port = server.addr.port()
   let local_url = "http://127.0.0.1:" + port.to_string()
@@ -253,6 +253,11 @@ async fn NativeService::run_listener(
   } else {
     Err("native service HTTP listener stopped unexpectedly")
   }
+}
+
+///|
+async fn native_service_listener(address : @socket.Addr) -> @http.Server {
+  @http.Server(address, reuse_addr=true)
 }
 
 ///|
