@@ -388,7 +388,7 @@ async test "model catalog refresh clears removed selection and fences old effect
 }
 
 ///|
-async test "rotated refresh token remains pending until durable save succeeds" {
+async test "rotated refresh survives failed save and stale sign-in rollback" {
   let fixture = @fs.tmpdir(prefix="dsh-native-refresh-rotation")
   @async.with_task_group() <| group => {
     group.add_defer(() => @fs.rmdir(fixture, recursive=true))
@@ -441,27 +441,27 @@ async test "rotated refresh token remains pending until durable save succeeds" {
     }
 
     let refresh_forms : Array[String] = []
-    @fs.chmod(data_dir, 0o500)
-    let failed_save = auth.refresh_locked_with(credential, native_auth_now(), fn(
-      endpoints,
-      endpoint,
-      form,
-    ) {
-      ignore(endpoints)
-      ignore(endpoint)
-      refresh_forms.push(form)
-      Ok(
-        (
-          200,
-          Json::object({
-            "token_type": "Bearer".to_json(),
-            "access_token": "rotated-access-fixture".to_json(),
-            "refresh_token": "rotated-refresh-fixture".to_json(),
-            "expires_in": Json::number(3600.0),
-          }),
-        ),
-      )
-    })
+    let failed_save = auth.refresh_locked_with(
+      credential,
+      native_auth_now(),
+      fn(endpoints, endpoint, form) {
+        ignore(endpoints)
+        ignore(endpoint)
+        refresh_forms.push(form)
+        Ok(
+          (
+            200,
+            Json::object({
+              "token_type": "Bearer".to_json(),
+              "access_token": "rotated-access-fixture".to_json(),
+              "refresh_token": "rotated-refresh-fixture".to_json(),
+              "expires_in": Json::number(3600.0),
+            }),
+          ),
+        )
+      },
+      fn() { Err("fixture persistence failure") },
+    )
     assert_true(failed_save is Err(error) && error.contains("AUTH_STORE_ERROR"))
     assert_true(auth.pending_checkpoint)
     let retained = match auth.credential {
@@ -475,11 +475,61 @@ async test "rotated refresh token remains pending until durable save succeeds" {
     assert_eq(refresh_forms.length(), 1)
     assert_true(refresh_forms[0].contains("synthetic-refresh-token"))
 
-    let blocked_use = auth.credential_for_selection(selection)
+    let blocked_use = auth.credential_for_selection_with(selection, fn() {
+      Err("fixture persistence failure")
+    })
     assert_true(blocked_use is Err(error) && error.contains("AUTH_STORE_ERROR"))
     assert_eq(refresh_forms.length(), 1)
 
-    @fs.chmod(data_dir, 0o700)
+    let replacement = match
+      @auth.Credential::from_storage_json({
+        "version": 1,
+        "host_id": store.host_id(),
+        "client_id": "fixture-client",
+        "subject": "replacement-account",
+        "email": "replacement@example.test",
+        "profile_id": "replacement-account",
+        "id_token": "synthetic-replacement-id-token",
+        "access_token": "synthetic-replacement-access-token",
+        "refresh_token": "synthetic-replacement-refresh-token",
+        "scopes": Json::array([
+          "openid".to_json(),
+          "profile".to_json(),
+          "email".to_json(),
+          "offline_access".to_json(),
+          "resource.invoke".to_json(),
+          "chatgpt.tokens.use.direct".to_json(),
+        ]),
+        "expires_at": (native_auth_now() + 7200).to_json(),
+      }) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    let failed_sign_in_save = auth.commit_sign_in_with(
+      replacement,
+      selection.generation,
+      fn() { Err("fixture sign-in checkpoint failure") },
+    )
+    assert_true(
+      failed_sign_in_save is Err(error) &&
+      error.contains("fixture sign-in checkpoint failure"),
+    )
+    let after_failed_sign_in = auth.credential.unwrap()
+    assert_eq(
+      native_auth_string(
+        object_field(after_failed_sign_in.storage_json(), "refresh_token"),
+      ),
+      "rotated-refresh-fixture",
+    )
+    assert_eq(auth.generation, selection.generation)
+    assert_eq(auth.selected_model, Some("fixture-model"))
+    assert_eq(auth.model_identity, Some(credential.identity_for_native()))
+    assert_eq(
+      native_auth_string(object_field(auth.models[0], "slug")),
+      "fixture-model",
+    )
+    assert_true(auth.pending_checkpoint)
+
     let credential_ready = match auth.credential_for_selection(selection) {
       Ok(value) => value
       Err(error) => fail(error)

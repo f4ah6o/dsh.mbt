@@ -1496,10 +1496,24 @@ async fn NativeRuntime::run_demo(
       "path": "native-demo.txt",
     },
   })
-  if !string_field(grep_result, "content")
-    .unwrap_or("")
-    .contains("durable native tool result") {
-    return Err("isolated grep worker failed to find the demo tool output")
+  if os_hard_worker_memory_supported() {
+    if !string_field(grep_result, "content")
+      .unwrap_or("")
+      .contains("durable native tool result") {
+      return Err("isolated grep worker failed to find the demo tool output")
+    }
+  } else {
+    if string_field(grep_result, "error") !=
+      Some(
+        "grep is disabled because this host cannot enforce a hard worker memory limit",
+      ) {
+      return Err(
+        "native demo expected grep to be explicitly disabled on this host",
+      )
+    }
+    println(
+      "native runtime demo note: grep unsupported on this host (no hard worker memory limit)",
+    )
   }
   Ok(demo_id)
 }

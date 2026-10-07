@@ -621,13 +621,24 @@ pub async fn NativeAuth::credential_for_selection(
   self : NativeAuth,
   selection : NativeProviderSelection,
 ) -> Result[@auth.Credential, String] {
+  self.credential_for_selection_with(selection, fn() { self.persist_locked() })
+}
+
+///|
+/// Inject the checkpoint operation so fixtures can exercise a failed flush
+/// without relying on filesystem permission behavior that differs for root.
+async fn NativeAuth::credential_for_selection_with(
+  self : NativeAuth,
+  selection : NativeProviderSelection,
+  persist : () -> Result[Unit, String],
+) -> Result[@auth.Credential, String] {
   self.gate.acquire()
   defer self.gate.release()
   if self.closed || self.generation != selection.generation {
     return Err("AUTH_ACCOUNT_CHANGED: account changed before provider dispatch")
   }
   if self.pending_checkpoint {
-    match self.persist_locked() {
+    match persist() {
       Err(_) =>
         return Err(
           "AUTH_STORE_ERROR: rotated ChatGPT credential is not durably saved",
@@ -654,13 +665,14 @@ async fn NativeAuth::refresh_locked(
   credential : @auth.Credential,
   now : Int,
 ) -> Result[@auth.Credential, String] {
-  self.refresh_locked_with(credential, now, async fn(
-    endpoints,
-    endpoint,
-    form,
-  ) {
-    oauth_post_form(endpoints, endpoint, form)
-  })
+  self.refresh_locked_with(
+    credential,
+    now,
+    async fn(endpoints, endpoint, form) {
+      oauth_post_form(endpoints, endpoint, form)
+    },
+    fn() { self.persist_locked() },
+  )
 }
 
 ///|
@@ -673,6 +685,7 @@ async fn NativeAuth::refresh_locked_with(
     (Int, Json),
     String,
   ],
+  persist : () -> Result[Unit, String],
 ) -> Result[@auth.Credential, String] {
   let fields = match credential.refresh_request() {
     Ok(value) =>
@@ -728,7 +741,7 @@ async fn NativeAuth::refresh_locked_with(
   }
   self.credential = Some(rotated)
   self.pending_checkpoint = true
-  match self.persist_locked() {
+  match persist() {
     Err(_) =>
       Err("AUTH_STORE_ERROR: rotated ChatGPT credential is not durably saved")
     Ok(_) => {
@@ -802,12 +815,14 @@ pub async fn NativeAuth::sign_in(self : NativeAuth) -> Result[Json, String] {
 
 ///|
 async fn NativeAuth::sign_in_flow(self : NativeAuth) -> Result[Json, String] {
-  let old_generation = self.generation
-  let old_credential = self.credential
-  let old_selected_model = self.selected_model
-  let old_model_identity = self.model_identity
-  let old_models = self.models.copy()
-  let old_login_state = self.login_state
+  self.gate.acquire()
+  if self.closed {
+    self.gate.release()
+    return Err("AUTH_CLOSED: authentication manager is closed")
+  }
+  let expected_generation = self.generation
+  let reauth_credential = self.credential
+  self.gate.release()
   let server = match native_callback_server() {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -841,7 +856,7 @@ async fn NativeAuth::sign_in_flow(self : NativeAuth) -> Result[Json, String] {
       return Err(error)
     }
   }
-  let reauth = old_credential.map(value => value.reauth_context())
+  let reauth = reauth_credential.map(value => value.reauth_context())
   let requested_client_id = reauth.map(value => value.client_id_for_native())
   let selected_subject = reauth.map(value => {
     value.selected_identity_for_native()
@@ -948,13 +963,45 @@ async fn NativeAuth::sign_in_flow(self : NativeAuth) -> Result[Json, String] {
   if credential.host_id_for_native() != self.host_id {
     return Err("AUTH_HOST_MISMATCH: ChatGPT credential belongs to another host")
   }
+  self.commit_sign_in(credential, expected_generation)
+}
+
+///|
+async fn NativeAuth::commit_sign_in(
+  self : NativeAuth,
+  credential : @auth.Credential,
+  expected_generation : String,
+) -> Result[Json, String] {
+  self.commit_sign_in_with(credential, expected_generation, fn() {
+    self.persist_locked()
+  })
+}
+
+///|
+/// Keep the account replacement transaction independently fixture-testable.
+async fn NativeAuth::commit_sign_in_with(
+  self : NativeAuth,
+  credential : @auth.Credential,
+  expected_generation : String,
+  persist : () -> Result[Unit, String],
+) -> Result[Json, String] {
   self.gate.acquire()
   defer self.gate.release()
-  if self.closed || self.generation != old_generation {
+  if self.closed || self.generation != expected_generation {
     return Err(
       "AUTH_ACCOUNT_CHANGED: sign-in was superseded by another account change",
     )
   }
+  // Browser and OAuth network work may take minutes. Refresh/model state can
+  // advance while that work is in flight, so rollback snapshots under this
+  // final commit lock instead of restoring a pre-browser copy.
+  let rollback_credential = self.credential
+  let rollback_generation = self.generation
+  let rollback_selected_model = self.selected_model
+  let rollback_model_identity = self.model_identity
+  let rollback_models = self.models.copy()
+  let rollback_login_state = self.login_state
+  let rollback_pending_checkpoint = self.pending_checkpoint
   let generation = match native_auth_random_id() {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -965,14 +1012,16 @@ async fn NativeAuth::sign_in_flow(self : NativeAuth) -> Result[Json, String] {
   self.model_identity = None
   self.models = []
   self.login_state = "connected"
-  match self.persist_locked() {
+  self.pending_checkpoint = false
+  match persist() {
     Err(error) => {
-      self.credential = old_credential
-      self.generation = old_generation
-      self.selected_model = old_selected_model
-      self.model_identity = old_model_identity
-      self.models = old_models
-      self.login_state = old_login_state
+      self.credential = rollback_credential
+      self.generation = rollback_generation
+      self.selected_model = rollback_selected_model
+      self.model_identity = rollback_model_identity
+      self.models = rollback_models
+      self.login_state = rollback_login_state
+      self.pending_checkpoint = rollback_pending_checkpoint
       Err(error)
     }
     Ok(_) => Ok(self.status())
