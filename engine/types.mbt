@@ -40,7 +40,10 @@ priv enum CallStage {
   Pending
   Called
   Waiting
+  Approved
+  Denied
   Dispatched
+  Completed
   Settled
 } derive(Eq)
 
@@ -58,6 +61,9 @@ priv struct ToolCall {
   name : String
   arguments : String
   mut stage : CallStage
+  mut effect_id : String?
+  mut completed_content : String?
+  mut completed_error : Bool?
 }
 
 ///|
@@ -89,7 +95,14 @@ priv struct Session {
   events : Array[Event]
   calls : Array[ToolCall]
   used_calls : Map[String, Bool]
+  /// First call whose durable result has not entered model history.
   mut cursor : Int
+  /// First call not yet admitted to execution.
+  mut schedule_cursor : Int
+  /// The current consecutive read-only call group is open for replenishment.
+  mut parallel_group : Bool
+  /// Host effects currently executing for read-only calls, keyed by effect id.
+  active_tool_effects : Map[String, String]
   mut approval : Approval?
   mut active_effect : String?
   mut active_kind : EffectKind?
@@ -108,6 +121,7 @@ priv struct Effect {
   session_id : String
   turn_id : Int
   step : Int
+  call_id : String?
   request : Json
 }
 
@@ -171,6 +185,9 @@ fn fresh_session(
     calls: [],
     used_calls: Map([]),
     cursor: 0,
+    schedule_cursor: 0,
+    parallel_group: false,
+    active_tool_effects: Map([]),
     approval: None,
     active_effect: None,
     active_kind: None,

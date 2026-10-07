@@ -162,8 +162,8 @@ MoonBit の portable package は JS / native / Wasm / Wasm GC の全 target で�
 `app` は JavaScript FFI 用です。workspace 全体を無指定でテストすると、gpui の OS 専用 backend や example も対象になるため、
 用意した package selector を使ってください。
 
-テストは API key を使いません。移植元の実記録から抽出した fixture をローカル HTTP provider に流し、
-承認済みの `echo SNAPSHOT_OK`、次のモデル応答 `DONE`、保存と再読込まで再現します。
+テストは API key を使いません。pinned upstream の tool-call-turn と parallel-tool-calls fixture を keyless なローカル HTTP provider に流し、
+承認済みの `echo SNAPSHOT_OK`、2 件の Read call と call-order の tool result、次のモデル応答 `DONE`、保存と再読込まで再現します。
 任意の実 Chromium 検証は `web/browser-smoke.mjs` にあります。
 Session v4 importer の対応 event と明示的な制約は [移植状況](docs/port-status.md) を参照してください。
 詳細な結果と再実行方法は [検証記録](docs/verification.md) を参照してください。

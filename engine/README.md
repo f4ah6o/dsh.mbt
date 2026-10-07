@@ -62,13 +62,24 @@ contains `{system, messages, tools}`. A tool request contains
 `{name, arguments, call_id}`. Model and tool results use the shared completion
 contract documented by the application host.
 
-Calls execute sequentially in model order. Taking an effect removes it only
-from the outgoing queue, not from outstanding work. Unknown, duplicate, stale,
-or malformed completion attempts return `Err` without partial mutation.
-Cancellation retires outstanding IDs, removes queued work, records error results
-for unfinished calls, and closes the turn. It cannot physically stop host I/O;
-the host must abort the owned operation as well. Late results cannot advance the
-cancelled session or a later turn.
+Consecutive calls with static `effect: "read"` classification execute in a
+rolling pool of at most four effects. The host checkpoints the whole admitted
+batch before starting I/O. Completion events correlate each result with its
+call and effect identity, while committed tool results and later model context
+remain in original model-call order even when reads finish out of order. The
+limit is four for this port; upstream defaults to ten. Write and shell calls are
+single-call approval barriers. Unknown tools and invalid arguments also wait
+for a preceding read group to drain before recording a local error.
+
+Taking an effect removes it only from the outgoing queue, not from outstanding
+work. Unknown, duplicate, stale, or malformed completion attempts return `Err`
+without partial mutation. Cancellation retires all active IDs, stops pool
+refill, preserves durable successes already accepted by the engine, records
+errors for unfinished or unstarted calls, and closes the turn. It cannot
+physically stop host I/O; the host must abort each owned operation as well.
+Late results cannot advance the cancelled session or a later turn. Restore
+closes an interrupted pool without replaying any read, and strict event replay
+validates staged results before admitting the snapshot.
 
 `length` preserves the truncated assistant answer and closes the turn as failed
 with `max_tokens`. The model-step budget is enforced before another model effect
@@ -136,13 +147,16 @@ requeued or executed.
 Behavior is distilled from DeepSeek Harness commit
 `5badb15009ae1756c3afe0ae0cef1faafc290ccc`, especially
 `packages/core/agent-loop`, `packages/core/session`, `packages/core/tools`, and
-`snapshots/session/tool-call-turn/session.v4.jsonl`.
+`snapshots/session/tool-call-turn/session.v4.jsonl`. Parallel dispatch semantics
+follow that revision's [tool-calls.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/core/agent-loop/src/tool-calls.ts)
+and [implemented parallel-execution note](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/.agents/notes/implemented/feature/2026-07-10-parallel-tool-call-execution.md).
 
 The focused tests cover the bash/result/DONE transcript, model history
-reconstruction, sequential call ordering, required approvals and denial,
-malformed/unknown tools, step/token limits, busy admission, provider errors,
-duplicate and late results, cancellation, interrupted restore, input ownership,
-and forged snapshot rejection. Run:
+reconstruction, bounded rolling reads, out-of-order completion, write barriers,
+required approvals and denial, malformed/unknown tools, step/token limits, busy
+admission, provider errors, duplicate and late results, cancellation,
+capacity closure, interrupted restore, input ownership, and forged snapshot
+rejection. Run:
 
 ```sh
 moon test --target js -p f4ah6o/dsh/engine
@@ -150,7 +164,7 @@ moon test --target native -p f4ah6o/dsh/engine
 ```
 
 Cordis/npm plugin loading, automatic Session v4 restore migration and v4 writing,
-v0–v3 migrations, parallel tools, retry policy, live compaction/context
+v0–v3 migrations, configurable/dynamic parallel-safety policy, retry policy, live compaction/context
 management, spill/offload, attachment replay, subagents, and durable inbox
 editing are not implemented by this engine. The explicit v4 importer accepts only the
 documented subset above; it is not full upstream compatibility.
