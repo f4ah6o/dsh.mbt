@@ -3,6 +3,7 @@
 The native command runs the MoonBit runtime and loopback HTTP carrier without Node.js. It serves the built web assets from `web/` and the generated files under `_build/js/release/build/`.
 
 ```sh
+moon update
 moon install
 moon run native --target native --release -- \
   --serve --data-dir /absolute/path/to/dsh-data \

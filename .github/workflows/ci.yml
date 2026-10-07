@@ -39,6 +39,8 @@ jobs:
             echo "The native verification container must not have Node.js or npm on PATH." >&2
             exit 1
           fi
+      - name: Refresh the MoonBit package registry
+        run: moon update
       - name: Resolve pinned MoonBit dependencies for the verifier
         run: moon install
       - name: Verify native build, tests, and CLI without Node
@@ -55,6 +57,10 @@ jobs:
         with:
           version: 0.10.14+7d59c7ec9
           core-version: 0.10.14+7d59c7ec9
+      - name: Refresh the MoonBit package registry
+        run: moon update
+      - name: Resolve pinned MoonBit dependencies
+        run: moon install
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24

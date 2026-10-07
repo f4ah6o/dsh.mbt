@@ -25,6 +25,8 @@ cd dsh.mbt
 curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s -- '0.10.14+7d59c7ec9'
 export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 
+moon update
+moon install
 npm run verify:env
 npm run demo
 ```
