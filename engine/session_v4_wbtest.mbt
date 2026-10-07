@@ -47,6 +47,94 @@ fn session_v4_metadata_fixture() -> String {
 }
 
 ///|
+fn session_v4_retry_portable_fixture() -> String {
+  "{\"type\":\"session\",\"version\":4,\"id\":\"retry-portable\",\"createdAt\":1,\"cwd\":\"/workspace\",\"isSeeded\":false,\"delegationDepth\":0}\n" +
+  "{\"type\":\"turn/start\",\"seq\":0,\"time\":1,\"data\":{\"turn\":1}}\n" +
+  "{\"type\":\"step/start\",\"seq\":1,\"time\":2,\"data\":{\"turn\":1,\"step\":1}}\n" +
+  "{\"type\":\"user/message\",\"seq\":2,\"time\":3,\"data\":{\"role\":\"user\",\"id\":\"retry-user\",\"source\":{\"kind\":\"user\"},\"content\":[{\"type\":\"text\",\"text\":\"Retry a provider request.\"}]},\"surfaceOp\":\"append\"}\n" +
+  "{\"type\":\"request/header\",\"seq\":3,\"time\":4,\"data\":{\"reason\":\"initial\",\"header\":{\"config\":{\"provider\":\"fixture\",\"model\":\"fixture-model\"}}}}\n" +
+  "{\"type\":\"request/context\",\"seq\":4,\"time\":5,\"data\":{\"provider\":\"fixture\",\"model\":\"fixture-model\"}}\n" +
+  "{\"type\":\"assistant/attempt\",\"seq\":5,\"time\":6,\"data\":{\"turn\":1,\"step\":1,\"stream\":[{\"type\":\"chunk\",\"time\":0,\"chunk\":{\"type\":\"finish\",\"reason\":{\"kind\":\"error\",\"failure\":{\"message\":\"provider busy\",\"code\":\"RATE_LIMIT\"}}}}]}}\n" +
+  "{\"type\":\"llm/retry\",\"seq\":6,\"time\":7,\"data\":{\"retryId\":\"retry-portable-chain\",\"turn\":1,\"step\":1,\"provider\":\"fixture\",\"mode\":\"normal\",\"policyKey\":\"policy-portable\",\"retry\":1,\"maxRetries\":2,\"delayMs\":10000.5,\"failure\":{\"message\":\"provider busy\",\"code\":\"RATE_LIMIT\",\"status\":429,\"providerRetryAfterMs\":250.5,\"requestId\":\"req-1\"}}}\n" +
+  "{\"type\":\"llm/retry-started\",\"seq\":7,\"time\":8,\"data\":{\"retryId\":\"retry-portable-chain\",\"turn\":1,\"step\":1,\"retry\":1}}\n" +
+  "{\"type\":\"llm/retry\",\"seq\":8,\"time\":9,\"data\":{\"retryId\":\"retry-portable-chain\",\"turn\":1,\"step\":1,\"provider\":\"fixture\",\"mode\":\"normal\",\"policyKey\":\"policy-portable\",\"retry\":2,\"maxRetries\":2,\"delayMs\":0.25,\"failure\":{\"message\":\"empty response\",\"code\":\"EMPTY_RESPONSE\"}}}\n" +
+  "{\"type\":\"llm/retry-started\",\"seq\":9,\"time\":10,\"data\":{\"retryId\":\"retry-portable-chain\",\"turn\":1,\"step\":1,\"retry\":2}}\n" +
+  "{\"type\":\"assistant/message\",\"seq\":10,\"time\":11,\"data\":{\"turn\":1,\"step\":1,\"message\":{\"role\":\"assistant\",\"id\":\"retry-assistant\",\"source\":{\"kind\":\"model\",\"provider\":\"fixture\",\"model\":\"fixture-model\"},\"content\":[{\"type\":\"text\",\"text\":\"Recovered.\"}]}},\"surfaceOp\":\"append\"}\n" +
+  "{\"type\":\"step/end\",\"seq\":11,\"time\":12,\"data\":{\"turn\":1,\"step\":1}}\n" +
+  "{\"type\":\"turn/end\",\"seq\":12,\"time\":13,\"data\":{\"turn\":1,\"reason\":{\"kind\":\"completed\"}}}"
+}
+
+///|
+test "Session v4 retry import validates correlations and preserves diagnostics" {
+  let engine = Engine::new(test_tools())
+  let jsonl = session_v4_retry_portable_fixture()
+  let imported = success(
+    engine.invoke("session_import", object([("jsonl", Json::string(jsonl))])),
+  )
+  assert_eq(get_status(imported), "completed")
+  let messages = array_value(
+    required_field(imported, "messages"),
+    "messages",
+    8,
+  )
+  assert_eq(messages.length(), 2)
+  assert_eq(required_string(messages[1], "content"), "Recovered.")
+  let events = array_value(required_field(imported, "events"), "events", 32)
+  let mut schedules = 0
+  let mut starts = 0
+  let mut diagnostics = 0
+  for event in events {
+    if required_string(event, "type", max=64) != "upstream/event" {
+      continue
+    }
+    let data = required_field(event, "data")
+    let record = required_field(data, "record")
+    match required_string(record, "type", max=128) {
+      "assistant/attempt" => diagnostics += 1
+      "llm/retry" => {
+        schedules += 1
+        let retry = required_field(record, "data")
+        let failure = required_field(retry, "failure")
+        assert_eq(
+          required_string(retry, "policyKey", max=128),
+          "policy-portable",
+        )
+        if schedules == 1 {
+          assert_eq(required_string(failure, "code", max=64), "RATE_LIMIT")
+          match required_field(retry, "delayMs") {
+            Json::Number(delay, ..) => assert_eq(delay, 10000.5)
+            _ => panic()
+          }
+        } else {
+          assert_eq(required_string(failure, "code", max=64), "EMPTY_RESPONSE")
+        }
+      }
+      "llm/retry-started" => starts += 1
+      _ => ()
+    }
+  }
+  assert_eq(schedules, 2)
+  assert_eq(starts, 2)
+  assert_eq(diagnostics, 1)
+  assert_true(engine.take_effects().is_empty())
+
+  let malformed = jsonl.replace_all(
+    old="\"retry\":1,\"maxRetries\":2",
+    new="\"retry\":3,\"maxRetries\":3",
+  )
+  let before = engine.snapshot()
+  assert_true(
+    engine.invoke(
+      "session_import",
+      object([("jsonl", Json::string(malformed))]),
+    )
+    is Err(_),
+  )
+  assert_eq(engine.snapshot(), before)
+  assert_true(engine.take_effects().is_empty())
+}
+
+///|
 test "Session v4 import is inert, read-only, atomic, and restorable" {
   let engine = Engine::new(test_tools())
   let imported = success(

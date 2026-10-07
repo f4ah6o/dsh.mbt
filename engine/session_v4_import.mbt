@@ -60,6 +60,10 @@ fn Engine::import_upstream_v4(
     ptc_dispatches: Map([]),
     workflow_runs: Map([]),
     subagents: Map([]),
+    retry_chains: Map([]),
+    retry_ids: Map([]),
+    retry_schedules: Map([]),
+    started_retries: Map([]),
     inbox: {
       next_turn: [],
       next_step: [],

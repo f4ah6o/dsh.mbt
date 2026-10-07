@@ -41,7 +41,10 @@ fn replay_v4_event(
       }
     _ => ()
   }
-  if replay.terminal_step_without_assistant && kind != "turn/end" {
+  if replay.terminal_step_without_assistant &&
+    kind != "turn/end" &&
+    kind != "llm/retry" &&
+    kind != "llm/retry-started" {
     raise Invalid(
       "An assistant-less Session v4 step must be followed by its terminal turn/end",
     )
@@ -457,6 +460,13 @@ fn replay_v4_event(
         )
       }
       replay.request_context_seen = true
+    }
+    "llm/retry" | "llm/retry-started" => {
+      let retry_coordinates = replay_v4_retry_event(
+        replay, kind, data, line_number,
+      )
+      turn = retry_coordinates.0
+      step = retry_coordinates.1
     }
     "agent/inbox/spliced" =>
       replay_inbox_splice(

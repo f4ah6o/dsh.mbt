@@ -8,7 +8,10 @@ import { pathToFileURL } from 'node:url';
 import { createHost, defaultModulePath } from '../../host/runtime.mjs';
 
 const upstream = await readFile(new URL('../fixtures/upstream-tool-call-turn/session.v4.jsonl', import.meta.url), 'utf8');
+const retryNativeFixture = await readFile(new URL('../fixtures/upstream-session-v4/provider-retry/native/session.v4.jsonl', import.meta.url), 'utf8');
+const retryShorthandFixture = await readFile(new URL('../fixtures/upstream-session-v4/provider-retry/shorthand/session.v4.jsonl', import.meta.url), 'utf8');
 const tools = [{ name: 'read', description: 'Read a text file.', parameters: { type: 'object', properties: { path: { type: 'string' } } } }];
+// Adapted retry fixtures live outside the 25-row unmodified upstream catalog below.
 const newlySupportedSnapshots = [
   'dynamic-tool-updates',
   'dynamic-tool-prompt-updates',
@@ -79,7 +82,69 @@ function archive(header, events) {
 }
 
 function snapshotArchive(header, events) {
-  return [header, ...events].map((value) => JSON.stringify(value)).join('\n');
+  const shorthandEvents = events.map((event) => {
+    const { seq, time, ...shorthand } = event;
+    return shorthand;
+  });
+  return [header, ...shorthandEvents].map((value) => JSON.stringify(value)).join('\n');
+}
+
+function retryArchive({ terminal = false, interrupted = false, started = true, attempts = 1, shorthand = false, retryAfterStepEnd = false, mutateFirstRetry, mutateSecondRetry } = {}) {
+  const [header, ...sourceEvents] = retryNativeFixture.trimEnd().split('\n').map((line) => JSON.parse(line));
+  let events = sourceEvents.map((event) => structuredClone(event));
+  const firstSchedule = events.find((event) => event.type === 'llm/retry');
+  assert.ok(firstSchedule);
+  mutateFirstRetry?.(firstSchedule);
+  if (attempts > 1) {
+    const firstStartedIndex = events.findIndex((event) => event.type === 'llm/retry-started');
+    assert.ok(firstStartedIndex >= 0);
+    const secondSchedule = structuredClone(firstSchedule);
+    Object.assign(secondSchedule.data, {
+      retry: 2,
+      delayMs: 10000.5,
+      failure: {
+        message: 'provider remained busy',
+        code: 'RATE_LIMIT',
+        status: 429,
+        providerRetryAfterMs: 250.5,
+        requestId: 'provider-request-2',
+      },
+    });
+    mutateSecondRetry?.(secondSchedule);
+    const secondStarted = row('llm/retry-started', {
+      retryId: secondSchedule.data.retryId,
+      turn: secondSchedule.data.turn,
+      step: secondSchedule.data.step,
+      retry: secondSchedule.data.retry,
+    });
+    events.splice(firstStartedIndex + 1, 0, secondSchedule, secondStarted);
+  }
+  if (terminal || interrupted) {
+    events = events.filter((event) => ![
+      'assistant/message', 'step/end', 'turn/end',
+    ].includes(event.type) && (started || event.type !== 'llm/retry-started'));
+    if (terminal) {
+      const retries = retryAfterStepEnd
+        ? events.filter((event) => ['llm/retry', 'llm/retry-started'].includes(event.type))
+        : [];
+      if (retryAfterStepEnd) {
+        events = events.filter((event) => !['llm/retry', 'llm/retry-started'].includes(event.type));
+      }
+      events.push(row('step/end', { turn: 1, step: 1 }));
+      events.push(...retries);
+      events.push(row('turn/end', {
+        turn: 1,
+        reason: { kind: 'error', error: { message: 'provider retry stopped', code: 'EMPTY_RESPONSE' } },
+      }));
+    }
+  }
+  return shorthand ? snapshotArchive(header, events) : archive(header, events);
+}
+
+function mutateRetryArchive(mutator, options = {}) {
+  const [header, ...events] = retryNativeFixture.trimEnd().split('\n').map((line) => JSON.parse(line));
+  mutator(events);
+  return options.shorthand ? snapshotArchive(header, events) : archive(header, events);
 }
 
 function encodeSnapshotRows(rows) {
@@ -1312,4 +1377,136 @@ test('native physical envelope and fork admission failures are atomic', async (t
   assert.match(rejected.error, /isSeeded|inherited end-seed/);
   assert.deepEqual(await host.call('session_list'), before);
   assert.equal(host.activeCount, 0);
+});
+
+test('Session v4 retry schedules and starts remain inert, lossless, and restorable', async (t) => {
+  const temporary = await mkdtemp(path.join(os.tmpdir(), 'dsh-v4-retry-restore-'));
+  const dataDir = path.join(temporary, '.dsh.mbt');
+  const first = await newHost(t, dataDir);
+  const provenance = JSON.parse(await readFile(new URL('../fixtures/upstream-session-v4/provider-retry/provenance.json', import.meta.url), 'utf8'));
+  assert.equal(createHash('sha256').update(retryNativeFixture).digest('hex'), provenance.fixtures['native/session.v4.jsonl'].sha256);
+  assert.equal(createHash('sha256').update(retryShorthandFixture).digest('hex'), provenance.fixtures['shorthand/session.v4.jsonl'].sha256);
+
+  const variants = [
+    ['native completed retry', retryNativeFixture, 'completed'],
+    ['snapshot shorthand completed retry', retryShorthandFixture, 'completed'],
+    ['completed always-mode retry', mutateRetryArchive((events) => {
+      const schedule = events.find((event) => event.type === 'llm/retry');
+      schedule.data.mode = 'always';
+      delete schedule.data.maxRetries;
+      schedule.data.delayMs = 10000.5;
+    }), 'completed'],
+    ['two sequential retries', retryArchive({ attempts: 2 }), 'completed'],
+    ['terminal scheduled retry without start', retryArchive({ terminal: true, started: false }), 'failed'],
+    ['native retry after closed assistant-less step', retryArchive({ terminal: true, retryAfterStepEnd: true }), 'failed'],
+    ['shorthand retry after closed assistant-less step', retryArchive({ terminal: true, retryAfterStepEnd: true, shorthand: true }), 'failed'],
+    ['interrupted retry wait', retryArchive({ interrupted: true, started: false }), 'failed'],
+    ['interrupted retry after start', retryArchive({ interrupted: true, started: true }), 'failed'],
+  ];
+  const imported = [];
+  for (const [name, jsonl, expectedStatus] of variants) {
+    const result = await first.host.call('session_import', { jsonl });
+    assert.equal(result.ok, true, `${name}: ${result.error}`);
+    const session = result.result;
+    assert.equal(session.status, expectedStatus, name);
+    assert.deepEqual(session.messages.map((item) => item.role), expectedStatus === 'completed' ? ['user', 'assistant'] : ['user'], name);
+    assert.deepEqual(session.pending_tool_calls, [], name);
+    assertCatalogTranscriptCorrelation(session, jsonl, name);
+    const sourceRows = jsonl.trimEnd().split('\n').slice(1).map((line) => JSON.parse(line));
+    const sourceEvents = session.events.filter((event) => event.type === 'upstream/event');
+    const attempts = sourceEvents.filter((event) => event.data.record.type === 'assistant/attempt');
+    const schedules = sourceEvents.filter((event) => event.data.record.type === 'llm/retry');
+    const starts = sourceEvents.filter((event) => event.data.record.type === 'llm/retry-started');
+    assert.equal(schedules.length, expectedStatus === 'completed' && name === 'two sequential retries' ? 2 : 1, name);
+    assert.equal(starts.length, sourceRows.filter((event) => event.type === 'llm/retry-started').length, name);
+    if (name.includes('retry after closed assistant-less step')) {
+      const stepEndIndex = sourceRows.findIndex((event) => event.type === 'step/end');
+      const retryIndex = sourceRows.findIndex((event) => event.type === 'llm/retry');
+      const startedIndex = sourceRows.findIndex((event) => event.type === 'llm/retry-started');
+      assert.ok(stepEndIndex < retryIndex && retryIndex < startedIndex, name);
+    }
+    assert.deepEqual(schedules.map((event) => event.data.record.data.retry), schedules.map((_, index) => index + 1), name);
+    for (const schedule of schedules) {
+      assert.deepEqual(schedule.data.record.data.failure, sourceRows[schedule.data.source_seq].data.failure, name);
+      assert.equal(schedule.data.raw, jsonl.trimEnd().split('\n')[schedule.data.source_seq + 1], name);
+    }
+    if (name === 'native completed retry' || name === 'snapshot shorthand completed retry') {
+      assert.equal(attempts.length, 1, name);
+      assert.deepEqual(attempts[0].data.record.data.stream[1].chunk.reason.failure, schedules[0].data.record.data.failure, name);
+      assert.equal(session.messages[1].content, 'Recovered.', name);
+    }
+    if (name === 'two sequential retries') {
+      assert.equal(schedules[1].data.record.data.retryId, schedules[0].data.record.data.retryId, name);
+      assert.equal(schedules[1].data.record.data.delayMs, 10000.5, name);
+      assert.equal(schedules[1].data.record.data.failure.providerRetryAfterMs, 250.5, name);
+    }
+    imported.push({ id: session.id, session, jsonl });
+    assert.equal(first.host.activeCount, 0, name);
+    assert.equal(first.fetchCalls(), 0, name);
+  }
+
+  const canonical = imported[0].session;
+  const forged = JSON.parse(first.facade.snapshot());
+  const stored = forged.sessions.find((session) => session.id === canonical.id);
+  const retrySource = stored.events.find((event) => event.type === 'upstream/event' && event.data.record.type === 'llm/retry');
+  retrySource.data.record.data.retry = 2;
+  retrySource.data.raw = JSON.stringify(retrySource.data.record);
+  const rejectedRestore = JSON.parse(first.facade.restore(JSON.stringify(forged)));
+  assert.equal(rejectedRestore.ok, false);
+  assert.match(rejectedRestore.error, /policy chain must begin at retry 1/);
+  assert.deepEqual(await first.host.session(canonical.id), canonical);
+
+  await first.close();
+  const reopened = await newHost(t, dataDir);
+  for (const { id, session } of imported) assert.deepEqual(await reopened.host.session(id), session);
+  assert.equal(reopened.host.activeCount, 0);
+  assert.equal(reopened.fetchCalls(), 0);
+  t.after(() => rm(temporary, { recursive: true, force: true }));
+});
+
+test('Session v4 retry event correlation, ordering, and payload constraints reject atomically', async (t) => {
+  const { host, fetchCalls } = await newHost(t);
+  const retry = (events) => events.find((event) => event.type === 'llm/retry');
+  const retryStart = (events) => events.find((event) => event.type === 'llm/retry-started');
+  const invalidArchives = [
+    ['provider must match request/header', mutateRetryArchive((events) => { retry(events).data.provider = 'other-provider'; }), /provider differs from the request\/header/],
+    ['closed assistant-less step still validates retry correlation', retryArchive({ terminal: true, retryAfterStepEnd: true, mutateFirstRetry: (event) => { event.data.provider = 'other-provider'; } }), /provider differs from the request\/header/],
+    ['ignorable does not bypass retry validation', retryArchive({ mutateFirstRetry: (event) => { event.ignorable = true; event.data.retry = 2; } }), /policy chain must begin at retry 1/],
+    ['retry count starts at one', mutateRetryArchive((events) => { retry(events).data.retry = 2; }), /policy chain must begin at retry 1/],
+    ['normal mode requires maxRetries', mutateRetryArchive((events) => { delete retry(events).data.maxRetries; }), /requires maxRetries/],
+    ['normal maxRetries must be positive', mutateRetryArchive((events) => { retry(events).data.maxRetries = 0; }), /positive safe integer/],
+    ['retry cannot exceed maxRetries', mutateRetryArchive((events) => { retry(events).data.maxRetries = 1; retry(events).data.retry = 2; }), /exceeds maxRetries/],
+    ['unsupported mode is rejected', mutateRetryArchive((events) => { retry(events).data.mode = 'sometimes'; }), /mode must be normal or always/],
+    ['retry identity is required', mutateRetryArchive((events) => { retry(events).data.retryId = ''; }), /retryId must not be empty/],
+    ['retry step must match current step', mutateRetryArchive((events) => { retry(events).data.step = 2; }), /does not match the current turn and step/],
+    ['delay must be numeric', mutateRetryArchive((events) => { retry(events).data.delayMs = '1'; }), /delayMs must be a finite number/],
+    ['delay cannot be negative', mutateRetryArchive((events) => { retry(events).data.delayMs = -1; }), /delayMs must be finite and non-negative/],
+    ['failure status uses an HTTP status code', mutateRetryArchive((events) => { retry(events).data.failure.status = 600; }), /retry failure status is outside the supported range/],
+    ['failure retry-after must be positive', mutateRetryArchive((events) => { retry(events).data.failure.providerRetryAfterMs = 0; }), /providerRetryAfterMs must be positive and finite/],
+    ['failure rejects unsupported metadata', mutateRetryArchive((events) => { retry(events).data.failure.unknown = true; }), /Unsupported Session v4 LLM retry failure field/],
+    ['retry start must follow a schedule', mutateRetryArchive((events) => {
+      const index = events.indexOf(retryStart(events));
+      const [start] = events.splice(index, 1);
+      events.splice(events.indexOf(retry(events)), 0, start);
+    }), /has no prior scheduled attempt/],
+    ['retry start coordinates must match its schedule', mutateRetryArchive((events) => { retryStart(events).data.step = 2; }), /changes its scheduled coordinates/],
+    ['retry start cannot duplicate a schedule', mutateRetryArchive((events) => {
+      const index = events.indexOf(retryStart(events));
+      events.splice(index + 1, 0, structuredClone(retryStart(events)));
+    }), /duplicates a scheduled attempt/],
+    ['policy chain attempt counts are contiguous', retryArchive({ attempts: 2, mutateSecondRetry: (event) => { event.data.retry = 3; event.data.maxRetries = 3; } }), /continue its policy chain/],
+    ['a scheduled attempt cannot be duplicated', retryArchive({ attempts: 2, mutateSecondRetry: (event) => { event.data.retry = 1; } }), /continue its policy chain/],
+    ['policy chain preserves its retry identity', retryArchive({ attempts: 2, mutateSecondRetry: (event) => { event.data.retryId = 'different-retry'; } }), /continue its policy chain/],
+    ['retry ids cannot be reused across policy chains', retryArchive({ attempts: 2, mutateSecondRetry: (event) => { event.data.retry = 1; event.data.policyKey = 'new-policy'; } }), /reuses a retryId across policy chains/],
+    ['always mode omits maxRetries', mutateRetryArchive((events) => { retry(events).data.mode = 'always'; }), /must omit maxRetries/],
+  ];
+  const before = await host.call('session_list');
+  for (const [name, jsonl, expected] of invalidArchives) {
+    const rejected = await host.call('session_import', { jsonl });
+    assert.equal(rejected.ok, false, name);
+    assert.match(rejected.error, expected, name);
+    assert.deepEqual(await host.call('session_list'), before, name);
+  }
+  assert.equal(host.activeCount, 0);
+  assert.equal(fetchCalls(), 0);
 });

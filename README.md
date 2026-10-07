@@ -80,7 +80,8 @@ retry は各 provider request を新たに送信するため、provider 側で�
 HTTP 4xx（408 / 429 を除く）、authentication、malformed response は retry しません。正の `Retry-After` は 10 秒以内のときだけ
 backoff を置き換え、上限を超える値は retry を止めます。受理した stream delta が一つでもある request は再試行しません。
 MoonBit は retry schedule と開始を event log に記録してから host が待機・再接続し、shutdown や reopen で provider / tool を
-重複実行しません。upstream と異なり jitter は使わず、`Session v4` read-only importer は upstream retry event family を受理しません。
+重複実行しません。upstream と異なり jitter は使いません。`Session v4` read-only importer は `llm/retry` と
+`llm/retry-started` の schema と相関を検証して raw history に保持しますが、待機や provider request は再生しません。
 実装範囲と差分は [移植状況](docs/port-status.md) を参照してください。
 
 ## ツールと承認

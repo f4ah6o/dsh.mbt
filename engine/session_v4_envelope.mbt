@@ -169,10 +169,11 @@ fn known_v4_event(kind : String) -> Bool {
     "agent/inbox/spliced", "approval/policy", "assistant/attempt", "assistant/message",
     "compaction/end", "compaction/prune", "compaction/start", "compaction/summary",
     "developer/message", "permission/preset", "request/context", "request/header",
-    "sandbox/mode", "session/end-seed", "session/title", "step/end", "step/start",
-    "subagent/catalog", "system/message", "tool-workflow/agent-end", "tool-workflow/agent-start",
-    "tool-workflow/run-end", "tool-workflow/run-start", "tool/call", "tool/ptc-dispatch",
-    "tool/ptc-dispatch-start", "tool/result", "turn/end", "turn/start", "user/message",
+    "llm/retry", "llm/retry-started", "sandbox/mode", "session/end-seed", "session/title",
+    "step/end", "step/start", "subagent/catalog", "system/message", "tool-workflow/agent-end",
+    "tool-workflow/agent-start", "tool-workflow/run-end", "tool-workflow/run-start",
+    "tool/call", "tool/ptc-dispatch", "tool/ptc-dispatch-start", "tool/result", "turn/end",
+    "turn/start", "user/message",
   ].contains(kind)
 }
 
