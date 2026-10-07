@@ -317,10 +317,12 @@ restore は成功し、effect の再発行は 0 でした。
 
 ## 2026-10-07 issue #9 / #11 implementation candidate
 
-The following checks ran on the macOS arm64 development host with MoonBit compiler/core 0.10.14+7d59c7ec9. They use synthetic identities, local servers, and keyless fixtures unless stated otherwise.
+Local checks ran on the macOS arm64 development host with MoonBit compiler/core 0.10.14+7d59c7ec9; Ubuntu CI results are listed separately below. Unless stated otherwise, checks use synthetic identities, local servers, and keyless fixtures.
 
 | Check | Result |
 | --- | --- |
+| Ubuntu 24.04 native-without-node CI | PASS on commit `8dc1ea7744ae7902938afe4b3071fabff0340b51` ([Actions run](https://github.com/f4ah6o/dsh.mbt/actions/runs/37589966829)). The container confirmed Node/npm were absent; native check had zero own warnings, 159 / 159 tests passed, and native/app/client builds, CLI help, and the offline checkpoint/approval/tool/context/reload demo passed. The Linux process fixtures exercised the hard worker resource boundary. |
+| Ubuntu 24.04 portable-and-host CI | PASS on the same commit and Actions run: 128 / 128 MoonBit tests on Wasm, Wasm GC, JS, and native; 31 additional native suite cases; host 42 / 42; web 17 / 17; integration 44 / 44; own warnings 0 and JavaScript syntax 34 files. |
 | Final `npm test` | PASS / exit 0 at source candidate `10d8a6c94eb2d95f2086166e430e63275d82e0bd`: 128 / 128 MoonBit tests on each of Wasm, Wasm GC, JS, and native; 31 additional native suite cases; host 42 / 42; web 17 / 17; integration 44 / 44; own warnings 0; JavaScript syntax 34 files. Log: `/private/tmp/dsh-final-npm-r5-20261007-01a11483.log`. |
 | MoonBit-only native verifier entry point | PASS / exit 0. Format and native package check passed with zero project warnings and three pinned hotpath warnings; native test matrix 159 / 159; native release build and CLI help passed; app and client JS release builds passed; offline native checkpoint/approval/tool/context/reload demo passed. |
 | Native verifier with Node/npm removed from PATH | PASS / exit 0. `/bin/sh` asserted that neither Node nor npm was available with PATH limited to Moon and OS tools. The local verifier passed format/check, 159 / 159 native tests, native/app/client builds, CLI help, and checkpoint/approval/tool/context/reload demo using its warm Moon cache. Cold CI runs only the standalone `.mbtx` wrapper non-frozen to resolve its separate imports; internal repository checks/builds remain `--frozen`. Log: `/private/tmp/dsh-final-no-node-r5-20261007-01a11483.log`. |
@@ -332,4 +334,4 @@ The following checks ran on the macOS arm64 development host with MoonBit compil
 | Engine native benchmark | Typed trace 86.06 ± 1.66 µs; compatibility JSON trace 86.41 ± 1.61 µs; ten samples. The intervals overlap; no speedup is claimed. Whole command max RSS was 286,081,024 bytes, including Moon build/tooling; per-operation allocation was not measured. |
 | Swift / iOS embedding checks | Parent reported the macOS generated-C harness passed three URLProtocol cases plus UTF-8/NUL and stale-handle ABI checks. Xcode Simulator build/install/launch also passed for the current SwiftUI + MoonC embedding spike. These are not physical-iPhone acceptance; the formal gpui iOS host, IME, accessibility, device memory, and lifecycle gates remain unimplemented or unrun. |
 
-The final local full npm test and Node/npm-absent verifier both pass for the implementation candidate above. The dedicated Ubuntu Node-absent Actions job still needs its PR run. Live SIWC, actual Tailscale Serve, formal gpui iOS host, and physical iPhone gates remain unrun or unimplemented.
+The local regression runs and both Ubuntu Actions jobs pass; the Ubuntu results tested commit `8dc1ea7744ae7902938afe4b3071fabff0340b51` ([run](https://github.com/f4ah6o/dsh.mbt/actions/runs/37589966829)). Live SIWC, actual Tailscale Serve, formal gpui iOS host, and physical iPhone gates remain unrun or unimplemented.
