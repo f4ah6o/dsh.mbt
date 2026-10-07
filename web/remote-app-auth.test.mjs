@@ -53,7 +53,7 @@ function fakeElement(id = "") {
   return element;
 }
 
-function auth(state, models = [], profileId = "profile-test") {
+function auth(state, models = [], profileId = "profile-test", selectedModel = null) {
   return {
     state,
     account: state === "connected" || state === "signing_in"
@@ -62,7 +62,7 @@ function auth(state, models = [], profileId = "profile-test") {
     plan_usage: "enabled",
     scopes: [],
     models,
-    selected_model: null,
+    selected_model: selectedModel,
   };
 }
 
@@ -78,6 +78,8 @@ function createHarness({
   },
   signInFailure = null,
   failPostSignInSnapshot = false,
+  failSelectModel = false,
+  deferSelectModel = false,
 } = {}) {
   const elements = new Map();
   const getElement = (id) => {
@@ -109,6 +111,11 @@ function createHarness({
   let backendAuth = structuredClone(initialAuth);
   let signInRequested = false;
   let signInRequests = 0;
+  const selectedModelRequests = [];
+  let signalSelectModelRequestStarted;
+  const selectModelRequestStarted = new Promise((resolve) => { signalSelectModelRequestStarted = resolve; });
+  let resolveSelectModelResponse;
+  const pendingSelectModelResponse = new Promise((resolve) => { resolveSelectModelResponse = resolve; });
   const operations = [];
   const openedTabs = [];
   let postSignInSnapshots = 0;
@@ -158,7 +165,8 @@ function createHarness({
   };
 
   const fetch = async (_url, init) => {
-    const operation = JSON.parse(init.body).operation;
+    const payload = JSON.parse(init.body);
+    const operation = payload.operation;
     operations.push(operation);
     if (operation === "auth_sign_in_browser") {
       signInRequests += 1;
@@ -197,6 +205,30 @@ function createHarness({
         ok: true,
         status: 200,
         async json() { return { ok: true, result: { models: backendAuth.models } }; },
+      };
+    }
+    if (operation === "auth_select_model") {
+      const model = payload.input.model;
+      selectedModelRequests.push(model);
+      if (deferSelectModel) {
+        signalSelectModelRequestStarted();
+        return pendingSelectModelResponse.then((response) => {
+          if (response.ok) backendAuth.selected_model = model;
+          return response;
+        });
+      }
+      if (failSelectModel) {
+        return {
+          ok: false,
+          status: 503,
+          async json() { return { ok: false, error: "fixture model selection failed" }; },
+        };
+      }
+      backendAuth.selected_model = model;
+      return {
+        ok: true,
+        status: 200,
+        async json() { return { ok: true, result: { ok: true, model } }; },
       };
     }
     throw new Error("unexpected operation: " + operation);
@@ -257,10 +289,19 @@ function createHarness({
     timers,
     get modelRefreshes() { return modelRefreshes; },
     get signInRequests() { return signInRequests; },
+    get selectedModelRequests() { return selectedModelRequests; },
     get operations() { return operations; },
     get openedTabs() { return openedTabs; },
     modelRequestStarted,
     resolveModelResponse,
+    selectModelRequestStarted,
+    resolveSelectionResponse(model) {
+      resolveSelectModelResponse({
+        ok: true,
+        status: 200,
+        async json() { return { ok: true, result: { ok: true, model } }; },
+      });
+    },
     async start() { await sandbox.__appStarted; },
     setAuth(value) {
       currentAuth = structuredClone(value);
@@ -271,6 +312,13 @@ function createHarness({
       const handler = getElement(id).listeners.get("click");
       assert.ok(handler, "expected a click handler for #" + id);
       await handler({ preventDefault() {} });
+    },
+    async changeModel(value) {
+      const picker = getElement("model-picker");
+      const handler = picker.listeners.get("change");
+      assert.ok(handler, "expected a change handler for #model-picker");
+      picker.value = value;
+      await handler();
     },
     async fireAuthPoll() {
       const entry = [...timers.entries()].find(([, timer]) => timer.delay === 2000);
@@ -298,6 +346,78 @@ test("sign-in polling discovers models after the first connected snapshot", asyn
   assert.ok(picker.children.some((option) => option.value === "gpt-6-luna"));
   assert.equal(picker.disabled, false);
   assert.equal(app.elements.get("auth-models-retry").hidden, true);
+});
+
+for (const selectedModel of [null, "gpt-6-luna"]) {
+  test(`model picker applies a new selection when the current model is ${selectedModel || "unset"}`, async () => {
+    const models = [
+      { slug: "gpt-6-luna", display_name: "GPT-6 Luna" },
+      { slug: "gpt-6-astra", display_name: "GPT-6 Astra" },
+    ];
+    const app = createHarness({
+      initialAuth: auth("connected", models, "profile-test", selectedModel),
+    });
+    await app.start();
+
+    await app.changeModel("gpt-6-astra");
+
+    assert.deepEqual(app.selectedModelRequests, ["gpt-6-astra"]);
+    assert.equal(app.elements.get("model-picker").value, "gpt-6-astra");
+    assert.equal(app.elements.get("action-message").textContent, "Using GPT-6 Astra.");
+  });
+}
+
+test("empty model selection makes no host request", async () => {
+  const app = createHarness({
+    initialAuth: auth("connected", [
+      { slug: "gpt-6-luna", display_name: "GPT-6 Luna" },
+    ]),
+  });
+  await app.start();
+
+  await app.changeModel("");
+
+  assert.deepEqual(app.selectedModelRequests, []);
+});
+
+test("failed model selection restores the previously active model", async () => {
+  const models = [
+    { slug: "gpt-6-luna", display_name: "GPT-6 Luna" },
+    { slug: "gpt-6-astra", display_name: "GPT-6 Astra" },
+  ];
+  const app = createHarness({
+    initialAuth: auth("connected", models, "profile-test", "gpt-6-luna"),
+    failSelectModel: true,
+  });
+  await app.start();
+
+  await app.changeModel("gpt-6-astra");
+
+  assert.deepEqual(app.selectedModelRequests, ["gpt-6-astra"]);
+  assert.equal(app.elements.get("model-picker").value, "gpt-6-luna");
+  assert.match(app.elements.get("run-error").textContent, /fixture model selection failed/i);
+});
+
+test("busy model selection ignores another picker change", async () => {
+  const models = [
+    { slug: "gpt-6-luna", display_name: "GPT-6 Luna" },
+    { slug: "gpt-6-astra", display_name: "GPT-6 Astra" },
+  ];
+  const app = createHarness({
+    initialAuth: auth("connected", models, "profile-test", "gpt-6-luna"),
+    deferSelectModel: true,
+  });
+  await app.start();
+
+  const selection = app.changeModel("gpt-6-astra");
+  await app.selectModelRequestStarted;
+  assert.equal(app.elements.get("model-picker").disabled, true);
+  await app.changeModel("gpt-6-luna");
+  assert.deepEqual(app.selectedModelRequests, ["gpt-6-astra"]);
+
+  app.resolveSelectionResponse("gpt-6-astra");
+  await selection;
+  assert.equal(app.elements.get("model-picker").value, "gpt-6-astra");
 });
 
 test("blocked sign-in pop-up makes no host request", async () => {
