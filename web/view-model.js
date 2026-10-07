@@ -1,3 +1,10 @@
+export function authModelRefreshKey(auth) {
+  if (auth?.state !== "connected") return null;
+  if (Array.isArray(auth.models) && auth.models.length > 0) return null;
+  const profileId = auth.account?.profile_id;
+  return typeof profileId === "string" && profileId ? profileId : "connected";
+}
+
 export function isBusy(session) {
   return Boolean(session?.pending_approval)
     || ["running", "queued", "awaiting_approval"].includes(session?.status);

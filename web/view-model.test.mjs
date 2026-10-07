@@ -1,7 +1,19 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isBusy, isReadOnly, statusLabel, sessionList, acceptsSnapshot, prettyArguments, runError, displayMessages } from "./view-model.js";
+import { authModelRefreshKey, isBusy, isReadOnly, statusLabel, sessionList, acceptsSnapshot, prettyArguments, runError, displayMessages } from "./view-model.js";
 import { drawSceneSnapshot } from "./canvas-renderer.js";
+
+test("connected accounts without a model catalog are eligible for one refresh", () => {
+  const auth = {
+    state: "connected",
+    account: { profile_id: "profile-a" },
+    models: [],
+  };
+  assert.equal(authModelRefreshKey({ ...auth, state: "signing_in" }), null);
+  assert.equal(authModelRefreshKey(auth), "profile-a");
+  assert.equal(authModelRefreshKey({ ...auth, models: [{ slug: "model-a" }] }), null);
+  assert.equal(authModelRefreshKey({ ...auth, account: null }), "connected");
+});
 
 test("pending approval blocks another prompt and exposes a review status", () => {
   assert.equal(isBusy({ status: "awaiting_approval" }), true);
