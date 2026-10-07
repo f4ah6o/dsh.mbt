@@ -2,6 +2,8 @@ const GENERATION_PREFIX = "dsh-shell-generation-";
 const META_CACHE = "dsh-shell-meta-v1";
 const STAGING_PREFIX = "/__dsh_shell_staging__/";
 const SHELL_FETCH_TIMEOUT_MS = 10000;
+const MAX_SHELL_ASSET_BYTES = 4 * 1024 * 1024;
+const MAX_SHELL_BUNDLE_BYTES = 8 * 1024 * 1024;
 const LEGACY_CACHES = new Set(["dsh-shell-v1", "dsh-shell-v2"]);
 const SHELL_ASSETS = [
   "/",
@@ -88,20 +90,85 @@ function isCacheableShellResponse(request, response, requestURL) {
   return true;
 }
 
-async function fetchShellAsset(request) {
+async function consumeBoundedBody(response, budget) {
+  const contentLength = response.headers.get("content-length");
+  if (contentLength !== null) {
+    const declaredLength = Number(contentLength);
+    if (!Number.isSafeInteger(declaredLength) || declaredLength < 0) {
+      throw new Error("Invalid shell asset content length");
+    }
+    if (declaredLength > MAX_SHELL_ASSET_BYTES) {
+      throw new Error("Shell asset exceeds the per-asset size limit");
+    }
+    if (declaredLength > MAX_SHELL_BUNDLE_BYTES - budget.bytes) {
+      throw new Error("Shell bundle exceeds the total size limit");
+    }
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) return;
+  let assetBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      const chunkBytes = value?.byteLength || 0;
+      assetBytes += chunkBytes;
+      budget.bytes += chunkBytes;
+      if (assetBytes > MAX_SHELL_ASSET_BYTES) {
+        throw new Error("Shell asset exceeds the per-asset size limit");
+      }
+      if (budget.bytes > MAX_SHELL_BUNDLE_BYTES) {
+        throw new Error("Shell bundle exceeds the total size limit");
+      }
+    }
+  } catch (error) {
+    try {
+      await reader.cancel(error);
+    } catch {
+      // The fetch abort or source stream may already have cancelled it.
+    }
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+async function fetchAndCacheShellAsset(request, assetURL, cache, budget, generation) {
   const controller = new AbortController();
   let timeoutId;
+  let timedOut = false;
   const timeout = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
+      timedOut = true;
       controller.abort();
       reject(new Error(`Timed out fetching shell asset: ${new URL(request.url).pathname}`));
     }, SHELL_FETCH_TIMEOUT_MS);
   });
+
+  const work = (async () => {
+    const response = await fetch(request, { signal: controller.signal });
+    if (!isCacheableShellResponse(request, response, assetURL)) {
+      throw new Error(`Invalid shell asset response: ${assetURL.pathname}`);
+    }
+    const cacheResponse = response.clone();
+    await consumeBoundedBody(response, budget);
+    await cache.put(shellCacheKey(assetURL), cacheResponse);
+  })();
+
   try {
-    return await Promise.race([
-      fetch(request, { signal: controller.signal }),
-      timeout,
-    ]);
+    await Promise.race([work, timeout]);
+  } catch (error) {
+    controller.abort();
+    if (timedOut) {
+      // A Cache API write cannot be cancelled. If it completes after its
+      // deadline, remove the still-inactive candidate once more.
+      void work.then(
+        async () => { await caches.delete(generation); },
+        () => undefined,
+      ).catch(() => undefined);
+    }
+    throw error;
   } finally {
     clearTimeout(timeoutId);
   }
@@ -145,10 +212,10 @@ async function createShellGeneration() {
 
   try {
     const cache = await caches.open(generation);
-    // Fetch every asset before writing the candidate. Promise.allSettled keeps
-    // a fast failure from racing still-running fetches that could repopulate a
-    // cache after it has been discarded.
-    const fetched = await Promise.allSettled(SHELL_ASSETS.map(async (asset) => {
+    const budget = { bytes: 0 };
+    // Each response is bounded through body consumption and its candidate
+    // cache write. The cache remains private until every asset has completed.
+    const results = await Promise.allSettled(SHELL_ASSETS.map(async (asset) => {
       const assetURL = new URL(asset, self.location.origin);
       const request = new Request(assetURL.href, {
         method: "GET",
@@ -156,20 +223,11 @@ async function createShellGeneration() {
         credentials: "same-origin",
         mode: "same-origin",
       });
-      const response = await fetchShellAsset(request);
-      if (!isCacheableShellResponse(request, response, assetURL)) {
-        throw new Error(`Invalid shell asset response: ${asset}`);
-      }
-      return { key: shellCacheKey(assetURL), response: response.clone() };
+      await fetchAndCacheShellAsset(request, assetURL, cache, budget, generation);
     }));
 
-    const failed = fetched.find((result) => result.status === "rejected");
+    const failed = results.find((result) => result.status === "rejected");
     if (failed) throw failed.reason;
-    for (const result of fetched) {
-      if (result.status === "fulfilled") {
-        await cache.put(result.value.key, result.value.response);
-      }
-    }
     return generation;
   } catch (error) {
     await caches.delete(generation);

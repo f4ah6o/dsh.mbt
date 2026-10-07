@@ -26,7 +26,10 @@ class MemoryCache {
   }
 
   async put(request, response) {
-    this.entries.set(this.key(request), response.clone());
+    const key = this.key(request);
+    const stored = response.clone();
+    await response.clone().arrayBuffer();
+    this.entries.set(key, stored);
   }
 
   async delete(request) {
@@ -322,15 +325,27 @@ test("an active worker's cleanup preserves a newer worker's in-flight generation
   await assertClientBundle(newWorker, "old-page-next", "v1");
 });
 
-test("a stalled asset has a deadline and all API, event, command, and credential paths bypass shell caches", async () => {
+test("a response body that never closes times out and falls back to the complete active bundle", async () => {
   let stalledFetchAborted = false;
+  let streamController;
   const worker = createWorker({
     timeoutMs: 10,
     fetchImpl: async (request, { signal }) => {
       const path = new URL(request.url).pathname;
       if (path === "/remote-app.js") {
-        signal.addEventListener("abort", () => { stalledFetchAborted = true; });
-        return new Promise(() => {});
+        const body = new ReadableStream({
+          start(controller) {
+            streamController = controller;
+            controller.enqueue(new TextEncoder().encode("headers arrived; body remains open"));
+          },
+        });
+        signal.addEventListener("abort", () => {
+          stalledFetchAborted = true;
+          streamController.error(new Error("fetch aborted"));
+        });
+        return new Response(body, {
+          headers: { "content-type": "text/javascript; charset=utf-8" },
+        });
       }
       return shellResponse(path, "v1");
     },
@@ -347,8 +362,57 @@ test("a stalled asset has a deadline and all API, event, command, and credential
     mode: "navigate",
   });
   assert.equal(await timedOut.text(), "v1:/");
-  assert.equal(stalledFetchAborted, true, "the timeout cancels the stalled asset request");
+  assert.equal(stalledFetchAborted, true, "the deadline remains active after response headers arrive");
   assert.equal(await readActiveGeneration(worker.caches), known);
+  await assertClientBundle(worker, "timeout-page", "v1");
+}, { timeout: 1000 });
+
+test("oversized shell assets cannot replace the active generation", async () => {
+  const worker = createWorker({
+    fetchImpl: async (request) => {
+      const path = new URL(request.url).pathname;
+      if (path === "/remote-app.js") {
+        const body = new ReadableStream({
+          start(controller) {
+            controller.enqueue(new Uint8Array(4 * 1024 * 1024 + 1));
+            controller.close();
+          },
+        });
+        return new Response(body, {
+          headers: {
+            "content-type": "text/javascript; charset=utf-8",
+          },
+        });
+      }
+      return shellResponse(path, "v2");
+    },
+    clients: [{ id: "known-page" }],
+  });
+  const known = "dsh-shell-generation-known";
+  await seedGeneration(worker.caches, known, "v1");
+  await seedActiveGeneration(worker.caches, known);
+  await lifecycle(worker, "activate");
+
+  const fallback = await shellFetch(worker, "/", {
+    clientId: "known-page",
+    resultingClientId: "oversize-page",
+    mode: "navigate",
+  });
+  assert.equal(await fallback.text(), "v1:/");
+  assert.equal(await readActiveGeneration(worker.caches), known);
+  await assertClientBundle(worker, "oversize-page", "v1");
+});
+
+test("API, event, command, and credential paths bypass shell caches", async () => {
+  const worker = createWorker({
+    timeoutMs: 10,
+    fetchImpl: async (request) => shellResponse(new URL(request.url).pathname, "v1"),
+    clients: [{ id: "known-page" }],
+  });
+  const known = "dsh-shell-generation-known";
+  await seedGeneration(worker.caches, known, "v1");
+  await seedActiveGeneration(worker.caches, known);
+  await lifecycle(worker, "activate");
 
   const before = await worker.caches.keys();
   for (const request of [
