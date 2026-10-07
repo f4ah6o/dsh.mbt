@@ -23,6 +23,18 @@ Run the host ABI lifecycle and UTF-8 smoke test:
 sh ios/ClientEmbedding/verify-abi.sh
 ```
 
+Run the native Swift model through the freshly generated C bridge with a
+stubbed HTTP host:
+
+```sh
+sh ios/ClientEmbedding/test-model.sh
+```
+
+This covers rejected receipts, persistence before command submission, draft
+edits during a stalled request, duplicate taps, and reconnect lookup of
+accepted, missing, and expired receipts. Missing receipts remain unconfirmed;
+the client never replays a saved command automatically.
+
 Generate the Xcode project and build for an installed simulator destination:
 
 ```sh
@@ -47,10 +59,9 @@ objects.
 On 2026-10-07, the host ABI smoke passed, and Xcode built, installed, and
 launched the arm64 iOS Simulator sample with the iOS 18.5 runtime and Xcode
 26.5 SDK. The simulator showed the initial connection screen with its
-safe-area layout, and the source at that point included scene-phase reconnect
-and explicit-button-only prompt submission. The later Swift follow-up that
-removes persisted preferences after a verified authorization-scope change
-and the unused-binding cleanup have not been rebuilt yet.
+safe-area layout. The Swift model integration harness builds and runs against
+fresh generated MoonBit C and passes all three lifecycle scenarios. The latest
+model and view changes still need the final Xcode Simulator rebuild.
 
 This is not physical-device acceptance. A connected iPhone, Japanese IME
 composition, VoiceOver, real tailnet TLS/API behavior, and a native gpui.mbt

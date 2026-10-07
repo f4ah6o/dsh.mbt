@@ -16,8 +16,8 @@ struct ClientMessageRow: Identifiable {
 
 @MainActor
 final class DshClientModel: ObservableObject {
-    @Published var hostURL = UserDefaults.standard.string(forKey: "dsh.native.host") ?? "" {
-        didSet { UserDefaults.standard.set(hostURL, forKey: "dsh.native.host") }
+    @Published var hostURL: String {
+        didSet { defaults.set(hostURL, forKey: "dsh.native.host") }
     }
     @Published var connection = "offline"
     @Published var authSummary = "Not connected"
@@ -27,13 +27,26 @@ final class DshClientModel: ObservableObject {
     @Published var pendingApproval: [String: Any]?
     @Published var draft = ""
     @Published var errorMessage: String?
+    @Published var commandNotice: String?
     @Published var isBusy = false
 
+    private let defaults: UserDefaults
+    private let urlSession: URLSession
+    private let eventStreamEnabled: Bool
     private let handle: DshMoonBitClientHandle
     private var streamTask: Task<Void, Never>?
     private var preferenceScope: String?
+    private var operationInFlight = false
 
-    init() {
+    init(
+        urlSession: URLSession = .shared,
+        defaults: UserDefaults = .standard,
+        eventStreamEnabled: Bool = true
+    ) {
+        self.defaults = defaults
+        self.urlSession = urlSession
+        self.eventStreamEnabled = eventStreamEnabled
+        _hostURL = Published(initialValue: defaults.string(forKey: "dsh.native.host") ?? "")
         _ = dsh_moonbit_runtime_start()
         handle = dsh_moonbit_client_create()
         refreshFromClient()
@@ -45,27 +58,23 @@ final class DshClientModel: ObservableObject {
     }
 
     func connect() async {
-        guard !isBusy else { return }
         guard let baseURL = validatedBaseURL() else {
             errorMessage = "Enter the HTTPS URL of the host on your tailnet."
             return
         }
-        isBusy = true
+        guard beginOperation() else { return }
+        defer { endOperation() }
         errorMessage = nil
-        _ = dsh_moonbit_client_begin_connect(handle)
+        _ = bridgeString(dsh_moonbit_client_begin_connect(handle))
         refreshFromClient()
         do {
             try await loadSnapshot(baseURL: baseURL)
-            streamTask?.cancel()
-            streamTask = Task { [weak self] in
-                await self?.maintainEventStream(baseURL: baseURL)
-            }
+            startEventStream(baseURL: baseURL)
         } catch {
-            _ = dsh_moonbit_client_connection_failed(handle)
+            _ = bridgeString(dsh_moonbit_client_connection_failed(handle))
             errorMessage = error.localizedDescription
             refreshFromClient()
         }
-        isBusy = false
     }
 
     func resumeIfConfigured() async {
@@ -78,7 +87,7 @@ final class DshClientModel: ObservableObject {
         streamTask?.cancel()
         streamTask = nil
         guard connection != "offline" else { return }
-        _ = dsh_moonbit_client_connection_failed(handle)
+        _ = bridgeString(dsh_moonbit_client_connection_failed(handle))
         persistPreferences()
         refreshFromClient()
     }
@@ -111,6 +120,8 @@ final class DshClientModel: ObservableObject {
     }
 
     func createSession() async {
+        guard beginOperation() else { return }
+        defer { endOperation() }
         do {
             let sessionID = UUID().uuidString.lowercased()
             _ = try await sendCommand(
@@ -119,7 +130,8 @@ final class DshClientModel: ObservableObject {
                 input: ["id": sessionID, "title": "New session"],
                 approvalRevision: -1
             )
-            await connect()
+            guard let baseURL = validatedBaseURL() else { throw ClientError.invalidHost }
+            try await loadSnapshot(baseURL: baseURL)
             await selectSession(sessionID)
         } catch {
             errorMessage = error.localizedDescription
@@ -127,8 +139,12 @@ final class DshClientModel: ObservableObject {
     }
 
     func sendDraft() async {
-        let prompt = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let originalDraft = draft
+        let prompt = originalDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !prompt.isEmpty else { return }
+        guard beginOperation() else { return }
+        defer { endOperation() }
+        commandNotice = nil
         do {
             var sessionID = selectedSessionID
             if sessionID == nil {
@@ -139,7 +155,8 @@ final class DshClientModel: ObservableObject {
                     input: ["id": sessionID!, "title": String(prompt.prefix(52))],
                     approvalRevision: -1
                 )
-                await connect()
+                guard let baseURL = validatedBaseURL() else { throw ClientError.invalidHost }
+                try await loadSnapshot(baseURL: baseURL)
                 await selectSession(sessionID!)
             }
             _ = try await sendCommand(
@@ -148,7 +165,7 @@ final class DshClientModel: ObservableObject {
                 input: ["prompt": prompt],
                 approvalRevision: -1
             )
-            setDraft("")
+            if draft == originalDraft { setDraft("") }
             guard let baseURL = validatedBaseURL() else { throw ClientError.invalidHost }
             try await loadSnapshot(baseURL: baseURL)
         } catch {
@@ -157,6 +174,9 @@ final class DshClientModel: ObservableObject {
     }
 
     func decideApproval(approved: Bool) async {
+        guard beginOperation() else { return }
+        defer { endOperation() }
+        commandNotice = nil
         guard let pendingApproval,
               let callID = pendingApproval["call_id"] as? String,
               let sessionID = selectedSessionID,
@@ -183,6 +203,8 @@ final class DshClientModel: ObservableObject {
             errorMessage = "Enter the HTTPS URL of the host on your tailnet."
             return
         }
+        guard beginOperation() else { return }
+        defer { endOperation() }
         do {
             try await loadSnapshot(baseURL: baseURL)
         } catch {
@@ -226,15 +248,20 @@ final class DshClientModel: ObservableObject {
         let prepared = parseObject(preparedRaw),
         prepared["ok"] as? Bool == true,
         let command = prepared["command"] as? [String: Any] else {
-            throw ClientError.commandRejected
+            throw ClientError.commandRejected(nil)
         }
 
         guard let encoded = try? JSONSerialization.data(withJSONObject: command, options: [.sortedKeys]) else {
-            throw ClientError.commandRejected
+            throw ClientError.commandRejected(nil)
         }
-        _ = callString(Data(commandID.utf8)) { pointer, count in
+        guard let markedRaw = callString(Data(commandID.utf8), { pointer, count in
             dsh_moonbit_client_mark_command_sent(handle, pointer, count)
+        }), parseObject(markedRaw)?["ok"] as? Bool == true else {
+            throw ClientError.commandRejected(nil)
         }
+        // Persist the receipt ID before the host can accept the POST. A process
+        // exit from this point onward can only lead to a lookup, never a replay.
+        persistPreferences()
         let receiptData: Data
         do {
             receiptData = try await request(
@@ -247,22 +274,16 @@ final class DshClientModel: ObservableObject {
             _ = callString(Data(commandID.utf8)) { pointer, count in
                 dsh_moonbit_client_mark_command_uncertain(handle, pointer, count)
             }
+            persistPreferences()
             refreshFromClient()
             if let receipt = try? await request(baseURL: baseURL, path: "/api/v1/commands/\(commandID)") {
-                _ = callString(receipt) { pointer, count in
-                    dsh_moonbit_client_apply_receipt(handle, pointer, count)
-                }
-                refreshFromClient()
+                return try applyReceipt(receipt, expectedCommandID: commandID)
             }
-            throw error
+            markReceiptMissing(commandID)
+            commandNotice = "The host’s response was lost and no receipt is available yet. The command was not resent; check its status before retrying."
+            throw ClientError.commandUnconfirmed
         }
-        guard let appliedRaw = callString(receiptData, { pointer, count in
-            dsh_moonbit_client_apply_receipt(handle, pointer, count)
-        }), let applied = parseObject(appliedRaw), applied["ok"] as? Bool == true else {
-            throw ClientError.receiptRejected
-        }
-        refreshFromClient()
-        return parseObject(String(decoding: receiptData, as: UTF8.self)) ?? [:]
+        return try applyReceipt(receiptData, expectedCommandID: commandID)
     }
 
     private func loadSnapshot(baseURL: URL) async throws {
@@ -282,6 +303,7 @@ final class DshClientModel: ObservableObject {
             }
             refreshFromClient()
         }
+        await reconcilePendingReceipts(baseURL: baseURL)
     }
 
     private func maintainEventStream(baseURL: URL) async {
@@ -292,7 +314,7 @@ final class DshClientModel: ObservableObject {
             } catch is CancellationError {
                 return
             } catch {
-                _ = dsh_moonbit_client_connection_failed(handle)
+                _ = bridgeString(dsh_moonbit_client_connection_failed(handle))
                 refreshFromClient()
                 try? await Task.sleep(for: .seconds(2))
             }
@@ -311,11 +333,11 @@ final class DshClientModel: ObservableObject {
         var request = URLRequest(url: components.url!, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 60)
         request.setValue("text/event-stream", forHTTPHeaderField: "Accept")
         request.setValue("no-cache", forHTTPHeaderField: "Cache-Control")
-        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        let (bytes, response) = try await urlSession.bytes(for: request)
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
             throw ClientError.serverUnavailable
         }
-        _ = dsh_moonbit_client_connection_restored(handle)
+        _ = bridgeString(dsh_moonbit_client_connection_restored(handle))
         refreshFromClient()
 
         var dataLines: [String] = []
@@ -382,10 +404,16 @@ final class DshClientModel: ObservableObject {
         request.httpBody = body
         request.setValue("application/json", forHTTPHeaderField: "Accept")
         if body != nil { request.setValue("application/json", forHTTPHeaderField: "Content-Type") }
-        let (data, response) = try await URLSession.shared.data(for: request)
-        guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
+        let (data, response) = try await urlSession.data(for: request)
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw ClientError.serverUnavailable
+        }
+        guard (200..<300).contains(httpResponse.statusCode) else {
             let detail = String(data: data, encoding: .utf8) ?? ""
-            throw ClientError.http(detail.isEmpty ? "The workspace host returned an error." : detail)
+            throw ClientError.httpStatus(
+                httpResponse.statusCode,
+                detail.isEmpty ? "The workspace host returned an error." : detail
+            )
         }
         return data
     }
@@ -405,9 +433,9 @@ final class DshClientModel: ObservableObject {
         let previousScope = preferenceScope
         preferenceScope = scope
         if let previousScope {
-            UserDefaults.standard.removeObject(forKey: "dsh.client.preferences.v1.\(previousScope)")
+            defaults.removeObject(forKey: "dsh.client.preferences.v1.\(previousScope)")
         }
-        guard let data = UserDefaults.standard.data(forKey: "dsh.client.preferences.v1.\(scope)") else { return }
+        guard let data = defaults.data(forKey: "dsh.client.preferences.v1.\(scope)") else { return }
         _ = callString(data) { pointer, count in
             dsh_moonbit_client_restore_preferences(handle, pointer, count)
         }
@@ -417,8 +445,9 @@ final class DshClientModel: ObservableObject {
         guard let raw = bridgeString(dsh_moonbit_client_persisted_state_json(handle)),
               let preferences = parseObject(raw),
               let scope = preferences["scope_key"] as? String,
+              !scope.isEmpty,
               let data = raw.data(using: .utf8) else { return }
-        UserDefaults.standard.set(data, forKey: "dsh.client.preferences.v1.\(scope)")
+        defaults.set(data, forKey: "dsh.client.preferences.v1.\(scope)")
     }
 
     private func refreshFromClient() {
@@ -496,11 +525,97 @@ final class DshClientModel: ObservableObject {
     }
 
     private func restartEventStream() {
+        guard eventStreamEnabled else { return }
         guard let baseURL = validatedBaseURL() else { return }
+        startEventStream(baseURL: baseURL)
+    }
+
+    private func startEventStream(baseURL: URL) {
+        guard eventStreamEnabled else { return }
         streamTask?.cancel()
         streamTask = Task { [weak self] in
             await self?.maintainEventStream(baseURL: baseURL)
         }
+    }
+
+    private func beginOperation() -> Bool {
+        guard !operationInFlight else { return false }
+        operationInFlight = true
+        isBusy = true
+        return true
+    }
+
+    private func endOperation() {
+        operationInFlight = false
+        isBusy = false
+    }
+
+    private func applyReceipt(_ data: Data, expectedCommandID: String) throws -> [String: Any] {
+        guard let receipt = parseObject(String(decoding: data, as: UTF8.self)),
+              receipt["command_id"] as? String == expectedCommandID,
+              let status = receipt["status"] as? String,
+              let appliedRaw = callString(data, { pointer, count in
+                  dsh_moonbit_client_apply_receipt(handle, pointer, count)
+              }),
+              let applied = parseObject(appliedRaw),
+              applied["ok"] as? Bool == true else {
+            throw ClientError.receiptRejected
+        }
+        persistPreferences()
+        refreshFromClient()
+        switch status {
+        case "completed":
+            commandNotice = nil
+        case "accepted":
+            commandNotice = "The host accepted the command. Its receipt will be checked again after reconnect."
+        case "rejected":
+            commandNotice = "The host rejected this command. Your draft is still here."
+            throw ClientError.commandRejected(receipt["error"] as? String)
+        case "expired":
+            commandNotice = "This command expired before the host accepted it. Your draft is still here."
+            throw ClientError.commandExpired
+        case "uncertain":
+            commandNotice = "The host cannot confirm whether this command completed. It was not resent; check status before retrying."
+            throw ClientError.commandUnconfirmed
+        default:
+            throw ClientError.receiptRejected
+        }
+        return receipt
+    }
+
+    private func reconcilePendingReceipts(baseURL: URL) async {
+        guard let raw = bridgeString(dsh_moonbit_client_pending_ids_json(handle)),
+              let ids = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String] else {
+            return
+        }
+        var hasUnconfirmedOutcome = false
+        for commandID in ids {
+            if Task.isCancelled { return }
+            do {
+                let receipt = try await request(baseURL: baseURL, path: "/api/v1/commands/\(commandID)")
+                _ = try applyReceipt(receipt, expectedCommandID: commandID)
+            } catch ClientError.commandRejected(_), ClientError.commandExpired {
+                // applyReceipt already saved the receipt and exposed its outcome.
+            } catch ClientError.commandUnconfirmed {
+                hasUnconfirmedOutcome = true
+            } catch {
+                markReceiptMissing(commandID)
+                hasUnconfirmedOutcome = true
+            }
+        }
+        persistPreferences()
+        refreshFromClient()
+        if hasUnconfirmedOutcome {
+            commandNotice = "A previous command still has no confirmed receipt. It was not resent; check status before retrying."
+        }
+    }
+
+    private func markReceiptMissing(_ commandID: String) {
+        _ = callString(Data(commandID.utf8)) { pointer, count in
+            dsh_moonbit_client_mark_receipt_missing(handle, pointer, count)
+        }
+        persistPreferences()
+        refreshFromClient()
     }
 
     private func secureEntropyHex() throws -> String {
@@ -551,24 +666,29 @@ final class DshClientModel: ObservableObject {
         case invalidHost
         case randomUnavailable
         case commandIDUnavailable
-        case commandRejected
+        case commandRejected(String?)
+        case commandExpired
+        case commandUnconfirmed
         case receiptRejected
         case snapshotRejected
         case eventRejected
         case serverUnavailable
-        case http(String)
+        case httpStatus(Int, String)
 
         var errorDescription: String? {
             switch self {
             case .invalidHost: return "Enter the HTTPS URL of the host on your tailnet."
             case .randomUnavailable: return "Secure command ID generation failed."
             case .commandIDUnavailable: return "The shared client could not create a command ID."
-            case .commandRejected: return "The shared client rejected this command. Refresh before retrying."
+            case .commandRejected(let detail): return detail ?? "The host rejected this command. Your draft is still here."
+            case .commandExpired: return "This command expired. Your draft is still here."
+            case .commandUnconfirmed: return "The command outcome is unconfirmed. It was not resent automatically."
             case .receiptRejected: return "The workspace receipt did not match the queued command. Refresh before retrying."
             case .snapshotRejected: return "The workspace snapshot could not be synchronized."
             case .eventRejected: return "The workspace event could not be applied. Reconnect to resync."
             case .serverUnavailable: return "The workspace host did not accept the live event connection."
-            case .http(let detail): return detail
+            case .httpStatus(let status, let detail):
+                return status == 404 ? "No receipt is available yet." : detail
             }
         }
     }

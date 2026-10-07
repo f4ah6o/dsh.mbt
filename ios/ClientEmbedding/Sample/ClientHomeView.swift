@@ -50,6 +50,7 @@ struct ClientHomeView: View {
                         .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(.bordered)
+                .disabled(model.isBusy)
                 .padding(.horizontal)
                 .padding(.bottom, 8)
             }
@@ -135,6 +136,15 @@ struct ClientHomeView: View {
                         .padding(.horizontal)
                         .padding(.bottom, 8)
                 }
+                if let notice = model.commandNotice {
+                    Label(notice, systemImage: "exclamationmark.circle")
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(.horizontal)
+                        .padding(.vertical, 8)
+                        .accessibilityLabel("Command status. \(notice)")
+                }
                 composer
             } else {
                 ContentUnavailableView(
@@ -164,9 +174,11 @@ struct ClientHomeView: View {
             }
             HStack {
                 Button("Deny", role: .destructive) { Task { await model.decideApproval(approved: false) } }
+                    .disabled(model.isBusy)
                 Spacer()
                 Button("Approve", role: .none) { Task { await model.decideApproval(approved: true) } }
                     .buttonStyle(.borderedProminent)
+                    .disabled(model.isBusy)
             }
         }
         .padding(12)
