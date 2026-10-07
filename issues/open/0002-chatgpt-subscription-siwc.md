@@ -28,7 +28,12 @@ OpenAI は 2026-09-28 に OSS / local app 向けの ChatGPT plan usage を公開
 `/v1/chat/completions` と `OPENAI_API_KEY` を前提にしている。
 
 provider package は wire protocol の serialize / decode / SSE normalization を担当し、
-credential と network は host responsibility として分離されている。この境界は維持する。
+Node.js host は HTTP / filesystem / subprocess / persistence など外部 I/O を担当している。
+
+SIWC 対応でもこの MoonBit-first の境界を崩さない。Responses request / event schema、
+OAuth / credential lifecycle の状態遷移、account / model selection の意味論は MoonBit が所有し、
+host は HTTPS、system browser 起動、127.0.0.1 callback、secret の安全な保存といった
+OS / I/O capability の実行だけを担当する。
 
 SIWC を既存 `OPENAI_API_KEY` の別名として扱うことはしない。
 ChatGPT plan usage は auth だけでなく Responses API 固有の request / stream contract を要求するため、
@@ -36,7 +41,8 @@ wire protocol と authentication strategy を独立に選べる設計へ進め�
 
 ## 提案する構成
 
-概念上、次の 2 軸に分離する。
+概念上、次の 2 軸に分離する。protocol / auth の仕様と状態遷移は MoonBit が所有し、
+host はそれを実行するための capability adapter とする。
 
 ### Wire protocol
 
@@ -65,7 +71,8 @@ model = <account-specific model slug>
 
 ## 1. SIWC OAuth
 
-初回 login は OSS client 用 dynamic registration を使う。
+OAuth state machine は MoonBit 側で定義し、host は browser / loopback callback / HTTPS / secret persistence の
+capability を提供する。初回 login は OSS client 用 dynamic registration を使う。
 
 - system browser を開く
 - callback は `127.0.0.1` loopback
@@ -87,6 +94,9 @@ ID token は JWKS で署名を検証し、issuer / audience / expiry / nonce を
 ChatGPT plan inference は disabled とする。
 
 ## 2. Credential store と refresh
+
+credential の schema、refresh rotation、expiry / revoke の状態遷移は MoonBit が所有し、
+host は OS に適した secret persistence と atomic I/O を提供する。
 
 credential は source tree、session log、analytics、diagnostics に出さない。
 
@@ -216,12 +226,13 @@ headless / remote host は別 increment とし、最初は local loopback browse
 
 ## 実装順
 
-1. Responses pure request / stream decoder を keyless fixture で追加する。
-2. host に auth strategy 境界を追加し、既存 API-key path の regression を固定する。
-3. local SIWC OAuth + protected credential store + refresh を追加する。
-4. model discovery と account selection を追加する。
-5. SIWC token を使う実 Responses smoke test を opt-in で追加する。
-6. browser / gpui 向けの共通 auth state と model selector を接続する。
+1. MoonBit に Responses pure request / stream decoder を keyless fixture で追加する。
+2. MoonBit に auth / credential lifecycle の型と状態遷移を追加し、既存 API-key path の regression を固定する。
+3. host に browser / loopback callback / HTTPS / protected secret persistence の capability adapter を追加する。
+4. local SIWC OAuth + refresh を MoonBit state machine と host capability の組合せで成立させる。
+5. model discovery と account selection を追加する。
+6. SIWC token を使う実 Responses smoke test を opt-in で追加する。
+7. browser / gpui 向けの共通 auth state と model selector を接続する。
 
 OAuth より先に Responses adapter を fixture で完成させ、認証・billing と wire correctness を同時にデバッグしない。
 
@@ -254,12 +265,3 @@ OAuth より先に Responses adapter を fixture で完成させ、認証・bill
 - malicious provider response による unbounded buffering
 - auth error と retryable transport error の混同
 - account switch 中の旧 credential 混線
-
-## Codex app-server について
-
-OpenAI は SIWC access token を Codex app-server に渡す経路も公開している。
-ただし `dsh.mbt` 自身の harness / engine / tool lifecycle を維持する目的では、
-direct Responses adapter を primary implementation とする。
-
-Codex app-server を追加する場合は、Responses 実装の代替ではなく別 runtime adapter として扱い、
-auth profile と model entitlement の共有だけを検討する。
