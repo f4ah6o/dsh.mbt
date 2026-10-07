@@ -10,6 +10,7 @@ import {
   prettyArguments,
   runError,
   statusLabel,
+  updateShellContext,
 } from "./view-model.js";
 
 const appSource = readFileSync(new URL("./remote-app.js", import.meta.url), "utf8");
@@ -83,6 +84,7 @@ function createHarness({
   initialSessions = [],
   initialSelectedSession = null,
   deferForkCommand = false,
+  deferPruneCommand = false,
 } = {}) {
   const elements = new Map();
   const getElement = (id) => {
@@ -135,6 +137,10 @@ function createHarness({
   const forkCommandStarted = new Promise((resolve) => { signalForkCommandStarted = resolve; });
   let releaseForkCommand;
   const pendingForkCommand = new Promise((resolve) => { releaseForkCommand = resolve; });
+  let signalPruneCommandStarted;
+  const pruneCommandStarted = new Promise((resolve) => { signalPruneCommandStarted = resolve; });
+  let resolvePruneCommand;
+  const pendingPruneCommand = new Promise((resolve) => { resolvePruneCommand = resolve; });
   const client = {
     beginConnect() {},
     connectionFailed() {},
@@ -175,6 +181,11 @@ function createHarness({
       return selectedProjection;
     },
     async command(operation, sessionId) {
+      if (operation === "session_prune_tool_results") {
+        signalPruneCommandStarted();
+        if (deferPruneCommand) return pendingPruneCommand;
+        return { status: "rejected", error: "fixture prune rejected" };
+      }
       if (operation !== "session_fork") throw new Error("unexpected command: " + operation);
       signalForkCommandStarted();
       if (deferForkCommand) await pendingForkCommand;
@@ -316,6 +327,7 @@ function createHarness({
     runError,
     displayMessages,
     authModelRefreshKey,
+    updateShellContext,
   };
   vm.runInNewContext(source, sandbox, { filename: "web/remote-app.js" });
 
@@ -331,6 +343,10 @@ function createHarness({
     get sessions() { return fixtureSessions.map((session) => structuredClone(session)); },
     forkCommandStarted,
     releaseForkCommand() { releaseForkCommand(); },
+    pruneCommandStarted,
+    rejectPruneCommand() {
+      resolvePruneCommand({ status: "rejected", error: "delayed fixture prune rejected" });
+    },
     modelRequestStarted,
     resolveModelResponse,
     selectModelRequestStarted,
@@ -601,4 +617,42 @@ test("an explicit A to B to A selection wins over a delayed remote fork", async 
   assert.equal(app.selectedSession, "session-a");
   assert.ok(app.sessions.some((session) => session.id === "fork-child"));
   assert.equal(app.elements.get("session-title").textContent, "Session A");
+});
+
+test("a delayed rejected remote trim cannot surface an error on a newly selected session", async () => {
+  const app = createHarness({
+    initialSessions: [
+      {
+        id: "source-a",
+        title: "Source session",
+        status: "completed",
+        turn_id: 1,
+        step: 1,
+        messages: [],
+        events: [{ type: "tool/result" }],
+      },
+      {
+        id: "target-b",
+        title: "Other session",
+        status: "idle",
+        turn_id: 0,
+        step: 0,
+        messages: [],
+        events: [],
+      },
+    ],
+    initialSelectedSession: "source-a",
+    deferPruneCommand: true,
+  });
+  await app.start();
+
+  const trim = app.click("prune-results");
+  await app.pruneCommandStarted;
+  await app.clickSession("target-b");
+  app.rejectPruneCommand();
+  await trim;
+
+  assert.equal(app.selectedSession, "target-b");
+  assert.equal(app.elements.get("run-error").hidden, true);
+  assert.equal(app.elements.get("run-error").textContent, "");
 });

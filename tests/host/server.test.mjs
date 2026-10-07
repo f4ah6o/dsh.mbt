@@ -73,13 +73,16 @@ test('Node host legacy API fallback and shared browser bridge assets are served'
 
   const page = await request(web.url);
   assert.equal(page.status, 200);
-  assert.match(page.text, /src="\/app\.js"/);
+  assert.match(page.text, /src="\/yami-kumo-shell\.js"/);
+  assert.match(page.text, /href="\/yami-kumo-shell\.css"/);
   // The legacy Node host has no versioned snapshot endpoint, so app.js selects
   // legacy-app.js. Verify the real static carrier serves that entrypoint and
   // every module it imports, alongside the generated MoonBit client bridge.
   assert.equal((await request(web.url, { pathname: '/api/v1/snapshot' })).status, 404);
   for (const pathname of [
     '/app.js',
+    '/yami-kumo-shell.js',
+    '/yami-kumo-shell.css',
     '/legacy-app.js',
     '/remote-app.js',
     '/remote-client.js',

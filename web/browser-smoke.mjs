@@ -16,6 +16,7 @@ const screenshots = path.resolve(process.env.DSH_SCREENSHOT_DIR || path.join(rep
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "dsh-browser-"));
 await fs.writeFile(path.join(workspace, "large.txt"), `${"A".repeat(12_000)}😀 tail\n`);
 await fs.mkdir(screenshots, { recursive: true });
+await fs.rm(path.join(screenshots, "failure.png"), { force: true });
 let callNumber = 0;
 let providerCalls = 0;
 const providerRequests = [];
@@ -154,6 +155,25 @@ async function send(prompt) {
   await page.locator("#send").click();
 }
 
+async function assertHeaderFitsViewport() {
+  const layout = await page.evaluate(() => {
+    const brand = document.querySelector(".yk-brand-group").getBoundingClientRect();
+    const search = document.querySelector(".yk-global-search").getBoundingClientRect();
+    const actions = document.querySelector(".yk-header-end").getBoundingClientRect();
+    return {
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      brandRight: brand.right,
+      searchLeft: search.left,
+      searchRight: search.right,
+      actionsLeft: actions.left,
+    };
+  });
+  assert.equal(layout.documentWidth, layout.viewportWidth, `header fits without horizontal overflow: ${JSON.stringify(layout)}`);
+  assert.ok(layout.brandRight <= layout.searchLeft + 1, `search does not cover the brand: ${JSON.stringify(layout)}`);
+  assert.ok(layout.searchRight <= layout.actionsLeft + 1, `header actions do not overlap search: ${JSON.stringify(layout)}`);
+}
+
 function currentId() {
   return page.locator(".session-option[aria-current='page']").getAttribute("data-id");
 }
@@ -187,11 +207,51 @@ try {
   page = await browser.newPage({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 1 });
   page.on("pageerror", (error) => failures.push(error.message));
   await page.goto(web.url, { waitUntil: "domcontentloaded" });
+  assert.equal(await page.locator(".yk-shell").count(), 1, "the Yami-kumo application shell mounts");
   await send("Hello from the browser");
   await waitStatus("Completed");
   assert.match(await page.locator("#text-transcript").textContent(), /MoonBit engine/);
   assert.equal(await page.locator("#text-transcript script").count(), 0);
   const firstId = await currentId();
+  assert.equal(await page.locator("#context-status").textContent(), "Completed");
+  assert.match(await page.locator("#context-history").textContent(), /messages · .*events/);
+  await page.locator("#sidebar-toggle").click();
+  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("aria-hidden"), "true");
+  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("inert"), "",
+    "the collapsed desktop navigation cannot receive keyboard focus");
+  await page.locator("#context-toggle").click();
+  assert.equal(await page.locator("#yk-context-panel").getAttribute("aria-hidden"), "false");
+  assert.equal(await page.locator("#yk-context-panel").getAttribute("aria-modal"), null,
+    "desktop conversation details stay a non-modal, keyboard-accessible region");
+  await page.locator("#context-close").click();
+  await page.locator("#sidebar-toggle").click();
+  await page.locator("#session-search").fill("no conversation matches this phrase");
+  assert.equal(await page.locator(`.session-option[data-id='${firstId}']`).count(), 1,
+    "filtering keeps the primary selected conversation visible");
+  assert.equal(await page.locator(".session-option").count(), 1,
+    "filtering removes nonmatching conversations while preserving the selection");
+  await page.locator("#session-search").fill("");
+  await page.setViewportSize({ width: 768, height: 820 });
+  await assertHeaderFitsViewport();
+  assert.equal(await page.locator("#navigation-toggle").isVisible(), true);
+  assert.equal(await page.locator("#sidebar-toggle").isVisible(), false,
+    "mobile navigation controls replace the desktop collapse button at tablet width");
+  await page.locator("#session-search").click();
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "session-search");
+  await page.locator("#navigation-toggle").click();
+  await page.keyboard.press("Escape");
+  await page.locator("#context-toggle").click();
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 821, height: 820 });
+  await assertHeaderFitsViewport();
+  assert.equal(await page.locator("#navigation-toggle").isVisible(), false);
+  assert.equal(await page.locator("#sidebar-toggle").isVisible(), true);
+  await page.locator("#sidebar-toggle").click();
+  await page.locator("#sidebar-toggle").click();
+  await page.locator("#context-toggle").click();
+  await page.keyboard.press("Escape");
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.waitForFunction(() => document.getElementById("yk-mobile-navigation").getAttribute("aria-hidden") === "false");
   await page.locator("#new-session").click();
   await page.waitForFunction((previous) => document.querySelector(".session-option[aria-current='page']")?.dataset.id !== previous, firstId);
   const secondId = await currentId();
@@ -207,6 +267,8 @@ try {
   const firstForkId = await currentId();
   const firstFork = await host.session(firstForkId);
   assert.equal(firstFork.parent_session_id, firstId);
+  assert.equal(await page.locator("#context-parent").textContent(), firstId,
+    "live conversation details include the selected fork's parent");
   assert.equal(firstFork.status, "idle");
   assert.equal(firstFork.pending_approval, undefined);
   assert.deepEqual(firstFork.messages, sourceBeforeFork.messages);
@@ -341,10 +403,31 @@ try {
 
   await page.locator("#new-session").click();
   await page.waitForFunction((old) => document.querySelector(".session-option[aria-current='page']")?.dataset.id !== old, firstId);
+  await page.setViewportSize({ width: 1280, height: 500 });
+  await page.locator("#prompt").fill("short desktop composer smoke");
+  assert.equal(await page.locator("#send").isEnabled(), true);
+  const compactComposer = await page.locator("#send").boundingBox();
+  assert.ok(compactComposer && compactComposer.y + compactComposer.height <= 500,
+    "the active Send control remains inside a short desktop viewport");
+  assert.ok(await page.locator(".yk-shell").evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.top >= 0 && rect.bottom <= window.innerHeight;
+  }), "the desktop application shell fits within a 500px viewport");
+  await page.screenshot({ path: path.join(screenshots, "short-desktop-composer.png"), fullPage: true });
+  await page.locator("#prompt").fill("");
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.waitForFunction(() => window.innerHeight >= 800);
   await send("Please write approved.txt");
   await waitStatus("Needs approval");
   assert.match(await page.locator("#approval-arguments").textContent(), /approved\.txt/);
   await assert.rejects(fs.access(path.join(workspace, "approved.txt")));
+  await page.setViewportSize({ width: 1280, height: 500 });
+  const compactApproval = await Promise.all(["#approve", "#deny"].map((selector) => page.locator(selector).boundingBox()));
+  assert.ok(compactApproval.every((rect) => rect && rect.y >= 0 && rect.y + rect.height <= 500),
+    "both approval actions remain reachable inside a short desktop viewport");
+  await page.screenshot({ path: path.join(screenshots, "short-desktop-approval.png"), fullPage: true });
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.waitForFunction(() => window.innerHeight >= 800);
   await page.screenshot({ path: path.join(screenshots, "desktop-approval.png"), fullPage: true });
   await page.locator("#approve").click();
   await waitStatus("Completed");
@@ -388,6 +471,8 @@ try {
   await page.waitForFunction(() => document.getElementById("status").textContent === "Read-only · Completed");
   assert.equal(await page.locator("#prompt").isDisabled(), true);
   assert.equal(await page.locator("#send").isDisabled(), true);
+  assert.match(await page.locator("#context-source").textContent(), /Imported Session v4 · read-only/);
+  assert.equal(await page.locator("#context-read-only").isVisible(), true);
   assert.match(await page.locator("#composer-hint").textContent(), /read-only/);
   assert.match(await page.locator("#text-transcript").textContent(), /DONE/);
   const providerCallsBeforeRejectedContinuation = providerCalls;
@@ -404,9 +489,53 @@ try {
   await page.waitForFunction(() => !document.getElementById("new-session").disabled);
   assert.equal(await currentId(), firstId);
 
+  await page.locator("#sidebar-toggle").click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForFunction(() => document.getElementById("transcript-canvas").width < 500);
+  assert.equal(await page.locator(".yk-shell").getAttribute("data-sidebar-collapsed"), "false");
+  assert.equal(await page.locator("#sidebar-toggle").getAttribute("aria-pressed"), "false");
+  assert.equal(await page.locator("#sidebar-toggle").textContent(), "Hide navigation");
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.waitForFunction(() => window.matchMedia("(min-width: 821px)").matches);
+  await page.waitForFunction(() => document.getElementById("yk-mobile-navigation").getAttribute("aria-hidden") === "false");
+  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("aria-hidden"), "false",
+    "desktop navigation remains visible and reachable after resizing from mobile");
+  assert.equal(await page.locator("#sidebar-toggle").textContent(), "Hide navigation");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForFunction(() => document.getElementById("transcript-canvas").width < 500);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
+  await page.locator("#navigation-toggle").click();
+  await page.waitForTimeout(220);
+  await page.screenshot({ path: path.join(screenshots, "mobile-navigation.png"), fullPage: true });
+  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("aria-modal"), "true");
+  assert.equal(await page.locator(".yk-workspace").getAttribute("inert"), "");
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await page.evaluate(() => document.getElementById("yk-mobile-navigation").contains(document.activeElement)), true,
+    "the mobile navigation traps reverse keyboard focus");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("aria-hidden"), "true");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "navigation-toggle",
+    "Escape closes navigation and restores focus to its trigger");
+  await page.locator("#context-toggle").click();
+  await page.waitForTimeout(220);
+  await page.screenshot({ path: path.join(screenshots, "mobile-details.png"), fullPage: true });
+  assert.equal(await page.locator("#yk-context-panel").getAttribute("aria-modal"), "true");
+  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("aria-hidden"), "true");
+  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("inert"), "");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#yk-context-panel").getAttribute("aria-hidden"), "true");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "context-toggle",
+    "Escape closes the details drawer and restores focus to its trigger");
+  await page.locator("#navigation-toggle").click();
+  await page.locator("#new-session").click();
+  await page.waitForFunction((previous) => document.querySelector(".session-option[aria-current='page']")?.dataset.id !== previous, firstId);
+  assert.equal(await page.locator(".yk-shell").getAttribute("data-mobile-sidebar-open"), "false",
+    "creating a conversation from the mobile navigation closes the drawer");
+  await page.locator("#navigation-toggle").click();
+  await page.locator(`.session-option[data-id='${firstId}']`).click();
+  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
+  assert.equal(await page.locator(".yk-shell").getAttribute("data-mobile-sidebar-open"), "false");
+  await page.waitForTimeout(220);
   await page.screenshot({ path: path.join(screenshots, "mobile-transcript.png"), fullPage: true });
 
   // Exercise the existing reconnect control without restarting or losing state.
@@ -417,7 +546,7 @@ try {
   await page.locator("#connection-error").waitFor({ state: "hidden" });
   assert.equal(await currentId(), firstId);
   assert.deepEqual(failures, []);
-  console.log(JSON.stringify({ status: "PASS", assertions: "startup, create/select, draft preservation, submit, settled session fork with immutable source, rekeyed effects and copied transcript, delayed fork/session-switch fencing, live provisional text/reasoning and final replacement, pruning context projection and success/failure notice session fencing, approval allow/deny, real file write, cancellation, provider error, literal output, scrolling, text-view follow, Session v4 read-only import/no-effect display, same-session create/select race, mobile layout, reconnect", screenshots }));
+  console.log(JSON.stringify({ status: "PASS", assertions: "Yami-kumo startup, live desktop details, collapsed-sidebar and drawer accessibility, selected-session-preserving search, create/select, draft preservation, short-desktop composer and approval reachability, submit, settled session fork with immutable source, rekeyed effects and copied transcript, delayed fork/session-switch fencing, live provisional text/reasoning and final replacement, pruning context projection and success/failure notice session fencing, approval allow/deny, real file write, cancellation, provider error, literal output, scrolling, text-view follow, Session v4 read-only import/no-effect display, same-session create/select race, desktop/mobile resize accessibility, mobile navigation and details drawers, mobile New conversation dismissal, reconnect", screenshots }));
 } catch (error) {
   if (page && !page.isClosed()) await page.screenshot({ path: path.join(screenshots, "failure.png"), fullPage: true }).catch(() => {});
   throw error;

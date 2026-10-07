@@ -27,13 +27,15 @@ export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 
 moon update
 moon install
+npm ci
 npm run verify:env
 npm run demo
 ```
 
 表示された `http://127.0.0.1:3080` を開きます。**demo は API key 不要の固定応答**で、
 実際の workspace `glob` ツールを使って一連の処理を確認できます。
-通常の build / 起動に npm パッケージのインストールは不要です。
+browser shell を再生成して build する場合は `npm ci` が必要です。Node host の実行時に npm パッケージを読み込むことはなく、
+native service は checkout に含まれる生成済み shell asset を配信するため Node.js を必要としません。
 既存 checkout の場合は `git submodule update --init --recursive` で依存を揃えてください。
 
 ### DeepSeek API を使う
@@ -134,10 +136,15 @@ shell の自動承認には `--allow-shell --approve-tools bash` の両方が必
 
 3 リポジトリは Git submodule で固定します。MoonBit module 名はそれぞれ `f4ah6o/gpui`、
 `f4ah6o/hotpath`、`f4ah6o/turtles` です。`moon.work` はローカルの固定 revision を使います。
-React / Vue や upstream TypeScript runtime を起動する構成ではありません。
 
-会話のレイアウトと scene 生成は MoonBit、Canvas 2D への描画は gpui の browser renderer を使用します。
-入力・承認ボタン・セッション選択には DOM の操作面を使い、IME、キーボード操作、選択可能な **Text view** を提供します。
+browser は [Yami-kumo](https://github.com/f4ah6o/Yami-kumo/tree/de8e3a3e167df2d721273f6a8f12c5df961d636d/src/shell)
+の `AppShell` と responsive shell CSS を使います。React はこの application shell を描画し、既存の browser controller を
+DOM が mount された後に読み込みます。会話 state、provider / tool loop、capability dispatch は MoonBit と host が所有し、
+conversation scene は `ui/transcript.mbt` と gpui browser renderer が生成・描画します。composer、承認、session 選択、
+Text view は DOM に残り、IME、キーボード操作、選択可能な transcript を提供します。
+
+`npm run build:shell` は `ui/` の shell source から `web/yami-kumo-shell.js` と
+`web/yami-kumo-shell.css` を再生成します。生成物も commit するため、Node を使わない native build は npm を呼び出しません。
 
 ## API
 
@@ -177,6 +184,7 @@ HTTP carrier は loopback に限定します。
 npm test                 # format / own warnings / portable MoonBit / build / host / web / integration
 npm run mutation:list    # production plugin の mutation 対象を列挙
 npm run mutation         # 固定 turtles を build し、実際に mutation test を実行
+node web/browser-smoke.mjs # optional real Chromium / browser UI acceptance
 ```
 
 MoonBit の portable package は JS / native / Wasm / Wasm GC の全 target で検証します。
@@ -186,7 +194,10 @@ MoonBit の portable package は JS / native / Wasm / Wasm GC の全 target で�
 テストは API key を使いません。pinned upstream の tool-call-turn と parallel-tool-calls fixture を keyless なローカル HTTP provider に流し、
 承認済みの `echo SNAPSHOT_OK`、2 件の Read call と call-order の tool result、手動 pruning 後の縮んだ request context、
 元の tool output の保持、次のモデル応答 `DONE`、保存と再読込まで再現します。
-任意の実 Chromium 検証は `web/browser-smoke.mjs` にあります。
+任意の実 Chromium 検証は `web/browser-smoke.mjs` にあります。Playwright と Chromium を用意して
+`npm run build && node web/browser-smoke.mjs` を実行すると、versioned browser shell、responsive drawers、
+MoonBit scene renderer、session 操作、approval、imported history を確認し、screenshots を `_build/browser-smoke/`
+に保存します。セットアップ方法は [検証記録](docs/verification.md) を参照してください。
 Session v4 importer の対応 event と明示的な制約は [移植状況](docs/port-status.md) を参照してください。
 詳細な結果と再実行方法は [検証記録](docs/verification.md) を参照してください。
 

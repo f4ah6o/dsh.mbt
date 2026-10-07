@@ -1,10 +1,11 @@
 import { drawSceneSnapshot } from "./canvas-renderer.js";
-import { isBusy, isReadOnly, statusLabel, sessionList, acceptsSnapshot, prettyArguments, runError, displayMessages } from "./view-model.js";
+import { isBusy, isReadOnly, statusLabel, sessionList, acceptsSnapshot, prettyArguments, runError, displayMessages, updateShellContext } from "./view-model.js";
 
 const $ = (id) => document.getElementById(id);
 const state = {
   moon: null, sessions: [], id: null, snapshot: { messages: [] },
   selection: 0, mutation: false, poll: null, polling: false, lastList: 0,
+  connection: "connecting", connectionError: false,
   follow: true, textView: false, frame: null, transcriptKey: "", statusKey: "", actionError: "", actionMessage: "",
 };
 const scroll = $("transcript-scroll");
@@ -12,11 +13,19 @@ const canvas = $("transcript-canvas");
 const context = canvas.getContext("2d");
 
 function connectionError(error) {
+  state.connection = "offline";
+  state.connectionError = true;
   $("connection-error-text").textContent = error instanceof Error ? error.message : String(error);
   $("connection-error").hidden = false;
+  updateShellContext(state.snapshot, state.connection, true);
 }
 
-function clearConnectionError() { $("connection-error").hidden = true; }
+function clearConnectionError() {
+  state.connection = "ready";
+  state.connectionError = false;
+  $("connection-error").hidden = true;
+  updateShellContext(state.snapshot, state.connection);
+}
 
 async function api(operation, input = {}) {
   const controller = new AbortController();
@@ -41,19 +50,28 @@ function renderSessions() {
   const container = $("sessions");
   // Retain focused buttons across polls. Session titles and IDs are data only.
   const existing = new Map([...container.querySelectorAll("button[data-id]")].map((button) => [button.dataset.id, button]));
-  if (!state.sessions.length) {
-    if (!container.querySelector(".empty-list")) {
-      container.replaceChildren();
-      const empty = document.createElement("p");
-      empty.className = "empty-list";
-      empty.textContent = "No sessions yet. Send a prompt to begin.";
-      container.append(empty);
-    }
+  const query = $("session-search").value.trim().toLocaleLowerCase();
+  const sessions = state.sessions.filter((session) => [
+    session.title,
+    session.id,
+    session.parent_session_id,
+    statusLabel(session),
+    isReadOnly(session) ? "imported read-only history" : "local conversation",
+  ].some((value) => String(value || "").toLocaleLowerCase().includes(query))
+    || session.id === state.id);
+  if (!sessions.length) {
+    container.replaceChildren();
+    const empty = document.createElement("p");
+    empty.className = "empty-list";
+    empty.textContent = query
+      ? "No conversations match this search."
+      : "No conversations yet. Send a prompt to begin.";
+    container.append(empty);
     return;
   }
   container.querySelector(".empty-list")?.remove();
   let cursor = container.firstElementChild;
-  for (const session of [...state.sessions].reverse()) {
+  for (const session of [...sessions].reverse()) {
     let button = existing.get(session.id);
     if (!button) {
       button = document.createElement("button");
@@ -116,6 +134,7 @@ function renderControls() {
     $("announcement").textContent = approval ? `Approval required for ${approval.name}.` : statusLabel(session);
     state.statusKey = statusKey;
   }
+  updateShellContext(session, state.connection, state.connectionError);
 }
 
 function renderAccessibleTranscript() {
@@ -252,6 +271,7 @@ $("new-session").addEventListener("click", () => mutate(async () => {
   const session = await createSession(`Session ${state.sessions.length + 1}`);
   if (session.id === state.id) $("prompt").focus();
 }));
+$("session-search").addEventListener("input", renderSessions);
 $("fork-session").addEventListener("click", () => mutate(async () => {
   const sourceId = state.id;
   const selection = state.selection;

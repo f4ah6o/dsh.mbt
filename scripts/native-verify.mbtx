@@ -191,6 +191,8 @@ async fn main {
   for path in [
     "_build/js/release/build/f4ah6o/dsh/app/app.js",
     "_build/js/release/build/f4ah6o/dsh/client/client.js",
+    "web/yami-kumo-shell.js",
+    "web/yami-kumo-shell.css",
   ] {
     if !@fs.exists(path) {
       fail("no-Node web asset build did not produce " + path)

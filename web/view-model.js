@@ -93,3 +93,49 @@ export function displayMessages(session) {
   if (session?._ui_live_text) rows.push({ label: "Assistant · writing", text: session._ui_live_text });
   return rows;
 }
+
+export function updateShellContext(session, connection, hasError = false, documentRef = globalThis.document) {
+  if (!documentRef) return;
+  const byId = (id) => documentRef.getElementById(id);
+  const active = session && typeof session.id === "string";
+  const imported = isReadOnly(session);
+  const messages = Array.isArray(session?.messages) ? session.messages : [];
+  const events = Array.isArray(session?.events) ? session.events : [];
+  const connectionLabel = ({
+    synced: "Connected · live updates",
+    ready: "Connected · polling for updates",
+    connecting: "Connecting to the local host…",
+    offline: "Disconnected · reconnect to resume",
+    needs_resync: "Refreshing workspace state…",
+    failed: "The local host is unavailable",
+  })[connection] || "Waiting for the local host…";
+
+  if (active) {
+    byId("context-summary").textContent = session.title || "Untitled conversation";
+    byId("context-status").textContent = statusLabel(session);
+    byId("context-turn").textContent = session.turn_id > 0
+      ? `Turn ${session.turn_id} · Step ${session.step || 0}`
+      : "No turns yet";
+    byId("context-history").textContent = `${messages.length} messages · ${events.length} events`;
+    byId("context-source").textContent = imported
+      ? "Imported Session v4 · read-only"
+      : "Local conversation";
+    byId("context-parent").textContent = typeof session.parent_session_id === "string"
+      ? session.parent_session_id
+      : "None";
+  } else {
+    byId("context-summary").textContent = "Select a conversation to view its current state.";
+    byId("context-status").textContent = "No conversation selected";
+    byId("context-turn").textContent = "—";
+    byId("context-history").textContent = "—";
+    byId("context-source").textContent = "Not available";
+    byId("context-parent").textContent = "—";
+  }
+
+  byId("context-read-only").hidden = !active || !imported;
+  byId("context-host-status").textContent = hasError
+    ? "Connection interrupted. Reconnect to refresh the current workspace state."
+    : `Local host · ${connectionLabel.toLowerCase()}`;
+  byId("shell-status").textContent = hasError ? "Connection interrupted · reconnect to resume" : connectionLabel;
+  byId("shell-status-dot").dataset.state = hasError ? "offline" : connection || "connecting";
+}

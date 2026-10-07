@@ -4,6 +4,7 @@ set -eu
 DSH_ROOT=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
 cd "$DSH_ROOT"
 node scripts/verify-env.mjs
+npm run build:shell
 moon build app --target js --release
 moon build client --target js --release
 
@@ -20,5 +21,10 @@ if [ ! -s "$DSH_CLIENT" ]; then
   exit 1
 fi
 node --check "$DSH_CLIENT"
+node --check web/yami-kumo-shell.js
+if [ ! -s web/yami-kumo-shell.css ]; then
+  echo "The Yami-kumo browser shell stylesheet was not produced." >&2
+  exit 1
+fi
 echo "Built $DSH_APP"
 echo "Built $DSH_CLIENT"

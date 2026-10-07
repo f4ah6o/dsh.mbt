@@ -5,7 +5,8 @@ import vm from "node:vm";
 
 const ORIGIN = "https://dsh.test";
 const ASSETS = [
-  "/", "/index.html", "/style.css", "/app.js", "/legacy-app.js",
+  "/", "/index.html", "/style.css", "/yami-kumo-shell.css",
+  "/yami-kumo-shell.js", "/app.js", "/legacy-app.js",
   "/remote-app.js", "/remote-client.js", "/view-model.js",
   "/canvas-renderer.js", "/manifest.webmanifest", "/icon.svg",
   "/moonbit/app.js", "/moonbit/client.js",

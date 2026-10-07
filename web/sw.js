@@ -9,6 +9,8 @@ const SHELL_ASSETS = [
   "/",
   "/index.html",
   "/style.css",
+  "/yami-kumo-shell.css",
+  "/yami-kumo-shell.js",
   "/app.js",
   "/legacy-app.js",
   "/remote-app.js",
