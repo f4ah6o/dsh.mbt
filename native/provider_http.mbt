@@ -34,8 +34,21 @@ async fn native_provider_read_chunk(
   client : @http.Client,
   already_read : Int,
 ) -> NativeProviderRead {
+  native_provider_read_chunk_with_timeout(
+    client,
+    already_read,
+    NATIVE_PROVIDER_IDLE_TIMEOUT_MS,
+  )
+}
+
+///|
+async fn native_provider_read_chunk_with_timeout(
+  client : @http.Client,
+  already_read : Int,
+  timeout_ms : Int,
+) -> NativeProviderRead {
   match
-    native_provider_with_deadline(NATIVE_PROVIDER_IDLE_TIMEOUT_MS, async fn() {
+    native_provider_with_deadline(timeout_ms, async fn() {
       client.read_some(max_len=16384)
     }) {
     None => NativeProviderRead::IdleTimeout
