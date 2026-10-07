@@ -248,7 +248,7 @@ fn json_field(value : Json, key : String) -> Json? {
 
 ///|
 fn imported_record(event : Event) -> Json? {
-  if event.kind != "upstream/event" {
+  if event.kind != EngineEventKind::UpstreamEvent {
     return None
   }
   match json_field(event.data, "record") {

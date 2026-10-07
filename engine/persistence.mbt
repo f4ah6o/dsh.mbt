@@ -17,8 +17,8 @@ pub fn Engine::snapshot(self : Engine) -> Json {
 
 ///|
 /// Validate and replay an entire snapshot before replacing any live state.
-/// Derived messages are checked against the log rather than trusted. Active
-/// work is closed as interrupted, with paired errors for unfinished tools.
+/// Derived messages are checked against the log rather than trusted. Running
+/// work is closed as interrupted; quiescent approval requests remain resumable.
 fn Engine::restore_impl(self : Engine, snapshot : Json) -> Result[Unit, String] {
   try {
     match self.config_error {
@@ -69,7 +69,7 @@ fn Engine::restore_impl(self : Engine, snapshot : Json) -> Result[Unit, String] 
       let session = loaded.get(id).unwrap()
       self.sessions.set(id, session)
       self.order.push(id)
-      if session.is_busy() {
+      if session.status == Running {
         session.append(
           "session/interrupted",
           object([
@@ -156,6 +156,9 @@ fn replay_tool(tools : Array[Tool], name : String) -> Tool? {
 
 ///|
 fn replay_arguments_are_valid(tool : Tool, call : ToolCall) -> Bool {
+  if call.kind != FunctionCall {
+    return false
+  }
   try {
     validate_arguments(tool.input_schema, parse_arguments(call.arguments))
     true
@@ -399,8 +402,9 @@ fn restore_session(
           }
           let failure = required_field(data, "failure")
           validate_retry_fields(failure, [
-            "code", "message", "status", "retry_after_ms",
+            "code", "message", "status", "retry_after_ms", "request_id",
           ])
+          validate_provider_request_id(fields(failure).get("request_id"))
           let code = required_string(failure, "code", max=32)
           ignore(required_string(failure, "message", max=512))
           if !retryable_provider_code(code) {
@@ -586,7 +590,8 @@ fn restore_session(
           }
           expect_call_id(data, "id", call)
           if required_string(data, "name", max=128) != call.name ||
-            required_string(data, "arguments") != call.arguments {
+            required_string(data, "arguments") != call.arguments ||
+            parse_tool_call_kind(data) != call.kind {
             raise Invalid("Tool call payload differs from the model message")
           }
           call.stage = Called
@@ -830,7 +835,13 @@ fn restore_session(
         _ => raise Invalid("Unknown required snapshot event: \{kind}")
       }
     }
-    session.events.push({ seq, kind, turn_id, step, data, })
+    session.events.push({
+      seq,
+      kind: EngineEventKind::from_wire(kind),
+      turn_id,
+      step,
+      data,
+    })
   }
   if status_text(session.status) != expected_status ||
     session.turn_id != expected_turn ||

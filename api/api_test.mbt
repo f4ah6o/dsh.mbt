@@ -140,6 +140,37 @@ test "capability send emits work and cancellation rejects its late settlement" {
 }
 
 ///|
+test "native API drains and settles typed effects against typed event identity" {
+  let api = @api.HarnessApi::new().unwrap()
+  api.invoke("session_create", { "id": "typed-api" }).unwrap() |> ignore
+  api
+  .invoke("session_send", { "session_id": "typed-api", "prompt": "typed" })
+  .unwrap()
+  |> ignore
+  let effects = api.take_typed_effects()
+  assert_eq(effects.length(), 1)
+  let effect = effects[0]
+  assert_true(effect.kind() == @engine.EffectType::Provider)
+  assert_eq(effect.id().as_string(), "effect-1")
+  api.project_effect_stream(effect.id(), "answer", "").unwrap() |> ignore
+  api
+  .complete_effect(effect.id(), {
+    "ok": true,
+    "content": "answer",
+    "tool_calls": [],
+    "finish_reason": "stop",
+  })
+  .unwrap()
+  |> ignore
+  let session_id = @engine.SessionId::new("typed-api").unwrap()
+  let events = api.event_log(session_id).unwrap()
+  assert_true(
+    events.any(event => event.kind() == @engine.EngineEventKind::TurnStarted),
+  )
+  api.close()
+}
+
+///|
 test "closing an API drains no effects and refuses future completions or restore" {
   let api = @api.HarnessApi::new().unwrap()
   api.invoke("session_create", { "id": "closing" }).unwrap() |> ignore
@@ -155,4 +186,50 @@ test "closing an API drains no effects and refuses future completions or restore
   )
   assert_true(api.restore(saved) is Err(_))
   api.close()
+}
+
+///|
+test "closing an API preserves a quiescent tool approval for host restart" {
+  let api = @api.HarnessApi::new().unwrap()
+  api.invoke("session_create", { "id": "approval-restart" }).unwrap() |> ignore
+  api
+  .invoke("session_send", {
+    "session_id": "approval-restart",
+    "prompt": "write a file",
+  })
+  .unwrap()
+  |> ignore
+  let effects = api.take_effects()
+  assert_eq(effects.length(), 1)
+  let provider_id = match get(effects[0], "id") {
+    String(value) => value
+    _ => fail("expected provider effect id")
+  }
+  api
+  .complete(provider_id, {
+    "ok": true,
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "write-call",
+        "name": "write",
+        "arguments": "{\"file_path\":\"persisted.txt\",\"content\":\"hello\"}",
+      },
+    ],
+    "finish_reason": "tool_calls",
+  })
+  .unwrap()
+  |> ignore
+  let before_close = api
+    .invoke("session_get", { "session_id": "approval-restart" })
+    .unwrap()
+  assert_eq(get(before_close, "status"), "awaiting_approval")
+  api.close()
+  let sessions = match get(api.snapshot(), "sessions") {
+    Array(values) => values
+    _ => fail("expected saved sessions")
+  }
+  assert_eq(sessions.length(), 1)
+  assert_eq(get(sessions[0], "status"), "awaiting_approval")
+  assert_eq(get(get(sessions[0], "pending_approval"), "call_id"), "write-call")
 }

@@ -246,6 +246,24 @@ fn Engine::advance_tools(self : Engine, session : Session) -> Unit {
     return
   }
   while session.schedule_cursor < session.calls.length() {
+    let call = session.calls[session.schedule_cursor]
+    if call.kind == CustomCall {
+      // The current capability registry accepts JSON-schema function calls.
+      // Preserve custom text calls in the transcript, but never coerce their
+      // input into a function argument object or dispatch by a colliding name.
+      if session.active_tool_effect_count() > 0 {
+        return
+      }
+      session.parallel_group = false
+      session.begin_tool(call)
+      session.schedule_cursor += 1
+      session.stage_local_tool_result(
+        call, "Unsupported custom tool input: local custom-tool execution is not configured for {call.name}",
+        true,
+      )
+      session.commit_ready_tool_results()
+      continue
+    }
     if session.parallel_group {
       if session.active_tool_effect_count() >= MAX_PARALLEL_TOOL_EFFECTS {
         return

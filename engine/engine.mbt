@@ -35,33 +35,27 @@ pub fn Engine::new(tools : Array[Json]) -> Engine {
 ///|
 /// Invoke one semantic session operation. Invalid input and busy-session
 /// conflicts leave the existing state untouched.
-fn Engine::invoke_impl(
+fn Engine::apply_command_impl(
   self : Engine,
-  operation : String,
-  input : Json,
+  command : EngineCommand,
 ) -> Result[Json, String] {
   try {
     match self.config_error {
       Some(message) => raise Invalid("Invalid tool configuration: \{message}")
       None => ()
     }
-    let input = checked_copy(input)
-    ignore(fields(input))
-    let value = match operation {
-      "session_create" => self.create_session(input).json()
-      "session_list" =>
-        Json::array(self.order.map(id => self.lookup(id).json()))
-      "session_get" => self.input_session(input).json()
-      "session_send" => {
-        let session = self.input_session(input)
+    let value = match command {
+      CreateSession(id, title, system_prompt, max_steps) =>
+        self.create_session(id, title, system_prompt, max_steps).json()
+      ListSessions => Json::array(self.order.map(id => self.lookup(id).json()))
+      ImportSession(jsonl) => self.import_upstream_v4(jsonl).json()
+      GetSession(id) => self.lookup(id.as_string()).json()
+      SendPrompt(id, prompt) => {
+        let session = self.lookup(id.as_string())
         if session.imported {
           raise Invalid(
             "Imported Session v4 histories are read-only and cannot be continued",
           )
-        }
-        let prompt = required_string(input, "prompt", max=16384)
-        if prompt.length() == 0 {
-          raise Invalid("prompt must not be empty")
         }
         if session.is_busy() {
           raise Invalid("Session is busy")
@@ -93,8 +87,8 @@ fn Engine::invoke_impl(
         self.start_step(session)
         session.json()
       }
-      "session_cancel" => {
-        let session = self.input_session(input)
+      CancelSession(id) => {
+        let session = self.lookup(id.as_string())
         if session.imported {
           raise Invalid(
             "Imported Session v4 histories are read-only and cannot be cancelled",
@@ -108,11 +102,11 @@ fn Engine::invoke_impl(
         }
         session.json()
       }
-      "session_prune_tool_results" => self.prune_session_tool_results(input)
-      "tool_approve" => {
-        let session = self.input_session(input)
-        let call_id = required_string(input, "call_id", max=128)
-        let approved = bool_value(required_field(input, "approved"), "approved")
+      PruneToolResults(id, config) =>
+        self.prune_session_tool_results(id, config)
+      ApproveTool(id, typed_call_id, approved) => {
+        let session = self.lookup(id.as_string())
+        let call_id = typed_call_id.as_string()
         let approval = match session.approval {
           Some(approval) => approval
           None => raise Invalid("Session has no pending approval")
@@ -146,13 +140,6 @@ fn Engine::invoke_impl(
         }
         session.json()
       }
-      "session_import" =>
-        self
-        .import_upstream_v4(
-          required_string(input, "jsonl", max=SESSION_CAPACITY),
-        )
-        .json()
-      _ => raise Invalid("Unknown operation: \{operation}")
     }
     Ok(value)
   } catch {
@@ -180,6 +167,16 @@ pub fn Engine::project_stream(
       Ok(value)
     }
   }
+}
+
+///|
+pub fn Engine::project_effect_stream(
+  self : Engine,
+  effect_id : EffectId,
+  content : String,
+  reasoning : String,
+) -> Result[Json, String] {
+  self.project_stream(effect_id.as_string(), content, reasoning)
 }
 
 ///|
@@ -239,37 +236,20 @@ fn Engine::lookup(self : Engine, id : String) -> Session raise EngineError {
 }
 
 ///|
-fn Engine::input_session(
-  self : Engine,
-  input : Json,
-) -> Session raise EngineError {
-  self.lookup(
-    identifier(required_string(input, "session_id", max=128), "session_id"),
-  )
-}
-
-///|
 fn Engine::create_session(
   self : Engine,
-  input : Json,
+  requested_id : String?,
+  title : String,
+  system_prompt : String,
+  requested_max_steps : Int?,
 ) -> Session raise EngineError {
   if self.order.length() >= 32 {
     raise Invalid("Session count limit reached")
   }
-  let title = optional_string(input, "title", "New session", max=512)
-  let system_prompt = optional_string(
-    input,
-    "system_prompt",
-    "You are a helpful coding assistant.",
-    max=16384,
-  )
-  let max_steps = match fields(input).get("max_steps") {
-    None => 16
-    Some(value) => int_value(value, "max_steps", 1, 64)
-  }
+  let max_steps = requested_max_steps.unwrap_or(16)
   let mut next = self.next_session
-  let id = match fields(input).get("id") {
-    Some(value) => identifier(string_value(value, "id", max=128), "id")
+  let id = match requested_id {
+    Some(value) => value
     None => {
       while self.sessions.get("session-\{next}") is Some(_) {
         next += 1
@@ -303,7 +283,7 @@ fn Engine::create_session(
 fn Session::append(self : Session, kind : String, data : Json) -> Unit {
   self.events.push({
     seq: self.events.length(),
-    kind,
+    kind: EngineEventKind::from_wire(kind),
     turn_id: self.turn_id,
     step: self.step,
     data,
@@ -319,9 +299,9 @@ fn Session::messages(self : Session) -> Array[Json] {
   let failed_streams : Map[String, Bool] = Map([])
   for event in self.events {
     let key = "\{event.turn_id}/\{event.step}"
-    if event.kind == "assistant/message" {
+    if event.kind == EngineEventKind::AssistantMessage {
       finalized.set(key, true)
-    } else if event.kind == "assistant/attempt" {
+    } else if event.kind == EngineEventKind::AssistantAttempt {
       failed_streams.set(key, true)
     }
   }
@@ -331,8 +311,8 @@ fn Session::messages(self : Session) -> Array[Json] {
   let result : Array[Json] = []
   for event in self.events {
     match event.kind {
-      "user/message" | "tool/result" => result.push(detached(event.data))
-      "assistant/message" =>
+      UserMessage | ToolResult => result.push(detached(event.data))
+      AssistantMessage =>
         match event.data {
           Json::Object(data) =>
             match data.get("message") {
@@ -341,7 +321,7 @@ fn Session::messages(self : Session) -> Array[Json] {
             }
           _ => ()
         }
-      "assistant/stream_delta" => {
+      AssistantStreamDelta => {
         let key = "\{event.turn_id}/\{event.step}"
         if finalized.get(key) is Some(_) {
           continue
@@ -441,9 +421,9 @@ fn Session::model_messages(self : Session) -> Array[Json] {
   let (content_by_result, _) = self.tool_result_pruning_state()
   self.events.filter_map(event => {
     match event.kind {
-      "user/message" => Some(detached(event.data))
-      "tool/result" => Some(projected_tool_result(event, content_by_result))
-      "assistant/message" =>
+      UserMessage => Some(detached(event.data))
+      ToolResult => Some(projected_tool_result(event, content_by_result))
+      AssistantMessage =>
         match event.data {
           Json::Object(data) => data.get("message").map(detached)
           _ => None
@@ -457,7 +437,7 @@ fn Session::model_messages(self : Session) -> Array[Json] {
 fn Session::stream_revision(self : Session) -> Int {
   let mut result = 0
   for event in self.events {
-    if event.kind == "assistant/stream_delta" {
+    if event.kind == EngineEventKind::AssistantStreamDelta {
       match event.data {
         Json::Object(data) => {
           match data.get("content") {
@@ -485,7 +465,7 @@ fn Session::stream_projection(
   let reasoning = StringBuilder()
   let mut found = false
   for event in self.events {
-    if event.kind != "assistant/stream_delta" {
+    if event.kind != EngineEventKind::AssistantStreamDelta {
       continue
     }
     match event.data {
@@ -508,13 +488,18 @@ fn Session::stream_projection(
 
 ///|
 fn Event::json(self : Event) -> Json {
-  object([
-    ("seq", integer(self.seq)),
-    ("type", Json::string(self.kind)),
-    ("turn_id", integer(self.turn_id)),
-    ("step", integer(self.step)),
-    ("data", detached(self.data)),
-  ])
+  self.typed().json()
+}
+
+///|
+fn Event::typed(self : Event) -> EngineEvent {
+  {
+    seq: self.seq,
+    kind: self.kind,
+    turn_id: self.turn_id,
+    step: self.step,
+    data: detached(self.data),
+  }
 }
 
 ///|
@@ -649,11 +634,16 @@ fn Engine::find_tool(self : Engine, name : String) -> Tool? {
 
 ///|
 fn ToolCall::json(self : ToolCall) -> Json {
-  object([
+  let fields = Map::from_array([
     ("id", Json::string(self.id)),
     ("name", Json::string(self.name)),
     ("arguments", Json::string(self.arguments)),
   ])
+  match self.kind {
+    FunctionCall => ()
+    CustomCall => fields.set("kind", Json::string("custom"))
+  }
+  Json::object(fields)
 }
 
 ///|
@@ -750,31 +740,44 @@ fn Engine::terminate(
 }
 
 ///|
-/// Drain newly queued effects exactly once. A taken effect remains outstanding
-/// until complete/cancel; repeated calls do not start duplicate work.
-pub fn Engine::take_effects(self : Engine) -> Array[Json] {
+/// Drain newly queued typed effects exactly once. A taken effect remains
+/// outstanding until complete/cancel; repeated calls do not duplicate work.
+pub fn Engine::take_typed_effects(self : Engine) -> Array[EngineEffect] {
   let result = self.queued.filter_map(id => {
     self.effects
     .get(id)
-    .map(effect => {
-      object([
-        ("id", Json::string(effect.id)),
-        (
-          "kind",
-          Json::string(
-            match effect.kind {
-              Llm => "llm"
-              ToolExecution => "tool"
-            },
-          ),
-        ),
-        ("session_id", Json::string(effect.session_id)),
-        ("request", detached(effect.request)),
-      ])
+    .map(effect => EngineEffect::{
+      id: EffectId::from_validated(effect.id),
+      session_id: SessionId::from_validated(effect.session_id),
+      kind: match effect.kind {
+        Llm => EffectType::Provider
+        ToolExecution => EffectType::Tool
+      },
+      request: detached(effect.request),
     })
   })
   self.queued.clear()
   result
+}
+
+///|
+/// JSON compatibility adapter for existing hosts and JavaScript exports.
+pub fn Engine::take_effects(self : Engine) -> Array[Json] {
+  self.take_typed_effects().map(EngineEffect::json)
+}
+
+///|
+/// Typed durable event view for native consumers.
+pub fn Engine::event_log(
+  self : Engine,
+  session_id : SessionId,
+) -> Result[Array[EngineEvent], String] {
+  try {
+    let session = self.lookup(session_id.as_string())
+    Ok(session.events.map(Event::typed))
+  } catch {
+    Invalid(message) => Err(message)
+  }
 }
 
 ///|
@@ -907,6 +910,10 @@ fn parse_calls(value : Json) -> Array[ToolCall] raise EngineError {
     let id = identifier(required_string(raw, "id", max=128), "call id")
     let name = identifier(required_string(raw, "name", max=128), "tool name")
     let arguments = required_string(raw, "arguments")
+    let kind = parse_tool_call_kind(raw)
+    if kind == CustomCall && arguments.length() > 65536 {
+      raise Invalid("Custom tool input exceeds the length limit")
+    }
     if seen.get(id) is Some(_) {
       raise Invalid("Duplicate tool call id: \{id}")
     }
@@ -915,12 +922,22 @@ fn parse_calls(value : Json) -> Array[ToolCall] raise EngineError {
       id,
       name,
       arguments,
+      kind,
       stage: Pending,
       effect_id: None,
       completed_content: None,
       completed_error: None,
     }
   })
+}
+
+///|
+fn parse_tool_call_kind(value : Json) -> ToolCallKind raise EngineError {
+  match fields(value).get("kind") {
+    None | Some(Json::String("function")) => FunctionCall
+    Some(Json::String("custom")) => CustomCall
+    _ => raise Invalid("Unsupported tool call kind")
+  }
 }
 
 ///|

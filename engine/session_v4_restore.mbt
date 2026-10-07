@@ -146,7 +146,7 @@ fn restore_imported_session(value : Json) -> Session raise EngineError {
     let event = replayed.events[index]
     restored.turn_id = event.turn_id
     restored.step = event.step
-    restored.append(event.kind, detached(event.data))
+    restored.append(event.kind.wire(), detached(event.data))
   }
   restored.turn_id = replayed.turn_id
   restored.step = replayed.step

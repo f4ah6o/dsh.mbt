@@ -11,5 +11,6 @@ import {
 
 import {
   "f4ah6o/dsh/api",
+  "f4ah6o/dsh/engine",
   "moonbitlang/core/json",
 } for "test"

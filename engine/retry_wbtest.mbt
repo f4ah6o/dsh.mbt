@@ -5,6 +5,7 @@ fn retry_policy(
   initial_delay_ms? : Int = 5,
   max_delay_ms? : Int = 50,
   retry_after_ms? : Int? = None,
+  request_id? : String? = None,
 ) -> Json {
   let failure = Map::from_array([
     ("code", Json::string(code)),
@@ -13,6 +14,10 @@ fn retry_policy(
   ])
   match retry_after_ms {
     Some(delay) => failure.set("retry_after_ms", integer(delay))
+    None => ()
+  }
+  match request_id {
+    Some(value) => failure.set("request_id", Json::string(value))
     None => ()
   }
   object([
@@ -27,13 +32,28 @@ fn retry_policy(
 test "provider retry is durable before the wait and starts on the same step" {
   let (engine, llm) = started_engine()
   let effect_id = id_of(llm)
-  let scheduled = success(engine.schedule_retry(effect_id, retry_policy()))
+  let scheduled = success(
+    engine.schedule_retry(
+      effect_id,
+      retry_policy(request_id=Some("req_fixture")),
+    ),
+  )
   assert_eq(required_field(scheduled, "scheduled"), boolean(true))
   assert_eq(required_string(scheduled, "retry_id"), "retry-\{effect_id}-1")
   assert_eq(int_value(required_field(scheduled, "delay_ms"), "delay", 0, 50), 5)
   let pending = get_session(engine)
   let events = array_value(required_field(pending, "events"), "events", 100)
   assert_eq(required_string(events[events.length() - 1], "type"), "llm/retry")
+  assert_eq(
+    required_string(
+      required_field(
+        required_field(events[events.length() - 1], "data"),
+        "failure",
+      ),
+      "request_id",
+    ),
+    "req_fixture",
+  )
   assert_eq(engine.take_effects().length(), 0)
   assert_true(engine.start_retry(effect_id, "wrong-retry-id") is Err(_))
   assert_eq(

@@ -1,0 +1,37 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "f4ah6o/dsh/api"
+
+import {
+  "f4ah6o/dsh/engine",
+  "f4ah6o/gpui/capability",
+}
+
+// Values
+
+// Errors
+
+// Types and methods
+pub struct HarnessApi {
+  // private fields
+}
+pub fn HarnessApi::close(Self) -> Unit
+pub fn HarnessApi::complete(Self, String, Json) -> Result[Json, String]
+pub fn HarnessApi::complete_effect(Self, @engine.EffectId, Json) -> Result[Json, String]
+pub fn HarnessApi::event_log(Self, @engine.SessionId) -> Result[Array[@engine.EngineEvent], String]
+pub fn HarnessApi::gui_binding(Self, String) -> @capability.GuiBinding[Json, Json]?
+pub fn HarnessApi::invoke(Self, String, Json, origin? : @capability.InvocationOrigin) -> Result[Json, String]
+pub fn HarnessApi::manifest(Self) -> String
+pub fn HarnessApi::mcp_handle(Self, String) -> String?
+pub fn HarnessApi::new() -> Result[Self, String]
+pub fn HarnessApi::project_effect_stream(Self, @engine.EffectId, String, String) -> Result[Json, String]
+pub fn HarnessApi::project_stream(Self, String, String, String) -> Result[Json, String]
+pub fn HarnessApi::restore(Self, Json) -> Result[Unit, String]
+pub fn HarnessApi::schedule_retry(Self, String, Json) -> Result[Json, String]
+pub fn HarnessApi::snapshot(Self) -> Json
+pub fn HarnessApi::start_retry(Self, String, String) -> Result[Json, String]
+pub fn HarnessApi::take_effects(Self) -> Array[Json]
+pub fn HarnessApi::take_typed_effects(Self) -> Array[@engine.EngineEffect]
+
+// Type aliases
+
+// Traits
