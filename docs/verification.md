@@ -314,3 +314,20 @@ restore は成功し、effect の再発行は 0 でした。
 - **対象外:** gpui の全 OS backend / example の検証。portable package の native PASS を native UI の実機 PASS として扱いません。
 
 全機能の対応表は [移植状況](port-status.md)、後続の受入条件は [残りの移植作業](../issues/open/0001-upstream-parity.md) にあります。
+
+## 2026-10-07 issue #9 / #11 implementation candidate
+
+The following checks ran on the macOS arm64 development host with MoonBit compiler/core 0.10.14+7d59c7ec9. They use synthetic identities, local servers, and keyless fixtures unless stated otherwise.
+
+| Check | Result |
+| --- | --- |
+| MoonBit-only native verifier entry point | PASS / exit 0. Format and native package check passed with zero project warnings and three pinned hotpath warnings; native matrix 158 / 158; native release build and CLI help passed; app and client JS release builds passed; offline native checkpoint/approval/tool/context/reload demo passed. The shell had Node available, so this does not establish a Node-absent local environment. |
+| Native verifier with Node/npm removed from PATH | Parent recorded a PATH containing Moon, compiler, and OS tools but no Node/npm. Native check, 158 / 158 native tests, native/app/client builds, and CLI help passed. The standalone demo then failed on macOS’s intentionally disabled grep; the demo was fixed and passed in a separate run. A complete rerun with the same Node-free PATH is pending. |
+| OAuth/JWKS and credential rotation fixtures | 10 / 10 PASS, including valid and rejected synthetic RS256 claims, callback binding, JWKS rotation, bounded HTTP body/timeouts, and rotated-refresh rollback after sign-in checkpoint failure. Local HTTP fixture execution used elevated loopback access; no OpenAI live credentials were read. |
+| PWA service worker and browser view-model tests | 17 / 17 PASS after the bounded whole-asset refresh fix. Tests cover same-URL update, offline generation fallback, partial refresh rollback, in-flight worker install, stalled body, and API/SSE/command/credential cache exclusions. |
+| Retry bound proof | PASS, 1 package / 1 goal proved with Z3 4.12.6. This proves only the implementation-connected bounded retry helper and its stated assumptions. |
+| Production plugin mutation gate | PASS: 35 mutants, 27 killed, 8 unviable, zero survivors, zero timeouts. Scope is production plugins only, not the typed engine, provider, OAuth, or native runtime. |
+| Engine native benchmark | Typed trace 86.06 ± 1.66 µs; compatibility JSON trace 86.41 ± 1.61 µs; ten samples. The intervals overlap; no speedup is claimed. Whole command max RSS was 286,081,024 bytes, including Moon build/tooling; per-operation allocation was not measured. |
+| Swift / iOS embedding checks | Parent reported the macOS generated-C harness passed three URLProtocol cases plus UTF-8/NUL and stale-handle ABI checks. Xcode Simulator build/install/launch also passed for the current SwiftUI + MoonC embedding spike. These are not physical-iPhone acceptance; the formal gpui iOS host, IME, accessibility, device memory, and lifecycle gates remain unimplemented or unrun. |
+
+A parent-run full npm test completed before the last native rollback/demo and PWA body-deadline fixes. It is not the final regression result. The full suite must be rerun on the finalized candidate. The dedicated Ubuntu workflow also has not yet reported a Node/npm-absent result. Live SIWC, actual Tailscale Serve, and physical iPhone gates remain unrun.

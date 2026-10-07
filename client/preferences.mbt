@@ -1,8 +1,5 @@
 ///|
-fn ClientState::set_scroll_anchor(
-  self : ClientState,
-  value : String?,
-) -> Unit {
+fn ClientState::set_scroll_anchor(self : ClientState, value : String?) -> Unit {
   self.scroll_anchor = value
 }
 
@@ -53,10 +50,7 @@ fn ClientState::preferences_json(self : ClientState) -> Json {
 
 ///|
 #warnings("-deprecated")
-fn ClientState::restore_preferences(
-  self : ClientState,
-  raw : String,
-) -> Bool {
+fn ClientState::restore_preferences(self : ClientState, raw : String) -> Bool {
   let expected = self.scope_key()
   if expected is None || raw.length() > 2_097_152 {
     self.clear_identity_state()
