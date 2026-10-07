@@ -18,6 +18,8 @@ const ASSETS = new Map([
   ['canvas-renderer.js', 'text/javascript; charset=utf-8'],
   ['view-model.js', 'text/javascript; charset=utf-8'],
   ['style.css', 'text/css; charset=utf-8'],
+  ['yami-kumo-shell.js', 'text/javascript; charset=utf-8'],
+  ['yami-kumo-shell.css', 'text/css; charset=utf-8'],
   ['styles.css', 'text/css; charset=utf-8'],
   ['favicon.svg', 'image/svg+xml'],
   ['icon.svg', 'image/svg+xml'],

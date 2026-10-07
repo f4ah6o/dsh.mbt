@@ -9,6 +9,7 @@ import {
   runError,
   displayMessages,
   authModelRefreshKey,
+  updateShellContext,
 } from "./view-model.js";
 
 const $ = (id) => document.getElementById(id);
@@ -48,10 +49,12 @@ let authModelsInFlight = null;
 function connectionError(error) {
   $("connection-error-text").textContent = error instanceof Error ? error.message : String(error);
   $("connection-error").hidden = false;
+  updateShellContext(state.snapshot, state.client?.connection || "offline", true, document);
 }
 
 function clearConnectionError() {
   $("connection-error").hidden = true;
+  updateShellContext(state.snapshot, state.client?.connection || "connecting", false, document);
 }
 
 function isTrustedAuthorizationUrl(value) {
@@ -126,19 +129,28 @@ function renderSessions() {
   const container = $("sessions");
   const existing = new Map([...container.querySelectorAll("button[data-id]")]
     .map((button) => [button.dataset.id, button]));
-  if (!state.sessions.length) {
-    if (!container.querySelector(".empty-list")) {
-      container.replaceChildren();
-      const empty = document.createElement("p");
-      empty.className = "empty-list";
-      empty.textContent = "No sessions yet. Send a prompt to begin.";
-      container.append(empty);
-    }
+  const query = $("session-search").value.trim().toLocaleLowerCase();
+  const sessions = state.sessions.filter((session) => [
+    session.title,
+    session.id,
+    session.parent_session_id,
+    statusLabel(session),
+    isReadOnly(session) ? "imported read-only history" : "local conversation",
+  ].some((value) => String(value || "").toLocaleLowerCase().includes(query))
+    || session.id === state.id);
+  if (!sessions.length) {
+    container.replaceChildren();
+    const empty = document.createElement("p");
+    empty.className = "empty-list";
+    empty.textContent = query
+      ? "No conversations match this search."
+      : "No conversations yet. Send a prompt to begin.";
+    container.append(empty);
     return;
   }
   container.querySelector(".empty-list")?.remove();
   let cursor = container.firstElementChild;
-  for (const session of [...state.sessions].reverse()) {
+  for (const session of [...sessions].reverse()) {
     let button = existing.get(session.id);
     if (!button) {
       button = document.createElement("button");
@@ -168,6 +180,10 @@ function renderControls() {
   const busy = isBusy(session);
   const readOnly = isReadOnly(session);
   const approval = session.pending_approval;
+  const canPrune = Boolean(state.id) && !readOnly && !busy
+    && ["idle", "completed"].includes(session.status)
+    && (session.events || []).some((event) => event.type === "tool/result")
+    && state.client?.connection === "synced";
   const canFork = Boolean(state.id) && !readOnly && !busy
     && ["idle", "completed", "failed", "cancelled"].includes(session.status)
     && state.client?.connection === "synced";
@@ -177,7 +193,8 @@ function renderControls() {
   $("progress").textContent = session.turn_id > 0 ? `Turn ${session.turn_id} · Step ${session.step || 0}` : "";
   $("cancel").disabled = state.mutation || !busy || !state.id;
   $("fork-session").disabled = state.mutation || !canFork;
-  $("prune-results").hidden = true;
+  $("prune-results").hidden = !canPrune;
+  $("prune-results").disabled = state.mutation || !canPrune;
   $("new-session").disabled = state.mutation || state.client?.connection !== "synced";
   $("prompt").disabled = readOnly || state.client?.connection !== "synced";
   $("prompt").placeholder = readOnly ? "Imported history is read-only" : "What would you like to work on?";
@@ -210,6 +227,7 @@ function renderControls() {
     $("announcement").textContent = approval ? `Approval required for ${approval.name}.` : statusLabel(session);
     state.statusKey = statusKey;
   }
+  updateShellContext(session, state.client?.connection || "connecting", Boolean(state.connectionMessage), document);
 }
 
 function renderAccount() {
@@ -596,6 +614,26 @@ $("fork-session").addEventListener("click", () => mutate(async () => {
   }
 }));
 
+$("prune-results").addEventListener("click", () => mutate(async () => {
+  const sessionId = state.id;
+  const selection = state.selection;
+  if (!sessionId) return;
+  let receipt;
+  try {
+    receipt = await runCommand("session_prune_tool_results", sessionId, {});
+  } catch (error) {
+    if (state.id !== sessionId || state.selection !== selection) return;
+    throw error;
+  }
+  if (state.id !== sessionId || state.selection !== selection) return;
+  const result = receipt.result?.result || receipt.result || {};
+  const pruned = Array.isArray(result.pruned) ? result.pruned : [];
+  state.actionMessage = pruned.length > 0
+    ? `Trimmed ${pruned.length} tool result${pruned.length === 1 ? "" : "s"} for future model requests. Full original output remains in the event history.`
+    : "No oversized tool results needed trimming.";
+  syncFromClient();
+}));
+
 $("composer").addEventListener("submit", (event) => {
   event.preventDefault();
   const entered = $("prompt").value;
@@ -625,6 +663,7 @@ $("prompt").addEventListener("input", () => {
   resizeComposer();
   renderControls();
 });
+$("session-search").addEventListener("input", renderSessions);
 $("prompt").addEventListener("keydown", (event) => {
   if (event.key === "Enter" && (event.metaKey || event.ctrlKey) && !event.isComposing) {
     event.preventDefault();

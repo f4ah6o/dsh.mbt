@@ -890,6 +890,9 @@ fn NativeService::static_asset(
   let (relative, mime) = match path {
     "/index.html" => ("index.html", "text/html; charset=utf-8")
     "/app.js" => ("app.js", "text/javascript; charset=utf-8")
+    "/yami-kumo-shell.js" =>
+      ("yami-kumo-shell.js", "text/javascript; charset=utf-8")
+    "/yami-kumo-shell.css" => ("yami-kumo-shell.css", "text/css; charset=utf-8")
     "/legacy-app.js" => ("legacy-app.js", "text/javascript; charset=utf-8")
     "/remote-app.js" => ("remote-app.js", "text/javascript; charset=utf-8")
     "/remote-client.js" =>
