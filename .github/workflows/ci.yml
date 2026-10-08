@@ -68,12 +68,12 @@ jobs:
         run: npm ci
       - name: Verify toolchain and exact dependency revisions
         run: npm run verify:env
+      - name: Build native runtime and compiled browser assets
+        run: npm run build
       - name: Check formatting, own warnings and JavaScript syntax
         run: npm run check
       - name: Test portable MoonBit packages on all backends
         run: npm run test:moon
-      - name: Build native runtime and compiled browser assets
-        run: npm run build
       - name: Install pinned Chromium for the native browser fixture
         run: npx playwright-core install --with-deps chromium
       - name: Test compiled browser modules and service worker

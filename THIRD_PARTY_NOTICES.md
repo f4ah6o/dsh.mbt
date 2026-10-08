@@ -23,20 +23,20 @@ The `vendor/gpui` Git submodule pins
 
 ## Yami-kumo and Cloudflare Kumo
 
-The `vendor/yami-kumo` Git submodule pins
-[f4ah6o/Yami-kumo](https://github.com/f4ah6o/Yami-kumo) at
-`fa857650d0bb462a862e7f62b808d565a093a1be`. Its MoonBit shell and DOM adapter
-are the pinned source used by the MoonBit browser package. The repository's
-acknowledgement and upstream-derived component contracts are retained in the
-submodule; this project does not claim that submodule source under its own MIT
-license.
+The browser package consumes Mooncakes module `f4ah6o/yami_kumo` version
+`0.1.0`, published from
+[f4ah6o/Yami-kumo](https://github.com/f4ah6o/Yami-kumo) at merged revision
+`0f6828647864930ef1c3022604beac36dcbd0781`. Its MoonBit shell, DOM adapter,
+and CSS are installed from `.mooncakes/f4ah6o/yami_kumo`. This project does not
+claim the package source under its own MIT license; see the copied upstream
+license at [`licenses/yami-kumo-LICENSE`](licenses/yami-kumo-LICENSE).
 
 The distributed `web/kumo-standalone.css` and
-`web/yami-kumo-components.css` are generated from that pinned source. The
-Kumo-derived stylesheet and generated component contracts come from
+`web/yami-kumo-components.css` come from that package. The Kumo-derived
+stylesheet and generated component contracts come from
 `@cloudflare/kumo` 2.14.0 and are licensed under MIT; the upstream license is
 reproduced at
-[`vendor/yami-kumo/licenses/cloudflare-kumo-LICENSE`](vendor/yami-kumo/licenses/cloudflare-kumo-LICENSE).
+[`licenses/yami-kumo-cloudflare-kumo-LICENSE`](licenses/yami-kumo-cloudflare-kumo-LICENSE).
 `web/kumo-standalone.css` also identifies Tailwind CSS 4.1.17 and its MIT
 license in its header. `web/yami-kumo-shell.css` is this project's stylesheet,
 assembled from `ui/yami-kumo/styles.css` and `ui/dsh.css`.

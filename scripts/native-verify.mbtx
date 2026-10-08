@@ -179,6 +179,20 @@ async fn copy_and_compare_asset(source : String, destination : String) -> Unit {
 }
 
 ///|
+async fn assert_asset_matches(source : String, destination : String) -> Unit {
+  if !@fs.exists(source) {
+    fail("missing pinned package asset " + source)
+  }
+  if !@fs.exists(destination) {
+    fail("missing checked-in asset " + destination)
+  }
+  let compared = @process.run("cmp", ["-s", source, destination])
+  if compared != 0 {
+    fail("checked-in asset differs from its pinned package source: " + destination)
+  }
+}
+
+///|
 async fn main {
   run_moon([
     "fmt", "--check", "engine", "provider", "auth", "protocol", "client", "plugins",
@@ -206,6 +220,11 @@ async fn main {
   ])
   run_moon(["build", "browser", "--target", "js", "--release", "--frozen"])
   run_moon(["build", "browser/sw", "--target", "js", "--release", "--frozen"])
+  if !@fs.exists("web/moonbit") {
+    try @fs.mkdir("web/moonbit", permission=0o755, recursive=true) catch {
+      _ => fail("cannot create web/moonbit for the generated browser module")
+    }
+  }
   copy_and_compare_asset(
     "_build/js/release/build/f4ah6o/dsh/browser/browser.js",
     "web/moonbit/browser.js",
@@ -214,13 +233,21 @@ async fn main {
     "_build/js/release/build/f4ah6o/dsh/browser/sw/sw.js",
     "web/sw.js",
   )
-  copy_and_compare_asset(
-    "vendor/yami-kumo/styles/kumo-standalone.css",
+  assert_asset_matches(
+    ".mooncakes/f4ah6o/yami_kumo/styles/kumo-standalone.css",
     "web/kumo-standalone.css",
   )
-  copy_and_compare_asset(
-    "vendor/yami-kumo/styles/yami-kumo-components.css",
+  assert_asset_matches(
+    ".mooncakes/f4ah6o/yami_kumo/styles/yami-kumo-components.css",
     "web/yami-kumo-components.css",
+  )
+  assert_asset_matches(
+    ".mooncakes/f4ah6o/yami_kumo/LICENSE",
+    "licenses/yami-kumo-LICENSE",
+  )
+  assert_asset_matches(
+    ".mooncakes/f4ah6o/yami_kumo/licenses/cloudflare-kumo-LICENSE",
+    "licenses/yami-kumo-cloudflare-kumo-LICENSE",
   )
   for path in [
     "_build/js/release/build/f4ah6o/dsh/browser/browser.js",
@@ -230,6 +257,8 @@ async fn main {
     "web/kumo-standalone.css",
     "web/yami-kumo-components.css",
     "web/yami-kumo-shell.css",
+    "licenses/yami-kumo-LICENSE",
+    "licenses/yami-kumo-cloudflare-kumo-LICENSE",
     "web/index.html",
     "web/manifest.webmanifest",
     "web/icon.svg",

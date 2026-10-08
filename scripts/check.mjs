@@ -108,11 +108,6 @@ function checkPureMoonBitInventory() {
     throw new Error('Handwritten production JavaScript/TypeScript remains: ' +
       forbidden.sort().join(', '));
   }
-  for (const path of generated) {
-    if (!existsSync(join(projectRoot, path))) {
-      throw new Error('Missing compiled MoonBit web asset: ' + path);
-    }
-  }
   const html = readFileSync(join(projectRoot, 'web/index.html'), 'utf8');
   const scriptSources = [...html.matchAll(/<script\b[^>]*\bsrc=["']([^"']+)["'][^>]*>/gi)]
     .map(match => match[1]);

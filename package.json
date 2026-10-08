@@ -13,7 +13,7 @@
     "build:shell": "node scripts/build-web-shell.mjs",
     "check": "node scripts/check.mjs && node scripts/build-web-shell.mjs --check",
     "check:shell": "node scripts/build-web-shell.mjs --check",
-    "test": "npm run check && npm run test:moon && npm run build && npm run test:web && npm run test:integration",
+    "test": "npm run build && npm run check && npm run test:moon && npm run test:web && npm run test:integration",
     "test:moon": "sh scripts/test-moon.sh",
     "test:web": "node --test web/*.test.mjs",
     "test:integration": "sh scripts/test-browser-smoke.sh",

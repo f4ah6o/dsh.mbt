@@ -6,7 +6,7 @@
 
 ## Build and run
 
-必要なのは固定版 MoonBit toolchain、Git、C compiler と submodule です。Node.js / npm はテストや開発スクリプトに使いますが、build と product runtime には不要です。
+必要なのは固定版 MoonBit toolchain、Git、C compiler と submodule です。Yami-kumo は Mooncakes からインストールします。Node.js / npm はテストや開発スクリプトに使いますが、product build と runtime には不要です。
 
 ```sh
 git clone --recurse-submodules https://github.com/f4ah6o/dsh.mbt.git
@@ -21,7 +21,7 @@ moon install
 sh scripts/build.sh
 ```
 
-`sh scripts/build.sh` は native executable、MoonBit browser module、MoonBit service worker と pinned Yami-kumo CSS を生成・配置します。Node/npm を呼びません。checkout 済みの生成 assets で起動する場合は build を省略できます。
+`sh scripts/build.sh` は native executable、MoonBit browser module、MoonBit service worker と Mooncakes から導入した Yami-kumo CSS を生成・配置します。Node/npm を呼びません。fresh checkout では service 起動や web test の前に build が必要です。`npm test` は最初に build を実行します。`npm run check` は生成 assets がない状態でも実行でき、存在する場合は MoonBit compiler output と比較します。`web/moonbit/browser.js` と `web/sw.js` は compiler 生成物で Git 管理せず、build 後も browser の runtime URL は同じです。
 
 API key を使わない browser demo は native service を loopback で起動します。
 
@@ -80,7 +80,7 @@ moon run native --target native --release -- --help
 
 ## Browser UI and data
 
-Browser UI は MoonBit module から生成される JavaScript と service worker、pinned Yami-kumo styles で構成します。React や Node.js host は product runtime に含みません。日本語 UI は会話検索、responsive navigation / details drawer、session details、fork、tool output pruning を提供します。設定は browser local storage、session は native data directory に保存し、公式 API に履歴をアップロードしません。iOS UI は別の受け入れ範囲です。
+Browser UI は MoonBit module から生成される JavaScript と service worker、Mooncakes の `f4ah6o/yami_kumo@0.1.0` から導入する styles で構成します。React や Node.js host は product runtime に含みません。日本語 UI は会話検索、responsive navigation / details drawer、session details、fork、tool output pruning を提供します。設定は browser local storage、session は native data directory に保存し、公式 API に履歴をアップロードしません。iOS UI は別の受け入れ範囲です。
 
 Native v1 は versioned data envelope と command receipt を保存します。初回起動時に対応する legacy snapshot / Session v4 input を native envelope に一方向変換します。旧版 Node host はこの envelope を読めないため、upgrade 前に data directory を backup してください。旧 Node host はこの版では配布しません。migration の境界は[native runtime guide](docs/native-runtime.md#data-directory-compatibility)に記載しています。
 
@@ -109,7 +109,7 @@ Browser and CLI use the same MoonBit engine and capability registry. The native 
 
 ```sh
 npm ci                    # test-only Node/Playwright tooling
-npm test                  # format/check, MoonBit matrix, native build, browser modules and native browser smoke
+npm test                  # build first, then format/check, MoonBit matrix, browser modules and native browser smoke
 npm run mutation:list     # list production plugin mutation cases
 npm run mutation          # run the pinned turtles mutation gate
 ```
