@@ -211,6 +211,12 @@ int dsh_os_flush_stdout(void) {
   return fflush(stdout) == 0 ? 0 : errno;
 }
 
+int dsh_os_flush_stderr(void) {
+  return fflush(stderr) == 0 ? 0 : errno;
+}
+
+int dsh_os_stdin_is_terminal(void) { return isatty(STDIN_FILENO) ? 1 : 0; }
+
 int dsh_fs_set_root_mode(int fd, int mode) {
   if (fchmod(fd, (mode_t)(mode & 0777)) != 0) return errno;
   if (fsync(fd) != 0) return errno;
@@ -796,6 +802,8 @@ int dsh_fs_root_matches(int root_fd, const char *path) { (void)root_fd; (void)pa
 int dsh_fs_mapping_matches(int root_fd, const char *root_path, const char *relative_path, int is_directory) { (void)root_fd; (void)root_path; (void)relative_path; (void)is_directory; return -ENOTSUP; }
 int dsh_fs_close(int fd) { (void)fd; return ENOTSUP; }
 int dsh_os_flush_stdout(void) { return fflush(stdout) == 0 ? 0 : errno; }
+int dsh_os_flush_stderr(void) { return fflush(stderr) == 0 ? 0 : errno; }
+int dsh_os_stdin_is_terminal(void) { return 0; }
 int dsh_fs_set_root_mode(int fd, int mode) { (void)fd; (void)mode; return ENOTSUP; }
 int dsh_fs_open_file(int root_fd, const char *path) { (void)root_fd; (void)path; return -ENOTSUP; }
 int dsh_fs_stat_fd(int fd, int64_t *out) { (void)fd; (void)out; return ENOTSUP; }

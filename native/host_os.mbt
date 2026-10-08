@@ -25,6 +25,17 @@ fn native_flush_stdout() -> Unit {
 }
 
 ///|
+extern "C" fn c_flush_stderr() -> Int = "dsh_os_flush_stderr"
+
+///|
+fn native_flush_stderr() -> Unit {
+  ignore(c_flush_stderr())
+}
+
+///|
+extern "C" fn c_stdin_is_terminal() -> Int = "dsh_os_stdin_is_terminal"
+
+///|
 #borrow(path)
 extern "C" fn c_root_matches(root : Int, path : Bytes) -> Int = "dsh_fs_root_matches"
 

@@ -25,13 +25,25 @@ struct NativeProviderConfig {
   base_url : String?
   generation : String
   demo_provider : Bool
+  max_retries : Int
 }
 
 ///|
 fn native_provider_config(
   demo_provider : Bool,
+  mode_override : String,
+  model_override : String,
+  base_url_override : String,
+  max_retries : Int,
 ) -> Result[NativeProviderConfig, String] {
-  let mode = @env.get_env_var("DSH_MODE").unwrap_or("deepseek")
+  if max_retries < 0 || max_retries > 5 {
+    return Err("--max-retries must be an integer between 0 and 5")
+  }
+  let mode = if mode_override.is_empty() {
+    @env.get_env_var("DSH_MODE").unwrap_or("deepseek")
+  } else {
+    mode_override
+  }
   let protocol = match mode {
     "deepseek" => NativeProtocol::DeepSeekMessages
     "openai" => NativeProtocol::OpenAIChatCompletions
@@ -53,8 +65,24 @@ fn native_provider_config(
     NativeProtocol::OpenAIChatCompletions => "offline-demo"
     NativeProtocol::OpenAIResponses => "offline-demo"
   }
-  let model = @env.get_env_var("DSH_MODEL").unwrap_or(fallback_model)
-  let base_url = @env.get_env_var("DSH_BASE_URL")
+  let model = if model_override.is_empty() {
+    @env.get_env_var("DSH_MODEL").unwrap_or(fallback_model)
+  } else {
+    model_override
+  }
+  if protocol == NativeProtocol::OpenAIChatCompletions &&
+    !demo_provider &&
+    @env.get_env_var("DSH_MODEL") is None &&
+    model_override.is_empty() {
+    return Err(
+      "OpenAI-compatible mode requires an explicit model: set --model NAME or DSH_MODEL",
+    )
+  }
+  let base_url = if base_url_override.is_empty() {
+    @env.get_env_var("DSH_BASE_URL")
+  } else {
+    Some(base_url_override)
+  }
   let generation = match random_uuid() {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -66,7 +94,15 @@ fn native_provider_config(
       Err(error) => return Err(error)
     }
   }
-  Ok({ protocol, auth_mode, model, base_url, generation, demo_provider, })
+  Ok({
+    protocol,
+    auth_mode,
+    model,
+    base_url,
+    generation,
+    demo_provider,
+    max_retries,
+  })
 }
 
 ///|
@@ -75,8 +111,15 @@ async fn NativeRuntime::open(
   workspace : String,
   allow_shell : Bool,
   demo_provider : Bool,
+  mode_override? : String = "",
+  model_override? : String = "",
+  base_url_override? : String = "",
+  max_retries? : Int = 5,
 ) -> Result[NativeRuntime, String] {
-  let provider_config = match native_provider_config(demo_provider) {
+  let provider_config = match
+    native_provider_config(
+      demo_provider, mode_override, model_override, base_url_override, max_retries,
+    ) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -929,7 +972,7 @@ async fn NativeRuntime::schedule_retry(
   let scheduled = match
     self.api.schedule_retry(effect_id, {
       "failure": failure,
-      "max_retries": 5,
+      "max_retries": self.provider_config.max_retries,
       "initial_delay_ms": 500,
       "max_delay_ms": 10000,
     }) {
@@ -940,6 +983,48 @@ async fn NativeRuntime::schedule_retry(
     Ok(_) => Ok(scheduled)
     Err(error) => Err(error)
   }
+}
+
+///|
+/// Handle one gpui MCP JSON-RPC line through the same protocol server as the
+/// in-process API, then durably checkpoint and drive any resulting effects.
+async fn NativeRuntime::mcp_handle(
+  self : NativeRuntime,
+  line : String,
+) -> Result[String, String] {
+  self.gate.acquire()
+  if self.stopped || self.closed {
+    self.gate.release()
+    return Err("native runtime is stopped")
+  }
+  let response = self.api.mcp_handle(line).unwrap_or("")
+  let effects = self.api.take_typed_effects()
+  let checkpoint = self.checkpoint_locked()
+  let accepted_revision = self.state.revision
+  self.gate.release()
+  match checkpoint {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  let handled_sessions : Array[String] = []
+  for effect in effects {
+    let session_id = effect.session_id().as_string()
+    if !handled_sessions.contains(session_id) {
+      handled_sessions.push(session_id)
+      let session_effects = effects.filter(candidate => {
+        candidate.session_id().as_string() == session_id
+      })
+      let command_id = match native_command_id() {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+      match self.run_effects(session_effects, command_id, accepted_revision) {
+        Ok(_) => ()
+        Err(error) => return Err(error)
+      }
+    }
+  }
+  Ok(response)
 }
 
 ///|

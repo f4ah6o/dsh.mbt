@@ -427,6 +427,64 @@ async test "native fork command and CLI receipt replay the same durable child wi
 }
 
 ///|
+async test "native MCP carrier checkpoints gpui protocol operations" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-mcp-carrier")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let data = fixture + "/data"
+    let runtime = match NativeRuntime::open(data, workspace, false, true) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let line = Json::object({
+      "jsonrpc": "2.0".to_json(),
+      "id": "native-mcp-create".to_json(),
+      "method": "tools/call".to_json(),
+      "params": Json::object({
+        "_meta": Json::object({
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28".to_json(),
+          "io.modelcontextprotocol/clientCapabilities": Json::empty_object(),
+        }),
+        "name": "session_create".to_json(),
+        "arguments": Json::object({
+          "id": "mcp-checkpointed-session".to_json(),
+          "title": "MCP checkpoint".to_json(),
+        }),
+      }),
+    }).stringify()
+    let response = match runtime.mcp_handle(line) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    let response_json = @json.parse(response)
+    assert_eq(string_field(response_json, "id"), Some("native-mcp-create"))
+    let current = runtime
+      .invoke("session_get", { "session_id": "mcp-checkpointed-session" })
+      .unwrap().0
+    assert_eq(string_field(current, "title"), Some("MCP checkpoint"))
+    runtime.close().unwrap()
+
+    let reopened = match NativeRuntime::open(data, workspace, false, true) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(reopened.close()))
+    })
+    let restored = reopened
+      .invoke("session_get", { "session_id": "mcp-checkpointed-session" })
+      .unwrap().0
+    assert_eq(string_field(restored, "title"), Some("MCP checkpoint"))
+    reopened.close().unwrap()
+  }
+}
+
+///|
 async test "native remote fork rejects a live source without creating a child or effects" {
   let fixture = @fs.tmpdir(prefix="dsh-native-session-fork-live")
   @async.with_task_group() <| group => {

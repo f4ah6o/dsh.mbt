@@ -9,6 +9,7 @@ test "native workspace metadata identifies providers without endpoint secrets" {
     ),
     generation: "fixture",
     demo_provider: false,
+    max_retries: 5,
   }
   let custom_label = service_provider_label(custom)
   assert_eq(custom_label, "provider.example")
@@ -32,6 +33,7 @@ test "native workspace metadata names known providers and hides secret-like host
     base_url: Some("https://api.deepseek.com/anthropic"),
     generation: "fixture",
     demo_provider: false,
+    max_retries: 5,
   }
   assert_eq(service_provider_label(deepseek), "DeepSeek")
   assert_eq(
@@ -84,5 +86,71 @@ async test "native repository metadata resolves nested worktree git directories"
       native_repository_name(worktree, separate_git_dir),
       "sample-worktree",
     )
+  }
+}
+
+///|
+async test "native static host exposes only the compiled MoonBit browser shell" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-static-shell")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let runtime = match
+      NativeRuntime::open(fixture + "/data", workspace, false, true) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let source_root = @env.current_dir().unwrap_or_else(() => {
+      fail("cannot resolve test checkout")
+    })
+    let service = match NativeService::new(runtime, source_root, 0) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    assert_eq(
+      service.static_asset("/moonbit/browser.js"),
+      Some(
+        (
+          source_root + "/web/moonbit/browser.js",
+          "text/javascript; charset=utf-8",
+        ),
+      ),
+    )
+    assert_eq(
+      service.static_asset("/kumo-standalone.css"),
+      Some(
+        (source_root + "/web/kumo-standalone.css", "text/css; charset=utf-8"),
+      ),
+    )
+    assert_eq(
+      service.static_asset("/yami-kumo-components.css"),
+      Some(
+        (
+          source_root + "/web/yami-kumo-components.css",
+          "text/css; charset=utf-8",
+        ),
+      ),
+    )
+    assert_eq(
+      service.static_asset("/yami-kumo-shell.css"),
+      Some(
+        (source_root + "/web/yami-kumo-shell.css", "text/css; charset=utf-8"),
+      ),
+    )
+    assert_eq(
+      service.static_asset("/sw.js"),
+      Some((source_root + "/web/sw.js", "text/javascript; charset=utf-8")),
+    )
+    assert_true(service.static_asset("/legacy-app.js") is None)
+    assert_true(service.static_asset("/remote-app.js") is None)
+    let policy = service.content_security_policy(3210)
+    assert_true(policy.contains("style-src 'self'"))
+    assert_true(!policy.contains("unsafe-inline"))
+    assert_true(!policy.contains("unsafe-eval"))
+    runtime.close().unwrap()
   }
 }

@@ -14,8 +14,8 @@ extern "C" fn c_service_signals_requested() -> Int = "dsh_service_signals_reques
 extern "C" fn c_service_signals_restore() -> Int = "dsh_service_signals_restore"
 
 ///|
-fn native_configure_service_signal_policy() -> Unit {
-  if @env.args().any(value => value == "--serve") {
+fn native_configure_service_signal_policy(args : Array[String]) -> Unit {
+  if args.any(value => value == "--serve") {
     // async's default event-loop signal waiter consumes SIGINT/SIGTERM and
     // re-raises them after cancelling main. Reconfigure the existing waiter
     // before the service starts accepting requests so the native sig_atomic_t
@@ -721,7 +721,27 @@ async fn NativeService::handle_post(
       return
     }
   }
-  if path == "/api/v1/commands" {
+  if path == "/mcp" {
+    match self.runtime.mcp_handle(body) {
+      Err(error) => self.respond_json(connection, 503, { "error": error })
+      Ok(response) =>
+        if response.is_empty() {
+          connection.send_response(202, "Accepted", extra_headers={
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+          })
+          connection.end_response()
+        } else {
+          connection.send_response(200, "OK", extra_headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+          })
+          connection.write_string(response)
+          connection.end_response()
+        }
+    }
+  } else if path == "/api/v1/commands" {
     self.handle_command(body, connection, group, identity_key)
   } else if path == "/api/call" {
     self.handle_call(body, connection, group, is_local_request)
@@ -1094,37 +1114,21 @@ fn NativeService::static_asset(
 ) -> (String, String)? {
   let (relative, mime) = match path {
     "/index.html" => ("index.html", "text/html; charset=utf-8")
-    "/app.js" => ("app.js", "text/javascript; charset=utf-8")
-    "/yami-kumo-shell.js" =>
-      ("yami-kumo-shell.js", "text/javascript; charset=utf-8")
+    "/moonbit/browser.js" =>
+      return Some(
+        (
+          self.source_root + "/web/moonbit/browser.js",
+          "text/javascript; charset=utf-8",
+        ),
+      )
+    "/kumo-standalone.css" => ("kumo-standalone.css", "text/css; charset=utf-8")
+    "/yami-kumo-components.css" =>
+      ("yami-kumo-components.css", "text/css; charset=utf-8")
     "/yami-kumo-shell.css" => ("yami-kumo-shell.css", "text/css; charset=utf-8")
-    "/legacy-app.js" => ("legacy-app.js", "text/javascript; charset=utf-8")
-    "/remote-app.js" => ("remote-app.js", "text/javascript; charset=utf-8")
-    "/remote-client.js" =>
-      ("remote-client.js", "text/javascript; charset=utf-8")
-    "/view-model.js" => ("view-model.js", "text/javascript; charset=utf-8")
-    "/canvas-renderer.js" =>
-      ("canvas-renderer.js", "text/javascript; charset=utf-8")
-    "/style.css" => ("style.css", "text/css; charset=utf-8")
     "/manifest.webmanifest" =>
       ("manifest.webmanifest", "application/manifest+json")
     "/icon.svg" => ("icon.svg", "image/svg+xml")
     "/sw.js" => ("sw.js", "text/javascript; charset=utf-8")
-    "/moonbit/app.js" =>
-      return Some(
-        (
-          self.source_root + "/_build/js/release/build/f4ah6o/dsh/app/app.js",
-          "text/javascript; charset=utf-8",
-        ),
-      )
-    "/moonbit/client.js" =>
-      return Some(
-        (
-          self.source_root +
-          "/_build/js/release/build/f4ah6o/dsh/client/client.js",
-          "text/javascript; charset=utf-8",
-        ),
-      )
     _ => return None
   }
   Some((self.web_root + "/" + relative, mime))
