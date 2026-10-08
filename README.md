@@ -15,7 +15,7 @@ agent の context 管理や長い会話の継続には使いません。
 
 ## Node.js host を起動
 
-Node.js **24 以上**、Git、固定版の MoonBit toolchain を使用します。native テストと turtles には C compiler が必要です。
+Node.js **24 以上**、Git、固定版の MoonBit toolchain を使用します。native build / tests と turtles には C compiler が必要です。
 
 ```sh
 git clone --recurse-submodules https://github.com/f4ah6o/dsh.mbt.git
@@ -67,6 +67,7 @@ node host/cli.mjs run "README を確認してください" --workspace /absolute
 node host/cli.mjs run "続きを進めてください" --session SESSION_ID
 node host/cli.mjs import-session /path/to/session.v4.jsonl --json
 node host/cli.mjs prune-session SESSION_ID
+node host/cli.mjs fork-session SESSION_ID
 # budgets are optional: --threshold-chars 8192 --head-chars 4096 --tail-chars 1024
 node host/cli.mjs --help
 ```
@@ -76,9 +77,25 @@ node host/cli.mjs --help
 保存先は `--data-dir` で指定できます。同一データディレクトリを複数プロセスから同時に開くことはできません。
 `import-session` は upstream Session v4 を検証して、再開できない読み取り専用履歴として保存します。
 記録された tool、inbox、permission、preset は履歴に残しますが、実行や権限設定には使いません。
+`fork-session` は Session v4 の読み込み履歴を除く idle / completed / failed / cancelled の session から、履歴付きの独立した idle session を作ります。
+provider、tool、承認待ち、retry の処理は引き継いだり再実行したりしません。
 
-Node.js を使わない native host を起動する場合は [native runtime guide](docs/native-runtime.md) を参照してください。
-ガイドには offline demo、ChatGPT SIWC の任意の実アカウント smoke、Tailnet Serve の設定があります。
+### Node.js を使わない native host
+
+native service / CLI は Node.js なしで実行できます。MoonBit toolchain と依存を用意した後、API key 不要の browser demo は次のように起動します。
+
+```sh
+moon run native --target native --release -- \
+  --serve --demo --data-dir /absolute/path/to/dsh-demo-data \
+  --workspace /absolute/path/to/project --port 3210
+```
+
+`http://127.0.0.1:3210` を開きます。この demo は固定応答で provider network request をせず、workspace 内に `native-demo.txt` を作成します。
+Node host は DeepSeek Messages と OpenAI Chat Completions 互換 endpoint を API key で利用します。
+native host はこの二つに加えて OpenAI Responses API を API key または ChatGPT SIWC で利用できます。SIWC の認証情報は native host の保護された credential store に保管されます。
+実アカウント smoke は任意で、リポジトリの検証ではまだ実行していません。API key、SIWC、Tailnet Serve の手順は
+[native runtime guide](docs/native-runtime.md) を参照してください。
+
 Native v1 の data directory は新しい versioned envelope と receipt を保存します。Node host はそれを拒否するため、
 native host は対応する legacy snapshot / Session v4 input を読み込んで native envelope に更新できますが、変換は一方向です。
 初回 native 起動前に data directory を backup し、同じ directory を Node / native host 間で切り替えないでください。
@@ -86,11 +103,12 @@ native iOS / 実機の tailnet 接続は別途受入確認が必要です。
 
 ### ブラウザ UI とデータ
 
-Node host と native host は共通の日本語ブラウザ UI を使い、プロジェクト名、Git リポジトリとブランチ、provider と選択中の model を表示します。
-日本語フォントは会話画面の詳細パネルで選び、設定はそのブラウザのローカルストレージに保存します。
-Session log を公式 API へアップロードする機能はなく、アップロードは既定で無効です。この変更はブラウザ UI が対象で、iOS アプリの表示は変更しません。
+Node host と native host は Yami-kumo の AppShell を使う共通の日本語ブラウザ UI を提供します。会話を検索でき、画面幅に応じて navigation と詳細パネルが drawer として開きます。
+詳細パネルには選択中の session の状態、turn、履歴、保存元、親 session と、host が取得した project、Git repository / branch、provider / model を表示します。settled session の分岐と tool output の手動整理も UI から実行できます。
+日本語フォントは詳細パネルで選び、設定はそのブラウザのローカルストレージに保存します。Session log は host の data directory に保存し、公式 API へアップロードしません。
+この UI の変更はブラウザが対象で、iOS アプリの表示は変更しません。
 
-`prune-session` は完了済みまたは idle の native session で、長い tool result の今後の model context を縮めます。
+`prune-session` は imported ではない idle / completed session で、長い tool result の今後の model context を縮めます。
 既定の trigger は 8,192 Unicode code points、保持する先頭 / 末尾は 4,096 / 1,024 code points です。
 元の tool output と transcript はそのまま保存し、次の provider request だけに marker 付き projection を使います。
 browser の **Trim outputs** と `session_prune_tool_results` API でも実行できます。これは手動操作であり、
@@ -170,10 +188,12 @@ curl -sS http://127.0.0.1:3080/api/call \
 `session_send` は処理の受付を返します。完了は `session_get` で確認します。
 
 公開操作は `session_create`、`session_import`、`session_list`、`session_get`、`session_send`、
-`session_prune_tool_results`、`session_cancel`、`tool_approve`、`plugin_list`、`profile_stats`。
-`session_prune_tool_results` は完了済み / idle の native session にだけ使え、budgets は
+`session_fork`、`session_prune_tool_results`、`session_cancel`、`tool_approve`、`plugin_list`、`profile_stats`。
+`session_fork` は settled な未 import session から新しい idle session を作成し、親 session と履歴を保ちますが、外部処理は再生しません。
+`session_prune_tool_results` は imported ではない completed / idle session に使え、budgets は
 `threshold_chars`、`head_chars`、`tail_chars` で指定できます。`session_list` は一覧用の要約を返します。
-HTTP carrier は loopback に限定します。
+Node host は loopback のみで待ち受けます。native service も loopback に bind し、設定した owner allowlist を通る Tailscale Serve 経由で tailnet client に接続できます。
+実際の Tailscale Serve と tailnet 端末接続の受入確認は未実施です。設定と境界は [native runtime guide](docs/native-runtime.md) を参照してください。
 
 `session_import` は `jsonl` に Session v4 archive 全体を受け取ります。import は read-only で、
 再オープン時も原文と派生 messages / status / pending inbox / tool outcome を再検証します。
@@ -196,6 +216,7 @@ node web/browser-smoke.mjs # optional real Chromium / browser UI acceptance
 MoonBit の portable package は JS / native / Wasm / Wasm GC の全 target で検証します。
 `app` は JavaScript FFI 用です。workspace 全体を無指定でテストすると、gpui の OS 専用 backend や example も対象になるため、
 用意した package selector を使ってください。
+GitHub Actions の CI workflow は `native-without-node` と `portable-and-host` の 2 job で実行し、native build / CLI を Node.js なしでも確認します。
 
 テストは API key を使いません。pinned upstream の tool-call-turn と parallel-tool-calls fixture を keyless なローカル HTTP provider に流し、
 承認済みの `echo SNAPSHOT_OK`、2 件の Read call と call-order の tool result、手動 pruning 後の縮んだ request context、
@@ -211,6 +232,8 @@ Session v4 importer の対応 event と明示的な制約は [移植状況](docs
 
 - [アーキテクチャ・API・所有権](docs/architecture.md)
 - [移植済み範囲と upstream との差分](docs/port-status.md)
+- [Native runtime、SIWC、Tailscale Serve](docs/native-runtime.md)
+- [native / SIWC / iOS の実装状況と受入条件](docs/implementation-status.md)
 - [検証記録](docs/verification.md)
 - [次の移植作業と受入条件](issues/open/0001-upstream-parity.md)
 - [Engine の境界仕様](engine/README.md)
