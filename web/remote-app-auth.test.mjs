@@ -317,6 +317,8 @@ function createHarness({
     fetch,
     setTimeout: setTimer,
     clearTimeout: clearTimer,
+    setInterval: setTimer,
+    clearInterval: clearTimer,
     requestAnimationFrame: () => 1,
     ResizeObserver: class { observe() {} },
     innerHeight: 820,
@@ -328,6 +330,10 @@ function createHarness({
     displayMessages,
     authModelRefreshKey,
     updateShellContext,
+    createWorkspaceMetadataRefresher: () => ({ refresh: async () => null }),
+    updateWorkspaceMetadata() {},
+    restoreJapaneseFont() {},
+    setJapaneseFont() {},
   };
   vm.runInNewContext(source, sandbox, { filename: "web/remote-app.js" });
 
@@ -425,7 +431,7 @@ for (const selectedModel of [null, "gpt-6-luna"]) {
 
     assert.deepEqual(app.selectedModelRequests, ["gpt-6-astra"]);
     assert.equal(app.elements.get("model-picker").value, "gpt-6-astra");
-    assert.equal(app.elements.get("action-message").textContent, "Using GPT-6 Astra.");
+  assert.equal(app.elements.get("action-message").textContent, "GPT-6 Astra を使用しています。");
   });
 }
 
@@ -490,7 +496,7 @@ test("blocked sign-in pop-up makes no host request", async () => {
   assert.equal(app.openedTabs.length, 0);
   assert.equal(app.signInRequests, 0);
   assert.equal(app.operations.includes("auth_sign_in_browser"), false);
-  assert.match(app.elements.get("run-error").textContent, /blocked the sign-in tab/i);
+  assert.match(app.elements.get("run-error").textContent, /サインイン用タブをブロックしました/);
 });
 
 test("failed browser preparation closes the reserved tab", async () => {
@@ -513,7 +519,7 @@ test("duplicate browser sign-in closes the reserved tab", async () => {
   assert.equal(app.signInRequests, 1);
   assert.equal(app.openedTabs[0].tab.closed, true);
   assert.equal(app.openedTabs[0].tab.replacedUrl, null);
-  assert.match(app.elements.get("action-message").textContent, /already in progress/i);
+  assert.match(app.elements.get("action-message").textContent, /すでに進行中です/);
 });
 
 test("untrusted authorization URL closes the reserved tab", async () => {
@@ -525,7 +531,7 @@ test("untrusted authorization URL closes the reserved tab", async () => {
 
   assert.equal(app.openedTabs[0].tab.closed, true);
   assert.equal(app.openedTabs[0].tab.replacedUrl, null);
-  assert.match(app.elements.get("run-error").textContent, /invalid ChatGPT authorization URL/i);
+  assert.match(app.elements.get("run-error").textContent, /無効な ChatGPT 認証 URL/);
 });
 
 test("a refresh failure after navigation leaves the OAuth tab open", async () => {
@@ -546,7 +552,7 @@ test("Tailnet UI disables sign-in and never requests a host browser handoff", as
   await app.click("auth-sign-in");
   assert.equal(app.openedTabs.length, 0);
   assert.equal(app.signInRequests, 0);
-  assert.match(app.elements.get("run-error").textContent, /host Mac/i);
+  assert.match(app.elements.get("run-error").textContent, /ホスト Mac/);
 });
 
 test("failed model discovery is visible and waits for an explicit retry", async () => {
@@ -556,7 +562,7 @@ test("failed model discovery is visible and waits for an explicit retry", async 
   await app.fireAuthPoll();
 
   assert.equal(app.modelRefreshes, 1);
-  assert.match(app.elements.get("auth-guidance").textContent, /could not be loaded/i);
+  assert.match(app.elements.get("auth-guidance").textContent, /モデルを読み込めませんでした/);
   assert.equal(app.elements.get("auth-models-retry").hidden, false);
   assert.equal([...app.timers.values()].filter((timer) => timer.delay === 2000).length, 0);
 

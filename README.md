@@ -84,6 +84,12 @@ native host は対応する legacy snapshot / Session v4 input を読み込ん�
 初回 native 起動前に data directory を backup し、同じ directory を Node / native host 間で切り替えないでください。
 native iOS / 実機の tailnet 接続は別途受入確認が必要です。
 
+### ブラウザ UI とデータ
+
+Node host と native host は共通の日本語ブラウザ UI を使い、プロジェクト名、Git リポジトリとブランチ、provider と選択中の model を表示します。
+日本語フォントは会話画面の詳細パネルで選び、設定はそのブラウザのローカルストレージに保存します。
+Session log を公式 API へアップロードする機能はなく、アップロードは既定で無効です。この変更はブラウザ UI が対象で、iOS アプリの表示は変更しません。
+
 `prune-session` は完了済みまたは idle の native session で、長い tool result の今後の model context を縮めます。
 既定の trigger は 8,192 Unicode code points、保持する先頭 / 末尾は 4,096 / 1,024 code points です。
 元の tool output と transcript はそのまま保存し、次の provider request だけに marker 付き projection を使います。

@@ -426,6 +426,13 @@ async fn NativeService::handle_get(
   port : Int,
   identity_key : String,
 ) -> Unit {
+  if path == "/api/metadata" {
+    self.respond_json(connection, 200, {
+      "ok": true.to_json(),
+      "result": self.metadata(),
+    })
+    return
+  }
   if path == "/api/v1/snapshot" {
     match self.runtime.remote_snapshot(identity_key) {
       Ok(value) => self.respond_json(connection, 200, value)
@@ -471,6 +478,204 @@ async fn NativeService::handle_get(
     return
   }
   self.serve_static(path, connection, port)
+}
+
+///|
+fn service_provider_hostname(raw_url : String) -> String? {
+  let remainder = if raw_url.has_prefix("https://") {
+    raw_url[8:].to_owned()
+  } else if raw_url.has_prefix("http://") {
+    raw_url[7:].to_owned()
+  } else {
+    return None
+  }
+  let authority = match remainder.find("/") {
+    Some(index) => remainder[:index].to_owned()
+    None => remainder
+  }
+  let authority = match authority.split_once("@") {
+    Some((_, host)) => host.to_owned()
+    None => authority
+  }
+  let authority = match authority.find("?") {
+    Some(index) => authority[:index].to_owned()
+    None => authority
+  }
+  let authority = match authority.find("#") {
+    Some(index) => authority[:index].to_owned()
+    None => authority
+  }
+  let hostname = if authority.has_prefix("[") {
+    match authority.find("]") {
+      Some(index) => authority[:index + 1].to_owned()
+      None => return None
+    }
+  } else {
+    match authority.split_once(":") {
+      Some((host, _)) => host.to_owned()
+      None => authority
+    }
+  }
+  let hostname = hostname.to_lower()
+  let mut suspicious = hostname.has_prefix("sk-") ||
+    hostname.has_prefix("sk_") ||
+    hostname.contains("sk-") ||
+    hostname.contains("sk_") ||
+    hostname.contains("api_key") ||
+    hostname.contains("api-key") ||
+    hostname.contains("token") ||
+    hostname.contains("secret") ||
+    hostname.contains("password")
+  let mut hexadecimal_run = 0
+  for ch in hostname {
+    let code = ch.to_int()
+    if (code >= 48 && code <= 57) || (code >= 97 && code <= 102) {
+      hexadecimal_run += 1
+      if hexadecimal_run >= 32 {
+        suspicious = true
+      }
+    } else {
+      hexadecimal_run = 0
+    }
+  }
+  if hostname.is_empty() ||
+    hostname.length() > 253 ||
+    suspicious ||
+    hostname.contains("@") {
+    return None
+  }
+  let mut valid = true
+  if hostname.has_prefix("[") {
+    for ch in hostname[1:hostname.length() - 1] {
+      let code = ch.to_int()
+      if !((code >= 48 && code <= 57) ||
+        (code >= 97 && code <= 102) ||
+        code == 58) {
+        valid = false
+      }
+    }
+  } else {
+    for ch in hostname {
+      let code = ch.to_int()
+      if !((code >= 48 && code <= 57) ||
+        (code >= 97 && code <= 122) ||
+        code == 45 ||
+        code == 46) {
+        valid = false
+      }
+    }
+  }
+  if valid {
+    Some(hostname)
+  } else {
+    None
+  }
+}
+
+///|
+fn service_provider_label(config : NativeProviderConfig) -> String {
+  if config.demo_provider {
+    return "デモ"
+  }
+  if config.auth_mode == NativeAuthMode::ChatGPT {
+    return "ChatGPT"
+  }
+  let protocol_label = match config.protocol {
+    NativeProtocol::DeepSeekMessages => "DeepSeek"
+    NativeProtocol::OpenAIChatCompletions => "OpenAI 互換 API"
+    NativeProtocol::OpenAIResponses => "OpenAI Responses API"
+  }
+  let default_url = match config.protocol {
+    NativeProtocol::DeepSeekMessages => "https://api.deepseek.com/anthropic"
+    NativeProtocol::OpenAIChatCompletions => "https://api.openai.com"
+    NativeProtocol::OpenAIResponses => "https://api.openai.com"
+  }
+  let hostname = match
+    service_provider_hostname(config.base_url.unwrap_or(default_url)) {
+    Some(value) => value
+    None => return protocol_label
+  }
+  if hostname == "localhost" || hostname == "127.0.0.1" || hostname == "[::1]" {
+    return "ローカル API"
+  }
+  if hostname == "api.deepseek.com" || hostname.has_suffix(".deepseek.com") {
+    return "DeepSeek"
+  }
+  if hostname == "api.openai.com" || hostname.has_suffix(".openai.com") {
+    return if config.protocol == NativeProtocol::OpenAIResponses {
+      "OpenAI Responses API"
+    } else {
+      "OpenAI"
+    }
+  }
+  hostname
+}
+
+///|
+fn service_model_display_name(value : String) -> String {
+  let model = value.trim().to_owned()
+  if model.is_empty() || model.length() > 128 {
+    return "カスタムモデル"
+  }
+  let lower_model = model.to_lower()
+  if lower_model.contains("sk-") ||
+    lower_model.contains("sk_") ||
+    lower_model.contains("api-key") ||
+    lower_model.contains("api_key") ||
+    lower_model.contains("token") ||
+    lower_model.contains("secret") ||
+    lower_model.contains("password") {
+    return "カスタムモデル"
+  }
+  let mut valid = true
+  let mut identifier_only = true
+  for ch in model {
+    let code = ch.to_int()
+    if !((code >= 48 && code <= 57) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      code == 95 ||
+      code == 46 ||
+      code == 58 ||
+      code == 47 ||
+      code == 43 ||
+      code == 45) {
+      valid = false
+    }
+    if !((code >= 48 && code <= 57) ||
+      (code >= 65 && code <= 90) ||
+      (code >= 97 && code <= 122) ||
+      code == 95 ||
+      code == 45) {
+      identifier_only = false
+    }
+  }
+  if identifier_only && model.length() >= 40 {
+    valid = false
+  }
+  if valid {
+    model
+  } else {
+    "カスタムモデル"
+  }
+}
+
+///|
+async fn NativeService::metadata(self : NativeService) -> Json {
+  let provider_config = self.runtime.provider_config
+  let model = if provider_config.auth_mode == NativeAuthMode::ChatGPT {
+    string_field(self.runtime.auth.status(), "selected_model").unwrap_or(
+      provider_config.model,
+    )
+  } else {
+    provider_config.model
+  }
+  {
+    "project": native_workspace_basename(self.runtime.tools.workspace).to_json(),
+    "repository": self.runtime.tools.repository_metadata(),
+    "provider": service_provider_label(provider_config).to_json(),
+    "model": service_model_display_name(model).to_json(),
+  }
 }
 
 ///|

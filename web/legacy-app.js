@@ -1,16 +1,23 @@
 import { drawSceneSnapshot } from "./canvas-renderer.js";
-import { isBusy, isReadOnly, statusLabel, sessionList, acceptsSnapshot, prettyArguments, runError, displayMessages, updateShellContext } from "./view-model.js";
+import { isBusy, isReadOnly, statusLabel, sessionList, acceptsSnapshot, prettyArguments, runError, displayMessages, updateShellContext, createWorkspaceMetadataRefresher, updateWorkspaceMetadata, restoreJapaneseFont, setJapaneseFont } from "./view-model.js";
 
 const $ = (id) => document.getElementById(id);
 const state = {
   moon: null, sessions: [], id: null, snapshot: { messages: [] },
   selection: 0, mutation: false, poll: null, polling: false, lastList: 0,
-  connection: "connecting", connectionError: false,
+  connection: "connecting", connectionError: false, workspaceMetadata: null,
   follow: true, textView: false, frame: null, transcriptKey: "", statusKey: "", actionError: "", actionMessage: "",
 };
 const scroll = $("transcript-scroll");
 const canvas = $("transcript-canvas");
 const context = canvas.getContext("2d");
+const workspaceMetadataRefresher = createWorkspaceMetadataRefresher({
+  onMetadata(metadata) {
+    state.workspaceMetadata = metadata;
+    updateWorkspaceMetadata(metadata);
+  },
+});
+function refreshWorkspaceMetadata(options) { return workspaceMetadataRefresher.refresh(options); }
 
 function connectionError(error) {
   state.connection = "offline";
@@ -36,12 +43,12 @@ async function api(operation, input = {}) {
       body: JSON.stringify({ operation, input }), signal: controller.signal,
     });
     let payload;
-    try { payload = await response.json(); } catch { throw new Error(`Server response could not be read (HTTP ${response.status}).`); }
-    if (!response.ok || !payload.ok) throw new Error(payload.error || `Request failed (HTTP ${response.status}).`);
+    try { payload = await response.json(); } catch { throw new Error(`サーバー応答を読み取れませんでした（HTTP ${response.status}）。`); }
+    if (!response.ok || !payload.ok) throw new Error(payload.error || `リクエストに失敗しました（HTTP ${response.status}）。`);
     return payload.result;
   } catch (error) {
-    if (error.name === "AbortError") throw new Error("The request timed out. Reconnect to check the session's current state.");
-    if (error instanceof TypeError) throw new Error("Cannot reach the local server. Check that it is running, then reconnect.");
+    if (error.name === "AbortError") throw new Error("リクエストがタイムアウトしました。再接続してセッションの状態を確認してください。");
+    if (error instanceof TypeError) throw new Error("ローカルサーバーに接続できません。サーバーが起動していることを確認してから再接続してください。");
     throw error;
   } finally { clearTimeout(timeout); }
 }
@@ -64,8 +71,8 @@ function renderSessions() {
     const empty = document.createElement("p");
     empty.className = "empty-list";
     empty.textContent = query
-      ? "No conversations match this search."
-      : "No conversations yet. Send a prompt to begin.";
+      ? "検索に一致する会話はありません。"
+      : "会話はまだありません。メッセージを送って開始してください。";
     container.append(empty);
     return;
   }
@@ -83,7 +90,7 @@ function renderSessions() {
       button.append(title, status);
       button.addEventListener("click", () => selectSession(session.id));
     }
-    button.children[0].textContent = session.title || "Untitled session";
+    button.children[0].textContent = session.title || "無題のセッション";
     button.children[1].textContent = statusLabel(session);
     if (session.id === state.id) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
@@ -103,22 +110,22 @@ function renderControls() {
     && (session.events || []).some((event) => event.type === "tool/result");
   const canFork = Boolean(state.id) && !readOnly && !busy
     && ["idle", "completed", "failed", "cancelled"].includes(session.status);
-  $("session-title").textContent = state.id ? session.title || "Untitled session" : "Agent workspace";
+  $("session-title").textContent = state.id ? session.title || "無題のセッション" : "エージェントのワークスペース";
   $("status").textContent = statusLabel(session);
   $("status").dataset.state = approval ? "approval" : session.status || "idle";
-  $("progress").textContent = session.turn_id > 0 ? `Turn ${session.turn_id} · Step ${session.step || 0}` : "";
+  $("progress").textContent = session.turn_id > 0 ? `${session.turn_id} ターン目 · ステップ ${session.step || 0}` : "";
   $("cancel").disabled = state.mutation || !busy;
   $("fork-session").disabled = state.mutation || !canFork;
   $("prune-results").hidden = !canPrune;
   $("prune-results").disabled = state.mutation || !canPrune;
   $("new-session").disabled = state.mutation;
   $("prompt").disabled = readOnly;
-  $("prompt").placeholder = readOnly ? "Imported history is read-only" : "What would you like to work on?";
+  $("prompt").placeholder = readOnly ? "読み込んだ履歴は読み取り専用です" : "取り組みたいことを入力してください";
   $("send").disabled = state.mutation || busy || readOnly || !state.moon || !$("prompt").value.trim();
-  $("composer-hint").textContent = readOnly ? "This imported history is read-only and cannot be continued." : approval ? "Review the tool request to continue." : busy ? "The agent is working. Stop to cancel this turn." : "⌘ / Ctrl + Enter to send";
+  $("composer-hint").textContent = readOnly ? "読み込んだ履歴は読み取り専用のため、続けて送信できません。" : approval ? "ツールの実行内容を確認してください。" : busy ? "エージェントが処理中です。停止するとこのターンをキャンセルします。" : "⌘ / Ctrl + Enter で送信";
   $("approval").hidden = !approval;
   if (approval) {
-    $("approval-description").textContent = `${approval.name} is waiting for permission to run.`;
+    $("approval-description").textContent = `${approval.name} の実行許可を待っています。`;
     const argumentsText = prettyArguments(approval.arguments);
     if ($("approval-arguments").textContent !== argumentsText) $("approval-arguments").textContent = argumentsText;
   }
@@ -131,7 +138,7 @@ function renderControls() {
   $("action-message").textContent = state.actionMessage;
   const statusKey = `${state.id}:${session.status}:${approval?.call_id || ""}`;
   if (state.statusKey !== statusKey) {
-    $("announcement").textContent = approval ? `Approval required for ${approval.name}.` : statusLabel(session);
+    $("announcement").textContent = approval ? `${approval.name} の実行許可が必要です。` : statusLabel(session);
     state.statusKey = statusKey;
   }
   updateShellContext(session, state.connection, state.connectionError);
@@ -152,7 +159,7 @@ function renderAccessibleTranscript() {
     article.append(heading, content); fragment.append(article);
   }
   if (!messages.length) {
-    const empty = document.createElement("p"); empty.textContent = "Send a prompt to start."; fragment.append(empty);
+    const empty = document.createElement("p"); empty.textContent = "メッセージを送ると開始します。"; fragment.append(empty);
   }
   container.replaceChildren(fragment);
   if (state.follow || wasBottom) container.scrollTop = container.scrollHeight;
@@ -176,7 +183,7 @@ function paint() {
     const scene = JSON.parse(state.moon.render_ui(JSON.stringify(presentation), width, height));
     drawSceneSnapshot(context, scene, { width, height, scale });
     $("jump-latest").hidden = state.follow || extent <= height;
-  } catch (error) { connectionError(new Error(`Conversation rendering failed: ${error.message}`)); }
+  } catch (error) { connectionError(new Error(`会話の描画に失敗しました: ${error.message}`)); }
 }
 
 function schedulePaint() {
@@ -194,6 +201,7 @@ function acceptSnapshot(snapshot) {
 }
 
 async function refresh({ list = false } = {}) {
+  void refreshWorkspaceMetadata();
   const selected = state.id;
   const selection = state.selection;
   if (list || Date.now() - state.lastList > 5000) {
@@ -249,7 +257,7 @@ async function selectSession(id) {
 async function mutate(body) {
   if (state.mutation) return;
   state.mutation = true; state.actionError = ""; state.actionMessage = ""; renderControls();
-  try { await body(); clearConnectionError(); }
+  try { await body(); void refreshWorkspaceMetadata({ force: true }); clearConnectionError(); }
   catch (error) { state.actionError = error instanceof Error ? error.message : String(error); }
   finally { state.mutation = false; renderControls(); schedulePoll(100); }
 }
@@ -268,7 +276,7 @@ async function createSession(title) {
 }
 
 $("new-session").addEventListener("click", () => mutate(async () => {
-  const session = await createSession(`Session ${state.sessions.length + 1}`);
+  const session = await createSession(`セッション ${state.sessions.length + 1}`);
   if (session.id === state.id) $("prompt").focus();
 }));
 $("session-search").addEventListener("input", renderSessions);
@@ -282,7 +290,7 @@ $("fork-session").addEventListener("click", () => mutate(async () => {
     state.id = child.id;
     state.selection += 1;
     state.follow = true;
-    state.actionMessage = `Forked ${sourceId} as an independent conversation.`;
+    state.actionMessage = `${sourceId} から会話を分岐しました。`;
     acceptSnapshot(child);
   } else {
     renderSessions();
@@ -301,8 +309,8 @@ $("prune-results").addEventListener("click", () => mutate(async () => {
   if (result.session.id === id) acceptSnapshot(result.session);
   const count = result.pruned.length;
   state.actionMessage = count > 0
-    ? `Trimmed ${count} tool result${count === 1 ? "" : "s"} for future model requests. Full original output remains in this session's event history.`
-    : "No oversized tool results needed trimming.";
+    ? `${count} 件のツール結果を今後のモデル要求向けに短縮しました。元の出力はこのセッションのイベント履歴に残っています。`
+    : "短縮が必要な大きさのツール結果はありません。";
 }));
 $("composer").addEventListener("submit", (event) => {
   event.preventDefault();
@@ -343,7 +351,7 @@ for (const [button, approved] of [["approve", true], ["deny", false]]) {
 $("text-view").addEventListener("click", () => {
   state.textView = !state.textView;
   $("text-view").setAttribute("aria-pressed", String(state.textView));
-  $("text-view").textContent = state.textView ? "Canvas view" : "Text view";
+  $("text-view").textContent = state.textView ? "キャンバス表示" : "テキスト表示";
   scroll.hidden = state.textView;
   $("text-transcript").classList.toggle("sr-only", !state.textView);
   $("jump-latest").hidden = true;
@@ -370,11 +378,11 @@ canvas.addEventListener("contextlost", (event) => { event.preventDefault(); });
 canvas.addEventListener("contextrestored", schedulePaint);
 new ResizeObserver(schedulePaint).observe($("transcript-area"));
 window.addEventListener("resize", schedulePaint);
-window.addEventListener("online", () => schedulePoll(0));
-document.addEventListener("visibilitychange", () => { if (!document.hidden) schedulePoll(0); });
+window.addEventListener("online", () => { void refreshWorkspaceMetadata({ force: true }); schedulePoll(0); });
+document.addEventListener("visibilitychange", () => { if (!document.hidden) { void refreshWorkspaceMetadata({ force: true }); schedulePoll(0); } });
 $("reconnect").addEventListener("click", async () => {
   $("reconnect").disabled = true;
-  try { if (!state.moon) await loadMoon(); await refresh({ list: true }); schedulePaint(); }
+  try { if (!state.moon) await loadMoon(); await refreshWorkspaceMetadata({ force: true }); await refresh({ list: true }); schedulePaint(); }
   catch (error) { connectionError(error); }
   finally { $("reconnect").disabled = false; renderControls(); schedulePoll(100); }
 });
@@ -383,11 +391,18 @@ async function loadMoon() {
   state.moon = await import("/moonbit/app.js");
   if (typeof state.moon.render_ui !== "function" || typeof state.moon.measure_ui !== "function") {
     state.moon = null;
-    throw new Error("The UI build is missing. Build the MoonBit browser module, then reconnect.");
+    throw new Error("UI ビルドがありません。MoonBit ブラウザーモジュールをビルドしてから再接続してください。");
   }
 }
 
 async function start() {
+  restoreJapaneseFont(document);
+  $("japanese-font").addEventListener("change", () => {
+    setJapaneseFont($("japanese-font").value, document);
+    schedulePaint();
+  });
+  void refreshWorkspaceMetadata({ force: true });
+  setInterval(() => { if (!document.hidden) void refreshWorkspaceMetadata({ force: true }); }, 10_000);
   renderControls();
   try { await loadMoon(); await refresh({ list: true }); }
   catch (error) { connectionError(error); }

@@ -4,13 +4,15 @@ function decode(value) {
   return JSON.parse(value);
 }
 
+class UnconfirmedReceiptError extends Error {}
+
 function randomEntropyHex() {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 export function createRemoteClient({ bridge: bridgeImpl, fetchImpl = fetch, EventSourceImpl = EventSource } = {}) {
-  if (!bridgeImpl) throw new Error("The shared client bridge is required.");
+  if (!bridgeImpl) throw new Error("共有クライアントブリッジが必要です。");
   const bridge = bridgeImpl;
   const handle = bridge.client_init();
   let restoredScope = "";
@@ -91,9 +93,9 @@ export function createRemoteClient({ bridge: bridgeImpl, fetchImpl = fetch, Even
       });
     } catch (error) {
       if (error?.name === "AbortError") {
-        throw new Error("The workspace request timed out. Check the command receipt before sending the action again.");
+        throw new Error("ワークスペースへのリクエストがタイムアウトしました。再送信する前に操作の受付結果を確認してください。");
       }
-      if (error instanceof TypeError) throw new Error("Cannot reach the workspace host. Check its network or tailnet connection.");
+      if (error instanceof TypeError) throw new Error("ワークスペースのホストに接続できません。ネットワークまたは Tailnet の接続を確認してください。");
       throw error;
     } finally {
       clearTimeout(timeout);
@@ -102,11 +104,13 @@ export function createRemoteClient({ bridge: bridgeImpl, fetchImpl = fetch, Even
     try {
       if (response.status !== 204) payload = await response.json();
     } catch {
-      throw new Error(`The workspace returned an unreadable response (HTTP ${response.status}).`);
+      throw new Error(`ワークスペースからの応答を読み取れませんでした（HTTP ${response.status}）。`);
     }
     if (!response.ok) {
       const detail = typeof payload?.error === "string" ? payload.error : `HTTP ${response.status}`;
-      throw new Error(`Workspace request failed: ${detail}`);
+      const error = new Error(`ワークスペースへのリクエストに失敗しました: ${detail}`);
+      error.status = response.status;
+      throw error;
     }
     return payload;
   }
@@ -114,7 +118,7 @@ export function createRemoteClient({ bridge: bridgeImpl, fetchImpl = fetch, Even
   async function snapshot() {
     const payload = await request("/api/v1/snapshot");
     const result = decode(bridge.client_accept_snapshot(handle, JSON.stringify(payload)));
-    if (!result.ok) throw new Error(result.error || "The workspace snapshot was rejected.");
+    if (!result.ok) throw new Error(result.error || "ワークスペースのスナップショットが拒否されました。");
     const current = restoreForScope(result.state);
     persist();
     return { result, state: current, payload };
@@ -123,7 +127,7 @@ export function createRemoteClient({ bridge: bridgeImpl, fetchImpl = fetch, Even
   async function selectedSession(sessionId) {
     const payload = await request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`);
     const result = decode(bridge.client_accept_session(handle, JSON.stringify(payload)));
-    if (!result.ok) throw new Error(result.error || "The selected session changed; refresh the workspace.");
+    if (!result.ok) throw new Error(result.error || "選択中のセッションが変わりました。ワークスペースを更新してください。");
     return result.state;
   }
 
@@ -135,7 +139,7 @@ export function createRemoteClient({ bridge: bridgeImpl, fetchImpl = fetch, Even
   function subscribe({ onEvent, onError }) {
     closeStream();
     const current = state();
-    if (!current.cursor) throw new Error("A workspace snapshot is required before subscribing.");
+    if (!current.cursor) throw new Error("ライブ更新を開始する前にワークスペースのスナップショットが必要です。");
     const url = new URL("/api/v1/events", location.origin);
     url.searchParams.set("cursor", current.cursor);
     if (current.selected_session) url.searchParams.set("session_id", current.selected_session);
@@ -161,14 +165,14 @@ export function createRemoteClient({ bridge: bridgeImpl, fetchImpl = fetch, Even
     };
     stream.onerror = () => {
       bridge.client_connection_failed(handle);
-      onError?.(new Error("Live updates paused. The browser will reconnect automatically."));
+      onError?.(new Error("ライブ更新を一時停止しました。ブラウザーが自動的に再接続します。"));
     };
     return closeStream;
   }
 
   function newCommandId() {
     const commandId = bridge.client_new_command_id(String(Date.now()), randomEntropyHex());
-    if (!commandId) throw new Error("The browser could not create a secure command ID.");
+    if (!commandId) throw new Error("安全な操作 ID を作成できませんでした。");
     return commandId;
   }
 
@@ -182,7 +186,7 @@ export function createRemoteClient({ bridge: bridgeImpl, fetchImpl = fetch, Even
       JSON.stringify(input ?? {}),
       approvalRevision,
     ));
-    if (!queued.ok) throw new Error(queued.error || "The command is not valid for this workspace state.");
+    if (!queued.ok) throw new Error(queued.error || "このワークスペースの状態では操作を実行できません。");
     const sent = queued.command;
     bridge.client_mark_command_sent(handle, commandId);
     persistNow();
@@ -192,7 +196,7 @@ export function createRemoteClient({ bridge: bridgeImpl, fetchImpl = fetch, Even
         body: JSON.stringify(sent),
       });
       const applied = decode(bridge.client_apply_receipt(handle, JSON.stringify(receipt)));
-      if (!applied.ok) throw new Error(applied.error || "The command receipt did not match this request.");
+      if (!applied.ok) throw new Error(applied.error || "操作の受付記録がこのリクエストと一致しません。");
       persist();
       return receipt;
     } catch (error) {
@@ -203,10 +207,10 @@ export function createRemoteClient({ bridge: bridgeImpl, fetchImpl = fetch, Even
         if (receipt) return receipt;
         bridge.client_mark_receipt_missing(handle, commandId);
         persistNow();
-        throw new Error("The host did not confirm whether this action was accepted. Check its receipt before sending it again.");
+        throw new UnconfirmedReceiptError("ホストは操作を受け付けたか確認できませんでした。再送信する前に受付記録を確認してください。");
       } catch (receiptError) {
-        if (receiptError.message.includes("did not confirm")) throw receiptError;
-        throw new Error(`${error.message} The command may have reached the host; reconnect to check its receipt.`);
+        if (receiptError instanceof UnconfirmedReceiptError) throw receiptError;
+        throw new Error(`${error.message} 操作がホストに届いている場合があります。再接続して受付記録を確認してください。`);
       }
     }
   }
@@ -215,11 +219,11 @@ export function createRemoteClient({ bridge: bridgeImpl, fetchImpl = fetch, Even
     try {
       const receipt = await request(`/api/v1/commands/${encodeURIComponent(commandId)}`);
       const applied = decode(bridge.client_apply_receipt(handle, JSON.stringify(receipt)));
-      if (!applied.ok) throw new Error(applied.error || "The host returned a mismatched command receipt.");
+      if (!applied.ok) throw new Error(applied.error || "ホストから一致しない操作受付記録が返されました。");
       persist();
       return receipt;
     } catch (error) {
-      if (error.message.includes("HTTP 404")) return null;
+      if (error.status === 404) return null;
       throw error;
     }
   }

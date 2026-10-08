@@ -1,6 +1,7 @@
 // Optional real-Chromium acceptance: build first, then `node web/browser-smoke.mjs`.
 // All provider responses and tool writes are confined to this test's temp directory.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -14,7 +15,12 @@ const { chromium } = createRequire(import.meta.url)("playwright");
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const screenshots = path.resolve(process.env.DSH_SCREENSHOT_DIR || path.join(repo, "_build/browser-smoke"));
 const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "dsh-browser-"));
+execFileSync("git", ["-C", workspace, "init", "--quiet", "-b", "main"]);
+execFileSync("git", ["-C", workspace, "config", "user.name", "Browser Smoke"]);
+execFileSync("git", ["-C", workspace, "config", "user.email", "browser-smoke@example.test"]);
 await fs.writeFile(path.join(workspace, "large.txt"), `${"A".repeat(12_000)}😀 tail\n`);
+execFileSync("git", ["-C", workspace, "add", "large.txt"]);
+execFileSync("git", ["-C", workspace, "commit", "--quiet", "-m", "Browser smoke fixture"]);
 await fs.mkdir(screenshots, { recursive: true });
 await fs.rm(path.join(screenshots, "failure.png"), { force: true });
 let callNumber = 0;
@@ -208,13 +214,24 @@ try {
   page.on("pageerror", (error) => failures.push(error.message));
   await page.goto(web.url, { waitUntil: "domcontentloaded" });
   assert.equal(await page.locator(".yk-shell").count(), 1, "the Yami-kumo application shell mounts");
+  await page.waitForFunction(() => document.getElementById("provider-model").textContent !== "プロバイダーを確認中…");
+  assert.equal(await page.locator("html").getAttribute("lang"), "ja");
+  assert.equal(await page.locator("#project-name").textContent(), path.basename(workspace));
+  assert.equal(await page.locator("#repository-name").textContent(), path.basename(workspace));
+  assert.equal(await page.locator("#branch-name").textContent(), "main");
+  assert.equal(await page.locator("#provider-model").textContent(), "ローカル API · browser-fixture");
+  await page.locator("#japanese-font").selectOption("noto");
+  assert.match(await page.evaluate(() => getComputedStyle(document.body).fontFamily), /Noto Sans JP/);
   await send("Hello from the browser");
-  await waitStatus("Completed");
+  await waitStatus("完了");
+  assert.match(await page.evaluate(() => getComputedStyle(document.querySelector(".text-message pre")).fontFamily), /Noto Sans JP/);
   assert.match(await page.locator("#text-transcript").textContent(), /MoonBit engine/);
   assert.equal(await page.locator("#text-transcript script").count(), 0);
+  execFileSync("git", ["-C", workspace, "branch", "-m", "live-context"]);
+  await page.waitForFunction(() => document.getElementById("branch-name").textContent === "live-context", null, { timeout: 15_000 });
   const firstId = await currentId();
-  assert.equal(await page.locator("#context-status").textContent(), "Completed");
-  assert.match(await page.locator("#context-history").textContent(), /messages · .*events/);
+  assert.equal(await page.locator("#context-status").textContent(), "完了");
+  assert.match(await page.locator("#context-history").textContent(), /メッセージ · .*イベント/);
   await page.locator("#sidebar-toggle").click();
   assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("aria-hidden"), "true");
   assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("inert"), "",
@@ -257,7 +274,7 @@ try {
   const secondId = await currentId();
   await page.locator(`.session-option[data-id='${firstId}']`).click();
   await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
-  await waitStatus("Completed");
+  await waitStatus("完了");
 
   const sourceBeforeFork = await host.session(firstId);
   await page.locator("#fork-session").waitFor({ state: "visible" });
@@ -305,33 +322,33 @@ try {
   assert.equal(forkList.result.filter((session) => session.parent_session_id === firstId).length, 2);
   await page.locator(`.session-option[data-id='${firstId}']`).click();
   await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
-  await waitStatus("Completed");
+  await waitStatus("完了");
 
-  const finalAssistantRowsBefore = await page.locator("#text-transcript h2").filter({ hasText: /^Assistant$/ }).count();
+  const finalAssistantRowsBefore = await page.locator("#text-transcript h2").filter({ hasText: /^アシスタント$/ }).count();
   await send("live stream smoke");
   await page.waitForFunction(() => {
     const transcript = document.getElementById("text-transcript");
-    return transcript.textContent.includes("Assistant · writing")
+    return transcript.textContent.includes("アシスタント · 生成中")
       && transcript.textContent.includes("Live answer 日本語 🌱");
   }, undefined, { timeout: 15_000 });
-  assert.match(await page.locator("#text-transcript").textContent(), /Reasoning · writing/);
-  assert.equal(await page.locator("#status").textContent(), "Running");
+  assert.match(await page.locator("#text-transcript").textContent(), /推論 · 生成中/);
+  assert.equal(await page.locator("#status").textContent(), "実行中");
   releaseLiveStream();
   releaseLiveStream = undefined;
-  await waitStatus("Completed");
-  assert.equal(await page.locator("#text-transcript h2").filter({ hasText: /^Assistant$/ }).count(), finalAssistantRowsBefore + 1);
-  assert.doesNotMatch(await page.locator("#text-transcript").textContent(), /Assistant · writing/);
+  await waitStatus("完了");
+  assert.equal(await page.locator("#text-transcript h2").filter({ hasText: /^アシスタント$/ }).count(), finalAssistantRowsBefore + 1);
+  assert.doesNotMatch(await page.locator("#text-transcript").textContent(), /アシスタント · 生成中/);
 
   await send("prune browser output");
-  await waitStatus("Completed");
+  await waitStatus("完了");
   await page.locator("#prune-results").waitFor({ state: "visible" });
   const beforePrune = await host.session(firstId);
   const fullOutput = beforePrune.messages.find((message) => message.role === "tool");
   assert.ok(fullOutput.content.length > 8192);
   await page.locator("#prune-results").click();
   await page.locator("#action-message").waitFor({ state: "visible" });
-  assert.match(await page.locator("#action-message").textContent(), /Trimmed 1 tool result/);
-  assert.match(await page.locator("#text-transcript").textContent(), /Tool result · trimmed for model context/);
+  assert.match(await page.locator("#action-message").textContent(), /1 件のツール結果/);
+  assert.match(await page.locator("#text-transcript").textContent(), /ツール結果 · モデル入力用に短縮/);
   const afterPrune = await host.session(firstId);
   assert.equal(afterPrune.messages.find((message) => message.role === "tool").content, fullOutput.content);
   assert.ok(afterPrune.events.some((event) => event.type === "tool/result/pruned"));
@@ -341,7 +358,7 @@ try {
     "selecting another session clears the previous pruning success notice");
   await page.locator(`.session-option[data-id='${firstId}']`).click();
   await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
-  await waitStatus("Completed");
+  await waitStatus("完了");
   const turnBeforeContinue = (await host.session(firstId)).turn_id;
   const providerCallsBeforeContinue = providerCalls;
   await send("continue after browser pruning");
@@ -371,11 +388,11 @@ try {
   await page.unroute("**/api/call");
   await page.locator(`.session-option[data-id='${firstId}']`).click();
   await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
-  await waitStatus("Completed");
+  await waitStatus("完了");
 
   await page.locator(".session-option[data-id='cap']").click();
   await page.waitForFunction(() => document.querySelector(".session-option[aria-current='page']")?.dataset.id === "cap");
-  await waitStatus("Completed");
+  await waitStatus("完了");
   await page.locator("#prune-results").click();
   await capPruneStarted;
   assert.equal(capPruneResponse.ok, false);
@@ -391,13 +408,13 @@ try {
   assert.equal(await currentId(), "other");
   await page.locator(`.session-option[data-id='${firstId}']`).click();
   await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
-  await waitStatus("Completed");
+  await waitStatus("完了");
 
   // Successful responses must preserve edits made to the next draft in flight.
   await send("draft race");
   await page.locator("#prompt").fill("Keep this next draft");
   await page.waitForFunction(() => !document.getElementById("new-session").disabled);
-  await waitStatus("Completed");
+  await waitStatus("完了");
   assert.equal(await page.locator("#prompt").inputValue(), "Keep this next draft");
   await page.locator("#prompt").fill("");
 
@@ -418,7 +435,7 @@ try {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.waitForFunction(() => window.innerHeight >= 800);
   await send("Please write approved.txt");
-  await waitStatus("Needs approval");
+  await waitStatus("承認待ち");
   assert.match(await page.locator("#approval-arguments").textContent(), /approved\.txt/);
   await assert.rejects(fs.access(path.join(workspace, "approved.txt")));
   await page.setViewportSize({ width: 1280, height: 500 });
@@ -430,25 +447,25 @@ try {
   await page.waitForFunction(() => window.innerHeight >= 800);
   await page.screenshot({ path: path.join(screenshots, "desktop-approval.png"), fullPage: true });
   await page.locator("#approve").click();
-  await waitStatus("Completed");
+  await waitStatus("完了");
   assert.match(await fs.readFile(path.join(workspace, "approved.txt"), "utf8"), /explicit browser approval/);
 
   await send("Please write denied.txt");
-  await waitStatus("Needs approval");
+  await waitStatus("承認待ち");
   await page.locator("#deny").click();
-  await waitStatus("Completed");
+  await waitStatus("完了");
   await assert.rejects(fs.access(path.join(workspace, "denied.txt")));
 
   await send("slow request");
-  await waitStatus("Running");
+  await waitStatus("実行中");
   await page.locator("#cancel").click();
-  await waitStatus("Cancelled");
+  await waitStatus("キャンセル済み");
   await send("provider failure");
-  await waitStatus("Failed");
+  await waitStatus("失敗");
   assert.match(await page.locator("#run-error").textContent(), /503|Fixture provider/);
 
   await send("long transcript");
-  await waitStatus("Completed");
+  await waitStatus("完了");
   await page.waitForFunction(() => document.getElementById("transcript-scroll").scrollHeight > document.getElementById("transcript-scroll").clientHeight);
   await page.evaluate(() => { document.getElementById("transcript-scroll").scrollTop = 0; });
   await page.locator("#jump-latest").waitFor({ state: "visible" });
@@ -468,12 +485,13 @@ try {
   const imported = await host.call("session_import", { jsonl: importedSource });
   assert.equal(imported.ok, true, imported.error);
   await page.reload({ waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => document.getElementById("status").textContent === "Read-only · Completed");
+  await page.waitForFunction(() => document.getElementById("status").textContent === "読み取り専用 · 完了");
+  assert.equal(await page.locator("#japanese-font").inputValue(), "noto");
   assert.equal(await page.locator("#prompt").isDisabled(), true);
   assert.equal(await page.locator("#send").isDisabled(), true);
-  assert.match(await page.locator("#context-source").textContent(), /Imported Session v4 · read-only/);
+  assert.match(await page.locator("#context-source").textContent(), /Session v4 の読み込み履歴 · 読み取り専用/);
   assert.equal(await page.locator("#context-read-only").isVisible(), true);
-  assert.match(await page.locator("#composer-hint").textContent(), /read-only/);
+  assert.match(await page.locator("#composer-hint").textContent(), /読み取り専用/);
   assert.match(await page.locator("#text-transcript").textContent(), /DONE/);
   const providerCallsBeforeRejectedContinuation = providerCalls;
   const deniedContinuation = await host.call("session_send", { session_id: imported.result.id, prompt: "do not run" });
@@ -481,7 +499,7 @@ try {
   assert.equal(providerCalls, providerCallsBeforeRejectedContinuation);
 
   await page.locator(`.session-option[data-id='${firstId}']`).click();
-  await page.waitForFunction(() => document.getElementById("status").textContent === "Completed");
+  await page.waitForFunction(() => document.getElementById("status").textContent === "完了");
 
   // A later explicit session selection wins over an earlier create request.
   await page.locator("#new-session").click();
@@ -494,13 +512,13 @@ try {
   await page.waitForFunction(() => document.getElementById("transcript-canvas").width < 500);
   assert.equal(await page.locator(".yk-shell").getAttribute("data-sidebar-collapsed"), "false");
   assert.equal(await page.locator("#sidebar-toggle").getAttribute("aria-pressed"), "false");
-  assert.equal(await page.locator("#sidebar-toggle").textContent(), "Hide navigation");
+  assert.equal(await page.locator("#sidebar-toggle").textContent(), "ナビゲーションを隠す");
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.waitForFunction(() => window.matchMedia("(min-width: 821px)").matches);
   await page.waitForFunction(() => document.getElementById("yk-mobile-navigation").getAttribute("aria-hidden") === "false");
   assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("aria-hidden"), "false",
     "desktop navigation remains visible and reachable after resizing from mobile");
-  assert.equal(await page.locator("#sidebar-toggle").textContent(), "Hide navigation");
+  assert.equal(await page.locator("#sidebar-toggle").textContent(), "ナビゲーションを隠す");
   await page.setViewportSize({ width: 390, height: 844 });
   await page.waitForFunction(() => document.getElementById("transcript-canvas").width < 500);
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);

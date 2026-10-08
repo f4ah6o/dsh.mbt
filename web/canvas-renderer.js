@@ -116,6 +116,11 @@ export function drawSceneSnapshot(context, snapshot, { width, height, scale } = 
   }
   context.save();
   try {
+    const ownerWindow = context.canvas?.ownerDocument?.defaultView;
+    const configuredFont = ownerWindow?.getComputedStyle?.(
+      context.canvas.ownerDocument.documentElement,
+    ).getPropertyValue("--dsh-font-family").trim();
+    const fontFamily = configuredFont || "system-ui, sans-serif";
     context.setTransform(scale, 0, 0, scale, 0, 0);
     context.clearRect(0, 0, width, height);
     context.globalCompositeOperation = "source-over";
@@ -139,7 +144,7 @@ export function drawSceneSnapshot(context, snapshot, { width, height, scale } = 
         } else {
           // Text bounds are local to the transformed item, unlike clip chains.
           clip(context, item.bounds);
-          context.font = `${item.font_size}px system-ui, sans-serif`;
+          context.font = `${item.font_size}px ${fontFamily}`;
           context.textAlign = "left";
           context.textBaseline = "top";
           context.direction = "ltr";

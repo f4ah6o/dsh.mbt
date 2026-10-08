@@ -760,3 +760,152 @@ async fn NativeTools::run_process(
     }
   }
 }
+
+///|
+fn native_workspace_basename(path : String) -> String {
+  let mut name = ""
+  for component in path.replace_all(old="\\", new="/").split("/") {
+    if component != "" {
+      name = component.to_owned()
+    }
+  }
+  if name.is_empty() {
+    "ワークスペース"
+  } else {
+    name
+  }
+}
+
+///|
+async fn native_resolved_git_common_dir(
+  workspace : String,
+  common_directory : String,
+) -> String {
+  if common_directory.is_empty() {
+    return ""
+  }
+  let absolute = if common_directory.has_prefix("/") {
+    common_directory
+  } else {
+    workspace + "/" + common_directory
+  }
+  @fs.realpath(absolute) catch {
+    _ => ""
+  }
+}
+
+///|
+fn native_repository_name(
+  repository_path : String,
+  common_path : String,
+) -> String {
+  let common_name = native_workspace_basename(common_path)
+  if common_name == ".git" {
+    native_workspace_basename(common_path[:common_path.length() - 5].to_owned())
+  } else if common_name.has_suffix(".git") {
+    common_name[:common_name.length() - 4].to_owned()
+  } else {
+    // With --separate-git-dir, the common directory is arbitrary storage;
+    // the checked-out repository identity comes from its actual worktree.
+    native_workspace_basename(repository_path)
+  }
+}
+
+///|
+async fn NativeTools::repository_metadata(self : NativeTools) -> Json {
+  let repository_path = match
+    self.run_process(
+      "git",
+      ["-C", self.workspace, "rev-parse", "--show-toplevel"],
+      "",
+      1000,
+      memory_limit_mb=64,
+    ) {
+    Ok(capture) if capture.code == 0 && !capture.truncated =>
+      capture.output.trim().to_owned()
+    _ => return Json::null()
+  }
+  if !repository_path.has_prefix("/") {
+    return Json::null()
+  }
+  let common_directory = match
+    self.run_process(
+      "git",
+      [
+        "-C",
+        self.workspace,
+        "rev-parse",
+        "--path-format=absolute",
+        "--git-common-dir",
+      ],
+      "",
+      1000,
+      memory_limit_mb=64,
+    ) {
+    Ok(capture) if capture.code == 0 && !capture.truncated =>
+      capture.output.trim().to_owned()
+    _ => ""
+  }
+  let common_path = native_resolved_git_common_dir(
+    self.workspace,
+    common_directory,
+  )
+  let repository_name = native_repository_name(repository_path, common_path)
+  let (branch, detached) = match
+    self.run_process(
+      "git",
+      ["-C", self.workspace, "symbolic-ref", "--quiet", "--short", "HEAD"],
+      "",
+      1000,
+      memory_limit_mb=64,
+    ) {
+    Ok(capture) if capture.code == 0 && !capture.truncated => {
+      let value = capture.output.trim().to_owned()
+      let mut safe = value.length() > 0 && value.length() <= 128
+      for ch in value {
+        let code = ch.to_int()
+        if code < 32 || code == 127 {
+          safe = false
+        }
+      }
+      if safe {
+        (value.to_json(), false.to_json())
+      } else {
+        (Json::null(), false.to_json())
+      }
+    }
+    _ => {
+      let commit = match
+        self.run_process(
+          "git",
+          ["-C", self.workspace, "rev-parse", "--short=12", "HEAD"],
+          "",
+          1000,
+          memory_limit_mb=64,
+        ) {
+        Ok(capture) if capture.code == 0 && !capture.truncated =>
+          capture.output.trim().to_owned()
+        _ => ""
+      }
+      let mut valid_commit = commit.length() == 12
+      for ch in commit {
+        let code = ch.to_int()
+        if !((code >= 48 && code <= 57) ||
+          (code >= 97 && code <= 102) ||
+          (code >= 65 && code <= 70)) {
+          valid_commit = false
+        }
+      }
+      if valid_commit {
+        (commit.to_json(), true.to_json())
+      } else {
+        (Json::null(), false.to_json())
+      }
+    }
+  }
+  Json::object({
+    "name": repository_name.to_json(),
+    "branch": branch,
+    "detached": detached,
+  })
+}
