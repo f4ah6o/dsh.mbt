@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "MoonBit DeepSeek Harness port with gpui.mbt UI and capability APIs.",
+  "description": "Pure MoonBit agent runtime, native CLI/service, and compiled browser UI.",
   "engines": {
     "node": ">=24"
   },
@@ -13,21 +13,16 @@
     "build:shell": "node scripts/build-web-shell.mjs",
     "check": "node scripts/check.mjs && node scripts/build-web-shell.mjs --check",
     "check:shell": "node scripts/build-web-shell.mjs --check",
-    "test": "npm run check && npm run test:moon && npm run build && npm run test:host && npm run test:web && npm run test:integration",
+    "test": "npm run check && npm run test:moon && npm run build && npm run test:web && npm run test:integration",
     "test:moon": "sh scripts/test-moon.sh",
-    "test:host": "node --test tests/host/*.test.mjs",
     "test:web": "node --test web/*.test.mjs",
-    "test:integration": "node --test tests/integration/*.test.mjs",
-    "start": "node host/cli.mjs",
-    "demo": "npm run build && node host/cli.mjs --demo",
+    "test:integration": "sh scripts/test-browser-smoke.sh",
+    "start": "moon run native --target native --release -- --serve",
+    "demo": "moon run native --target native --release -- --demo",
     "mutation": "node scripts/mutation.mjs",
     "mutation:list": "node scripts/mutation.mjs --list"
   },
-  "dependencies": {
-    "react": "19.1.1",
-    "react-dom": "19.1.1"
-  },
   "devDependencies": {
-    "esbuild": "0.28.2"
+    "playwright-core": "1.64.0"
   }
 }

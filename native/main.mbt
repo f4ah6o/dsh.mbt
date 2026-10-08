@@ -1,16 +1,42 @@
 ///|
 fn native_flag(args : Array[String], name : String) -> Bool {
-  args.any(value => value == name)
+  let mut index = if args.length() > 0 && args[0].has_prefix("-") {
+    0
+  } else {
+    1
+  }
+  while index < args.length() && args[index] != "--" {
+    if args[index] == name {
+      return true
+    }
+    if native_cli_is_value_option(args[index]) {
+      index = index + 2
+    } else {
+      index = index + 1
+    }
+  }
+  false
 }
 
 ///|
 fn native_option(args : Array[String], name : String) -> String? {
-  for index = 0; index + 1 < args.length(); index = index + 1 {
+  let mut found : String? = None
+  let mut index = if args.length() > 0 && args[0].has_prefix("-") {
+    0
+  } else {
+    1
+  }
+  while index + 1 < args.length() && args[index] != "--" {
     if args[index] == name {
-      return Some(args[index + 1])
+      found = Some(args[index + 1])
+      index = index + 2
+    } else if native_cli_is_value_option(args[index]) {
+      index = index + 2
+    } else {
+      index = index + 1
     }
   }
-  None
+  found
 }
 
 ///|
@@ -54,12 +80,18 @@ fn native_usage() -> String {
   "Usage:\n" +
   "  dsh-native --help\n" +
   "  dsh-native --demo --data-dir PATH --workspace PATH\n\n" +
-  "  dsh-native --run PROMPT [--session ID] [--demo] --data-dir PATH --workspace PATH\n" +
-  "  dsh-native --fork SESSION_ID [--demo] --data-dir PATH --workspace PATH\n" +
+  "  dsh-native run PROMPT [--session ID] [--demo] --data-dir PATH --workspace PATH\n" +
+  "  dsh-native import-session PATH [--demo] --data-dir PATH --workspace PATH\n" +
+  "  dsh-native prune-session ID [--threshold-chars N --head-chars N --tail-chars N] --data-dir PATH --workspace PATH\n" +
+  "  dsh-native fork-session ID [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh-native --session ID --approve-call CALL_ID --approval-revision REV [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh-native --session ID --deny-call CALL_ID --approval-revision REV [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh-native --auth-status|--sign-in|--models|--sign-out|--select-model MODEL --data-dir PATH --workspace PATH\n\n" +
-  "  dsh-native --serve --data-dir PATH --workspace PATH [--port PORT] [--allow-shell] [--demo]\n\n" +
+  "  dsh-native web --data-dir PATH --workspace PATH [--port PORT] [--allow-shell] [--demo]\n" +
+  "  dsh-native mcp --data-dir PATH --workspace PATH [--allow-shell] [--demo]\n\n" +
+  "Provider options: --mode deepseek|openai|openai-responses --model NAME --base-url URL --max-retries 0..5\n" +
+  "Approval options: --allow-shell, --approve-writes, --approve-tools write,edit,bash\n" +
+  "Use --json to print command results as JSON. API keys are read from DSH_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY.\n\n" +
   "The demo checkpoints a session, gates a write call on approval, runs the\n" +
   "workspace tool, feeds its result into the next model context, and verifies\n" +
   "that the completed session reloads from the native snapshot."
@@ -107,7 +139,7 @@ async fn native_cli_command(
     Err(error) => return Err(error)
   }
   let identity_key = runtime.state.identity_key
-  let (receipt, effects, should_start) = match
+  let (receipt, effects, should_start, control) = match
     runtime.accept_remote_command(command, identity_key) {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -115,7 +147,11 @@ async fn native_cli_command(
   if should_start {
     let accepted_revision = int_field(receipt, "accepted_revision").unwrap_or(0)
     runtime.run_command_job(
-      command_id, identity_key, accepted_revision, effects,
+      command_id,
+      identity_key,
+      accepted_revision,
+      effects,
+      control~,
     )
   }
   match runtime.find_receipt(command_id, identity_key) {
@@ -156,6 +192,19 @@ async fn native_cli_action(
   runtime : NativeRuntime,
   args : Array[String],
 ) -> Result[Json, String] {
+  if native_cli_has_prune_budget(args) &&
+    native_option(args, "--prune-session") is None {
+    return Err("tool-result pruning budget options require prune-session")
+  }
+  match native_option(args, "--import-session") {
+    Some(path) => return native_cli_import_action(runtime, path)
+    None => ()
+  }
+  match native_option(args, "--prune-session") {
+    Some(session_id) =>
+      return native_cli_prune_action(runtime, args, session_id)
+    None => ()
+  }
   if native_flag(args, "--auth-status") {
     return Ok(runtime.auth.status())
   }
@@ -231,6 +280,11 @@ async fn native_cli_action(
     deny_call is None {
     return Err("no native CLI action was selected")
   }
+  let approved_tools = match
+    native_cli_approved_tools(args, native_flag(args, "--allow-shell")) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
   let mut session_id = requested_session
   let mut receipt : Json? = None
   match fork_source {
@@ -263,7 +317,12 @@ async fn native_cli_action(
         runtime,
         None,
         "session_create",
-        { "id": generated.to_json(), "title": "Native CLI session".to_json() },
+        {
+          "id": generated.to_json(),
+          "title": native_option(args, "--title")
+          .unwrap_or("Native CLI session")
+          .to_json(),
+        },
         None,
       ) {
       Ok(value) => value
@@ -326,12 +385,91 @@ async fn native_cli_action(
         _ => ()
       }
   }
-  let session = match
+  let mut session = match
     runtime.invoke("session_get", { "session_id": active_session }) {
     Ok((value, _)) => value
     Err(error) => return Err(error)
   }
+  while prompt is Some(_) &&
+        string_field(session, "status") == Some("awaiting_approval") {
+    let pending = object_field(session, "pending_approval").unwrap_or(
+      Json::null(),
+    )
+    let tool_name = string_field(pending, "name").unwrap_or("unknown")
+    let approved = if native_cli_auto_approves(approved_tools, session) {
+      true
+    } else if c_stdin_is_terminal() != 0 {
+      eprintln(
+        "\nApprove " + tool_name + " for session " + active_session + "?",
+      )
+      eprintln(
+        object_field(pending, "arguments")
+        .map(value => value.stringify())
+        .unwrap_or("{}"),
+      )
+      @stdio.stderr.write("Allow once? [y/N] ") catch {
+        _ => ()
+      }
+      native_flush_stderr()
+      let answer = @stdio.stdin.read_until("\n") catch { _ => None }
+      match answer {
+        Some(value) => {
+          let normalized = value.trim().to_lower().to_owned()
+          normalized == "y" || normalized == "yes"
+        }
+        None => false
+      }
+    } else {
+      eprintln(
+        "Tool " +
+        tool_name +
+        " requires approval. Use an interactive terminal, the web UI, or explicit --approve-tools options. This noninteractive turn is cancelled.",
+      )
+      let _ = native_cli_command(
+        runtime,
+        Some(active_session),
+        "session_cancel",
+        {},
+        None,
+      )
+      return Err("noninteractive approval required; turn cancelled")
+    }
+    let revision = match native_cli_approval_revision_number(session) {
+      Some(value) => value
+      None => return Err("pending approval has no durable revision")
+    }
+    let decision = match
+      native_cli_command(
+        runtime,
+        Some(active_session),
+        "tool_approve",
+        {
+          "call_id": string_field(pending, "call_id").unwrap_or("").to_json(),
+          "approved": approved.to_json(),
+        },
+        Some(revision),
+      ) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    receipt = Some(decision)
+    session = match
+      runtime.invoke("session_get", { "session_id": active_session }) {
+      Ok((value, _)) => value
+      Err(error) => return Err(error)
+    }
+  }
   Ok({
+    "kind": if prompt is Some(_) {
+      "run".to_json()
+    } else if fork_source is Some(_) {
+      "fork".to_json()
+    } else {
+      "approval".to_json()
+    },
+    "source_session_id": fork_source
+    .map(value => value.to_json())
+    .unwrap_or(Json::null()),
     "session_id": active_session.to_json(),
     "receipt": receipt.unwrap_or(Json::null()),
     "approval_revision": native_cli_approval_revision(session),
@@ -341,10 +479,9 @@ async fn native_cli_action(
 
 ///|
 async fn main {
-  let args = @env.args()
-  native_configure_service_signal_policy()
-  if native_flag(args, "--internal-worker") {
-    let payload = match native_worker_payload(args) {
+  let raw_args = @env.args()
+  if native_flag(raw_args, "--internal-worker") {
+    let payload = match native_worker_payload(raw_args) {
       Ok(value) => value
       Err(error) => abort(error)
     }
@@ -355,18 +492,20 @@ async fn main {
       ")",
     )
   }
+  let args = native_cli_default_web(native_cli_normalize_args(raw_args))
+  match native_cli_validate_args(args) {
+    Ok(_) => ()
+    Err(error) => abort(error)
+  }
+  native_configure_service_signal_policy(args)
   if native_flag(args, "--help") || native_flag(args, "-h") {
     println(native_usage())
     return
   }
   if native_flag(args, "--serve") {
-    let data_dir = match native_option(args, "--data-dir") {
-      Some(value) => value
-      None => abort("--serve requires --data-dir PATH")
-    }
-    let workspace = match native_option(args, "--workspace") {
-      Some(value) => value
-      None => abort("--serve requires --workspace PATH")
+    let (data_dir, workspace) = match native_cli_paths(args) {
+      Ok(value) => value
+      Err(error) => abort(error)
     }
     let port = match native_option(args, "--port") {
       Some(value) =>
@@ -374,11 +513,15 @@ async fn main {
           Some(value) if value >= 0 && value <= 65535 => value
           _ => abort("--port must be between 0 and 65535")
         }
-      None => 3210
+      None => 3080
     }
     let source_root = match @env.current_dir() {
       Some(value) => value
       None => abort("cannot determine native service source directory")
+    }
+    let max_retries = match native_cli_retry_limit(args) {
+      Ok(value) => value
+      Err(error) => abort(error)
     }
     let runtime = match
       NativeRuntime::open(
@@ -386,6 +529,10 @@ async fn main {
         workspace,
         native_flag(args, "--allow-shell"),
         native_flag(args, "--demo"),
+        mode_override=native_option(args, "--mode").unwrap_or(""),
+        model_override=native_option(args, "--model").unwrap_or(""),
+        base_url_override=native_option(args, "--base-url").unwrap_or(""),
+        max_retries~,
       ) {
       Err(error) => abort("native runtime could not start: " + error)
       Ok(runtime) => runtime
@@ -403,23 +550,14 @@ async fn main {
     }
     return
   }
-  let cli_action = native_flag(args, "--auth-status") ||
-    native_flag(args, "--sign-in") ||
-    native_flag(args, "--sign-out") ||
-    native_flag(args, "--models") ||
-    native_option(args, "--select-model") is Some(_) ||
-    native_option(args, "--run") is Some(_) ||
-    native_option(args, "--fork") is Some(_) ||
-    native_option(args, "--approve-call") is Some(_) ||
-    native_option(args, "--deny-call") is Some(_)
-  if cli_action {
-    let data_dir = match native_option(args, "--data-dir") {
-      Some(value) => value
-      None => abort("native CLI actions require --data-dir PATH")
+  if native_flag(args, "--mcp") {
+    let (data_dir, workspace) = match native_cli_paths(args) {
+      Ok(value) => value
+      Err(error) => abort(error)
     }
-    let workspace = match native_option(args, "--workspace") {
-      Some(value) => value
-      None => abort("native CLI actions require --workspace PATH")
+    let max_retries = match native_cli_retry_limit(args) {
+      Ok(value) => value
+      Err(error) => abort(error)
     }
     let runtime = match
       NativeRuntime::open(
@@ -427,6 +565,57 @@ async fn main {
         workspace,
         native_flag(args, "--allow-shell"),
         native_flag(args, "--demo"),
+        mode_override=native_option(args, "--mode").unwrap_or(""),
+        model_override=native_option(args, "--model").unwrap_or(""),
+        base_url_override=native_option(args, "--base-url").unwrap_or(""),
+        max_retries~,
+      ) {
+      Err(error) => abort("native runtime could not start: " + error)
+      Ok(runtime) => runtime
+    }
+    match native_mcp_stdio(runtime) {
+      Err(error) => {
+        ignore(runtime.close())
+        abort("native MCP carrier failed: " + error)
+      }
+      Ok(_) =>
+        match runtime.close() {
+          Err(error) => abort("native runtime shutdown failed: " + error)
+          Ok(_) => ()
+        }
+    }
+    return
+  }
+  let cli_action = native_flag(args, "--auth-status") ||
+    native_flag(args, "--sign-in") ||
+    native_flag(args, "--sign-out") ||
+    native_flag(args, "--models") ||
+    native_option(args, "--select-model") is Some(_) ||
+    native_option(args, "--run") is Some(_) ||
+    native_option(args, "--fork") is Some(_) ||
+    native_option(args, "--import-session") is Some(_) ||
+    native_option(args, "--prune-session") is Some(_) ||
+    native_option(args, "--approve-call") is Some(_) ||
+    native_option(args, "--deny-call") is Some(_)
+  if cli_action {
+    let (data_dir, workspace) = match native_cli_paths(args) {
+      Ok(value) => value
+      Err(error) => abort(error)
+    }
+    let max_retries = match native_cli_retry_limit(args) {
+      Ok(value) => value
+      Err(error) => abort(error)
+    }
+    let runtime = match
+      NativeRuntime::open(
+        data_dir,
+        workspace,
+        native_flag(args, "--allow-shell"),
+        native_flag(args, "--demo"),
+        mode_override=native_option(args, "--mode").unwrap_or(""),
+        model_override=native_option(args, "--model").unwrap_or(""),
+        base_url_override=native_option(args, "--base-url").unwrap_or(""),
+        max_retries~,
       ) {
       Err(error) => abort("native runtime could not start: " + error)
       Ok(runtime) => runtime
@@ -440,7 +629,12 @@ async fn main {
     }
     match runtime.close() {
       Err(error) => abort("native runtime shutdown failed: " + error)
-      Ok(_) => println(output.stringify())
+      Ok(_) => {
+        let rendered = native_cli_render(args, output)
+        if !rendered.is_empty() {
+          println(rendered)
+        }
+      }
     }
     return
   }
@@ -448,13 +642,9 @@ async fn main {
     println(native_usage())
     return
   }
-  let data_dir = match native_option(args, "--data-dir") {
-    Some(value) => value
-    None => abort("--demo requires --data-dir PATH")
-  }
-  let workspace = match native_option(args, "--workspace") {
-    Some(value) => value
-    None => abort("--demo requires --workspace PATH")
+  let (data_dir, workspace) = match native_cli_paths(args) {
+    Ok(value) => value
+    Err(error) => abort(error)
   }
   match NativeRuntime::open(data_dir, workspace, false, false) {
     Err(error) => abort("native runtime could not start: " + error)

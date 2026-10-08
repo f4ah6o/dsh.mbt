@@ -7,7 +7,7 @@ node scripts/verify-env.mjs
 
 # Explicit selectors keep vendor OS backend/example tests out of this gate.
 moon test engine provider auth protocol client plugins api ui verification/retry_math --target all
-moon test app --target js
+moon test app browser browser/sw --target js
 
 native_test_root=$(mktemp -d "${TMPDIR:-/tmp}/dsh-native-tests.XXXXXX")
 trap 'rm -rf "$native_test_root"' EXIT HUP INT TERM

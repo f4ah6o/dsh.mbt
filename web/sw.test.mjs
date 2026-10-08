@@ -5,11 +5,9 @@ import vm from "node:vm";
 
 const ORIGIN = "https://dsh.test";
 const ASSETS = [
-  "/", "/index.html", "/style.css", "/yami-kumo-shell.css",
-  "/yami-kumo-shell.js", "/app.js", "/legacy-app.js",
-  "/remote-app.js", "/remote-client.js", "/view-model.js",
-  "/canvas-renderer.js", "/manifest.webmanifest", "/icon.svg",
-  "/moonbit/app.js", "/moonbit/client.js",
+  "/", "/index.html", "/kumo-standalone.css",
+  "/yami-kumo-components.css", "/yami-kumo-shell.css",
+  "/manifest.webmanifest", "/icon.svg", "/moonbit/browser.js",
 ];
 const ACTIVE_URL = `${ORIGIN}/__dsh_shell_active__`;
 const LEGACY_NAME = "dsh-shell-v1";
@@ -103,10 +101,23 @@ async function assertClientBundle(worker, clientId, version) {
 }
 
 function createWorker({ fetchImpl, clients = [], timeoutMs, cacheStorage: sharedCacheStorage } = {}) {
-  const script = SW_SOURCE;
+  const script = SW_SCRIPT;
   const cacheStorage = sharedCacheStorage || new MemoryCacheStorage();
   const listeners = new Map();
   const liveClients = [...clients];
+  let deadlineTimerFired = false;
+  let abortCalls = 0;
+  const controllers = [];
+  class TrackingAbortController extends AbortController {
+    constructor() {
+      super();
+      controllers.push(this);
+    }
+    abort(...args) {
+      abortCalls += 1;
+      return super.abort(...args);
+    }
+  }
   const self = {
     location: { origin: ORIGIN },
     addEventListener(name, callback) { listeners.set(name, callback); },
@@ -120,21 +131,39 @@ function createWorker({ fetchImpl, clients = [], timeoutMs, cacheStorage: shared
   const context = {
     self,
     caches: cacheStorage,
-    fetch: fetchImpl,
+    fetch: (input, init) => {
+      const request = new Request(input, init);
+      return fetchImpl(request, { signal: init?.signal ?? request.signal });
+    },
     Request,
     Response,
     Headers,
     URL,
-    AbortController,
+    AbortController: TrackingAbortController,
     setTimeout: (callback, milliseconds) =>
-      nativeSetTimeout(callback, timeoutMs === undefined ? milliseconds : timeoutMs),
+      nativeSetTimeout(
+        () => {
+          if (milliseconds >= 1000) deadlineTimerFired = true;
+          callback();
+        },
+        timeoutMs === undefined || milliseconds < 1000 ? milliseconds : timeoutMs,
+      ),
     clearTimeout: globalThis.clearTimeout,
   };
   vm.runInNewContext(script, context, { filename: "web/sw.js" });
-  return { listeners, caches: cacheStorage, liveClients };
+  return {
+    listeners,
+    caches: cacheStorage,
+    liveClients,
+    deadlineFired: () => deadlineTimerFired,
+    abortCalls: () => abortCalls,
+    controllerSignals: () => controllers.map((controller) => controller.signal),
+  };
 }
 
 const SW_SOURCE = await readFile(new URL("./sw.js", import.meta.url), "utf8");
+const SW_SCRIPT = SW_SOURCE.replace(/^export \{[^\n]+\}\s*$/m, "");
+assert.notEqual(SW_SCRIPT, SW_SOURCE, "generated service worker export is removed only for isolated vm execution");
 
 function lifecycle(worker, name) {
   let pending;
@@ -223,11 +252,11 @@ test("refresh stages the whole bundle before switching and keeps the prior bundl
   let failBridge = false;
   const fetchImpl = async (request) => {
     const path = new URL(request.url).pathname;
-    if (path === "/remote-app.js" && blockApplicationAsset) {
+    if (path === "/moonbit/browser.js" && blockApplicationAsset) {
       signalApplicationAsset();
       return blockedApplicationAsset;
     }
-    if (path === "/moonbit/client.js" && failBridge) {
+    if (path === "/yami-kumo-components.css" && failBridge) {
       throw new Error("bridge unavailable during partial deployment");
     }
     return shellResponse(path, version);
@@ -252,7 +281,7 @@ test("refresh stages the whole bundle before switching and keeps the prior bundl
   assert.equal(await readActiveGeneration(worker.caches), previous);
 
   blockApplicationAsset = false;
-  releaseApplicationAsset(shellResponse("/remote-app.js", version));
+  releaseApplicationAsset(shellResponse("/moonbit/browser.js", version));
   assert.equal(await (await navigationPromise).text(), "v2:/");
   const complete = await readActiveGeneration(worker.caches);
   assert.notEqual(complete, previous);
@@ -293,7 +322,7 @@ test("an active worker's cleanup preserves a newer worker's in-flight generation
   const newWorker = createWorker({
     fetchImpl: async (request) => {
       const path = new URL(request.url).pathname;
-      if (path === "/remote-app.js") {
+      if (path === "/moonbit/browser.js") {
         signalApplicationAsset();
         return blockedApplicationAsset;
       }
@@ -319,7 +348,7 @@ test("an active worker's cleanup preserves a newer worker's in-flight generation
   newWorker.liveClients.push({ id: "old-page-next" });
   assert.ok((await sharedCaches.keys()).includes(staged), "old-worker cleanup preserves staged generation");
 
-  releaseApplicationAsset(shellResponse("/remote-app.js", "v2"));
+  releaseApplicationAsset(shellResponse("/moonbit/browser.js", "v2"));
   await installPromise;
   await lifecycle(newWorker, "activate");
   assert.equal(await readActiveGeneration(sharedCaches), staged);
@@ -328,12 +357,19 @@ test("an active worker's cleanup preserves a newer worker's in-flight generation
 
 test("a response body that never closes times out and falls back to the complete active bundle", async () => {
   let stalledFetchAborted = false;
+  let stalledFetchRequested = false;
+  const stalledSignals = [];
   let streamController;
   const worker = createWorker({
-    timeoutMs: 10,
+    // Keep the synthetic deadline long enough that unrelated Node event-loop
+    // scheduling from preceding tests cannot win the race with AbortSignal's
+    // event delivery. The product deadline remains 10 seconds.
+    timeoutMs: 100,
     fetchImpl: async (request, { signal }) => {
       const path = new URL(request.url).pathname;
-      if (path === "/remote-app.js") {
+      if (path === "/moonbit/browser.js") {
+        stalledFetchRequested = true;
+        stalledSignals.push(signal);
         const body = new ReadableStream({
           start(controller) {
             streamController = controller;
@@ -363,16 +399,26 @@ test("a response body that never closes times out and falls back to the complete
     mode: "navigate",
   });
   assert.equal(await timedOut.text(), "v1:/");
+  assert.equal(stalledFetchRequested, true, "the browser module is included in the generated cache candidate");
+  assert.equal(stalledSignals.length, 1, "one browser module fetch participates in this refresh");
+  assert.equal(worker.deadlineFired(), true, "the per-asset deadline elapsed");
+  assert.ok(worker.abortCalls() > 0, "the deadline aborts its fetch controller");
+  assert.equal(worker.controllerSignals().some((signal) => signal.aborted), true, "an asset controller is aborted");
+  assert.equal(
+    stalledSignals.some((signal) => signal.aborted),
+    true,
+    `the generated fetch signal is aborted (fetch signals: ${stalledSignals.map((signal) => signal.aborted).join(",")}; asset controller signals: ${worker.controllerSignals().map((signal) => signal.aborted).join(",")})`,
+  );
   assert.equal(stalledFetchAborted, true, "the deadline remains active after response headers arrive");
   assert.equal(await readActiveGeneration(worker.caches), known);
   await assertClientBundle(worker, "timeout-page", "v1");
-}, { timeout: 1000 });
+}, { timeout: 5000 });
 
 test("oversized shell assets cannot replace the active generation", async () => {
   const worker = createWorker({
     fetchImpl: async (request) => {
       const path = new URL(request.url).pathname;
-      if (path === "/remote-app.js") {
+      if (path === "/moonbit/browser.js") {
         const body = new ReadableStream({
           start(controller) {
             controller.enqueue(new Uint8Array(4 * 1024 * 1024 + 1));
@@ -422,9 +468,9 @@ test("API, event, command, and credential paths bypass shell caches", async () =
     { path: "/api/v1/commands/cmd-1" },
     { path: "/api/call", method: "POST" },
     { path: "/auth/callback?code=oauth-secret" },
-    { path: "/moonbit/client.js?code=oauth-secret" },
-    { path: "/moonbit/client.js", authorization: "Bearer credential-secret" },
-    { path: "https://other.test/moonbit/client.js" },
+    { path: "/moonbit/browser.js?code=oauth-secret" },
+    { path: "/moonbit/browser.js", authorization: "Bearer credential-secret" },
+    { path: "https://other.test/moonbit/browser.js" },
   ]) {
     assert.equal(shellFetch(worker, request.path, request), undefined, `${request.path} bypasses the SW`);
   }
@@ -433,7 +479,7 @@ test("API, event, command, and credential paths bypass shell caches", async () =
   const leakingWorker = createWorker({
     fetchImpl: async (request) => {
       const path = new URL(request.url).pathname;
-      if (path === "/remote-app.js") {
+      if (path === "/moonbit/browser.js") {
         return new Response('{"access_token":"never-cache-this"}', {
           headers: { "content-type": "application/json" },
         });

@@ -14,6 +14,7 @@ import {
   "moonbitlang/async/socket",
   "moonbitlang/async/aqueue",
   "moonbitlang/async/signal",
+  "moonbitlang/async/stdio",
 }
 
 supported_targets = "+native"

@@ -1,167 +1,120 @@
-// Optional real-Chromium acceptance: build first, then `node web/browser-smoke.mjs`.
-// All provider responses and tool writes are confined to this test's temp directory.
+// Native-v1 browser acceptance. scripts/test-browser-smoke.sh supplies a
+// temporary native demo host URL and the cached Chromium executable.
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import * as fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { createRequire } from "node:module";
-import { fileURLToPath, pathToFileURL } from "node:url";
-import { randomUUID } from "node:crypto";
-import { createHost, defaultModulePath } from "../host/runtime.mjs";
-import { startWebServer } from "../host/server.mjs";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const { chromium } = createRequire(import.meta.url)("playwright");
+const require = createRequire(import.meta.url);
+const { chromium } = require("playwright-core");
+const baseURL = process.env.DSH_BROWSER_URL;
+const executablePath = process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH ||
+  chromium.executablePath();
+assert.ok(baseURL, "DSH_BROWSER_URL must point to the running native demo host");
+
 const repo = fileURLToPath(new URL("../", import.meta.url));
-const screenshots = path.resolve(process.env.DSH_SCREENSHOT_DIR || path.join(repo, "_build/browser-smoke"));
-const workspace = await fs.mkdtemp(path.join(os.tmpdir(), "dsh-browser-"));
-execFileSync("git", ["-C", workspace, "init", "--quiet", "-b", "main"]);
-execFileSync("git", ["-C", workspace, "config", "user.name", "Browser Smoke"]);
-execFileSync("git", ["-C", workspace, "config", "user.email", "browser-smoke@example.test"]);
-await fs.writeFile(path.join(workspace, "large.txt"), `${"A".repeat(12_000)}😀 tail\n`);
-execFileSync("git", ["-C", workspace, "add", "large.txt"]);
-execFileSync("git", ["-C", workspace, "commit", "--quiet", "-m", "Browser smoke fixture"]);
-await fs.mkdir(screenshots, { recursive: true });
-await fs.rm(path.join(screenshots, "failure.png"), { force: true });
-let callNumber = 0;
-let providerCalls = 0;
-const providerRequests = [];
-let browser;
-let facade;
-let host;
-let web;
-let page;
+const screenshotDirectory = path.resolve(
+  process.env.DSH_SCREENSHOT_DIR || path.join(repo, "_build/browser-smoke"),
+);
 const failures = [];
-let releaseLiveStream;
-let releaseCapPrune;
-let signalCapPruneStarted;
-let capPruneResponse;
-const capPruneStarted = new Promise((resolve) => { signalCapPruneStarted = resolve; });
-const capPruneReleased = new Promise((resolve) => { releaseCapPrune = resolve; });
-let forkDelay;
-const encoder = new TextEncoder();
+const contexts = [];
+const pages = [];
+let browser;
 
-async function freshFacade() {
-  return import(`${pathToFileURL(defaultModulePath).href}?browser-smoke=${randomUUID()}`);
-}
-
-function engineCall(runtime, operation, input) {
-  const response = JSON.parse(runtime.dispatch(JSON.stringify({ operation, input })));
-  assert.equal(response.ok, true, response.error);
-  return response.result;
-}
-
-function engineComplete(runtime, effect, result) {
-  const response = JSON.parse(runtime.complete(effect.id, JSON.stringify(result)));
-  assert.equal(response.ok, true, response.error);
-  return response.result;
-}
-
-function seedNearCapacityPruneSession(runtime) {
-  runtime.start();
-  engineCall(runtime, "session_create", { id: "cap", title: "Near-capacity result" });
-  engineCall(runtime, "session_send", { session_id: "cap", prompt: "Seed a completed tool result." });
-  const request = JSON.parse(runtime.take_effects())[0];
-  engineComplete(runtime, request, {
-    ok: true, content: "", tool_calls: [{
-      id: "cap-read", name: "read", arguments: JSON.stringify({ file_path: "large.txt" }),
-    }], finish_reason: "tool_calls",
+function observePage(page) {
+  pages.push(page);
+  page.on("pageerror", (error) => failures.push(error.message));
+  page.on("console", (message) => {
+    if (message.type() === "error") {
+      const text = message.text();
+      if (!/Failed to load resource: net::ERR_(FAILED|INTERNET_DISCONNECTED)$/.test(text)) {
+        failures.push(text);
+      }
+    }
   });
-  const tool = JSON.parse(runtime.take_effects())[0];
-  engineComplete(runtime, tool, { ok: true, content: "\n".repeat(41_800) });
-  const followup = JSON.parse(runtime.take_effects())[0];
-  engineComplete(runtime, followup, {
-    ok: true, content: "complete", tool_calls: [], finish_reason: "stop",
-  });
-  engineCall(runtime, "session_create", { id: "other", title: "Other session" });
 }
 
-function completion(content, toolCalls) {
-  return new Response(JSON.stringify({
-    choices: [{ index: 0, finish_reason: toolCalls ? "tool_calls" : "stop", message: {
-      role: "assistant", content: toolCalls ? "" : content, ...(toolCalls ? { tool_calls: toolCalls } : {}),
-    } }],
-  }), { headers: { "content-type": "application/json" } });
+async function waitForConnectedWorkspace(page) {
+  await page.waitForFunction(
+    () => {
+      const project = document.getElementById("project-name")?.textContent || "";
+      const status = document.getElementById("shell-status")?.textContent || "";
+      const provider = document.getElementById("provider-model")?.textContent || "";
+      return project !== "取得中…" &&
+        provider !== "プロバイダーを確認中…" &&
+        !status.includes("接続中");
+    },
+    null,
+    { timeout: 20_000 },
+  );
 }
 
-async function provider(_url, options) {
-  providerCalls += 1;
-  const request = JSON.parse(options.body);
-  providerRequests.push(request);
-  const messages = request.messages;
-  const prompt = [...messages].reverse().find((message) => message.role === "user")?.content || "";
-  const last = messages.at(-1);
-  if (prompt.includes("slow request")) {
-    return new Promise((_resolve, reject) => {
-      if (options.signal.aborted) reject(options.signal.reason);
-      else options.signal.addEventListener("abort", () => reject(options.signal.reason), { once: true });
+async function postNativeCommand(page, operation, sessionId, input) {
+  return page.evaluate(async ({ operation, sessionId, input }) => {
+    const snapshotResponse = await fetch("/api/v1/snapshot", { cache: "no-store" });
+    if (!snapshotResponse.ok) throw new Error("native snapshot failed");
+    const snapshot = await snapshotResponse.json();
+    const bytes = crypto.getRandomValues(new Uint8Array(16));
+    let timestamp = BigInt(Date.now());
+    for (let index = 5; index >= 0; index -= 1) {
+      bytes[index] = Number(timestamp & 255n);
+      timestamp >>= 8n;
+    }
+    bytes[6] = 0x70 | (bytes[6] & 0x0f);
+    bytes[8] = 0x80 | (bytes[8] & 0x3f);
+    const id = Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+    const commandId = `${id.slice(0, 8)}-${id.slice(8, 12)}-${id.slice(12, 16)}-${id.slice(16, 20)}-${id.slice(20)}`;
+    const response = await fetch("/api/v1/commands", {
+      method: "POST",
+      cache: "no-store",
+      credentials: "same-origin",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({
+        protocol_version: 1,
+        workspace_id: snapshot.workspace_id,
+        command_id: commandId,
+        session_id: sessionId,
+        operation,
+        input,
+        approval_revision: null,
+      }),
     });
-  }
-  if (prompt.includes("live stream smoke")) {
-    const initial = [
-      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", reasoning_content: "Reasoning arrives first." }, finish_reason: null }] })}\n\n`,
-      `data: ${JSON.stringify({ choices: [{ index: 0, delta: { content: "Live answer 日本語 🌱" }, finish_reason: null }] })}\n\n`,
-    ].join("");
-    const terminal = [
-      `data: ${JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: "stop" }] })}\n\n`,
-      "data: [DONE]\n\n",
-    ].join("");
-    return new Response(new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode(initial));
-        let released = false;
-        releaseLiveStream = () => {
-          if (released) return;
-          released = true;
-          controller.enqueue(encoder.encode(terminal));
-          controller.close();
-        };
-      },
-    }), { headers: { "content-type": "text/event-stream" } });
-  }
-  if (prompt.includes("provider failure")) return new Response("Fixture provider unavailable", { status: 503 });
-  if (prompt.includes("prune browser output") && last.role !== "tool") {
-    return completion("", [{ id: `browser-call-${++callNumber}`, type: "function", function: {
-      name: "read", arguments: JSON.stringify({ file_path: "large.txt" }),
-    } }]);
-  }
-  if ((prompt.includes("approved.txt") || prompt.includes("denied.txt")) && last.role !== "tool") {
-    const target = prompt.includes("approved.txt") ? "approved.txt" : "denied.txt";
-    return completion("", [{ id: `browser-call-${++callNumber}`, type: "function", function: {
-      name: "write", arguments: JSON.stringify({ file_path: target, content: "Written only after explicit browser approval.\n" }),
-    } }]);
-  }
-  if (last.role === "tool") return completion(`The tool request settled.\n${last.content}`);
-  if (prompt.includes("long transcript")) return completion(Array.from({ length: 70 }, (_, i) => `Line ${i + 1}: MoonBit owns the transcript layout. 日本語も表示できます。`).join("\n"));
-  return completion(`Received: ${prompt}\nThe session completed through the MoonBit engine. <script>literal text</script>`);
+    return { status: response.status, receipt: await response.json() };
+  }, { operation, sessionId, input });
 }
 
-async function waitStatus(value) {
-  await page.waitForFunction((expected) => document.getElementById("status").textContent === expected, value, { timeout: 15_000 });
-}
+const longImportedText = "Older archived transcript content. ".repeat(1800);
+const importedAssistantRow = JSON.stringify({
+  type: "assistant/message",
+  data: {
+    turn: 1,
+    step: 1,
+    message: {
+      role: "assistant",
+      id: "import-assistant",
+      source: { kind: "model", provider: "fixture", model: "fixture-model" },
+      content: [{
+        type: "text",
+        text: "Imported history stays read only. " + longImportedText,
+      }],
+    },
+  },
+  surfaceOp: "append",
+});
+const importedHistoryJsonl = [
+  '{"type":"session","version":4,"id":"browser-import-fixture","createdAt":1,"isSeeded":false,"delegationDepth":0}',
+  '{"type":"turn/start","data":{"turn":1}}',
+  '{"type":"step/start","data":{"turn":1,"step":1}}',
+  '{"type":"user/message","data":{"role":"user","id":"import-user","source":{"kind":"user"},"content":[{"type":"text","text":"Imported Japanese history"}]},"surfaceOp":"append"}',
+  '{"type":"request/header","data":{"reason":"initial","header":{"config":{"provider":"fixture","model":"fixture-model"}}}}',
+  '{"type":"request/context","data":{"provider":"fixture","model":"fixture-model"}}',
+  importedAssistantRow,
+  '{"type":"step/end","data":{"turn":1,"step":1}}',
+  '{"type":"turn/end","data":{"turn":1,"reason":{"kind":"completed"}}}',
+].join("\n");
 
-async function waitForNewTurn(sessionID, previousTurn) {
-  const deadline = Date.now() + 15_000;
-  let session;
-  while (Date.now() < deadline) {
-    session = await host.session(sessionID);
-    if (session.turn_id > previousTurn) break;
-    await new Promise((resolve) => setTimeout(resolve, 10));
-  }
-  assert.ok(session && session.turn_id > previousTurn, "the browser must admit the requested new turn");
-  if (session.status === "running") {
-    session = await host.waitForSession(sessionID, { signal: AbortSignal.timeout(15_000) });
-  }
-  assert.equal(session.status, "completed");
-  return session;
-}
-
-async function send(prompt) {
-  await page.locator("#prompt").fill(prompt);
-  await page.locator("#send").click();
-}
-
-async function assertHeaderFitsViewport() {
+async function assertHeaderFitsViewport(page) {
   const layout = await page.evaluate(() => {
     const brand = document.querySelector(".yk-brand-group").getBoundingClientRect();
     const search = document.querySelector(".yk-global-search").getBoundingClientRect();
@@ -175,403 +128,791 @@ async function assertHeaderFitsViewport() {
       actionsLeft: actions.left,
     };
   });
-  assert.equal(layout.documentWidth, layout.viewportWidth, `header fits without horizontal overflow: ${JSON.stringify(layout)}`);
-  assert.ok(layout.brandRight <= layout.searchLeft + 1, `search does not cover the brand: ${JSON.stringify(layout)}`);
-  assert.ok(layout.searchRight <= layout.actionsLeft + 1, `header actions do not overlap search: ${JSON.stringify(layout)}`);
+  assert.equal(
+    layout.documentWidth,
+    layout.viewportWidth,
+    `the header has no horizontal overflow: ${JSON.stringify(layout)}`,
+  );
+  assert.ok(
+    layout.brandRight <= layout.searchLeft + 1,
+    `search does not cover the brand: ${JSON.stringify(layout)}`,
+  );
+  assert.ok(
+    layout.searchRight <= layout.actionsLeft + 1,
+    `header actions do not overlap search: ${JSON.stringify(layout)}`,
+  );
 }
 
-function currentId() {
-  return page.locator(".session-option[aria-current='page']").getAttribute("data-id");
-}
-
-try {
-  facade = await freshFacade();
-  seedNearCapacityPruneSession(facade);
-  host = await createHost({ facade, workspace, mode: "openai", baseURL: "http://127.0.0.1:1", model: "browser-fixture", maxRetries: 0, fetchImpl: provider });
-  const delayedHost = { ...host, async call(operation, input) {
-    const result = await host.call(operation, input);
-    if (operation === "session_prune_tool_results" && input.session_id === "cap") {
-      capPruneResponse = result;
-      signalCapPruneStarted();
-      await capPruneReleased;
-    }
-    if (operation === "session_fork" && forkDelay) {
-      forkDelay.started();
-      await forkDelay.released;
-    }
-    if (operation === "session_create" || (operation === "session_send" && input.prompt.includes("draft race"))) {
-      await new Promise((resolve) => setTimeout(resolve, 350));
-    }
-    return result;
-  } };
-  web = await startWebServer({ host: delayedHost, port: 0 });
-  browser = await chromium.launch({
-    headless: true,
-    args: ["--no-sandbox"],
-    ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}),
+async function assertReadableSessionOption(page, selector) {
+  await page.waitForFunction((target) => {
+    const button = document.querySelector(target);
+    const title = button?.querySelector(".session-option-title");
+    const status = button?.querySelector(".session-option-state");
+    return (button?.getBoundingClientRect().height || 0) >= 50 &&
+      (title?.getBoundingClientRect().height || 0) >= 12 &&
+      (status?.getBoundingClientRect().height || 0) >= 9;
+  }, selector, { timeout: 10_000 });
+  const label = await page.locator(selector).evaluate((button) => {
+    const title = button.querySelector(".session-option-title");
+    const status = button.querySelector(".session-option-state");
+    return {
+      title: title?.textContent || "",
+      titleHeight: title?.getBoundingClientRect().height || 0,
+      statusHeight: status?.getBoundingClientRect().height || 0,
+      buttonHeight: button.getBoundingClientRect().height,
+    };
   });
-  page = await browser.newPage({ viewport: { width: 1280, height: 820 }, deviceScaleFactor: 1 });
-  page.on("pageerror", (error) => failures.push(error.message));
-  await page.goto(web.url, { waitUntil: "domcontentloaded" });
-  assert.equal(await page.locator(".yk-shell").count(), 1, "the Yami-kumo application shell mounts");
-  await page.waitForFunction(() => document.getElementById("provider-model").textContent !== "プロバイダーを確認中…");
-  assert.equal(await page.locator("html").getAttribute("lang"), "ja");
-  assert.equal(await page.locator("#project-name").textContent(), path.basename(workspace));
-  assert.equal(await page.locator("#repository-name").textContent(), path.basename(workspace));
-  assert.equal(await page.locator("#branch-name").textContent(), "main");
-  assert.equal(await page.locator("#provider-model").textContent(), "ローカル API · browser-fixture");
-  await page.locator("#japanese-font").selectOption("noto");
-  assert.match(await page.evaluate(() => getComputedStyle(document.body).fontFamily), /Noto Sans JP/);
-  await send("Hello from the browser");
-  await waitStatus("完了");
-  assert.match(await page.evaluate(() => getComputedStyle(document.querySelector(".text-message pre")).fontFamily), /Noto Sans JP/);
-  assert.match(await page.locator("#text-transcript").textContent(), /MoonBit engine/);
-  assert.equal(await page.locator("#text-transcript script").count(), 0);
-  execFileSync("git", ["-C", workspace, "branch", "-m", "live-context"]);
-  await page.waitForFunction(() => document.getElementById("branch-name").textContent === "live-context", null, { timeout: 15_000 });
-  const firstId = await currentId();
-  assert.equal(await page.locator("#context-status").textContent(), "完了");
-  assert.match(await page.locator("#context-history").textContent(), /メッセージ · .*イベント/);
-  await page.locator("#sidebar-toggle").click();
-  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("aria-hidden"), "true");
-  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("inert"), "",
-    "the collapsed desktop navigation cannot receive keyboard focus");
-  await page.locator("#context-toggle").click();
-  assert.equal(await page.locator("#yk-context-panel").getAttribute("aria-hidden"), "false");
-  assert.equal(await page.locator("#yk-context-panel").getAttribute("aria-modal"), null,
-    "desktop conversation details stay a non-modal, keyboard-accessible region");
-  await page.locator("#context-close").click();
-  await page.locator("#sidebar-toggle").click();
-  await page.locator("#session-search").fill("no conversation matches this phrase");
-  assert.equal(await page.locator(`.session-option[data-id='${firstId}']`).count(), 1,
-    "filtering keeps the primary selected conversation visible");
-  assert.equal(await page.locator(".session-option").count(), 1,
-    "filtering removes nonmatching conversations while preserving the selection");
-  await page.locator("#session-search").fill("");
-  await page.setViewportSize({ width: 768, height: 820 });
-  await assertHeaderFitsViewport();
-  assert.equal(await page.locator("#navigation-toggle").isVisible(), true);
-  assert.equal(await page.locator("#sidebar-toggle").isVisible(), false,
-    "mobile navigation controls replace the desktop collapse button at tablet width");
-  await page.locator("#session-search").click();
-  assert.equal(await page.evaluate(() => document.activeElement?.id), "session-search");
-  await page.locator("#navigation-toggle").click();
-  await page.keyboard.press("Escape");
-  await page.locator("#context-toggle").click();
-  await page.keyboard.press("Escape");
-  await page.setViewportSize({ width: 821, height: 820 });
-  await assertHeaderFitsViewport();
-  assert.equal(await page.locator("#navigation-toggle").isVisible(), false);
-  assert.equal(await page.locator("#sidebar-toggle").isVisible(), true);
-  await page.locator("#sidebar-toggle").click();
-  await page.locator("#sidebar-toggle").click();
-  await page.locator("#context-toggle").click();
-  await page.keyboard.press("Escape");
-  await page.setViewportSize({ width: 1280, height: 820 });
-  await page.waitForFunction(() => document.getElementById("yk-mobile-navigation").getAttribute("aria-hidden") === "false");
+  assert.match(label.title, /.+/, "the session title is present");
+  assert.ok(label.titleHeight >= 12, `the session title has readable line height: ${JSON.stringify(label)}`);
+  assert.ok(label.statusHeight >= 9, `the session status has readable line height: ${JSON.stringify(label)}`);
+  assert.ok(label.buttonHeight >= 50, `the two-line session row is tall enough: ${JSON.stringify(label)}`);
+}
+
+async function waitForActiveShellWorker(page) {
+  await page.waitForFunction(
+    async () => {
+      const registration = await navigator.serviceWorker.getRegistration("/");
+      return Boolean(registration?.active && navigator.serviceWorker.controller);
+    },
+    null,
+    { timeout: 30_000 },
+  );
+  const assets = await page.evaluate(async () => {
+    const names = (await caches.keys()).filter((name) =>
+      name.startsWith("dsh-shell-generation-"),
+    );
+    const requests = [];
+    for (const name of names) {
+      const cache = await caches.open(name);
+      for (const request of await cache.keys()) {
+        requests.push(new URL(request.url).pathname);
+      }
+    }
+    return requests;
+  });
+  for (const asset of [
+    "/index.html",
+    "/kumo-standalone.css",
+    "/yami-kumo-components.css",
+    "/yami-kumo-shell.css",
+    "/moonbit/browser.js",
+  ]) {
+    assert.ok(assets.includes(asset), `the active shell generation contains ${asset}`);
+  }
+}
+
+async function testNativeDemo(browserInstance) {
+  const context = await browserInstance.newContext({
+    locale: "ja-JP",
+    viewport: { width: 1280, height: 820 },
+    deviceScaleFactor: 1,
+  });
+  contexts.push(context);
+  const page = await context.newPage();
+  observePage(page);
+  const sentCommands = [];
+  const receiptLookups = [];
+  let droppedSendResponse = false;
+  await page.route("**/api/v1/commands", async (route) => {
+    const command = JSON.parse(route.request().postData() || "{}");
+    sentCommands.push(command);
+    const response = await route.fetch();
+    if (command.operation === "session_send" && !droppedSendResponse) {
+      droppedSendResponse = true;
+      await route.abort("failed");
+      return;
+    }
+    await route.fulfill({ response });
+  });
+  await page.route("**/api/v1/commands/*", async (route) => {
+    receiptLookups.push(new URL(route.request().url()).pathname.split("/").at(-1));
+    await route.continue();
+  });
+  await page.addInitScript(() => {
+    window.__dshCspViolations = [];
+    document.addEventListener("securitypolicyviolation", (event) => {
+      window.__dshCspViolations.push({
+        directive: event.violatedDirective,
+        blockedURI: event.blockedURI,
+      });
+    });
+  });
+
+  const moduleResponse = page.waitForResponse((response) =>
+    response.url().endsWith("/moonbit/browser.js"),
+  );
+  const response = await page.goto(baseURL, { waitUntil: "domcontentloaded" });
+  assert.equal(response.status(), 200, "the native service serves the app shell");
+  const csp = response.headers()["content-security-policy"] || "";
+  assert.ok(csp.includes("script-src 'self'"), "the native shell has a script CSP");
+  assert.ok(csp.includes("style-src 'self'"), "the native shell has a style CSP");
+  assert.doesNotMatch(csp, /unsafe-inline/i, "the shell does not permit inline code or styles");
+  assert.equal((await moduleResponse).status(), 200, "the compiled MoonBit browser module loads");
+  await page.locator("#transcript-canvas").waitFor({ state: "attached" });
+  await waitForConnectedWorkspace(page);
+  assert.match(await page.locator("#provider-model").textContent(), /デモ/);
+  assert.equal(await page.locator(".session-option").count(), 0);
+  assert.match(await page.locator(".empty-list").textContent(), /会話はまだありません/);
+  await assertHeaderFitsViewport(page);
+
+  await waitForActiveShellWorker(page);
+  const registration = await page.evaluate(async () => {
+    const value = await navigator.serviceWorker.getRegistration("/");
+    return {
+      scriptURL: value?.active?.scriptURL || "",
+      scope: value?.scope || "",
+    };
+  });
+  assert.ok(registration.scriptURL.endsWith("/sw.js"), "the compiled module service worker is active");
+  assert.ok(registration.scope.endsWith("/"), "the app shell is scoped to the native origin");
+
   await page.locator("#new-session").click();
-  await page.waitForFunction((previous) => document.querySelector(".session-option[aria-current='page']")?.dataset.id !== previous, firstId);
-  const secondId = await currentId();
-  await page.locator(`.session-option[data-id='${firstId}']`).click();
-  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
-  await waitStatus("完了");
+  await page.waitForFunction(
+    () => document.querySelectorAll(".session-option[aria-current='page']").length === 1,
+    null,
+    { timeout: 15_000 },
+  );
+  await assertReadableSessionOption(
+    page,
+    ".session-option[aria-current='page']",
+  );
+  await page.locator("#prompt").fill("Browser smoke 日本語");
+  await page.locator("#send").click();
+  await page.locator("#approval").waitFor({ state: "visible", timeout: 20_000 });
+  const sendCommands = sentCommands.filter((command) => command.operation === "session_send");
+  assert.equal(sendCommands.length, 1, "a dropped command response does not replay the command");
+  assert.ok(
+    receiptLookups.includes(sendCommands[0].command_id),
+    "the client recovers the accepted command through its durable receipt",
+  );
+  assert.match(await page.locator("#approval-arguments").textContent(), /native-demo\.txt/);
+  assert.equal(await page.locator("#send").isDisabled(), true);
+  await page.locator("#approve").click();
+  await page.waitForFunction(
+    () => document.getElementById("status")?.textContent?.includes("完了"),
+    null,
+    { timeout: 30_000 },
+  );
+  const transcript = await page.locator("#text-transcript").textContent();
+  assert.match(transcript, /Browser smoke 日本語/);
+  assert.match(transcript, /durable native tool result/);
+  assert.match(transcript, /Offline demo finished/);
 
-  const sourceBeforeFork = await host.session(firstId);
-  await page.locator("#fork-session").waitFor({ state: "visible" });
-  await page.waitForFunction(() => !document.getElementById("fork-session").disabled);
-  await page.locator("#fork-session").click();
-  await page.waitForFunction((previous) => document.querySelector(".session-option[aria-current='page']")?.dataset.id !== previous, firstId);
-  const firstForkId = await currentId();
-  const firstFork = await host.session(firstForkId);
-  assert.equal(firstFork.parent_session_id, firstId);
-  assert.equal(await page.locator("#context-parent").textContent(), firstId,
-    "live conversation details include the selected fork's parent");
-  assert.equal(firstFork.status, "idle");
-  assert.equal(firstFork.pending_approval, undefined);
-  assert.deepEqual(firstFork.messages, sourceBeforeFork.messages);
-  const sourceRequest = sourceBeforeFork.events.find((event) => event.type === "llm/request");
-  const forkRequest = firstFork.events.find((event) => event.type === "llm/request");
-  assert.ok(sourceRequest && forkRequest);
-  assert.notEqual(forkRequest.data.effect_id, sourceRequest.data.effect_id,
-    "forked durable effects receive branch-local identities");
-  assert.deepEqual(await host.session(firstId), sourceBeforeFork,
-    "fork creation leaves the source session unchanged");
-  assert.ok(firstFork.events.some((event) => event.type === "session/forked"));
+  await page.waitForFunction(
+    () => document.getElementById("transcript-canvas")?.width > 0,
+    null,
+    { timeout: 10_000 },
+  );
+  const canvas = await page.locator("#transcript-canvas").evaluate((element) => {
+    const context = element.getContext("2d");
+    const image = context.getImageData(0, 0, element.width, element.height).data;
+    let painted = false;
+    for (let index = 3; index < image.length; index += 4) {
+      if (image[index] !== 0) {
+        painted = true;
+        break;
+      }
+    }
+    return { width: element.width, height: element.height, painted };
+  });
+  assert.ok(canvas.painted, `the MoonBit renderer paints the transcript canvas: ${JSON.stringify(canvas)}`);
 
-  // A delayed durable fork may add its child to the sidebar, but a newer
-  // explicit session selection wins over automatic child selection.
-  await page.locator(`.session-option[data-id='${firstId}']`).click();
-  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
-  let signalForkStarted;
-  let releaseForkResponse;
-  const forkStarted = new Promise((resolve) => { signalForkStarted = resolve; });
-  const forkReleased = new Promise((resolve) => { releaseForkResponse = resolve; });
-  forkDelay = { started: signalForkStarted, released: forkReleased };
-  await page.locator("#fork-session").click();
-  await forkStarted;
-  await page.locator(`.session-option[data-id='${secondId}']`).click();
-  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, secondId);
-  releaseForkResponse();
-  forkDelay = undefined;
-  await page.waitForFunction(() => !document.getElementById("new-session").disabled);
-  assert.equal(await currentId(), secondId);
-  assert.equal(await page.locator("#action-message").isVisible(), false,
-    "a late fork response cannot select its child or show a notice on another session");
-  const forkList = await host.call("session_list", {});
-  assert.equal(forkList.ok, true, forkList.error);
-  assert.equal(forkList.result.filter((session) => session.parent_session_id === firstId).length, 2);
-  await page.locator(`.session-option[data-id='${firstId}']`).click();
-  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
-  await waitStatus("完了");
+  await page.locator("#text-view").click();
+  await page.waitForFunction(
+    () => !document.getElementById("text-transcript")?.classList.contains("sr-only"),
+  );
+  await page.locator("#japanese-font").selectOption("noto");
+  const font = await page.evaluate(() => ({
+    selected: document.getElementById("japanese-font").value,
+    family: getComputedStyle(document.documentElement).getPropertyValue("--dsh-font-family"),
+    saved: localStorage.getItem("dsh.display.japanese-font.v1"),
+  }));
+  assert.equal(font.selected, "noto");
+  assert.equal(font.saved, "noto");
+  assert.match(font.family, /Noto Sans JP/);
 
-  const finalAssistantRowsBefore = await page.locator("#text-transcript h2").filter({ hasText: /^アシスタント$/ }).count();
-  await send("live stream smoke");
-  await page.waitForFunction(() => {
-    const transcript = document.getElementById("text-transcript");
-    return transcript.textContent.includes("アシスタント · 生成中")
-      && transcript.textContent.includes("Live answer 日本語 🌱");
-  }, undefined, { timeout: 15_000 });
-  assert.match(await page.locator("#text-transcript").textContent(), /推論 · 生成中/);
-  assert.equal(await page.locator("#status").textContent(), "実行中");
-  releaseLiveStream();
-  releaseLiveStream = undefined;
-  await waitStatus("完了");
-  assert.equal(await page.locator("#text-transcript h2").filter({ hasText: /^アシスタント$/ }).count(), finalAssistantRowsBefore + 1);
-  assert.doesNotMatch(await page.locator("#text-transcript").textContent(), /アシスタント · 生成中/);
-
-  await send("prune browser output");
-  await waitStatus("完了");
   await page.locator("#prune-results").waitFor({ state: "visible" });
-  const beforePrune = await host.session(firstId);
-  const fullOutput = beforePrune.messages.find((message) => message.role === "tool");
-  assert.ok(fullOutput.content.length > 8192);
   await page.locator("#prune-results").click();
-  await page.locator("#action-message").waitFor({ state: "visible" });
-  assert.match(await page.locator("#action-message").textContent(), /1 件のツール結果/);
-  assert.match(await page.locator("#text-transcript").textContent(), /ツール結果 · モデル入力用に短縮/);
-  const afterPrune = await host.session(firstId);
-  assert.equal(afterPrune.messages.find((message) => message.role === "tool").content, fullOutput.content);
-  assert.ok(afterPrune.events.some((event) => event.type === "tool/result/pruned"));
-  await page.locator(`.session-option[data-id='${secondId}']`).click();
-  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, secondId);
-  assert.equal(await page.locator("#action-message").isVisible(), false,
-    "selecting another session clears the previous pruning success notice");
-  await page.locator(`.session-option[data-id='${firstId}']`).click();
-  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
-  await waitStatus("完了");
-  const turnBeforeContinue = (await host.session(firstId)).turn_id;
-  const providerCallsBeforeContinue = providerCalls;
-  await send("continue after browser pruning");
-  await waitForNewTurn(firstId, turnBeforeContinue);
-  assert.ok(providerCalls > providerCallsBeforeContinue, "the continuation reaches the OpenAI adapter");
-  const projectedTool = providerRequests.at(-1).messages.find((message) => message.role === "tool");
-  assert.ok(projectedTool.content.includes("[... tool result middle pruned ...]"),
-    `expected the next OpenAI request to use the pruned result, got ${projectedTool.content.length} chars`);
-  assert.ok(projectedTool.content.length <= 8192);
+  await page.waitForFunction(
+    () => document.getElementById("action-message")?.textContent?.includes("短縮が必要な大きさのツール結果はありません") ||
+      document.getElementById("action-message")?.textContent?.includes("件のツール結果を今後のモデル要求向けに短縮"),
+    null,
+    { timeout: 20_000 },
+  );
+  assert.ok(
+    sentCommands.some((command) => command.operation === "session_prune_tool_results"),
+    "the browser sends the native tool-result pruning command",
+  );
+  await page.locator("#fork-session").click();
+  await page.waitForFunction(
+    () => document.querySelectorAll(".session-option").length === 2 &&
+      document.querySelector("#action-message")?.textContent?.includes("から会話を分岐しました"),
+    null,
+    { timeout: 20_000 },
+  );
+  assert.ok(
+    sentCommands.some((command) => command.operation === "session_fork"),
+    "the browser sends the native fork command",
+  );
 
-  let pruneRequestStarted;
-  const pruneRequest = new Promise((resolve) => { pruneRequestStarted = resolve; });
+  await page.locator("#context-toggle").click();
+  assert.equal(await page.locator("#context-toggle").getAttribute("aria-expanded"), "true");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#context-toggle").getAttribute("aria-expanded"), "false");
+  await page.locator("#sidebar-toggle").click();
+  assert.equal(await page.locator(".yk-shell").getAttribute("data-sidebar-collapsed"), "true");
+  await page.locator("#sidebar-toggle").click();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  const navigation = page.locator("#yk-mobile-navigation");
+  await page.waitForFunction(
+    () => document.getElementById("yk-mobile-navigation")?.getAttribute("aria-hidden") === "true",
+  );
+  assert.equal(await navigation.getAttribute("aria-hidden"), "true");
+  assert.notEqual(await navigation.getAttribute("inert"), null);
+  const contextPanel = page.locator("#yk-context-panel");
+  assert.equal(await contextPanel.getAttribute("aria-hidden"), "true");
+  assert.notEqual(await contextPanel.getAttribute("inert"), null);
+  await page.locator("#navigation-toggle").focus();
+  for (let index = 0; index < 24; index += 1) {
+    await page.keyboard.press("Tab");
+    assert.equal(
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest("#yk-mobile-navigation")),
+      ),
+      false,
+      "Tab never enters the closed, inert mobile navigation",
+    );
+  }
+  await page.locator("#navigation-toggle").click();
+  assert.equal(await navigation.getAttribute("aria-modal"), "true");
+  assert.equal(await navigation.getAttribute("aria-hidden"), "false");
+  assert.equal(await navigation.getAttribute("inert"), null);
+  assert.equal(await page.locator("#navigation-toggle").getAttribute("aria-expanded"), "true");
+  const focusable = navigation.locator(
+    'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+  );
+  const focusableCount = await focusable.count();
+  assert.ok(focusableCount >= 2, "the mobile navigation has focusable controls");
+  await focusable.first().focus();
+  await page.keyboard.press("Shift+Tab");
+  assert.equal(await focusable.last().evaluate((element) => element === document.activeElement), true,
+    "Shift+Tab wraps from the first mobile navigation control to the last");
+  await page.keyboard.press("Tab");
+  assert.equal(await focusable.first().evaluate((element) => element === document.activeElement), true,
+    "Tab wraps from the last mobile navigation control to the first");
+  await page.keyboard.press("Escape");
+  assert.equal(await page.locator("#navigation-toggle").getAttribute("aria-expanded"), "false");
+  assert.equal(await page.evaluate(() => document.activeElement?.id), "navigation-toggle");
+  assert.equal(await navigation.getAttribute("aria-hidden"), "true");
+  assert.notEqual(await navigation.getAttribute("inert"), null);
+  for (let index = 0; index < 24; index += 1) {
+    await page.keyboard.press("Tab");
+    assert.equal(
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest("#yk-mobile-navigation")),
+      ),
+      false,
+      "Tab never enters the closed mobile navigation after Escape",
+    );
+  }
+  await page.setViewportSize({ width: 1280, height: 844 });
+  await page.waitForFunction(
+    () => document.getElementById("yk-mobile-navigation")?.getAttribute("aria-hidden") === "false",
+  );
+  assert.equal(await navigation.getAttribute("inert"), null);
+  await page.locator("#new-session").focus();
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.id),
+    "new-session",
+    "the desktop sidebar is visible and keyboard-focusable after resizing",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForFunction(
+    () => document.getElementById("yk-mobile-navigation")?.getAttribute("aria-hidden") === "true",
+  );
+
+  await page.locator("#prompt").fill("未送信の下書き");
+  await page.waitForTimeout(300);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await waitForConnectedWorkspace(page);
+  await page.waitForFunction(
+    () => document.getElementById("prompt")?.value === "未送信の下書き",
+    null,
+    { timeout: 15_000 },
+  );
+  assert.equal(
+    await page.locator("#japanese-font").inputValue(),
+    "noto",
+    "the Japanese font preference survives reload",
+  );
+
+  await context.setOffline(true);
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.locator("#transcript-canvas").waitFor({ state: "attached", timeout: 20_000 });
+  assert.equal(await page.locator("#prompt").count(), 1, "the cached app shell mounts offline after reload");
+  assert.equal(
+    await page.evaluate(async () => {
+      try {
+        await fetch("/api/v1/snapshot", { cache: "no-store" });
+        return false;
+      } catch {
+        return true;
+      }
+    }),
+    true,
+    "the native API is unreachable while the cached shell still mounts",
+  );
+  await page.locator("#connection-error").waitFor({ state: "visible", timeout: 20_000 });
+  await page.evaluate(() => {
+    window.__dshOnlineEventCount = 0;
+    window.addEventListener("online", () => { window.__dshOnlineEventCount += 1; });
+  });
+  const recoveredSnapshot = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === "/api/v1/snapshot" && response.status() === 200;
+  }, { timeout: 20_000 });
+  await context.setOffline(false);
+  // Allow a real Chromium online event to reach the page before using the
+  // fallback for builds where the emulation only changes network reachability.
+  await page.waitForTimeout(100);
+  const onlineState = await page.evaluate(() => ({
+    online: navigator.onLine,
+    eventCount: window.__dshOnlineEventCount,
+  }));
+  assert.equal(onlineState.online, true, "the browser network is restored before recovery");
+  // Playwright's offline emulation does not dispatch Window.online on every
+  // pinned Chromium build. Drive that standard browser event only when absent.
+  if (onlineState.eventCount === 0) {
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  }
+  const recoveredResponse = await recoveredSnapshot;
+  assert.equal(recoveredResponse.ok(), true, "the online handler receives a fresh native snapshot");
+  await waitForConnectedWorkspace(page);
+  await page.waitForFunction(
+    () => document.getElementById("connection-error")?.hidden === true,
+    null,
+    { timeout: 20_000 },
+  );
+
+  const imported = await postNativeCommand(page, "session_import", null, {
+    jsonl: importedHistoryJsonl,
+  });
+  assert.equal(imported.status, 202, "the native host accepts a v4 history import");
+  assert.equal(imported.receipt.status, "accepted");
+  await page.waitForFunction(async () => {
+    const response = await fetch("/api/v1/snapshot", { cache: "no-store" });
+    const snapshot = await response.json();
+    return snapshot.projection.sessions.some((session) =>
+      session.source_format === "deepseek-session-v4",
+    );
+  }, null, { timeout: 20_000 });
+  const importedSession = await page.evaluate(async () => {
+    const response = await fetch("/api/v1/snapshot", { cache: "no-store" });
+    const snapshot = await response.json();
+    return snapshot.projection.sessions.find((session) =>
+      session.source_format === "deepseek-session-v4",
+    );
+  });
+  assert.ok(importedSession?.id, "the imported session appears in the native projection");
+  await page.locator("#navigation-toggle").click();
+  await page.locator(`.session-option[data-session-id="${importedSession.id}"]`).click();
+  await page.waitForFunction(
+    (id) => document.querySelector(`.session-option[data-session-id="${CSS.escape(id)}"]`)?.getAttribute("aria-current") === "page" &&
+      document.getElementById("prompt")?.disabled === true,
+    importedSession.id,
+    { timeout: 15_000 },
+  );
+  assert.match(await page.locator("#composer-hint").textContent(), /読み取り専用/);
+  assert.match(await page.locator("#text-transcript").textContent(), /Imported history stays read only/);
+  assert.equal(await page.locator("#send").isDisabled(), true);
+  const transcriptScroll = page.locator("#transcript-scroll");
+  if (await page.locator("#text-view").getAttribute("aria-pressed") === "true") {
+    await page.locator("#text-view").click();
+  }
+  await page.waitForFunction(
+    () => document.getElementById("transcript-scroll")?.hidden === false,
+  );
+  await page.waitForFunction(
+    () => {
+      const scroll = document.getElementById("transcript-scroll");
+      const spacer = document.getElementById("scene-spacer");
+      return scroll && spacer &&
+        Number.parseFloat(spacer.style.height) > scroll.clientHeight &&
+        scroll.scrollHeight > scroll.clientHeight;
+    },
+    null,
+    { timeout: 20_000 },
+  );
+  const longHistory = await transcriptScroll.evaluate((scroll) => {
+    const spacer = document.getElementById("scene-spacer");
+    return {
+      clientHeight: scroll.clientHeight,
+      scrollHeight: scroll.scrollHeight,
+      scrollTop: scroll.scrollTop,
+      spacerHeight: Number.parseFloat(spacer.style.height),
+    };
+  });
+  assert.ok(
+    longHistory.spacerHeight > longHistory.clientHeight,
+    "the measured canvas extent creates a spacer taller than the viewport: " + JSON.stringify(longHistory),
+  );
+  assert.ok(
+    longHistory.scrollHeight > longHistory.clientHeight,
+    "long imported history creates a nonzero scroll range: " + JSON.stringify(longHistory),
+  );
+  await transcriptScroll.evaluate((scroll) => {
+    scroll.scrollTop = Math.floor((scroll.scrollHeight - scroll.clientHeight) / 2);
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  await page.waitForFunction(
+    () => document.getElementById("jump-latest")?.hidden === false &&
+      document.getElementById("jump-latest")?.disabled === false,
+    null,
+    { timeout: 10_000 },
+  );
+  const olderPosition = await transcriptScroll.evaluate((scroll) => ({
+    scrollTop: scroll.scrollTop,
+    maxScroll: scroll.scrollHeight - scroll.clientHeight,
+  }));
+  assert.ok(
+    olderPosition.scrollTop > 0 && olderPosition.scrollTop < olderPosition.maxScroll,
+    "the canvas can scroll to older transcript content: " + JSON.stringify(olderPosition),
+  );
+  await page.locator("#jump-latest").click();
+  await page.waitForFunction(() => {
+    const scroll = document.getElementById("transcript-scroll");
+    return scroll && scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 2;
+  }, null, { timeout: 10_000 });
+
+  const violations = await page.evaluate(() => window.__dshCspViolations);
+  assert.deepEqual(violations, [], `no CSP violations occur: ${JSON.stringify(violations)}`);
+}
+
+async function testCompiledAuthModelFlow(browserInstance) {
+  const context = await browserInstance.newContext({
+    locale: "ja-JP",
+    viewport: { width: 1280, height: 820 },
+  });
+  contexts.push(context);
+  const page = await context.newPage();
+  observePage(page);
+  let connected = false;
+  let modelsLoaded = false;
+  let selectedModel = "";
+  let modelRefreshes = 0;
+  let signInRequests = 0;
+  let invalidAuthorizationUrl = false;
+  let failFirstModelRefresh = true;
+  let rejectNextModel = false;
+  await page.addInitScript(() => {
+    window.__dshBlockPopup = false;
+    window.__dshAuthTabs = [];
+    window.open = () => {
+      if (window.__dshBlockPopup) return null;
+      const tab = {
+        href: "about:blank",
+        closed: false,
+        opener: window,
+        location: { replace(value) { tab.href = value; } },
+        close() { tab.closed = true; },
+      };
+      window.__dshAuthTabs.push(tab);
+      return tab;
+    };
+  });
+  await page.route("**/api/v1/snapshot", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.auth = connected
+      ? {
+        state: "connected",
+        account: { profile_id: "profile-fixture", email: "fixture@example.test" },
+        plan_usage: "disabled",
+        scopes: [],
+        models: modelsLoaded
+          ? [
+            { slug: "fixture-model", display_name: "Fixture model" },
+            { slug: "alternate-model", display_name: "Alternate model" },
+          ]
+          : [],
+        selected_model: selectedModel || null,
+      }
+      : {
+        state: "signed_out",
+        account: null,
+        plan_usage: "disabled",
+        scopes: [],
+        models: [],
+        selected_model: null,
+      };
+    await route.fulfill({ response, body: JSON.stringify(snapshot) });
+  });
   await page.route("**/api/call", async (route) => {
-    if (route.request().postDataJSON()?.operation === "session_prune_tool_results") {
-      pruneRequestStarted();
-      await new Promise((resolve) => setTimeout(resolve, 500));
+    const request = JSON.parse(route.request().postData() || "{}");
+    const operation = request.operation;
+    const input = request.input || {};
+    if (operation === "auth_sign_in_browser") {
+      signInRequests += 1;
+      connected = true;
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          result: {
+            started: true,
+            authorization_url: invalidAuthorizationUrl
+              ? "https://auth.openai.com.evil.test/api/accounts/authorize"
+              : "https://auth.openai.com/api/accounts/authorize?client_id=fixture",
+          },
+        }),
+      });
+      return;
+    }
+    if (operation === "auth_models") {
+      modelRefreshes += 1;
+      if (failFirstModelRefresh) {
+        failFirstModelRefresh = false;
+        await route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({ ok: false, error: "fixture model catalog unavailable" }),
+        });
+        return;
+      }
+      modelsLoaded = true;
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, result: {} }),
+      });
+      return;
+    }
+    if (operation === "auth_select_model") {
+      if (rejectNextModel) {
+        rejectNextModel = false;
+        await route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({ ok: false, error: "fixture selection rejected" }),
+        });
+        return;
+      }
+      selectedModel = input.model;
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, result: { selected_model: selectedModel } }),
+      });
+      return;
     }
     await route.continue();
   });
-  await page.locator("#prune-results").click();
-  await pruneRequest;
-  await page.locator(`.session-option[data-id='${secondId}']`).click();
-  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, secondId);
-  await page.waitForFunction(() => !document.getElementById("new-session").disabled);
-  assert.equal(await page.locator("#action-message").isVisible(), false,
-    "a delayed prune response cannot restore a notice for the session that is no longer selected");
-  await page.unroute("**/api/call");
-  await page.locator(`.session-option[data-id='${firstId}']`).click();
-  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
-  await waitStatus("完了");
 
-  await page.locator(".session-option[data-id='cap']").click();
-  await page.waitForFunction(() => document.querySelector(".session-option[aria-current='page']")?.dataset.id === "cap");
-  await waitStatus("完了");
-  await page.locator("#prune-results").click();
-  await capPruneStarted;
-  assert.equal(capPruneResponse.ok, false);
-  assert.match(capPruneResponse.error, /capacity/i);
-  assert.equal((await host.session("cap")).events.filter((event) => event.type === "tool/result/pruned").length, 0);
-  await page.locator(".session-option[data-id='other']").click();
-  await page.waitForFunction(() => document.querySelector(".session-option[aria-current='page']")?.dataset.id === "other");
-  releaseCapPrune();
-  await page.waitForFunction(() => !document.getElementById("new-session").disabled);
-  assert.equal(await page.locator("#run-error").isVisible(), false,
-    "a delayed failed prune cannot show an error on the newly selected session");
-  assert.equal(await page.locator("#action-message").isVisible(), false);
-  assert.equal(await currentId(), "other");
-  await page.locator(`.session-option[data-id='${firstId}']`).click();
-  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
-  await waitStatus("完了");
+  await page.goto(baseURL, { waitUntil: "domcontentloaded" });
+  await waitForConnectedWorkspace(page);
+  await page.evaluate(() => { window.__dshBlockPopup = true; });
+  await page.locator("#auth-sign-in").click();
+  await page.waitForFunction(
+    () => document.getElementById("run-error")?.textContent?.includes("ポップアップ"),
+  );
+  assert.equal(signInRequests, 0, "a blocked popup does not ask the host to start sign-in");
 
-  // Successful responses must preserve edits made to the next draft in flight.
-  await send("draft race");
-  await page.locator("#prompt").fill("Keep this next draft");
-  await page.waitForFunction(() => !document.getElementById("new-session").disabled);
-  await waitStatus("完了");
-  assert.equal(await page.locator("#prompt").inputValue(), "Keep this next draft");
-  await page.locator("#prompt").fill("");
+  await page.evaluate(() => { window.__dshBlockPopup = false; });
+  invalidAuthorizationUrl = true;
+  await page.locator("#auth-sign-in").click();
+  await page.waitForFunction(
+    () => document.getElementById("run-error")?.textContent?.includes("無効な ChatGPT 認証 URL"),
+  );
+  assert.equal(signInRequests, 1);
+  assert.deepEqual(
+    await page.evaluate(() => window.__dshAuthTabs.map((tab) => tab.closed)),
+    [true],
+    "an untrusted authorization URL closes the reserved tab",
+  );
 
-  await page.locator("#new-session").click();
-  await page.waitForFunction((old) => document.querySelector(".session-option[aria-current='page']")?.dataset.id !== old, firstId);
-  await page.setViewportSize({ width: 1280, height: 500 });
-  await page.locator("#prompt").fill("short desktop composer smoke");
-  assert.equal(await page.locator("#send").isEnabled(), true);
-  const compactComposer = await page.locator("#send").boundingBox();
-  assert.ok(compactComposer && compactComposer.y + compactComposer.height <= 500,
-    "the active Send control remains inside a short desktop viewport");
-  assert.ok(await page.locator(".yk-shell").evaluate((element) => {
-    const rect = element.getBoundingClientRect();
-    return rect.top >= 0 && rect.bottom <= window.innerHeight;
-  }), "the desktop application shell fits within a 500px viewport");
-  await page.screenshot({ path: path.join(screenshots, "short-desktop-composer.png"), fullPage: true });
-  await page.locator("#prompt").fill("");
-  await page.setViewportSize({ width: 1280, height: 820 });
-  await page.waitForFunction(() => window.innerHeight >= 800);
-  await send("Please write approved.txt");
-  await waitStatus("承認待ち");
-  assert.match(await page.locator("#approval-arguments").textContent(), /approved\.txt/);
-  await assert.rejects(fs.access(path.join(workspace, "approved.txt")));
-  await page.setViewportSize({ width: 1280, height: 500 });
-  const compactApproval = await Promise.all(["#approve", "#deny"].map((selector) => page.locator(selector).boundingBox()));
-  assert.ok(compactApproval.every((rect) => rect && rect.y >= 0 && rect.y + rect.height <= 500),
-    "both approval actions remain reachable inside a short desktop viewport");
-  await page.screenshot({ path: path.join(screenshots, "short-desktop-approval.png"), fullPage: true });
-  await page.setViewportSize({ width: 1280, height: 820 });
-  await page.waitForFunction(() => window.innerHeight >= 800);
-  await page.screenshot({ path: path.join(screenshots, "desktop-approval.png"), fullPage: true });
-  await page.locator("#approve").click();
-  await waitStatus("完了");
-  assert.match(await fs.readFile(path.join(workspace, "approved.txt"), "utf8"), /explicit browser approval/);
+  invalidAuthorizationUrl = false;
+  await page.locator("#auth-sign-in").click();
+  await page.waitForFunction(
+    () => document.getElementById("auth-guidance")?.textContent?.includes("モデルを読み込めませんでした"),
+    null,
+    { timeout: 20_000 },
+  );
+  assert.equal(signInRequests, 2);
+  assert.equal(modelRefreshes, 1, "the connected account automatically refreshes its model catalog");
+  assert.equal(await page.locator("#auth-models-retry").isHidden(), false);
+  await page.locator("#auth-models-retry").click();
+  await page.waitForFunction(
+    () => document.querySelector("#model-picker option[value='fixture-model']"),
+    null,
+    { timeout: 20_000 },
+  );
+  assert.equal(modelRefreshes, 2, "failed discovery waits for an explicit retry");
+  assert.match(await page.locator("#auth-status").textContent(), /ChatGPT/);
+  assert.equal(await page.locator("#auth-sign-in").isHidden(), true);
+  assert.equal(await page.locator("#model-picker").isDisabled(), false);
+  const tabs = await page.evaluate(() => window.__dshAuthTabs.map((tab) => ({
+    href: tab.href,
+    opener: tab.opener,
+    closed: tab.closed,
+  })));
+  assert.equal(tabs.length, 2);
+  assert.equal(tabs[0].closed, true);
+  assert.equal(tabs[1].href, "https://auth.openai.com/api/accounts/authorize?client_id=fixture");
+  assert.equal(tabs[1].opener, null, "the authorization window has no opener");
 
-  await send("Please write denied.txt");
-  await waitStatus("承認待ち");
-  await page.locator("#deny").click();
-  await waitStatus("完了");
-  await assert.rejects(fs.access(path.join(workspace, "denied.txt")));
+  await page.locator("#model-picker").selectOption("fixture-model");
+  await page.waitForFunction(
+    () => document.getElementById("model-picker")?.value === "fixture-model",
+  );
+  rejectNextModel = true;
+  await page.locator("#model-picker").selectOption("alternate-model");
+  await page.waitForFunction(
+    () => document.getElementById("run-error")?.textContent?.includes("fixture selection rejected"),
+  );
+  assert.equal(
+    await page.locator("#model-picker").inputValue(),
+    "fixture-model",
+    "a failed remote model selection restores the previously active model",
+  );
+}
 
-  await send("slow request");
-  await waitStatus("実行中");
-  await page.locator("#cancel").click();
-  await waitStatus("キャンセル済み");
-  await send("provider failure");
-  await waitStatus("失敗");
-  assert.match(await page.locator("#run-error").textContent(), /503|Fixture provider/);
-
-  await send("long transcript");
-  await waitStatus("完了");
-  await page.waitForFunction(() => document.getElementById("transcript-scroll").scrollHeight > document.getElementById("transcript-scroll").clientHeight);
-  await page.evaluate(() => { document.getElementById("transcript-scroll").scrollTop = 0; });
-  await page.locator("#jump-latest").waitFor({ state: "visible" });
-  await page.screenshot({ path: path.join(screenshots, "desktop-transcript.png"), fullPage: true });
-
-  await page.locator("#text-view").click();
-  await page.evaluate(() => { document.getElementById("text-transcript").scrollTop = 0; });
-  await page.locator("#jump-latest").waitFor({ state: "visible" });
-  const activeId = await currentId();
-  await host.call("session_send", { session_id: activeId, prompt: "append while reading" });
-  await host.waitForSession(activeId, { signal: AbortSignal.timeout(10_000) });
-  await page.waitForFunction(() => document.getElementById("text-transcript").textContent.includes("append while reading"));
-  assert.equal(await page.locator("#text-transcript").evaluate((element) => element.scrollTop), 0);
-  await page.locator("#text-view").click();
-
-  const importedSource = await fs.readFile(new URL("../tests/fixtures/upstream-tool-call-turn/session.v4.jsonl", import.meta.url), "utf8");
-  const imported = await host.call("session_import", { jsonl: importedSource });
-  assert.equal(imported.ok, true, imported.error);
-  await page.reload({ waitUntil: "domcontentloaded" });
-  await page.waitForFunction(() => document.getElementById("status").textContent === "読み取り専用 · 完了");
-  assert.equal(await page.locator("#japanese-font").inputValue(), "noto");
-  assert.equal(await page.locator("#prompt").isDisabled(), true);
-  assert.equal(await page.locator("#send").isDisabled(), true);
-  assert.match(await page.locator("#context-source").textContent(), /Session v4 の読み込み履歴 · 読み取り専用/);
-  assert.equal(await page.locator("#context-read-only").isVisible(), true);
-  assert.match(await page.locator("#composer-hint").textContent(), /読み取り専用/);
-  assert.match(await page.locator("#text-transcript").textContent(), /DONE/);
-  const providerCallsBeforeRejectedContinuation = providerCalls;
-  const deniedContinuation = await host.call("session_send", { session_id: imported.result.id, prompt: "do not run" });
-  assert.equal(deniedContinuation.ok, false);
-  assert.equal(providerCalls, providerCallsBeforeRejectedContinuation);
-
-  await page.locator(`.session-option[data-id='${firstId}']`).click();
-  await page.waitForFunction(() => document.getElementById("status").textContent === "完了");
-
-  // A later explicit session selection wins over an earlier create request.
-  await page.locator("#new-session").click();
-  await page.locator(`.session-option[data-id='${firstId}']`).click();
-  await page.waitForFunction(() => !document.getElementById("new-session").disabled);
-  assert.equal(await currentId(), firstId);
-
-  await page.locator("#sidebar-toggle").click();
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.waitForFunction(() => document.getElementById("transcript-canvas").width < 500);
-  assert.equal(await page.locator(".yk-shell").getAttribute("data-sidebar-collapsed"), "false");
-  assert.equal(await page.locator("#sidebar-toggle").getAttribute("aria-pressed"), "false");
-  assert.equal(await page.locator("#sidebar-toggle").textContent(), "ナビゲーションを隠す");
-  await page.setViewportSize({ width: 1280, height: 820 });
-  await page.waitForFunction(() => window.matchMedia("(min-width: 821px)").matches);
-  await page.waitForFunction(() => document.getElementById("yk-mobile-navigation").getAttribute("aria-hidden") === "false");
-  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("aria-hidden"), "false",
-    "desktop navigation remains visible and reachable after resizing from mobile");
-  assert.equal(await page.locator("#sidebar-toggle").textContent(), "ナビゲーションを隠す");
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.waitForFunction(() => document.getElementById("transcript-canvas").width < 500);
-  assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > window.innerWidth), false);
-  await page.locator("#navigation-toggle").click();
-  await page.waitForTimeout(220);
-  await page.screenshot({ path: path.join(screenshots, "mobile-navigation.png"), fullPage: true });
-  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("aria-modal"), "true");
-  assert.equal(await page.locator(".yk-workspace").getAttribute("inert"), "");
-  await page.keyboard.press("Shift+Tab");
-  assert.equal(await page.evaluate(() => document.getElementById("yk-mobile-navigation").contains(document.activeElement)), true,
-    "the mobile navigation traps reverse keyboard focus");
-  await page.keyboard.press("Escape");
-  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("aria-hidden"), "true");
-  assert.equal(await page.evaluate(() => document.activeElement?.id), "navigation-toggle",
-    "Escape closes navigation and restores focus to its trigger");
-  await page.locator("#context-toggle").click();
-  await page.waitForTimeout(220);
-  await page.screenshot({ path: path.join(screenshots, "mobile-details.png"), fullPage: true });
-  assert.equal(await page.locator("#yk-context-panel").getAttribute("aria-modal"), "true");
-  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("aria-hidden"), "true");
-  assert.equal(await page.locator("#yk-mobile-navigation").getAttribute("inert"), "");
-  await page.keyboard.press("Escape");
-  assert.equal(await page.locator("#yk-context-panel").getAttribute("aria-hidden"), "true");
-  assert.equal(await page.evaluate(() => document.activeElement?.id), "context-toggle",
-    "Escape closes the details drawer and restores focus to its trigger");
-  await page.locator("#navigation-toggle").click();
-  await page.locator("#new-session").click();
-  await page.waitForFunction((previous) => document.querySelector(".session-option[aria-current='page']")?.dataset.id !== previous, firstId);
-  assert.equal(await page.locator(".yk-shell").getAttribute("data-mobile-sidebar-open"), "false",
-    "creating a conversation from the mobile navigation closes the drawer");
-  await page.locator("#navigation-toggle").click();
-  await page.locator(`.session-option[data-id='${firstId}']`).click();
-  await page.waitForFunction((expected) => document.querySelector(".session-option[aria-current='page']")?.dataset.id === expected, firstId);
-  assert.equal(await page.locator(".yk-shell").getAttribute("data-mobile-sidebar-open"), "false");
-  await page.waitForTimeout(220);
-  await page.screenshot({ path: path.join(screenshots, "mobile-transcript.png"), fullPage: true });
-
-  // Exercise the existing reconnect control without restarting or losing state.
-  await page.route("**/api/call", (route) => route.abort("failed"));
-  await page.locator("#connection-error").waitFor({ state: "visible", timeout: 10_000 });
-  await page.unroute("**/api/call");
+async function testCorruptSnapshotRecovery(browserInstance) {
+  const context = await browserInstance.newContext({ locale: "ja-JP" });
+  contexts.push(context);
+  const page = await context.newPage();
+  observePage(page);
+  let snapshotRequests = 0;
+  await page.route("**/api/v1/snapshot", async (route) => {
+    snapshotRequests += 1;
+    if (snapshotRequests <= 2) {
+      await route.fulfill({ status: 200, contentType: "application/json", body: "{bad json" });
+      return;
+    }
+    await route.continue();
+  });
+  await page.goto(baseURL, { waitUntil: "domcontentloaded" });
+  await page.locator("#connection-error").waitFor({ state: "visible", timeout: 15_000 });
   await page.locator("#reconnect").click();
-  await page.locator("#connection-error").waitFor({ state: "hidden" });
-  assert.equal(await currentId(), firstId);
-  assert.deepEqual(failures, []);
-  console.log(JSON.stringify({ status: "PASS", assertions: "Yami-kumo startup, live desktop details, collapsed-sidebar and drawer accessibility, selected-session-preserving search, create/select, draft preservation, short-desktop composer and approval reachability, submit, settled session fork with immutable source, rekeyed effects and copied transcript, delayed fork/session-switch fencing, live provisional text/reasoning and final replacement, pruning context projection and success/failure notice session fencing, approval allow/deny, real file write, cancellation, provider error, literal output, scrolling, text-view follow, Session v4 read-only import/no-effect display, same-session create/select race, desktop/mobile resize accessibility, mobile navigation and details drawers, mobile New conversation dismissal, reconnect", screenshots }));
+  await waitForConnectedWorkspace(page);
+  await page.waitForFunction(() => document.getElementById("connection-error")?.hidden === true);
+  assert.ok(snapshotRequests >= 3, "the explicit recovery requests a fresh valid snapshot after malformed responses");
+  assert.equal(await page.locator("#provider-model").textContent().then((text) => text.includes("デモ")), true);
+}
+
+async function testStaleAuthCatalogCannotOverwriteNewAccount(browserInstance) {
+  const context = await browserInstance.newContext({
+    locale: "ja-JP",
+    viewport: { width: 1280, height: 820 },
+  });
+  contexts.push(context);
+  const page = await context.newPage();
+  observePage(page);
+  let connectedProfile = "";
+  let profileBModelsLoaded = false;
+  let authModelRequests = 0;
+  let releaseProfileA;
+  let resolveProfileAStarted;
+  const profileAResultGate = new Promise((resolve) => { releaseProfileA = resolve; });
+  const profileAStarted = new Promise((resolve) => { resolveProfileAStarted = resolve; });
+  await page.addInitScript(() => {
+    window.open = () => ({
+      href: "about:blank",
+      closed: false,
+      opener: null,
+      location: { replace(value) { this.href = value; } },
+      close() { this.closed = true; },
+    });
+  });
+  await page.route("**/api/v1/snapshot", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.auth = connectedProfile
+      ? {
+        state: "connected",
+        account: { profile_id: connectedProfile, email: `${connectedProfile}@example.test` },
+        plan_usage: "disabled",
+        scopes: [],
+        models: profileBModelsLoaded && connectedProfile === "profile-b"
+          ? [{ slug: "model-b", display_name: "Model B" }]
+          : [],
+        selected_model: null,
+      }
+      : { state: "signed_out", account: null, plan_usage: "disabled", scopes: [], models: [], selected_model: null };
+    await route.fulfill({ response, body: JSON.stringify(snapshot) });
+  });
+  await page.route("**/api/call", async (route) => {
+    const request = JSON.parse(route.request().postData() || "{}");
+    if (request.operation === "auth_sign_in_browser") {
+      connectedProfile = "profile-a";
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          result: { started: true, authorization_url: "https://auth.openai.com/api/accounts/authorize?client_id=race" },
+        }),
+      });
+      return;
+    }
+    if (request.operation === "auth_models") {
+      authModelRequests += 1;
+      if (connectedProfile === "profile-a") {
+        resolveProfileAStarted();
+        await profileAResultGate;
+        await route.fulfill({
+          contentType: "application/json",
+          body: JSON.stringify({ ok: false, error: "stale profile A catalog failure" }),
+        });
+        return;
+      }
+      profileBModelsLoaded = true;
+      await route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify({ ok: true, result: {} }),
+      });
+      return;
+    }
+    await route.continue();
+  });
+
+  await page.goto(baseURL, { waitUntil: "domcontentloaded" });
+  await waitForConnectedWorkspace(page);
+  await page.locator("#auth-sign-in").click();
+  await profileAStarted;
+  connectedProfile = "profile-b";
+  await page.evaluate(() => window.dispatchEvent(new Event("pageshow")));
+  await page.waitForFunction(
+    () => Boolean(document.querySelector("#model-picker option[value='model-b']")),
+    null,
+    { timeout: 20_000 },
+  );
+  assert.ok(authModelRequests >= 2, "profile B starts its own model catalog request while A is pending");
+  releaseProfileA();
+  await page.waitForTimeout(300);
+  assert.equal(await page.locator("#model-picker option[value='model-b']").count(), 1);
+  assert.equal(await page.locator("#model-picker").isDisabled(), false);
+  assert.equal(await page.locator("#auth-models-retry").isHidden(), true);
+  assert.doesNotMatch(await page.locator("#auth-guidance").textContent(), /モデルを読み込めませんでした/);
+}
+
+try {
+  browser = await chromium.launch({
+    headless: true,
+    executablePath,
+    args: ["--no-sandbox"],
+  });
+  await testNativeDemo(browser);
+  await testCorruptSnapshotRecovery(browser);
+  await testCompiledAuthModelFlow(browser);
+  await testStaleAuthCatalogCannotOverwriteNewAccount(browser);
+  assert.deepEqual(failures, [], `the browser reports no runtime or console errors: ${JSON.stringify(failures)}`);
+  process.stdout.write("Native-host Chromium smoke passed: CSP, MoonBit UI/transport, Canvas, command receipts, fork/prune/import, offline shell, accessibility, auth races, and compiled service-worker cache.\n");
 } catch (error) {
-  if (page && !page.isClosed()) await page.screenshot({ path: path.join(screenshots, "failure.png"), fullPage: true }).catch(() => {});
+  await mkdir(screenshotDirectory, { recursive: true });
+  await Promise.all(
+    pages.map((page, index) =>
+      page.screenshot({ path: path.join(screenshotDirectory, `failure-${index + 1}.png`), fullPage: true })
+        .catch(() => undefined),
+    ),
+  );
   throw error;
 } finally {
-  releaseCapPrune?.();
-  if (browser) await browser.close();
-  if (web) await web.close();
-  if (host) await host.close();
-  await fs.rm(workspace, { recursive: true, force: true });
+  for (const context of contexts) await context.close().catch(() => undefined);
+  await browser?.close().catch(() => undefined);
 }

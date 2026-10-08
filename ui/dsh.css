@@ -280,7 +280,12 @@ textarea:focus-visible,
 .session-option {
   display: flex;
   width: 100%;
+  height: auto;
+  min-height: 56px;
+  flex-shrink: 0;
   flex-direction: column;
+  align-items: flex-start;
+  justify-content: flex-start;
   gap: 5px;
   margin: 0 0 4px;
   padding: 10px 9px;
@@ -301,6 +306,7 @@ textarea:focus-visible,
 }
 
 .session-option-title {
+  flex: none;
   width: 100%;
   overflow: hidden;
   color: #2c3541;
@@ -311,6 +317,7 @@ textarea:focus-visible,
 }
 
 .session-option-state {
+  flex: none;
   overflow: hidden;
   color: #737e8e;
   font-size: 10px;

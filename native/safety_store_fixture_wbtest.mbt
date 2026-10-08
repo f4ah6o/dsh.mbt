@@ -157,3 +157,61 @@ async test "native store rejects unsupported receipt envelope versions" {
     }
   }
 }
+
+///|
+async test "native store recovers only a dead local lock owner" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-store-stale-lock")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let hostname = match os_hostname() {
+      Ok(value) => value
+      Err(_) => fail("native hostname fixture is unavailable")
+    }
+    let local_data = fixture + "/local-data"
+    @fs.mkdir(local_data)
+    @fs.write_file(
+      local_data + "/host.lock",
+      @utf8.encode(
+        Json::object({
+          "pid": (2147483647).to_json(),
+          "hostname": hostname.to_json(),
+          "token": "dead-owner".to_json(),
+          "created_at": "2026-10-08T00:00:00Z".to_json(),
+        }).stringify(),
+      ),
+    )
+    let recovered = match NativeStore::open(local_data) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    let replacement = match NativeStore::read_lock(recovered.root) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    assert_eq(string_field(replacement, "hostname"), Some(hostname))
+    assert_true(string_field(replacement, "token") != Some("dead-owner"))
+    assert_true(!@fs.exists(local_data + "/host.recovery"))
+    recovered.close().unwrap()
+
+    let remote_data = fixture + "/remote-data"
+    @fs.mkdir(remote_data)
+    @fs.write_file(
+      remote_data + "/host.lock",
+      @utf8.encode(
+        Json::object({
+          "pid": (2147483647).to_json(),
+          "hostname": "unknown-other-machine".to_json(),
+          "token": "remote-owner".to_json(),
+          "created_at": "2026-10-08T00:00:00Z".to_json(),
+        }).stringify(),
+      ),
+    )
+    assert_true(NativeStore::open(remote_data) is Err(_))
+    let remote_lock = @json.parse(
+      @fs.read_file(remote_data + "/host.lock").text(),
+    ) catch {
+      _ => fail("remote lock marker was not valid JSON")
+    }
+    assert_eq(string_field(remote_lock, "token"), Some("remote-owner"))
+  }
+}

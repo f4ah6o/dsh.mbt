@@ -1,0 +1,21 @@
+import {
+  "f4ah6o/dsh/client",
+  "f4ah6o/dsh/app",
+  "f4ah6o/yami_kumo",
+  "f4ah6o/yami_kumo/dom",
+  "moonbitlang/async/js_async",
+  "moonbitlang/core/json",
+}
+
+import {
+  "f4ah6o/dsh/browser",
+  "moonbitlang/core/json",
+} for "test"
+
+supported_targets = "js"
+
+pkgtype(kind: "foreign_library")
+
+options(
+  link: { "js": { "format": "esm" } },
+)

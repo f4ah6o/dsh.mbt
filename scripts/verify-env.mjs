@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const projectRoot = fileURLToPath(new URL('../', import.meta.url));
-const dependencyPaths = ['vendor/gpui', 'vendor/hotpath', 'tools/turtles'];
+const dependencyPaths = ['vendor/gpui', 'vendor/hotpath', 'vendor/yami-kumo', 'tools/turtles'];
 // This is the build/runner release distributed with .moonbit-version.
 const expectedBuildVersion = '0.1.20260920';
 
@@ -119,7 +119,7 @@ export function verifyEnvironment({ quiet = false } = {}) {
   const turtlesVersion = moduleField(join(projectRoot, 'tools/turtles/moon.mod'), 'version');
   if (!quiet) {
     console.log('Environment: Node ' + process.versions.node + '; MoonBit ' +
-      compilerVersion + '; core and 3 dependency pins verified.');
+      compilerVersion + '; core and 4 dependency pins verified.');
   }
   return { compilerVersion, moonVersion, turtlesVersion, pins };
 }

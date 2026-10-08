@@ -161,10 +161,28 @@ async fn run_native_demo() -> Unit {
 }
 
 ///|
+async fn copy_and_compare_asset(source : String, destination : String) -> Unit {
+  if !@fs.exists(source) {
+    fail("missing compiled or pinned web source asset " + source)
+  }
+  let copied = @process.run("cp", [source, destination])
+  if copied != 0 {
+    fail("cannot copy native-verifier asset " + source)
+  }
+  let expected = @fs.read_file(source)
+  let actual = @fs.read_file(destination)
+  let expected_data : &@io.Data = expected
+  let actual_data : &@io.Data = actual
+  if expected_data.text() != actual_data.text() {
+    fail("copied web asset differs from its source: " + destination)
+  }
+}
+
+///|
 async fn main {
   run_moon([
     "fmt", "--check", "engine", "provider", "auth", "protocol", "client", "plugins",
-    "api", "ui", "native", "verification/retry_math",
+    "api", "ui", "native", "browser", "browser/sw", "verification/retry_math",
   ])
   check_native_packages()
   let worker_root = @fs.tmpdir(prefix="dsh-native-worker-build")
@@ -186,13 +204,35 @@ async fn main {
   run_moon([
     "run", "native", "--target", "native", "--release", "--frozen", "--", "--help",
   ])
-  run_moon(["build", "app", "--target", "js", "--release", "--frozen"])
-  run_moon(["build", "client", "--target", "js", "--release", "--frozen"])
+  run_moon(["build", "browser", "--target", "js", "--release", "--frozen"])
+  run_moon(["build", "browser/sw", "--target", "js", "--release", "--frozen"])
+  copy_and_compare_asset(
+    "_build/js/release/build/f4ah6o/dsh/browser/browser.js",
+    "web/moonbit/browser.js",
+  )
+  copy_and_compare_asset(
+    "_build/js/release/build/f4ah6o/dsh/browser/sw/sw.js",
+    "web/sw.js",
+  )
+  copy_and_compare_asset(
+    "vendor/yami-kumo/styles/kumo-standalone.css",
+    "web/kumo-standalone.css",
+  )
+  copy_and_compare_asset(
+    "vendor/yami-kumo/styles/yami-kumo-components.css",
+    "web/yami-kumo-components.css",
+  )
   for path in [
-    "_build/js/release/build/f4ah6o/dsh/app/app.js",
-    "_build/js/release/build/f4ah6o/dsh/client/client.js",
-    "web/yami-kumo-shell.js",
+    "_build/js/release/build/f4ah6o/dsh/browser/browser.js",
+    "_build/js/release/build/f4ah6o/dsh/browser/sw/sw.js",
+    "web/moonbit/browser.js",
+    "web/sw.js",
+    "web/kumo-standalone.css",
+    "web/yami-kumo-components.css",
     "web/yami-kumo-shell.css",
+    "web/index.html",
+    "web/manifest.webmanifest",
+    "web/icon.svg",
   ] {
     if !@fs.exists(path) {
       fail("no-Node web asset build did not produce " + path)
