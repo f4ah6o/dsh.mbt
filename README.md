@@ -83,8 +83,11 @@ provider、tool、承認待ち、retry の処理は引き継いだり再実行�
 ### Node.js を使わない native host
 
 native service / CLI は Node.js なしで実行できます。MoonBit toolchain と依存を用意した後、API key 不要の browser demo は次のように起動します。
+native service が配信する browser bridge を先に JavaScript target で build します。
 
 ```sh
+moon build app --target js --release
+moon build client --target js --release
 moon run native --target native --release -- \
   --serve --demo --data-dir /absolute/path/to/dsh-demo-data \
   --workspace /absolute/path/to/project --port 3210
@@ -104,7 +107,7 @@ native iOS / 実機の tailnet 接続は別途受入確認が必要です。
 ### ブラウザ UI とデータ
 
 Node host と native host は Yami-kumo の AppShell を使う共通の日本語ブラウザ UI を提供します。会話を検索でき、画面幅に応じて navigation と詳細パネルが drawer として開きます。
-詳細パネルには選択中の session の状態、turn、履歴、保存元、親 session と、host が取得した project、Git repository / branch、provider / model を表示します。settled session の分岐と tool output の手動整理も UI から実行できます。
+sidebar には workspace 名、詳細パネルには選択中の session の状態、turn、履歴、保存元、親 session と Git repository / branch、会話 header には provider / model を表示します。settled session の分岐と tool output の手動整理も UI から実行できます。
 日本語フォントは詳細パネルで選び、設定はそのブラウザのローカルストレージに保存します。Session log は host の data directory に保存し、公式 API へアップロードしません。
 この UI の変更はブラウザが対象で、iOS アプリの表示は変更しません。
 
