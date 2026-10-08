@@ -38,7 +38,7 @@ MoonBit authentication code. Its filesystem walk rejects absolute paths and
 `.` / `..` components as a syscall-level guard; MoonBit still owns workspace
 admission, path normalization, bounds, tool policy, and error semantics.
 `oauth_os.c` supplies entropy, Unix time, and launching a validated authorization
-URL in the host browser. `signal_os.c` installs and restores minimal SIGINT / 
+URL in the host browser. `signal_os.c` installs and restores minimal SIGINT /
 SIGTERM handlers and reports the requested signal; MoonBit owns shutdown and
 task-drain behavior.
 
