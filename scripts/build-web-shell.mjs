@@ -9,7 +9,7 @@ const checkOnly = process.argv.includes('--check');
 const buildDirectory = path.join(root, '_build/js/release/build/f4ah6o/dsh/browser');
 const browserModule = path.join(buildDirectory, 'browser.js');
 const serviceWorkerModule = path.join(buildDirectory, 'sw/sw.js');
-const yamiSource = path.join(root, 'vendor/yami-kumo');
+const yamiSource = path.join(root, '.mooncakes/f4ah6o/yami_kumo');
 const shellStyles = [
   path.join(root, 'ui/yami-kumo/styles.css'),
   path.join(root, 'ui/dsh.css'),
@@ -18,10 +18,12 @@ const outputs = [
   {
     destination: path.join(root, 'web/moonbit/browser.js'),
     source: browserModule,
+    checkInCheck: false,
   },
   {
     destination: path.join(root, 'web/sw.js'),
     source: serviceWorkerModule,
+    checkInCheck: false,
   },
   {
     destination: path.join(root, 'web/kumo-standalone.css'),
@@ -59,13 +61,15 @@ execFileSync('moon', ['build', 'browser/sw', '--target', 'js', '--release'], {
 if (checkOnly) {
   for (const output of outputs) {
     const actual = await readFile(output.destination).catch(() => null);
+    if (!actual && output.checkInCheck === false) continue;
     const expected = await expectedBytes(output);
     if (!actual || !actual.equals(expected)) {
       const relative = path.relative(root, output.destination).split(path.sep).join('/');
-      throw new Error(`${relative} is stale; run npm run build:shell and commit the rebuilt asset.`);
+      const refresh = output.checkInCheck === false ? 'npm run build' : 'npm run build:shell';
+      throw new Error(`${relative} is stale; run ${refresh} to refresh it.`);
     }
   }
-  process.stdout.write('MoonBit browser and service-worker modules plus pinned Yami-kumo CSS match their sources.\n');
+  process.stdout.write('Tracked CSS matches its sources; any existing generated modules match their MoonBit builds.\n');
 } else {
   for (const output of outputs) {
     await mkdir(path.dirname(output.destination), { recursive: true });

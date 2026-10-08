@@ -56,7 +56,8 @@ reviewed together.
 ## Browser host APIs
 
 Browser and service-worker code is authored in `browser/**/*.mbt` and compiled
-to the shipped ESM files `web/moonbit/browser.js` and `web/sw.js`. The
+to `web/moonbit/browser.js` and `web/sw.js` at their runtime paths. These
+generated JavaScript files are not tracked in Git. The
 `extern "js"` declarations in `browser/dom.mbt`, `browser/transport.mbt`, and
 `browser/sw/sw.mbt` are narrow adapters for standard browser facilities:
 DOM nodes, events, focus, layout measurement, Canvas 2D, Fetch, EventSource,
@@ -67,9 +68,16 @@ MoonBit. The web shell has no handwritten JavaScript entrypoint or product
 logic.
 
 The source inventory check permits only the two generated JavaScript assets
-and explicitly test-only JavaScript. `scripts/build-web-shell.mjs` rebuilds
-the browser and service-worker packages and verifies or copies those exact
-compiler outputs alongside CSS from the pinned Yami-kumo submodule.
+and explicitly test-only JavaScript. A fresh checkout needs
+`sh scripts/build.sh` before service startup or direct web-test runs; `npm test`
+runs the build first. `npm run check` can run before output generation and
+compares generated modules when present. `scripts/build-web-shell.mjs` rebuilds the
+browser and service-worker packages, writes their compiler outputs at the same
+runtime paths, and copies CSS from Mooncakes dependency
+`f4ah6o/yami_kumo@0.1.0` installed under `.mooncakes/f4ah6o/yami_kumo`. Its
+`--check` mode freshly compiles the browser and service-worker modules, compares
+them with the generated web files when present, and always checks the tracked
+CSS and local shell stylesheet against their sources.
 `scripts/native-verify.mbtx` performs the same browser/service-worker build and
 asset comparison in the CI job where Node.js and npm are absent. Node-based
 scripts and Playwright are development/test tooling, not product runtime

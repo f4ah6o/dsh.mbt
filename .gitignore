@@ -7,6 +7,8 @@ coverage/
 test-results/
 .turtles/
 ios/ClientEmbedding/DshClientEmbedding.xcodeproj/
+/web/moonbit/browser.js
+/web/sw.js
 *.log
 .env
 .env.*

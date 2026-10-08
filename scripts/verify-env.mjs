@@ -6,7 +6,9 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const projectRoot = fileURLToPath(new URL('../', import.meta.url));
-const dependencyPaths = ['vendor/gpui', 'vendor/hotpath', 'vendor/yami-kumo', 'tools/turtles'];
+const dependencyPaths = ['vendor/gpui', 'vendor/hotpath', 'tools/turtles'];
+const yamiKumoPackage = 'f4ah6o/yami_kumo';
+const yamiKumoVersion = '0.1.0';
 // This is the build/runner release distributed with .moonbit-version.
 const expectedBuildVersion = '0.1.20260920';
 
@@ -36,6 +38,41 @@ function moduleField(path, name) {
   const value = readFileSync(path, 'utf8').match(expression)?.[1];
   if (!value) throw new Error('Missing ' + name + ' in ' + path);
   return value;
+}
+
+function verifyYamiKumoPackage() {
+  const expectedImport = yamiKumoPackage + '@' + yamiKumoVersion;
+  const projectManifest = readFileSync(join(projectRoot, 'moon.mod'), 'utf8');
+  if (!projectManifest.includes('"' + expectedImport + '"')) {
+    throw new Error('moon.mod must pin ' + expectedImport + '.');
+  }
+
+  const packageRoot = join(projectRoot, '.mooncakes', 'f4ah6o', 'yami_kumo');
+  const packageManifest = join(packageRoot, 'moon.mod');
+  if (!existsSync(packageManifest)) {
+    throw new Error('Pinned package ' + expectedImport + ' is not installed. Run:\n' +
+      '  moon update && moon install');
+  }
+  const installedName = moduleField(packageManifest, 'name');
+  const installedVersion = moduleField(packageManifest, 'version');
+  if (installedName !== yamiKumoPackage || installedVersion !== yamiKumoVersion) {
+    throw new Error('Installed Yami-kumo package mismatch: expected ' + expectedImport +
+      ', found ' + installedName + '@' + installedVersion + '. Run:\n' +
+      '  moon update && moon install');
+  }
+
+  const requiredFiles = [
+    'styles/kumo-standalone.css',
+    'styles/yami-kumo-components.css',
+    'LICENSE',
+    'licenses/cloudflare-kumo-LICENSE',
+  ];
+  const missingFiles = requiredFiles.filter(path => !existsSync(join(packageRoot, path)));
+  if (missingFiles.length) {
+    throw new Error('Installed ' + expectedImport + ' is missing required publication assets: ' +
+      missingFiles.join(', ') + '. Run:\n  moon update && moon install');
+  }
+  return installedVersion;
 }
 
 export function verifyEnvironment({ quiet = false } = {}) {
@@ -116,12 +153,13 @@ export function verifyEnvironment({ quiet = false } = {}) {
     }
     pins[path] = pin[1];
   }
+  const yamiKumoVersion = verifyYamiKumoPackage();
   const turtlesVersion = moduleField(join(projectRoot, 'tools/turtles/moon.mod'), 'version');
   if (!quiet) {
     console.log('Environment: Node ' + process.versions.node + '; MoonBit ' +
-      compilerVersion + '; core and 4 dependency pins verified.');
+      compilerVersion + '; core and 3 dependency pins verified.');
   }
-  return { compilerVersion, moonVersion, turtlesVersion, pins };
+  return { compilerVersion, moonVersion, turtlesVersion, yamiKumoVersion, pins };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

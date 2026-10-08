@@ -14,6 +14,7 @@
 
 - Browser UI を日本語化し、日本語フォント、プロジェクト / Git branch、provider と選択 model を表示するようにした。Session log の公式 API upload はなく、既定で無効のまま。iOS UI は対象外。
 - Browser UI を Yami-kumo application shell に移し、会話検索、responsive な navigation / context drawer、live session details を追加した。browser / service worker は MoonBit package から生成し、UI の送信、承認、fork、trim は native v1 API に接続する。
+- Yami-kumo を Git submodule から Mooncakes の `f4ah6o/yami_kumo@0.1.0` dependency に切り替えた。fresh checkout の service 起動前に build が必要で、browser JavaScript と service worker は Git 管理しない。
 - native host の Tailscale Serve は `DSH_TAILNET_PORT` で HTTPS port を指定できる。未指定時は 443 を使う。
 - ローカル browser UI の ChatGPT sign-in は同じ browser の新しい tab で完了する。Tailnet client の sign-in や account 切り替えは host Mac 上の dsh から開始する。
 

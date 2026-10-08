@@ -7,6 +7,3 @@
 [submodule "tools/turtles"]
 	path = tools/turtles
 	url = https://github.com/gpui-mbt/turtles.mbt.git
-[submodule "vendor/yami-kumo"]
-	path = vendor/yami-kumo
-	url = https://github.com/f4ah6o/Yami-kumo.git
