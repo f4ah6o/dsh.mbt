@@ -15,9 +15,9 @@ export function isReadOnly(session) {
 }
 
 export function statusLabel(session) {
-  if (session?.pending_approval || session?.status === "awaiting_approval") return "Needs approval";
-  const label = ({ idle: "Ready", running: "Running", queued: "Queued", completed: "Completed", failed: "Failed", cancelled: "Cancelled" })[session?.status] || session?.status || "Ready";
-  return isReadOnly(session) ? `Read-only · ${label}` : label;
+  if (session?.pending_approval || session?.status === "awaiting_approval") return "承認待ち";
+  const label = ({ idle: "準備完了", running: "実行中", queued: "待機中", completed: "完了", failed: "失敗", cancelled: "キャンセル済み" })[session?.status] || session?.status || "準備完了";
+  return isReadOnly(session) ? `読み取り専用 · ${label}` : label;
 }
 
 export function sessionList(result) {
@@ -57,8 +57,8 @@ export function runError(session) {
     if (event.turn_id !== session.turn_id) continue;
     if (typeof event.data?.error === "string" && event.data.error) return event.data.error;
   }
-  if (isReadOnly(session)) return "This imported history records a failed turn and cannot be continued.";
-  return "The turn failed. You can review the conversation and send another prompt.";
+  if (isReadOnly(session)) return "読み込んだ履歴のターンが失敗しました。この会話を続けることはできません。";
+  return "ターンに失敗しました。会話を確認して、新しいメッセージを送信できます。";
 }
 
 export function displayMessages(session) {
@@ -70,27 +70,27 @@ export function displayMessages(session) {
   for (const message of session?.messages || []) {
     if (!message || ["system", "developer"].includes(message.role)) continue;
     const provisional = message.provisional === true;
-    const status = message.stream_status === "partial" ? "partial" : "writing";
-    if (message.reasoning) rows.push({ label: provisional ? `Reasoning · ${status}` : "Reasoning", text: String(message.reasoning) });
+    const status = message.stream_status === "partial" ? "一部表示" : "生成中";
+    if (message.reasoning) rows.push({ label: provisional ? `推論 · ${status}` : "推論", text: String(message.reasoning) });
     if (message.content) rows.push({
       label: provisional && message.role === "assistant"
-        ? `Assistant · ${status}`
+        ? `アシスタント · ${status}`
         : message.role === "tool" && prunedCallIds.has(message.tool_call_id)
-          ? "Tool result · trimmed for model context"
-        : ({ user: "You", assistant: "Assistant", tool: "Tool result" })[message.role] || "Message",
+          ? "ツール結果 · モデル入力用に短縮"
+        : ({ user: "あなた", assistant: "アシスタント", tool: "ツール結果" })[message.role] || "メッセージ",
       text: String(message.content),
     });
     for (const call of message.tool_calls || []) {
       if (call.kind === "custom") {
         // Custom call arguments are provider-defined text, not JSON input.
         // The renderer assigns this string with textContent, so markup stays inert.
-        rows.push({ label: `Custom call · ${String(call.name || "")}`, text: String(call.arguments ?? "") });
+        rows.push({ label: `カスタム呼び出し · ${String(call.name || "")}`, text: String(call.arguments ?? "") });
       } else {
-        rows.push({ label: `Tool request · ${String(call.name || "")}`, text: prettyArguments(call.arguments) });
+        rows.push({ label: `ツール要求 · ${String(call.name || "")}`, text: prettyArguments(call.arguments) });
       }
     }
   }
-  if (session?._ui_live_text) rows.push({ label: "Assistant · writing", text: session._ui_live_text });
+  if (session?._ui_live_text) rows.push({ label: "アシスタント · 生成中", text: session._ui_live_text });
   return rows;
 }
 
@@ -102,40 +102,143 @@ export function updateShellContext(session, connection, hasError = false, docume
   const messages = Array.isArray(session?.messages) ? session.messages : [];
   const events = Array.isArray(session?.events) ? session.events : [];
   const connectionLabel = ({
-    synced: "Connected · live updates",
-    ready: "Connected · polling for updates",
-    connecting: "Connecting to the local host…",
-    offline: "Disconnected · reconnect to resume",
-    needs_resync: "Refreshing workspace state…",
-    failed: "The local host is unavailable",
-  })[connection] || "Waiting for the local host…";
+    synced: "接続済み · ライブ更新",
+    ready: "接続済み · 更新を確認中",
+    connecting: "ローカルホストに接続中…",
+    offline: "切断されました · 再接続してください",
+    needs_resync: "ワークスペースを更新中…",
+    failed: "ローカルホストを利用できません",
+  })[connection] || "ローカルホストを待っています…";
 
   if (active) {
-    byId("context-summary").textContent = session.title || "Untitled conversation";
+    byId("context-summary").textContent = session.title || "無題の会話";
     byId("context-status").textContent = statusLabel(session);
     byId("context-turn").textContent = session.turn_id > 0
-      ? `Turn ${session.turn_id} · Step ${session.step || 0}`
-      : "No turns yet";
-    byId("context-history").textContent = `${messages.length} messages · ${events.length} events`;
+      ? `${session.turn_id} ターン目 · ステップ ${session.step || 0}`
+      : "ターンはまだありません";
+    byId("context-history").textContent = `${messages.length} 件のメッセージ · ${events.length} 件のイベント`;
     byId("context-source").textContent = imported
-      ? "Imported Session v4 · read-only"
-      : "Local conversation";
+      ? "Session v4 の読み込み履歴 · 読み取り専用"
+      : "ローカルの会話";
     byId("context-parent").textContent = typeof session.parent_session_id === "string"
       ? session.parent_session_id
-      : "None";
+      : "なし";
   } else {
-    byId("context-summary").textContent = "Select a conversation to view its current state.";
-    byId("context-status").textContent = "No conversation selected";
+    byId("context-summary").textContent = "会話を選ぶと現在の状態を表示します。";
+    byId("context-status").textContent = "会話が選択されていません";
     byId("context-turn").textContent = "—";
     byId("context-history").textContent = "—";
-    byId("context-source").textContent = "Not available";
+    byId("context-source").textContent = "利用できません";
     byId("context-parent").textContent = "—";
   }
 
   byId("context-read-only").hidden = !active || !imported;
   byId("context-host-status").textContent = hasError
-    ? "Connection interrupted. Reconnect to refresh the current workspace state."
-    : `Local host · ${connectionLabel.toLowerCase()}`;
-  byId("shell-status").textContent = hasError ? "Connection interrupted · reconnect to resume" : connectionLabel;
+    ? "接続が中断されました。再接続してワークスペースを更新してください。"
+    : `ローカルホスト · ${connectionLabel}`;
+  byId("shell-status").textContent = hasError ? "接続が中断されました · 再接続してください" : connectionLabel;
   byId("shell-status-dot").dataset.state = hasError ? "offline" : connection || "connecting";
+}
+
+export async function loadWorkspaceMetadata(fetchImpl = globalThis.fetch) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const response = await fetchImpl("/api/metadata", {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+      credentials: "same-origin",
+      signal: controller.signal,
+    });
+    if (!response.ok) return null;
+    const payload = await response.json();
+    const result = payload?.result;
+    return result && typeof result === "object" ? result : null;
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+export function createWorkspaceMetadataRefresher({
+  fetchImpl = globalThis.fetch,
+  onMetadata = () => {},
+  getContextKey = () => null,
+  intervalMs = 10_000,
+  now = () => Date.now(),
+} = {}) {
+  let inFlight = null;
+  let lastStartedAt = Number.NEGATIVE_INFINITY;
+  const interval = Number.isFinite(intervalMs) && intervalMs >= 0 ? intervalMs : 10_000;
+
+  function refresh({ force = false } = {}) {
+    if (inFlight) return inFlight;
+    const startedAt = now();
+    if (!force && startedAt - lastStartedAt < interval) return Promise.resolve(null);
+    lastStartedAt = startedAt;
+    const contextKey = getContextKey();
+
+    let request;
+    request = loadWorkspaceMetadata(fetchImpl)
+      .then((metadata) => {
+        if (metadata && Object.is(contextKey, getContextKey())) onMetadata(metadata);
+        return metadata;
+      })
+      .finally(() => {
+        if (inFlight === request) inFlight = null;
+      });
+    inFlight = request;
+    return request;
+  }
+
+  return { refresh };
+}
+
+export function updateWorkspaceMetadata(metadata, documentRef = globalThis.document) {
+  if (!metadata || !documentRef) return;
+  const byId = (id) => documentRef.getElementById(id);
+  const project = typeof metadata.project === "string" && metadata.project.trim()
+    ? metadata.project
+    : "ワークスペース";
+  const repository = metadata.repository && typeof metadata.repository === "object"
+    ? metadata.repository
+    : null;
+  byId("project-name").textContent = project;
+  byId("repository-name").textContent = repository?.name || "Git リポジトリではありません";
+  byId("branch-name").textContent = typeof repository?.branch === "string"
+    ? repository.detached ? `HEAD 分離 · ${repository.branch}` : repository.branch
+    : repository ? "ブランチを取得できません" : "—";
+  byId("provider-model").textContent = `${metadata.provider || "不明なプロバイダー"} · ${metadata.model || "モデル未選択"}`;
+}
+
+const JAPANESE_FONT_STORAGE_KEY = "dsh.display.japanese-font.v1";
+export const JAPANESE_FONT_STACKS = Object.freeze({
+  system: '"Hiragino Sans", "Yu Gothic UI", "Yu Gothic", Meiryo, sans-serif',
+  hiragino: '"Hiragino Sans", "Yu Gothic UI", "Yu Gothic", Meiryo, sans-serif',
+  yugothic: '"Yu Gothic UI", "Yu Gothic", Meiryo, "Hiragino Sans", sans-serif',
+  meiryo: 'Meiryo, "Yu Gothic UI", "Hiragino Sans", sans-serif',
+  noto: '"Noto Sans JP", "Hiragino Sans", "Yu Gothic UI", Meiryo, sans-serif',
+});
+
+function availableStorage(storageRef) {
+  try { return storageRef || globalThis.localStorage; }
+  catch { return null; }
+}
+
+export function setJapaneseFont(value, documentRef = globalThis.document, storageRef) {
+  const selected = Object.hasOwn(JAPANESE_FONT_STACKS, value) ? value : "system";
+  documentRef?.documentElement?.style?.setProperty("--dsh-font-family", JAPANESE_FONT_STACKS[selected]);
+  const picker = documentRef?.getElementById?.("japanese-font");
+  if (picker && picker.value !== selected) picker.value = selected;
+  try { availableStorage(storageRef)?.setItem(JAPANESE_FONT_STORAGE_KEY, selected); }
+  catch { /* Storage may be unavailable; the page-local setting still applies. */ }
+  return selected;
+}
+
+export function restoreJapaneseFont(documentRef = globalThis.document, storageRef) {
+  let saved = "system";
+  try { saved = availableStorage(storageRef)?.getItem(JAPANESE_FONT_STORAGE_KEY) || "system"; }
+  catch { /* A fresh page uses the system Japanese font stack. */ }
+  return setJapaneseFont(saved, documentRef, storageRef);
 }

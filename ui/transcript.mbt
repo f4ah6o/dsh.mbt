@@ -188,17 +188,17 @@ fn transcript_blocks(snapshot : Json, width : Double) -> Array[Block] {
     }
     let provisional = bool_member(message, "provisional")
     let stream_status = if string_member(message, "stream_status") == "partial" {
-      "partial"
+      "一部表示"
     } else {
-      "writing"
+      "生成中"
     }
     let reasoning = string_member(message, "reasoning")
     if reasoning != "" {
       blocks.push({
         label: if provisional {
-          "Reasoning · " + stream_status
+          "推論 · " + stream_status
         } else {
-          "Reasoning"
+          "推論"
         },
         role: "reasoning",
         lines: wrap_text(reasoning, columns),
@@ -207,15 +207,15 @@ fn transcript_blocks(snapshot : Json, width : Double) -> Array[Block] {
     let content = string_member(message, "content")
     if content != "" {
       let label = match role {
-        "user" => "You"
+        "user" => "あなた"
         "assistant" =>
           if provisional {
-            "Assistant · " + stream_status
+            "アシスタント · " + stream_status
           } else {
-            "Assistant"
+            "アシスタント"
           }
-        "tool" => "Tool result"
-        _ => "Message"
+        "tool" => "ツール結果"
+        _ => "メッセージ"
       }
       blocks.push({ label, role, lines: wrap_text(content, columns), })
     }
@@ -223,7 +223,7 @@ fn transcript_blocks(snapshot : Json, width : Double) -> Array[Block] {
       let name = string_member(call, "name")
       let arguments = string_member(call, "arguments")
       blocks.push({
-        label: "Tool request · " + name,
+        label: "ツール要求 · " + name,
         role: "tool",
         lines: wrap_text(arguments, columns),
       })
@@ -232,17 +232,18 @@ fn transcript_blocks(snapshot : Json, width : Double) -> Array[Block] {
   let live = string_member(snapshot, "_ui_live_text")
   if live != "" {
     blocks.push({
-      label: "Assistant · writing",
+      label: "アシスタント · 生成中",
       role: "assistant",
       lines: wrap_text(live, columns),
     })
   }
   if blocks.is_empty() {
     blocks.push({
-      label: "Ready when you are",
+      label: "準備ができました",
       role: "empty",
       lines: wrap_text(
-        "Send a prompt to start. Messages and tool results will appear here.", columns,
+        "メッセージを送ると開始します。会話とツールの結果がここに表示されます。",
+        columns,
       ),
     })
   }

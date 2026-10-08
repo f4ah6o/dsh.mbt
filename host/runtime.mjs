@@ -5,6 +5,7 @@ import { createWorkspaceTools } from './tools.mjs';
 import { createProvider } from './provider.mjs';
 import { openPersistence } from './persistence.mjs';
 import { HostError, messageOf, parseEnvelope, unwrap } from './errors.mjs';
+import { modelDisplayName, providerDisplayName, resolveWorkspaceMetadata } from './workspace-metadata.mjs';
 
 export const defaultModulePath = fileURLToPath(new URL('../_build/js/release/build/f4ah6o/dsh/app/app.js', import.meta.url));
 const ownedFacades = new WeakSet();
@@ -734,5 +735,16 @@ async function initializeHost(options) {
     return closePromise;
   }
 
-  return { call, mcp, state, session, waitForSession, close, workspace: workspaceTools.workspace, dataDir: persistence.directory, backend: { mode: provider.mode, model: provider.model }, get activeCount() { return active.size; }, get status() { return fatalError ? 'failed' : closing ? 'closing' : 'running'; } };
+  const backend = {
+    mode: provider.mode,
+    model: provider.model,
+  };
+  async function metadata() {
+    return {
+      ...await resolveWorkspaceMetadata(workspaceTools.workspace),
+      provider: providerDisplayName(provider.mode, 'api-key', options.baseURL),
+      model: modelDisplayName(provider.model),
+    };
+  }
+  return { call, mcp, state, session, waitForSession, close, metadata, workspace: workspaceTools.workspace, dataDir: persistence.directory, backend, get activeCount() { return active.size; }, get status() { return fatalError ? 'failed' : closing ? 'closing' : 'running'; } };
 }

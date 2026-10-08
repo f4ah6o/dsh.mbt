@@ -10,6 +10,10 @@ import {
   displayMessages,
   authModelRefreshKey,
   updateShellContext,
+  createWorkspaceMetadataRefresher,
+  updateWorkspaceMetadata,
+  restoreJapaneseFont,
+  setJapaneseFont,
 } from "./view-model.js";
 
 const $ = (id) => document.getElementById(id);
@@ -41,7 +45,20 @@ const state = {
   authModelsLoading: false,
   authModelsError: false,
   installPrompt: null,
+  workspaceMetadata: null,
 };
+
+const workspaceMetadataRefresher = createWorkspaceMetadataRefresher({
+  getContextKey() {
+    const auth = state.client?.auth;
+    return JSON.stringify([auth?.state, auth?.account?.profile_id, auth?.selected_model]);
+  },
+  onMetadata(metadata) {
+    state.workspaceMetadata = metadata;
+    renderWorkspaceContext();
+  },
+});
+function refreshWorkspaceMetadata(options) { return workspaceMetadataRefresher.refresh(options); }
 
 let authModelsAttemptedKey = null;
 let authModelsInFlight = null;
@@ -85,10 +102,10 @@ async function localOperation(operation, input = {}) {
   try {
     payload = await response.json();
   } catch {
-    throw new Error(`The host returned an unreadable response (HTTP ${response.status}).`);
+    throw new Error(`ホストからの応答を読み取れませんでした（HTTP ${response.status}）。`);
   }
   if (!response.ok || !payload?.ok) {
-    throw new Error(payload?.error || `The host rejected the request (HTTP ${response.status}).`);
+    throw new Error(payload?.error || `ホストがリクエストを拒否しました（HTTP ${response.status}）。`);
   }
   return payload.result;
 }
@@ -111,15 +128,28 @@ function syncFromClient({ restoreDraft = false } = {}) {
   renderSessions();
   renderControls();
   renderAccount();
+  renderWorkspaceContext();
   renderAccessibleTranscript();
   syncTextView();
   schedulePaint();
 }
 
+function renderWorkspaceContext() {
+  const metadata = state.workspaceMetadata;
+  if (!metadata) return;
+  const selectedModel = metadata.provider === "ChatGPT"
+    ? state.client?.auth?.selected_model
+    : null;
+  updateWorkspaceMetadata({
+    ...metadata,
+    model: selectedModel || metadata.model,
+  }, document);
+}
+
 function syncTextView() {
   const textView = Boolean(state.client?.text_view);
   $("text-view").setAttribute("aria-pressed", String(textView));
-  $("text-view").textContent = textView ? "Canvas view" : "Text view";
+  $("text-view").textContent = textView ? "キャンバス表示" : "テキスト表示";
   scroll.hidden = textView;
   $("text-transcript").classList.toggle("sr-only", !textView);
   $("jump-latest").hidden = true;
@@ -143,8 +173,8 @@ function renderSessions() {
     const empty = document.createElement("p");
     empty.className = "empty-list";
     empty.textContent = query
-      ? "No conversations match this search."
-      : "No conversations yet. Send a prompt to begin.";
+      ? "検索に一致する会話はありません。"
+      : "会話はまだありません。メッセージを送って開始してください。";
     container.append(empty);
     return;
   }
@@ -164,7 +194,7 @@ function renderSessions() {
       button.append(title, status);
       button.addEventListener("click", () => selectSession(session.id, { explicit: true }));
     }
-    button.children[0].textContent = session.title || "Untitled session";
+    button.children[0].textContent = session.title || "無題のセッション";
     button.children[1].textContent = statusLabel(session);
     if (session.id === state.id) button.setAttribute("aria-current", "page");
     else button.removeAttribute("aria-current");
@@ -187,29 +217,29 @@ function renderControls() {
   const canFork = Boolean(state.id) && !readOnly && !busy
     && ["idle", "completed", "failed", "cancelled"].includes(session.status)
     && state.client?.connection === "synced";
-  $("session-title").textContent = state.id ? session.title || "Untitled session" : "Agent workspace";
+  $("session-title").textContent = state.id ? session.title || "無題のセッション" : "エージェントのワークスペース";
   $("status").textContent = statusLabel(session);
   $("status").dataset.state = approval ? "approval" : session.status || "idle";
-  $("progress").textContent = session.turn_id > 0 ? `Turn ${session.turn_id} · Step ${session.step || 0}` : "";
+  $("progress").textContent = session.turn_id > 0 ? `${session.turn_id} ターン目 · ステップ ${session.step || 0}` : "";
   $("cancel").disabled = state.mutation || !busy || !state.id;
   $("fork-session").disabled = state.mutation || !canFork;
   $("prune-results").hidden = !canPrune;
   $("prune-results").disabled = state.mutation || !canPrune;
   $("new-session").disabled = state.mutation || state.client?.connection !== "synced";
   $("prompt").disabled = readOnly || state.client?.connection !== "synced";
-  $("prompt").placeholder = readOnly ? "Imported history is read-only" : "What would you like to work on?";
+  $("prompt").placeholder = readOnly ? "読み込んだ履歴は読み取り専用です" : "取り組みたいことを入力してください";
   $("send").disabled = state.mutation || busy || readOnly ||
     state.client?.connection !== "synced" || !$("prompt").value.trim();
   $("composer-hint").textContent = state.connectionMessage || (readOnly
-    ? "Imported history is read-only and cannot be continued."
+    ? "読み込んだ履歴は読み取り専用のため、続けて送信できません。"
     : approval
-      ? "Review the tool request to continue."
+      ? "ツールの実行内容を確認してください。"
       : busy
-        ? "The agent is working. Stop to cancel this turn."
-        : "⌘ / Ctrl + Enter to send");
+        ? "エージェントが処理中です。停止するとこのターンをキャンセルします。"
+        : "⌘ / Ctrl + Enter で送信");
   $("approval").hidden = !approval;
   if (approval) {
-    $("approval-description").textContent = `${approval.name} is waiting for permission to run.`;
+    $("approval-description").textContent = `${approval.name} の実行許可を待っています。`;
     const argumentsText = prettyArguments(approval.arguments);
     if ($("approval-arguments").textContent !== argumentsText) {
       $("approval-arguments").textContent = argumentsText;
@@ -224,7 +254,7 @@ function renderControls() {
   $("action-message").textContent = state.actionMessage;
   const statusKey = `${state.id}:${session.status}:${approval?.call_id || ""}`;
   if (state.statusKey !== statusKey) {
-    $("announcement").textContent = approval ? `Approval required for ${approval.name}.` : statusLabel(session);
+    $("announcement").textContent = approval ? `${approval.name} の実行許可が必要です。` : statusLabel(session);
     state.statusKey = statusKey;
   }
   updateShellContext(session, state.client?.connection || "connecting", Boolean(state.connectionMessage), document);
@@ -239,16 +269,16 @@ function renderAccount() {
   const status = $("auth-status");
   status.dataset.state = auth.state || "signed_out";
   status.textContent = ({
-    connected: account ? `ChatGPT · ${account}` : "ChatGPT connected",
-    signing_in: "Waiting for ChatGPT sign-in",
-    reauth_required: "ChatGPT sign-in needs renewal",
-    signed_out: "ChatGPT not connected",
-  })[auth.state] || "ChatGPT not connected";
+    connected: account ? `ChatGPT · ${account}` : "ChatGPT 接続済み",
+    signing_in: "ChatGPT のサインインを待っています",
+    reauth_required: "ChatGPT に再度サインインしてください",
+    signed_out: "ChatGPT 未接続",
+  })[auth.state] || "ChatGPT 未接続";
   const usage = auth.plan_usage === "enabled"
-    ? "Plan usage available"
+    ? "プランの利用状況を確認できます"
     : connected
-      ? "Plan usage is unavailable for this account. Check ChatGPT Settings → Usage."
-      : "Sign in to check plan access";
+      ? "このアカウントではプランの利用状況を確認できません。ChatGPT の設定 → 使用状況を確認してください。"
+      : "プランを確認するにはサインインしてください";
   const scopes = Array.isArray(auth.scopes) && auth.scopes.length
     ? ` · ${auth.scopes.join(", ")}`
     : "";
@@ -256,21 +286,21 @@ function renderAccount() {
   $("auth-guidance").textContent = !connected
     ? !isLocalDshOrigin
       ? auth.state === "signing_in"
-        ? "Complete sign-in in the host Mac’s browser. This page will refresh when it finishes."
-        : "Open dsh on the host Mac to start or switch ChatGPT sign-in."
+        ? "ホスト Mac のブラウザーでサインインを完了してください。完了するとこのページが更新されます。"
+        : "ホスト Mac で dsh を開いて、ChatGPT にサインインするかアカウントを切り替えてください。"
       : auth.state === "signing_in"
-        ? "Complete sign-in in the new tab in this browser."
-        : "Sign-in opens a new tab in this browser. Credentials stay on the host."
+        ? "このブラウザーの新しいタブでサインインを完了してください。"
+        : "サインイン用のタブが開きます。認証情報はホスト側に保存されます。"
     : models.length > 0
-      ? "Disconnect to sign out or switch accounts, then sign in with the other account."
+      ? "別のアカウントに切り替えるには、接続を解除してからサインインしてください。"
       : state.authModelsLoading
-        ? "Loading models for this ChatGPT account…"
+        ? "この ChatGPT アカウントのモデルを読み込んでいます…"
         : state.authModelsError
-          ? "Models could not be loaded. Select Refresh models to try again."
-          : "No models are currently listed for this account. Select Refresh models to check again.";
+          ? "モデルを読み込めませんでした。「モデルを再読み込み」を選んで再試行してください。"
+          : "このアカウントのモデルがありません。「モデルを再読み込み」を選んで再確認してください。";
   $("usage-link").hidden = !connected || auth.plan_usage === "enabled";
   $("auth-sign-in").hidden = connected;
-  $("auth-sign-in").textContent = auth.state === "reauth_required" ? "Sign in again" : "Sign in with ChatGPT";
+  $("auth-sign-in").textContent = auth.state === "reauth_required" ? "再度サインイン" : "ChatGPT にサインイン";
   $("auth-sign-in").disabled = state.mutation || auth.state === "signing_in" ||
     !isLocalDshOrigin;
   $("auth-sign-out").hidden = !connected;
@@ -282,13 +312,13 @@ function renderAccount() {
   picker.replaceChildren();
   if (!models.length) {
     const option = document.createElement("option");
-    option.textContent = connected ? "No models available" : "Connect ChatGPT to discover models";
+    option.textContent = connected ? "利用できるモデルがありません" : "ChatGPT に接続してモデルを表示";
     option.value = "";
     picker.append(option);
   } else {
     const placeholder = document.createElement("option");
     placeholder.value = "";
-    placeholder.textContent = "Select a model";
+    placeholder.textContent = "モデルを選択";
     placeholder.disabled = true;
     picker.append(placeholder);
     for (const model of models) {
@@ -325,7 +355,7 @@ function renderAccessibleTranscript() {
   }
   if (!messages.length) {
     const empty = document.createElement("p");
-    empty.textContent = "Send a prompt to start.";
+    empty.textContent = "メッセージを送ると開始します。";
     fragment.append(empty);
   }
   container.replaceChildren(fragment);
@@ -352,7 +382,7 @@ function paint() {
     drawSceneSnapshot(context, scene, { width, height, scale });
     $("jump-latest").hidden = state.client.follow_latest || extent <= height;
   } catch (error) {
-    connectionError(new Error(`Conversation rendering failed: ${error.message}`));
+    connectionError(new Error(`会話の描画に失敗しました: ${error.message}`));
   }
 }
 
@@ -374,6 +404,7 @@ async function refreshSnapshot({ reconnect = true, refreshAuthModels = true } = 
   try {
     const result = await client.snapshot();
     syncFromClient();
+    void refreshWorkspaceMetadata();
     if (state.id) {
       try {
         await client.selectedSession(state.id);
@@ -392,7 +423,7 @@ async function refreshSnapshot({ reconnect = true, refreshAuthModels = true } = 
     state.connectionMessage = "";
     clearConnectionError();
     if (result.result.status === "identity_changed") {
-      state.actionMessage = "The signed-in account changed. Review the current session before continuing.";
+    state.actionMessage = "サインイン中のアカウントが変わりました。続ける前に現在の会話を確認してください。";
       syncFromClient();
     }
     if (refreshAuthModels) await refreshAuthCatalog();
@@ -475,7 +506,7 @@ function scheduleReceiptCheck(delay = 6000) {
       await client.reconcileReceipts();
       syncFromClient();
     } catch (error) {
-      state.connectionMessage = "A command receipt could not be checked. Reconnect to confirm its outcome.";
+      state.connectionMessage = "操作の結果を確認できませんでした。再接続して結果を確認してください。";
       connectionError(error);
       renderControls();
     } finally {
@@ -501,7 +532,7 @@ function recoverSnapshot() {
       await refreshSnapshot({ reconnect: true });
     } catch (error) {
       connectionError(error);
-      state.connectionMessage = "Updates are paused until the workspace can be refreshed.";
+      state.connectionMessage = "ワークスペースを更新できるまで、更新を一時停止しています。";
       renderControls();
     } finally {
       state.recoverPromise = null;
@@ -532,6 +563,7 @@ async function mutate(body) {
   renderAccount();
   try {
     await body();
+    void refreshWorkspaceMetadata({ force: true });
     clearConnectionError();
   } catch (error) {
     state.actionError = error instanceof Error ? error.message : String(error);
@@ -544,10 +576,10 @@ async function mutate(body) {
 async function runCommand(operation, sessionId, input, approvalRevision = -1) {
   const receipt = await client.command(operation, sessionId, input, approvalRevision);
   if (receipt.status === "rejected") {
-    throw new Error(receipt.error || "The host rejected this action.");
+    throw new Error(receipt.error || "ホストがこの操作を拒否しました。");
   }
   if (receipt.status === "uncertain" || receipt.status === "expired") {
-    throw new Error(receipt.error || "The host could not confirm this action.");
+    throw new Error(receipt.error || "ホストがこの操作の結果を確認できませんでした。");
   }
   state.connectionMessage = "";
   await refreshSnapshot();
@@ -590,7 +622,7 @@ async function handleAuthRefresh() {
 }
 
 $("new-session").addEventListener("click", () => mutate(async () => {
-  await createSession(`Session ${state.sessions.length + 1}`);
+  await createSession(`セッション ${state.sessions.length + 1}`);
   $("prompt").focus();
 }));
 
@@ -601,14 +633,14 @@ $("fork-session").addEventListener("click", () => mutate(async () => {
   const receipt = await runCommand("session_fork", sourceId, {});
   const child = receipt.result?.session || receipt.result;
   if (typeof child?.id !== "string") {
-    throw new Error("The host did not return the forked conversation.");
+    throw new Error("ホストから分岐した会話が返されませんでした。");
   }
   // Selecting the fork is a convenience. A newer explicit user selection
   // always wins while the durable command is in flight.
   if (state.id === sourceId && state.selection === selection && client.state().selected_session === sourceId) {
     await selectSession(child.id);
     if (state.id === child.id) {
-      state.actionMessage = `Forked ${sourceId} as an independent conversation.`;
+      state.actionMessage = `${sourceId} から会話を分岐しました。`;
       syncFromClient();
     }
   }
@@ -629,8 +661,8 @@ $("prune-results").addEventListener("click", () => mutate(async () => {
   const result = receipt.result?.result || receipt.result || {};
   const pruned = Array.isArray(result.pruned) ? result.pruned : [];
   state.actionMessage = pruned.length > 0
-    ? `Trimmed ${pruned.length} tool result${pruned.length === 1 ? "" : "s"} for future model requests. Full original output remains in the event history.`
-    : "No oversized tool results needed trimming.";
+    ? `${pruned.length} 件のツール結果を今後のモデル要求向けに短縮しました。元の出力はイベント履歴に残っています。`
+    : "短縮が必要な大きさのツール結果はありません。";
   syncFromClient();
 }));
 
@@ -645,7 +677,7 @@ $("composer").addEventListener("submit", (event) => {
       await createSession(prompt.slice(0, 60));
       id = state.id;
     }
-    if (!id) throw new Error("The new session is not visible yet. Refresh and try again.");
+    if (!id) throw new Error("新しいセッションを表示できません。更新してから再試行してください。");
     const receipt = await runCommand("session_send", id, { prompt });
     if (["accepted", "completed"].includes(receipt.status) && $("prompt").value === entered) {
       $("prompt").value = "";
@@ -689,14 +721,14 @@ for (const [button, approved] of [["approve", true], ["deny", false]]) {
 
 $("auth-sign-in").addEventListener("click", () => {
   if (!isLocalDshOrigin) {
-    state.actionError = "Open dsh on the host Mac to start or switch ChatGPT sign-in.";
+    state.actionError = "ホスト Mac で dsh を開いて、ChatGPT にサインインするかアカウントを切り替えてください。";
     syncFromClient();
     return;
   }
   if (state.mutation || client.state().auth?.state === "signing_in") return;
   const signInTab = window.open("about:blank", "_blank");
   if (!signInTab) {
-    state.actionError = "Your browser blocked the sign-in tab. Allow pop-ups for this local dsh page and try again.";
+    state.actionError = "ブラウザーがサインイン用タブをブロックしました。このローカル dsh ページのポップアップを許可して再試行してください。";
     syncFromClient();
     return;
   }
@@ -706,13 +738,13 @@ $("auth-sign-in").addEventListener("click", () => {
       const result = await localOperation("auth_sign_in_browser", {});
       if (result?.started === false) {
         signInTab.close();
-        state.actionMessage = "A sign-in attempt is already in progress. Complete it in the browser tab that was opened.";
+        state.actionMessage = "サインイン処理はすでに進行中です。開いているブラウザータブで完了してください。";
         await handleAuthRefresh();
         return;
       }
       if (result?.started !== true ||
         !isTrustedAuthorizationUrl(result.authorization_url)) {
-        throw new Error("The host returned an invalid ChatGPT authorization URL.");
+        throw new Error("ホストから無効な ChatGPT 認証 URL が返されました。");
       }
       signInTab.location.replace(result.authorization_url);
     } catch (error) {
@@ -727,7 +759,7 @@ $("auth-models-retry").addEventListener("click", () => mutate(async () => {
 }));
 $("auth-sign-out").addEventListener("click", () => mutate(async () => {
   const profileId = client.state().auth?.account?.profile_id;
-  if (!profileId) throw new Error("The active ChatGPT profile could not be identified.");
+  if (!profileId) throw new Error("現在の ChatGPT プロファイルを特定できません。");
   await localOperation("auth_sign_out", { profile_id: profileId });
   await refreshSnapshot();
 }));
@@ -737,7 +769,7 @@ $("model-picker").addEventListener("change", () => {
   return mutate(async () => {
     await localOperation("auth_select_model", { model });
     await refreshSnapshot();
-    state.actionMessage = `Using ${client.state().auth?.models?.find((entry) => entry.slug === model)?.display_name || model}.`;
+    state.actionMessage = `${client.state().auth?.models?.find((entry) => entry.slug === model)?.display_name || model} を使用しています。`;
     syncFromClient();
   });
 });
@@ -777,6 +809,7 @@ $("jump-latest").addEventListener("click", () => {
 $("reconnect").addEventListener("click", async () => {
   $("reconnect").disabled = true;
   try {
+    await refreshWorkspaceMetadata({ force: true });
     await client.reconcileReceipts();
     await refreshSnapshot();
     state.connectionMessage = "";
@@ -817,7 +850,7 @@ window.visualViewport?.addEventListener("resize", () => {
   resizeComposer();
   schedulePaint();
 });
-window.addEventListener("online", () => void recoverSnapshot());
+window.addEventListener("online", () => { void refreshWorkspaceMetadata({ force: true }); void recoverSnapshot(); });
 window.addEventListener("pagehide", () => {
   client.persistNow();
   client.closeStream();
@@ -826,10 +859,10 @@ window.addEventListener("pagehide", () => {
   clearTimeout(state.receiptPoll);
 });
 window.addEventListener("pageshow", () => {
-  if (!document.hidden) void recoverSnapshot();
+  if (!document.hidden) { void refreshWorkspaceMetadata({ force: true }); void recoverSnapshot(); }
 });
 document.addEventListener("visibilitychange", () => {
-  if (!document.hidden) void recoverSnapshot();
+  if (!document.hidden) { void refreshWorkspaceMetadata({ force: true }); void recoverSnapshot(); }
   else {
     client.persistNow();
     client.closeStream();
@@ -840,12 +873,18 @@ document.addEventListener("visibilitychange", () => {
 async function loadMoon() {
   state.moon = await import("/moonbit/app.js");
   if (typeof state.moon.render_ui !== "function" || typeof state.moon.measure_ui !== "function") {
-    throw new Error("The MoonBit presentation module is unavailable. Rebuild the browser assets, then reconnect.");
+    throw new Error("MoonBit 表示モジュールを利用できません。ブラウザー用アセットを再ビルドしてから再接続してください。");
   }
 }
 
 async function start() {
   document.documentElement.style.setProperty("--visible-height", `${window.visualViewport?.height || innerHeight}px`);
+  restoreJapaneseFont(document);
+  $("japanese-font").addEventListener("change", () => {
+    setJapaneseFont($("japanese-font").value, document);
+    schedulePaint();
+  });
+  setInterval(() => { if (!document.hidden) void refreshWorkspaceMetadata({ force: true }); }, 10_000);
   await loadMoon();
   syncFromClient({ restoreDraft: true });
   try {

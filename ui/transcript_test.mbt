@@ -46,7 +46,7 @@ test "mobile layout measures more lines than desktop without losing text" {
   assert_true(@ui.measure(snapshot, 320) > @ui.measure(snapshot, 900))
   let rendered = @ui.render(snapshot, 320, 1000)
   let text = scene_text(rendered)
-  assert_eq(text[0], "Assistant")
+  assert_eq(text[0], "アシスタント")
   assert_eq(
     text[1:].to_owned().join(""),
     "A fairly long response with many words is wrapped by the MoonBit layout for the current viewport.",
@@ -69,8 +69,8 @@ test "reasoning tool requests and tool results are rendered but system prompts a
     "{\"messages\":[{\"role\":\"system\",\"content\":\"private system instructions\"},{\"role\":\"assistant\",\"content\":\"answer\",\"reasoning\":\"reason\",\"tool_calls\":[{\"name\":\"read_file\",\"id\":\"call_1\",\"arguments\":\"{\\\"path\\\":\\\"README.md\\\"}\"}]},{\"role\":\"tool\",\"content\":\"file contents\"}]}",
   )
   let text = scene_text(@ui.render(snapshot, 1000, 1000))
-  assert_true(text.contains("Reasoning"))
-  assert_true(text.contains("Tool request · read_file"))
+  assert_true(text.contains("推論"))
+  assert_true(text.contains("ツール要求 · read_file"))
   assert_true(text.contains("file contents"))
   assert_false(text.contains("private system instructions"))
 }
@@ -81,8 +81,8 @@ test "provisional transcript blocks announce writing and partial status" {
     "{\"messages\":[{\"role\":\"assistant\",\"reasoning\":\"thinking\",\"content\":\"draft\",\"provisional\":true,\"stream_status\":\"partial\"}]}",
   )
   let text = scene_text(@ui.render(snapshot, 500, 800))
-  assert_true(text.contains("Reasoning · partial"))
-  assert_true(text.contains("Assistant · partial"))
+  assert_true(text.contains("推論 · 一部表示"))
+  assert_true(text.contains("アシスタント · 一部表示"))
 }
 
 ///|

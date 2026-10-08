@@ -43,6 +43,16 @@ test('loopback HTTP serves only fixed UI assets and delegates semantic API reque
   const health = await request(web.url, { pathname: '/health' });
   assert.equal(health.status, 200);
   assert.equal(JSON.parse(health.text).status, 'running');
+  const metadata = await request(web.url, { pathname: '/api/metadata' });
+  assert.equal(metadata.status, 200);
+  assert.deepEqual(JSON.parse(metadata.text).result, {
+    project: 'ワークスペース',
+    repository: null,
+    provider: 'デモ',
+    model: 'test',
+  });
+  assert.equal(metadata.headers['cache-control'], 'no-store');
+  assert.equal((await request(web.url, { pathname: '/api/metadata', method: 'POST' })).status, 405);
   const page = await request(web.url);
   assert.equal(page.text, '<h1>local UI</h1>');
   assert.equal(page.headers['x-frame-options'], 'DENY');

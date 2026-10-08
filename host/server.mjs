@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { HostError, messageOf } from './errors.mjs';
 import { defaultModulePath } from './runtime.mjs';
+import { modelDisplayName, providerDisplayName } from './workspace-metadata.mjs';
 
 const BODY_LIMIT = 1024 * 1024;
 const defaultClientModulePath = fileURLToPath(new URL('../_build/js/release/build/f4ah6o/dsh/client/client.js', import.meta.url));
@@ -114,6 +115,18 @@ export async function startWebServer({ host, port = 3080, bind = '127.0.0.1', we
         json(response, status === 'failed' ? 503 : 200, { ok: status !== 'failed', status, backend: host.backend });
         return;
       }
+      if (pathname === '/api/metadata' && request.method === 'GET') {
+        const metadata = typeof host.metadata === 'function'
+          ? await host.metadata()
+          : {
+            project: 'ワークスペース',
+            repository: null,
+            provider: providerDisplayName(host.backend?.mode),
+            model: modelDisplayName(host.backend?.model),
+          };
+        json(response, 200, { ok: true, result: metadata });
+        return;
+      }
       if (pathname === '/api/state' && request.method === 'GET') {
         json(response, 200, { ok: true, result: await host.state() });
         return;
@@ -135,7 +148,7 @@ export async function startWebServer({ host, port = 3080, bind = '127.0.0.1', we
         }
         return;
       }
-      if (['/api/state', '/api/call', '/mcp', '/health'].includes(pathname)) throw new HostError('Method not allowed', { status: 405 });
+      if (['/api/state', '/api/call', '/api/metadata', '/mcp', '/health'].includes(pathname)) throw new HostError('Method not allowed', { status: 405 });
       if (!['GET', 'HEAD'].includes(request.method)) throw new HostError('Method not allowed', { status: 405 });
       let target;
       let contentType;

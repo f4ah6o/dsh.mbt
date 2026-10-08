@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { authModelRefreshKey, isBusy, isReadOnly, statusLabel, sessionList, acceptsSnapshot, prettyArguments, runError, displayMessages } from "./view-model.js";
+import { authModelRefreshKey, isBusy, isReadOnly, statusLabel, sessionList, acceptsSnapshot, prettyArguments, runError, displayMessages, loadWorkspaceMetadata, createWorkspaceMetadataRefresher, updateWorkspaceMetadata, JAPANESE_FONT_STACKS, setJapaneseFont, restoreJapaneseFont } from "./view-model.js";
 import { drawSceneSnapshot } from "./canvas-renderer.js";
 
 test("connected accounts without a model catalog are eligible for one refresh", () => {
@@ -20,21 +20,21 @@ test("pending approval blocks another prompt and exposes a review status", () =>
   assert.equal(isBusy({ status: "running" }), true);
   assert.equal(isBusy({ status: "idle", pending_approval: { call_id: "c1" } }), true);
   assert.equal(isBusy({ status: "completed" }), false);
-  assert.equal(statusLabel({ status: "awaiting_approval" }), "Needs approval");
+  assert.equal(statusLabel({ status: "awaiting_approval" }), "承認待ち");
 });
 
 test("imported Session v4 is visibly read-only", () => {
   const imported = { status: "completed", source_format: "deepseek-session-v4" };
   assert.equal(isReadOnly(imported), true);
-  assert.equal(statusLabel(imported), "Read-only · Completed");
+  assert.equal(statusLabel(imported), "読み取り専用 · 完了");
   assert.equal(isReadOnly({ status: "completed" }), false);
-  assert.equal(statusLabel({ status: "completed" }), "Completed");
+  assert.equal(statusLabel({ status: "completed" }), "完了");
 });
 
 test("failed imported Session v4 does not suggest it can be continued", () => {
   const imported = { status: "failed", source_format: "deepseek-session-v4", events: [] };
-  assert.match(runError(imported), /cannot be continued/);
-  assert.doesNotMatch(runError(imported), /send another prompt/);
+  assert.match(runError(imported), /続けることはできません/);
+  assert.doesNotMatch(runError(imported), /新しいメッセージを送信できます/);
 });
 
 test("a stale poll cannot replace a newer mutation response", () => {
@@ -77,7 +77,7 @@ test("accessible transcript includes reasoning and tool arguments without system
     ] },
     { role: "tool", content: "result" },
   ] });
-  assert.deepEqual(messages.map((item) => item.label), ["You", "Reasoning", "Assistant", "Tool request · read_file", "Custom call · terminal", "Tool result"]);
+  assert.deepEqual(messages.map((item) => item.label), ["あなた", "推論", "アシスタント", "ツール要求 · read_file", "カスタム呼び出し · terminal", "ツール結果"]);
   assert.equal(messages[4].text, '{"command":"<script>literal</script>"}');
   assert.equal(messages.some((item) => item.text === "hidden"), false);
 });
@@ -88,7 +88,7 @@ test("transcript keeps original tool output visible and labels its model project
     messages: [{ role: "tool", tool_call_id: "c1", content: "full original output" }],
   });
   assert.deepEqual(messages, [{
-    label: "Tool result · trimmed for model context",
+    label: "ツール結果 · モデル入力用に短縮",
     text: "full original output",
   }]);
 });
@@ -98,7 +98,94 @@ test("accessible transcript labels provisional reasoning and partial answer expl
     { role: "assistant", content: "kept text", reasoning: "working it out", provisional: true, stream_status: "partial" },
     { role: "assistant", content: "final text", provisional: false },
   ] });
-  assert.deepEqual(rows.map((item) => item.label), ["Reasoning · partial", "Assistant · partial", "Assistant"]);
+  assert.deepEqual(rows.map((item) => item.label), ["推論 · 一部表示", "アシスタント · 一部表示", "アシスタント"]);
+});
+
+test("workspace metadata uses a same-origin no-store read and updates project/provider context", async () => {
+  let request;
+  const metadata = await loadWorkspaceMetadata(async (url, options) => {
+    request = { url, options };
+    return { ok: true, json: async () => ({ ok: true, result: {
+      project: "sample-project",
+      repository: { name: "sample-repository", branch: "feature/context", detached: false },
+      provider: "provider.example",
+      model: "model-fixture",
+    } }) };
+  });
+  assert.equal(request.url, "/api/metadata");
+  assert.equal(request.options.cache, "no-store");
+  assert.equal(request.options.credentials, "same-origin");
+  assert.equal(metadata.repository.branch, "feature/context");
+
+  const elements = new Map(["project-name", "repository-name", "branch-name", "provider-model"]
+    .map((id) => [id, { textContent: "" }]));
+  updateWorkspaceMetadata(metadata, { getElementById: (id) => elements.get(id) });
+  assert.equal(elements.get("project-name").textContent, "sample-project");
+  assert.equal(elements.get("repository-name").textContent, "sample-repository");
+  assert.equal(elements.get("branch-name").textContent, "feature/context");
+  assert.equal(elements.get("provider-model").textContent, "provider.example · model-fixture");
+  updateWorkspaceMetadata({ ...metadata, repository: { name: "repo", branch: "0123456789ab", detached: true } }, {
+    getElementById: (id) => elements.get(id),
+  });
+  assert.equal(elements.get("branch-name").textContent, "HEAD 分離 · 0123456789ab");
+  assert.equal(await loadWorkspaceMetadata(async () => ({ ok: false })), null);
+});
+
+test("workspace metadata refresh coalesces requests and ignores stale account context", async () => {
+  let now = 0;
+  let context = "profile-a";
+  let requests = 0;
+  let resolveRequest;
+  const updates = [];
+  const refresher = createWorkspaceMetadataRefresher({
+    intervalMs: 10_000,
+    now: () => now,
+    getContextKey: () => context,
+    onMetadata: (metadata) => updates.push(metadata),
+    fetchImpl: () => {
+      requests += 1;
+      return new Promise((resolve) => { resolveRequest = resolve; });
+    },
+  });
+  const first = refresher.refresh({ force: true });
+  assert.equal(refresher.refresh({ force: true }), first, "simultaneous refreshes share one request");
+  assert.equal(requests, 1);
+  context = "profile-b";
+  resolveRequest({
+    ok: true,
+    async json() { return { ok: true, result: { provider: "old-provider", model: "old-model" } }; },
+  });
+  await first;
+  assert.deepEqual(updates, [], "a response from the previous auth context is discarded");
+
+  now = 10_001;
+  const second = refresher.refresh();
+  assert.equal(requests, 2);
+  resolveRequest({
+    ok: true,
+    async json() { return { ok: true, result: { provider: "new-provider", model: "new-model" } }; },
+  });
+  await second;
+  assert.deepEqual(updates, [{ provider: "new-provider", model: "new-model" }]);
+  assert.equal(await refresher.refresh(), null, "ordinary polls are rate limited");
+});
+
+test("Japanese font preference is validated, applied to CSS, and restored", () => {
+  let stored = null;
+  let fontFamily = "";
+  const picker = { value: "" };
+  const documentRef = {
+    documentElement: { style: { setProperty: (name, value) => { if (name === "--dsh-font-family") fontFamily = value; } } },
+    getElementById: (id) => id === "japanese-font" ? picker : null,
+  };
+  const storage = { setItem: (_key, value) => { stored = value; }, getItem: () => stored };
+  assert.equal(setJapaneseFont("noto", documentRef, storage), "noto");
+  assert.equal(picker.value, "noto");
+  assert.match(fontFamily, /Noto Sans JP/);
+  assert.equal(restoreJapaneseFont(documentRef, storage), "noto");
+  assert.equal(setJapaneseFont("unexpected-font", documentRef, storage), "system");
+  assert.equal(picker.value, "system");
+  assert.equal(Object.hasOwn(JAPANESE_FONT_STACKS, "noto"), true);
 });
 
 test("Canvas leaf rejects a malformed frame before clearing an existing frame", () => {
@@ -106,5 +193,32 @@ test("Canvas leaf rejects a malformed frame before clearing an existing frame", 
   assert.throws(() => drawSceneSnapshot(context, {
     schema_version: 1, resources: [], items: [{ kind: "image" }], clip_chains: [],
     viewport: { x: 0, y: 0, width: 320, height: 200 }, scale: 1,
-  }, { width: 320, height: 200, scale: 1 }), /Unsupported Canvas scene item/);
+}, { width: 320, height: 200, scale: 1 }), /Unsupported Canvas scene item/);
+});
+
+test("Canvas transcript paint honors the selected Japanese font stack", () => {
+  let selectedFont = "";
+  const context = {
+    canvas: { ownerDocument: {
+      documentElement: {},
+      defaultView: { getComputedStyle: () => ({ getPropertyValue: () => '"Noto Sans JP", sans-serif' }) },
+    } },
+    save() {}, restore() {}, setTransform() {}, clearRect() {}, beginPath() {}, rect() {}, clip() {},
+    transform() {}, fillRect() {}, fillText() {},
+  };
+  drawSceneSnapshot(context, {
+    schema_version: 1,
+    resources: [],
+    items: [{
+      id: 1, kind: "text", text: "日本語", font_size: 14,
+      bounds: { x: 0, y: 0, width: 100, height: 20 },
+      transform: { a: 1, b: 0, c: 0, d: 1, tx: 0, ty: 0 },
+      opacity: 1, color: { red: 0, green: 0, blue: 0, alpha: 255 }, clip_chain_id: null,
+    }],
+    clip_chains: [],
+    viewport: { x: 0, y: 0, width: 100, height: 30 },
+    scale: 1,
+  }, { width: 100, height: 30, scale: 1 });
+  selectedFont = context.font;
+  assert.equal(selectedFont, '14px "Noto Sans JP", sans-serif');
 });

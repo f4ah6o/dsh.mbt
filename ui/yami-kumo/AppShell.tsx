@@ -30,7 +30,7 @@ export function AppShell({
   sidebar,
   tabs,
   contextPanel,
-  contextPanelLabel = 'Context panel',
+  contextPanelLabel = 'コンテキストパネル',
   bottomBar,
   children,
   sidebarCollapsed = false,
@@ -67,7 +67,7 @@ export function AppShell({
       </header>
 
       {rail ? (
-        <nav className="yk-rail" aria-label="Primary">
+        <nav className="yk-rail" aria-label="メインナビゲーション">
           {rail}
         </nav>
       ) : null}
@@ -78,10 +78,10 @@ export function AppShell({
             type="button"
             className="yk-drawer-scrim yk-sidebar-scrim"
             tabIndex={-1}
-            aria-label="Close workspace navigation"
+            aria-label="ワークスペースのナビゲーションを閉じる"
             onClick={onMobileSidebarDismiss}
           />
-          <aside id="yk-mobile-navigation" className="yk-sidebar" tabIndex={-1} aria-label="Workspace navigation">
+          <aside id="yk-mobile-navigation" className="yk-sidebar" tabIndex={-1} aria-label="ワークスペースのナビゲーション">
             {sidebar}
           </aside>
         </>
@@ -89,7 +89,7 @@ export function AppShell({
 
       <section className="yk-workspace" data-has-tabs={Boolean(tabs)}>
         {tabs ? (
-          <nav className="yk-tabs" aria-label="Workspace tabs">
+            <nav className="yk-tabs" aria-label="ワークスペースのタブ">
             {tabs}
           </nav>
         ) : null}
@@ -102,7 +102,7 @@ export function AppShell({
             type="button"
             className="yk-drawer-scrim yk-context-panel-scrim"
             tabIndex={-1}
-            aria-label={`Close ${contextPanelLabel}`}
+            aria-label={`閉じる ${contextPanelLabel}`}
             onClick={onContextPanelDismiss}
           />
           <aside id="yk-context-panel" className="yk-context-panel" tabIndex={-1} aria-label={contextPanelLabel}>

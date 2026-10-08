@@ -148,7 +148,7 @@ function App() {
         const toggle = document.getElementById('sidebar-toggle');
         if (toggle) {
           toggle.setAttribute('aria-pressed', 'false');
-          toggle.textContent = 'Hide navigation';
+          toggle.textContent = 'ナビゲーションを隠す';
         }
       }
       syncShellAccessibility();
@@ -184,7 +184,7 @@ function App() {
     const button = document.getElementById('sidebar-toggle');
     if (button) {
       button.setAttribute('aria-pressed', String(next));
-      button.textContent = next ? 'Show navigation' : 'Hide navigation';
+      button.textContent = next ? 'ナビゲーションを表示' : 'ナビゲーションを隠す';
     }
     syncShellAccessibility();
     if (next) button?.focus();
@@ -207,7 +207,7 @@ function App() {
           id="navigation-toggle"
           type="button"
           className="icon-button mobile-navigation-toggle"
-          aria-label="Open conversation navigation"
+          aria-label="会話ナビゲーションを開く"
           aria-controls="yk-mobile-navigation"
           aria-expanded="false"
           onClick={toggleMobileSidebar}
@@ -216,16 +216,16 @@ function App() {
         </button>
       }
       brand={
-        <a className="dsh-brand" href="/" aria-label="dsh.mbt home">
+        <a className="dsh-brand" href="/" aria-label="dsh.mbt ホーム">
           <span className="dsh-brand-mark" aria-hidden="true">d</span>
           <strong>dsh.mbt</strong>
         </a>
       }
       globalSearch={
         <label className="session-search" htmlFor="session-search">
-          <span className="sr-only">Search conversations</span>
+          <span className="sr-only">会話を検索</span>
           <span className="session-search-icon" aria-hidden="true">⌕</span>
-          <input id="session-search" type="search" placeholder="Search conversations" autoComplete="off" />
+          <input id="session-search" type="search" placeholder="会話を検索" autoComplete="off" />
         </label>
       }
       headerActions={
@@ -236,7 +236,7 @@ function App() {
           aria-pressed="false"
           onClick={toggleSidebar}
         >
-          Hide navigation
+          ナビゲーションを隠す
         </button>
       }
       accountMenu={
@@ -248,152 +248,166 @@ function App() {
           aria-expanded="false"
           onClick={toggleContext}
         >
-          Details
+          詳細
         </button>
       }
       sidebar={
         <div className="dsh-sidebar">
           <div className="sidebar-heading">
             <div>
-              <span className="eyebrow">Workspace</span>
-              <strong>Conversations</strong>
+              <span className="eyebrow">プロジェクト</span>
+              <strong id="project-name">ワークスペース</strong>
             </div>
             <button
               type="button"
               className="icon-button mobile-navigation-close"
-              aria-label="Close conversation navigation"
+              aria-label="会話ナビゲーションを閉じる"
               onClick={closeSidebar}
             >
               ×
             </button>
           </div>
           <button id="new-session" className="new-session" type="button">
-            <span aria-hidden="true">＋</span> New conversation
+            <span aria-hidden="true">＋</span> 新しい会話
           </button>
           <div className="sidebar-heading session-list-heading">
-            <span className="eyebrow">Recent</span>
+            <span className="eyebrow">最近の会話</span>
           </div>
-          <nav id="sessions" className="session-list" aria-label="Conversation list">
-            <p className="empty-list">Loading conversations…</p>
+          <nav id="sessions" className="session-list" aria-label="会話の一覧">
+            <p className="empty-list">会話を読み込んでいます…</p>
           </nav>
-          <p className="sidebar-note">Local agent workspace</p>
+          <p className="sidebar-note">ローカルエージェントのワークスペース</p>
         </div>
       }
       contextPanel={
         <div className="context-content">
           <div className="context-heading">
             <div>
-              <span className="eyebrow">Current conversation</span>
-              <h2 id="context-title">Conversation details</h2>
+              <span className="eyebrow">現在の会話</span>
+              <h2 id="context-title">会話の詳細</h2>
             </div>
             <button
               id="context-close"
               type="button"
               className="icon-button"
-              aria-label="Close conversation details"
+              aria-label="会話の詳細を閉じる"
               onClick={closeContext}
             >
               ×
             </button>
           </div>
-          <p id="context-summary" className="context-summary">Select a conversation to view its current state.</p>
+          <p id="context-summary" className="context-summary">会話を選ぶと現在の状態が表示されます。</p>
           <dl className="context-facts">
-            <div><dt>Status</dt><dd id="context-status">No conversation selected</dd></div>
-            <div><dt>Turn</dt><dd id="context-turn">—</dd></div>
-            <div><dt>History</dt><dd id="context-history">—</dd></div>
-            <div><dt>Source</dt><dd id="context-source">Local session</dd></div>
-            <div><dt>Parent</dt><dd id="context-parent">None</dd></div>
+            <div><dt>状態</dt><dd id="context-status">会話が選択されていません</dd></div>
+            <div><dt>ターン</dt><dd id="context-turn">—</dd></div>
+            <div><dt>履歴</dt><dd id="context-history">—</dd></div>
+            <div><dt>保存元</dt><dd id="context-source">ローカルの会話</dd></div>
+            <div><dt>親セッション</dt><dd id="context-parent">なし</dd></div>
+            <div><dt>リポジトリ</dt><dd id="repository-name">取得中…</dd></div>
+            <div><dt>ブランチ</dt><dd id="branch-name">—</dd></div>
           </dl>
           <p id="context-read-only" className="context-note" hidden>
-            Imported history is read-only. You can review the transcript, but cannot send or cancel turns.
+            読み込んだ履歴は読み取り専用です。会話を確認できますが、送信やターンのキャンセルはできません。
           </p>
-          <p id="context-host-status" className="context-host-status">Connecting to the local host…</p>
+          <label className="font-control" htmlFor="japanese-font">
+            <span>日本語フォント</span>
+            <select id="japanese-font">
+              <option value="system">システム標準</option>
+              <option value="hiragino">ヒラギノ角ゴ</option>
+              <option value="yugothic">游ゴシック</option>
+              <option value="meiryo">メイリオ</option>
+              <option value="noto">Noto Sans JP</option>
+            </select>
+          </label>
+          <p className="context-note">セッションログの外部アップロード機能はありません（既定で無効です）。</p>
+          <p id="context-host-status" className="context-host-status">ローカルホストに接続中…</p>
         </div>
       }
-      contextPanelLabel="Conversation details"
+      contextPanelLabel="会話の詳細"
       bottomBar={
         <div className="workspace-status">
           <span id="shell-status-dot" className="workspace-status-dot" data-state="connecting" aria-hidden="true" />
-          <span id="shell-status" role="status" aria-live="polite">Connecting to the local host…</span>
+          <span id="shell-status" role="status" aria-live="polite">ローカルホストに接続中…</span>
         </div>
       }
       onMobileSidebarDismiss={closeSidebar}
       onContextPanelDismiss={closeContext}
     >
       <div className="dsh-workspace">
-        <a className="skip-link" href="#transcript-scroll">Skip to conversation</a>
+        <a className="skip-link" href="#transcript-scroll">会話へ移動</a>
         <header className="session-header">
           <div className="session-heading">
-            <h1 id="session-title">Agent workspace</h1>
+            <h1 id="session-title">エージェントのワークスペース</h1>
             <div className="status-row">
-              <span id="status" className="status-pill" data-state="idle">Ready</span>
+              <span id="status" className="status-pill" data-state="idle">準備完了</span>
               <span id="progress" className="progress" />
+              <span id="provider-model" className="provider-model">プロバイダーを確認中…</span>
             </div>
           </div>
           <div className="header-actions">
-            <button id="text-view" className="quiet-button" type="button" aria-pressed="false">Text view</button>
-            <button id="fork-session" className="quiet-button" type="button" disabled>Fork conversation</button>
-            <button id="prune-results" className="quiet-button" type="button" hidden>Trim outputs</button>
-            <button id="cancel" className="quiet-button" type="button" disabled>Stop</button>
+            <button id="text-view" className="quiet-button" type="button" aria-pressed="false">テキスト表示</button>
+            <button id="fork-session" className="quiet-button" type="button" disabled>会話を分岐</button>
+            <button id="prune-results" className="quiet-button" type="button" hidden>出力を整理</button>
+            <button id="cancel" className="quiet-button" type="button" disabled>停止</button>
           </div>
         </header>
 
-        <section className="account-bar" aria-label="ChatGPT account and model">
+        <section className="account-bar" aria-label="ChatGPT アカウントとモデル">
           <div className="account-summary">
-            <span id="auth-status" className="account-status" data-state="signed_out">ChatGPT not connected</span>
+            <span id="auth-status" className="account-status" data-state="signed_out">ChatGPT 未接続</span>
             <span id="auth-detail" className="account-detail" />
             <span id="auth-guidance" className="account-detail" />
             <a id="usage-link" className="account-link" href="https://chatgpt.com" target="_blank" rel="noopener noreferrer" hidden>
-              Open ChatGPT · Settings → Usage
+              ChatGPT を開く · 設定 → 使用状況
             </a>
           </div>
           <div className="account-actions">
             <label className="model-control" htmlFor="model-picker">
-              <span>Model</span>
-              <select id="model-picker" disabled><option>Connect ChatGPT to discover models</option></select>
+              <span>モデル</span>
+              <select id="model-picker" disabled><option>ChatGPT に接続してモデルを表示</option></select>
             </label>
-            <button id="auth-sign-in" className="quiet-button" type="button">Sign in with ChatGPT</button>
-            <button id="auth-models-retry" className="quiet-button" type="button" hidden>Refresh models</button>
-            <button id="auth-sign-out" className="quiet-button" type="button" hidden>Disconnect</button>
-            <button id="install-app" className="quiet-button" type="button" hidden>Install</button>
+            <button id="auth-sign-in" className="quiet-button" type="button">ChatGPT にサインイン</button>
+            <button id="auth-models-retry" className="quiet-button" type="button" hidden>モデルを再読み込み</button>
+            <button id="auth-sign-out" className="quiet-button" type="button" hidden>接続を解除</button>
+            <button id="install-app" className="quiet-button" type="button" hidden>インストール</button>
           </div>
         </section>
 
         <div id="connection-error" className="notice error-notice" role="alert" hidden>
           <span id="connection-error-text" />
-          <button id="reconnect" type="button">Reconnect</button>
+          <button id="reconnect" type="button">再接続</button>
         </div>
         <div id="run-error" className="notice error-notice" role="alert" hidden />
         <div id="action-message" className="notice success-notice" role="status" aria-live="polite" hidden />
 
-        <section id="transcript-area" className="transcript-area" aria-label="Conversation">
-          <div id="transcript-scroll" className="transcript-scroll" tabIndex={0} role="region" aria-label="Conversation transcript" aria-describedby="transcript-help">
+        <section id="transcript-area" className="transcript-area" aria-label="会話">
+          <div id="transcript-scroll" className="transcript-scroll" tabIndex={0} role="region" aria-label="会話の記録" aria-describedby="transcript-help">
             <canvas id="transcript-canvas" aria-hidden="true" />
             <div id="scene-spacer" aria-hidden="true" />
           </div>
-          <div id="text-transcript" className="text-transcript sr-only" role="log" aria-label="Selectable conversation transcript" aria-live="off" />
-          <p id="transcript-help" className="sr-only">Scroll to read the conversation. Use Text view for selectable text and screen-reader reading.</p>
-          <button id="jump-latest" className="jump-latest" type="button" hidden>↓ Latest</button>
+          <div id="text-transcript" className="text-transcript sr-only" role="log" aria-label="選択可能な会話の記録" aria-live="off" />
+          <p id="transcript-help" className="sr-only">スクロールして会話を読めます。テキスト表示では文字を選択でき、スクリーンリーダーでも読み上げられます。</p>
+          <button id="jump-latest" className="jump-latest" type="button" hidden>↓ 最新へ</button>
         </section>
 
         <section id="approval" className="approval" aria-labelledby="approval-title" hidden>
           <div className="approval-heading">
-            <div><h2 id="approval-title">Tool approval required</h2><p id="approval-description" /></div>
-            <span className="approval-tag">REVIEW</span>
+            <div><h2 id="approval-title">ツールの実行許可が必要です</h2><p id="approval-description" /></div>
+            <span className="approval-tag">確認</span>
           </div>
-          <pre id="approval-arguments" tabIndex={0} aria-label="Tool arguments" />
+          <pre id="approval-arguments" tabIndex={0} aria-label="ツールへの引数" />
           <div className="approval-actions">
-            <button id="deny" className="quiet-button" type="button">Deny</button>
-            <button id="approve" className="primary-button" type="button">Allow once</button>
+            <button id="deny" className="quiet-button" type="button">拒否</button>
+            <button id="approve" className="primary-button" type="button">今回のみ許可</button>
           </div>
         </section>
 
         <form id="composer" className="composer">
-          <label htmlFor="prompt" className="sr-only">Message the agent</label>
-          <textarea id="prompt" name="prompt" rows={3} maxLength={16384} placeholder="What would you like to work on?" autoComplete="off" spellCheck={true} required />
+          <label htmlFor="prompt" className="sr-only">エージェントへのメッセージ</label>
+          <textarea id="prompt" name="prompt" rows={3} maxLength={16384} placeholder="取り組みたいことを入力してください" autoComplete="off" spellCheck={true} required />
           <div className="composer-footer">
-            <p id="composer-hint">⌘ / Ctrl + Enter to send</p>
-            <button id="send" className="primary-button" type="submit">Send <span aria-hidden="true">↑</span></button>
+            <p id="composer-hint">⌘ / Ctrl + Enter で送信</p>
+            <button id="send" className="primary-button" type="submit">送信 <span aria-hidden="true">↑</span></button>
           </div>
         </form>
       </div>
