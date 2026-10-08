@@ -8,12 +8,12 @@
 - Node を実行依存としない MoonBit native CLI / loopback service、永続 command receipt、snapshot / SSE 同期、最大 4 件の Read pool、session 単位 cancel、共有 client と SwiftUI + MoonC iOS embedding spike を追加した。gpui iOS host は未実装。
 - typed command / event / effect API、再試行上限の小さな moon prove 対象、native verification の .mbtx entry point を追加した。
 - 完了済み / idle の native session 向けに、元の tool output を保持しながら将来の provider context を縮める手動 pruning を API、CLI、browser UI に追加した。canonical session の保存上限は引き続き適用する。([残りの移植作業](issues/open/0001-upstream-parity.md))
-- 完了済みなどの native v1 conversation を、履歴を保った独立した会話へ分岐できるようにした。Node / native CLI と browser の **Fork conversation** が使え、fork lineage と再採番した effect / retry identity は restore 時に検証する。upstream Session v4 writer や runtime parity は含まない。([残りの移植作業](issues/open/0001-upstream-parity.md))
+- 完了済みなどの native v1 conversation を、履歴を保った独立した会話へ分岐できるようにした。native CLI と browser の **Fork conversation** が使え、fork lineage と再採番した effect / retry identity は restore 時に検証する。upstream Session v4 writer や runtime parity は含まない。([残りの移植作業](issues/open/0001-upstream-parity.md))
 
 ### Changed
 
-- Node / native 共通のブラウザ UI を日本語化し、日本語フォント、プロジェクト / Git ブランチ、実際の provider と選択 model を表示するようにした。Session log の公式 API アップロード機能はなく、既定で無効のまま。iOS UI は対象外。
-- ブラウザ UI を Yami-kumo application shell に移し、会話検索、responsive な navigation / context drawer、live session details を追加した。gpui scene、履歴、送信、承認、fork、trim の操作経路は既存 host と MoonBit client に接続する。
+- Browser UI を日本語化し、日本語フォント、プロジェクト / Git branch、provider と選択 model を表示するようにした。Session log の公式 API upload はなく、既定で無効のまま。iOS UI は対象外。
+- Browser UI を Yami-kumo application shell に移し、会話検索、responsive な navigation / context drawer、live session details を追加した。browser / service worker は MoonBit package から生成し、UI の送信、承認、fork、trim は native v1 API に接続する。
 - native host の Tailscale Serve は `DSH_TAILNET_PORT` で HTTPS port を指定できる。未指定時は 443 を使う。
 - ローカル browser UI の ChatGPT sign-in は同じ browser の新しい tab で完了する。Tailnet client の sign-in や account 切り替えは host Mac 上の dsh から開始する。
 
@@ -29,10 +29,12 @@
 
 ### Removed
 
+- Node.js product host と handwritten JavaScript / React browser runtime を削除した。MoonBit native executable が CLI、HTTP/MCP、provider、tool、storage runtime を所有し、browser JavaScript / service worker は compiler output とする。Node.js / npm は test/build tooling に限り、production runtime dependency はない。旧 host suites の移行範囲と未移植の細かな injection cases は[retirement crosswalk](docs/node-host-retirement-test-crosswalk.md)に記録した。
+
 ### Security
 
 - SIWC credential は native host の owner-only store に保管する。ChatGPT plan request は Platform API key 課金へ自動 fallback しない。
 
 ### Migration
 
-- Native v1 は versioned data envelope と command receipt を保存する。対応する legacy snapshot / Session v4 input は native envelope に一方向更新する。Node host は native envelope を拒否するため、初回 native 起動前に backup し、両 host で同じ data directory を交互利用しない。
+- Native v1 は versioned data envelope と command receipt を保存する。対応する legacy snapshot / Session v4 input は native envelope に一方向更新する。旧版 Node-host reader は native envelope を拒否するため、初回 native 起動前に backup し、更新済み data directory を旧版 writer に戻さない。

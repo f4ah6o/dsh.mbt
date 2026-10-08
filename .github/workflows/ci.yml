@@ -1,4 +1,4 @@
-name: MoonBit and Node host
+name: MoonBit native runtime and browser
 
 on:
   push:
@@ -46,7 +46,7 @@ jobs:
       - name: Verify native build, tests, and CLI without Node (internal gates frozen)
         run: moon run scripts/native-verify.mbtx --target native
 
-  portable-and-host:
+  portable-and-native:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -64,7 +64,7 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24
-      - name: Install browser-shell build dependencies
+      - name: Install browser test tooling
         run: npm ci
       - name: Verify toolchain and exact dependency revisions
         run: npm run verify:env
@@ -72,11 +72,11 @@ jobs:
         run: npm run check
       - name: Test portable MoonBit packages on all backends
         run: npm run test:moon
-      - name: Build the JavaScript application bridge
+      - name: Build native runtime and compiled browser assets
         run: npm run build
-      - name: Test the Node host
-        run: npm run test:host
-      - name: Test browser view models
+      - name: Install pinned Chromium for the native browser fixture
+        run: npx playwright-core install --with-deps chromium
+      - name: Test compiled browser modules and service worker
         run: npm run test:web
-      - name: Run the fake-provider integration suite
+      - name: Run strict-CSP browser smoke against the native fixture
         run: npm run test:integration

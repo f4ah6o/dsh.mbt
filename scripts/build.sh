@@ -3,28 +3,35 @@ set -eu
 
 DSH_ROOT=$(CDPATH= cd "$(dirname "$0")/.." && pwd)
 cd "$DSH_ROOT"
-node scripts/verify-env.mjs
-npm run build:shell
-moon build app --target js --release
-moon build client --target js --release
 
-# moon.work places the module name between the build root and package path.
-DSH_APP="_build/js/release/build/f4ah6o/dsh/app/app.js"
-DSH_CLIENT="_build/js/release/build/f4ah6o/dsh/client/client.js"
-if [ ! -s "$DSH_APP" ]; then
-  echo "MoonBit did not produce $DSH_APP. Check the app package and moon.work configuration." >&2
+moon build native --target native --release --frozen
+moon build browser --target js --release --frozen
+moon build browser/sw --target js --release --frozen
+
+DSH_NATIVE="_build/native/release/build/f4ah6o/dsh/native/native.exe"
+DSH_BROWSER="_build/js/release/build/f4ah6o/dsh/browser/browser.js"
+DSH_SERVICE_WORKER="_build/js/release/build/f4ah6o/dsh/browser/sw/sw.js"
+if [ ! -s "$DSH_NATIVE" ]; then
+  echo "MoonBit did not produce $DSH_NATIVE." >&2
   exit 1
 fi
-node --check "$DSH_APP"
-if [ ! -s "$DSH_CLIENT" ]; then
-  echo "MoonBit did not produce $DSH_CLIENT. Check the client package and moon.work configuration." >&2
+if [ ! -s "$DSH_BROWSER" ]; then
+  echo "MoonBit did not produce $DSH_BROWSER." >&2
   exit 1
 fi
-node --check "$DSH_CLIENT"
-node --check web/yami-kumo-shell.js
+if [ ! -s "$DSH_SERVICE_WORKER" ]; then
+  echo "MoonBit did not produce $DSH_SERVICE_WORKER." >&2
+  exit 1
+fi
+
+mkdir -p web/moonbit
+cp "$DSH_BROWSER" web/moonbit/browser.js
+cp "$DSH_SERVICE_WORKER" web/sw.js
+cp vendor/yami-kumo/styles/kumo-standalone.css web/kumo-standalone.css
+cp vendor/yami-kumo/styles/yami-kumo-components.css web/yami-kumo-components.css
 if [ ! -s web/yami-kumo-shell.css ]; then
-  echo "The Yami-kumo browser shell stylesheet was not produced." >&2
+  echo "The dsh Yami-kumo shell stylesheet is missing." >&2
   exit 1
 fi
-echo "Built $DSH_APP"
-echo "Built $DSH_CLIENT"
+
+echo "Built $DSH_NATIVE, web/moonbit/browser.js, web/sw.js, and pinned Yami-kumo styles."

@@ -733,11 +733,14 @@ async fn NativeRuntime::accept_remote_command(
   self : NativeRuntime,
   command : @protocol.RemoteCommand,
   identity_key : String,
-) -> Result[(Json, Array[@engine.EngineEffect], Bool), String] {
+) -> Result[
+  (Json, Array[@engine.EngineEffect], Bool, NativeJobControl?),
+  String,
+] {
   let fingerprint = match
     self.preflight_existing_command(command, identity_key) {
     Err(error) => return Err(error)
-    Ok((_, Some(receipt))) => return Ok((receipt, [], false))
+    Ok((_, Some(receipt))) => return Ok((receipt, [], false, None))
     Ok((fingerprint, None)) => fingerprint
   }
   if command.operation != "session_cancel" {
@@ -771,7 +774,7 @@ async fn NativeRuntime::accept_remote_command(
   }
   match
     self.existing_command_receipt_locked(command, identity_key, fingerprint) {
-    Some(receipt) => return Ok((receipt, [], false))
+    Some(receipt) => return Ok((receipt, [], false, None))
     None => ()
   }
   let retained : Array[Json] = []
@@ -810,6 +813,7 @@ async fn NativeRuntime::accept_remote_command(
   let mut error_message : String? = None
   let mut result : Json? = None
   let mut effects : Array[@engine.EngineEffect] = []
+  let mut control : NativeJobControl? = None
   if !allowed.contains(command.operation) {
     status = "rejected"
     error_message = Some("operation is not available through remote commands")
@@ -820,6 +824,21 @@ async fn NativeRuntime::accept_remote_command(
       "approval is stale or does not match the pending tool call",
     )
   } else {
+    if native_session_effect_mutation(command.operation) {
+      match command.session_id {
+        Some(session_id) =>
+          match
+            self.scheduler.begin(
+              session_id,
+              command.command_id,
+              self.state.revision + 1,
+            ) {
+            Ok(value) => control = Some(value)
+            Err(error) => return Err(error)
+          }
+        None => ()
+      }
+    }
     match self.api.invoke(command.operation, input) {
       Err(error) => {
         status = "rejected"
@@ -848,7 +867,12 @@ async fn NativeRuntime::accept_remote_command(
   retained.push(native_receipt_with_owner(receipt, identity_key))
   self.state.receipts = retained
   match self.checkpoint_locked() {
-    Err(error) => Err(error)
+    Err(error) => {
+      if control is Some(value) {
+        self.scheduler.finish(value)
+      }
+      Err(error)
+    }
     Ok(_) => {
       if status == "accepted" && command.operation == "session_cancel" {
         match command.session_id {
@@ -857,9 +881,29 @@ async fn NativeRuntime::accept_remote_command(
           None => ()
         }
       }
-      Ok((receipt, effects, status == "accepted"))
+      if status != "accepted" || effects.is_empty() {
+        if control is Some(value) {
+          self.scheduler.finish(value)
+        }
+        control = None
+      } else if control is Some(value) {
+        for effect in effects {
+          if effect.session_id().as_string() != value.session_id {
+            self.scheduler.finish(value)
+            return Err("remote effect session does not match its reservation")
+          }
+        }
+      }
+      Ok((receipt, effects, status == "accepted", control))
     }
   }
+}
+
+///|
+fn native_session_effect_mutation(operation : String) -> Bool {
+  ["session_send", "tool_approve", "session_prune_tool_results", "session_fork"].contains(
+    operation,
+  )
 }
 
 ///|
@@ -992,27 +1036,82 @@ async fn NativeRuntime::schedule_retry(
 }
 
 ///|
-/// Handle one gpui MCP JSON-RPC line through the same protocol server as the
-/// in-process API, then durably checkpoint and drive any resulting effects.
-async fn NativeRuntime::mcp_handle(
+/// Handle one gpui MCP JSON-RPC line through the same protocol server. Persist
+/// acceptance before dispatching effects in the carrier's background task so
+/// the JSON-RPC response remains immediate.
+async fn[X] NativeRuntime::mcp_handle(
   self : NativeRuntime,
   line : String,
+  group : @async.TaskGroup[X],
 ) -> Result[String, String] {
+  let (tool_name, session_id) = native_mcp_call_scope(line)
+  if [
+      "session_send", "tool_approve", "session_prune_tool_results", "session_fork",
+    ].contains(tool_name) {
+    match session_id {
+      Some(id) =>
+        match self.scheduler.await_idle(id) {
+          Ok(_) => ()
+          Err(_) => return Ok(native_mcp_busy_response(line))
+        }
+      None => ()
+    }
+  }
   self.gate.acquire()
   if self.stopped || self.closed {
     self.gate.release()
     return Err("native runtime is stopped")
   }
+  let mut control : NativeJobControl? = None
+  if native_session_effect_mutation(tool_name) {
+    match session_id {
+      Some(id) => {
+        let command_id = match native_command_id() {
+          Ok(value) => value
+          Err(error) => {
+            self.gate.release()
+            return Err(error)
+          }
+        }
+        match self.scheduler.begin(id, command_id, self.state.revision + 1) {
+          Ok(value) => control = Some(value)
+          Err(_) => {
+            self.gate.release()
+            return Ok(native_mcp_busy_response(line))
+          }
+        }
+      }
+      None => ()
+    }
+  }
   let response = self.api.mcp_handle(line).unwrap_or("")
   let effects = self.api.take_typed_effects()
   let checkpoint = self.checkpoint_locked()
   let accepted_revision = self.state.revision
-  self.gate.release()
   match checkpoint {
-    Err(error) => return Err(error)
+    Err(error) => {
+      if control is Some(value) {
+        self.scheduler.finish(value)
+      }
+      self.gate.release()
+      return Err(error)
+    }
     Ok(_) => ()
   }
+  if tool_name == "session_cancel" && native_mcp_response_succeeded(response) {
+    match session_id {
+      Some(id) => self.scheduler.cancel_through(id, accepted_revision)
+      None => ()
+    }
+  }
+  if !native_mcp_response_succeeded(response) || effects.is_empty() {
+    if control is Some(value) {
+      self.scheduler.finish(value)
+    }
+    control = None
+  }
   let handled_sessions : Array[String] = []
+  let dispatches : Array[(Array[@engine.EngineEffect], NativeJobControl)] = []
   for effect in effects {
     let session_id = effect.session_id().as_string()
     if !handled_sessions.contains(session_id) {
@@ -1020,17 +1119,88 @@ async fn NativeRuntime::mcp_handle(
       let session_effects = effects.filter(candidate => {
         candidate.session_id().as_string() == session_id
       })
-      let command_id = match native_command_id() {
-        Ok(value) => value
-        Err(error) => return Err(error)
+      let dispatch_control = match control {
+        Some(value) if value.session_id == session_id => {
+          control = None
+          Some(value)
+        }
+        _ =>
+          match native_command_id() {
+            Err(error) => {
+              self.gate.release()
+              return Err(error)
+            }
+            Ok(command_id) =>
+              match
+                self.scheduler.begin(session_id, command_id, accepted_revision) {
+                Ok(value) => Some(value)
+                Err(error) => {
+                  self.gate.release()
+                  return Err(error)
+                }
+              }
+          }
       }
-      match self.run_effects(session_effects, command_id, accepted_revision) {
+      match dispatch_control {
+        Some(value) => dispatches.push((session_effects, value))
+        None => ()
+      }
+    }
+  }
+  if control is Some(value) {
+    self.scheduler.finish(value)
+  }
+  self.gate.release()
+  for (session_effects, control) in dispatches {
+    group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
+      match self.run_effects_in_control(session_effects, control) {
         Ok(_) => ()
-        Err(error) => return Err(error)
+        Err(_) if control.cancelled.val => ()
+        Err(error) => eprintln("native MCP effect failed: " + error)
       }
     }
   }
   Ok(response)
+}
+
+///|
+fn native_mcp_call_scope(line : String) -> (String, String?) {
+  let request = @json.parse(line) catch { _ => return ("", None) }
+  if string_field(request, "method") != Some("tools/call") {
+    return ("", None)
+  }
+  let params = object_field(request, "params").unwrap_or(Json::null())
+  let external_name = string_field(params, "name").unwrap_or("")
+  let name = if external_name.has_prefix("dsh.") {
+    external_name[4:].to_owned()
+  } else {
+    external_name
+  }
+  let arguments = object_field(params, "arguments").unwrap_or(Json::null())
+  (name, string_field(arguments, "session_id"))
+}
+
+///|
+fn native_mcp_busy_response(line : String) -> String {
+  let request = @json.parse(line) catch { _ => return "" }
+  let id = match object_field(request, "id") {
+    Some(value) => value.stringify()
+    None => return ""
+  }
+  "{\"jsonrpc\":\"2.0\",\"id\":\{id},\"error\":{\"code\":-32000,\"message\":\"a native effect job is still active for this session\"}}"
+}
+
+///|
+fn native_mcp_response_succeeded(response : String) -> Bool {
+  let parsed = @json.parse(response) catch { _ => return false }
+  match parsed {
+    Json::Object(fields) =>
+      match fields.get("result") {
+        Some(result) => !native_json_true(object_field(result, "isError"))
+        None => false
+      }
+    _ => false
+  }
 }
 
 ///|
@@ -1334,25 +1504,47 @@ async fn NativeRuntime::run_effects(
     Ok(value) => value
     Err(error) => return Err(error)
   }
+  self.run_effects_in_control(effects, control)
+}
+
+///|
+async fn NativeRuntime::run_effects_in_control(
+  self : NativeRuntime,
+  effects : Array[@engine.EngineEffect],
+  control : NativeJobControl,
+) -> Result[Unit, String] {
+  for effect in effects {
+    if effect.session_id().as_string() != control.session_id {
+      return Err("one native command produced effects for multiple sessions")
+    }
+  }
   let outcome = @async.handle_cancellation(async fn() {
     @async.with_task_group() <| workers => {
+      let start = @async.Semaphore::Semaphore(1, initial_value=0)
       let task = workers.spawn(no_wait=true, async fn() {
-        match
-          @async.handle_cancellation(async fn() {
-            native_drive_effects(self.scheduler, effects, control, async fn(
-              effect,
-            ) {
-              match effect.kind() {
-                @engine.EffectType::Tool => self.run_tool_effect(effect)
-                @engine.EffectType::Provider => self.run_provider_effect(effect)
-              }
-            })
-          }) {
-          None => Err("native command was cancelled")
-          Some(result) => result
+        start.acquire()
+        if control.cancelled.val {
+          Err("native command was cancelled")
+        } else {
+          match
+            @async.handle_cancellation(async fn() {
+              native_drive_effects(self.scheduler, effects, control, async fn(
+                effect,
+              ) {
+                match effect.kind() {
+                  @engine.EffectType::Tool => self.run_tool_effect(effect)
+                  @engine.EffectType::Provider =>
+                    self.run_provider_effect(effect)
+                }
+              })
+            }) {
+            None => Err("native command was cancelled")
+            Some(result) => result
+          }
         }
       })
       self.scheduler.attach_task(control, task)
+      start.release()
       task.wait()
     }
   })
@@ -1370,9 +1562,13 @@ async fn NativeRuntime::run_command_job(
   identity_key : String,
   accepted_revision : Int,
   effects : Array[@engine.EngineEffect],
+  control? : NativeJobControl? = None,
 ) -> Unit {
   let outcome = @async.handle_cancellation(async fn() {
-    self.run_effects(effects, command_id, accepted_revision)
+    match control {
+      Some(value) => self.run_effects_in_control(effects, value)
+      None => self.run_effects(effects, command_id, accepted_revision)
+    }
   })
   @async.protect_from_cancel(async fn() {
     match outcome {

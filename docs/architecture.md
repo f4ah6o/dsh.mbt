@@ -2,8 +2,9 @@
 
 ## 実行境界
 
-MoonBit が domain state と provider protocol を所有し、host は I/O の実行と永続化を担当します。
-JavaScript に agent loop の別実装はありません。
+MoonBit が domain state、provider protocol、agent loop、CLI / HTTP / MCP service と browser UI を所有します。
+native runtime は async HTTP / filesystem / process API と narrow C FFI を通じて外部作用を実行し、checkpoint を保存します。
+product logic を持つ handwritten JavaScript / TypeScript runtime はありません。
 
 ```mermaid
 flowchart TD
@@ -11,10 +12,10 @@ flowchart TD
   CLI["CLI / HTTP / MCP carrier"] --> API
   API --> E["MoonBit engine"]
   E --> Q["LLM / tool effects"]
-  Q --> H["Node host"]
+  Q --> H["MoonBit native runtime"]
   H --> P["MoonBit provider codec"]
   P -->|"validated stream deltas"| E
-  H --> IO["HTTP / files / processes"]
+  H --> IO["Async HTTP / files / processes; narrow C OS FFI"]
   H --> D["Atomic session snapshot"]
   H -->|"correlated completion"| E
 ```
@@ -26,25 +27,25 @@ flowchart TD
 | `plugins/` | MoonBit startup composition、依存・所有権検証、6 種の tool schema |
 | `api/` | gpui `App` / registry / typed capability / GUI binding / MCP、hotpath 計測 |
 | `ui/` | gpui による transcript layout、visible scene、scroll bounds |
-| `app/` | 明示的な start / stop と JSON を使う JavaScript FFI |
-| `host/` | HTTP、CLI、provider transport、workspace tools、atomic persistence、shutdown |
-| `web/` | gpui Canvas renderer、DOM 操作、polling、再接続、Text view |
+| `app/` | MoonBit application composition と明示的な start / stop boundary |
+| `native/` | HTTP、CLI、MCP、provider transport、workspace tools、atomic persistence、scheduler、shutdown |
+| `browser/`, `web/` | MoonBit browser / service-worker package、生成 JavaScript、pinned static CSS |
 
 ## 状態遷移と effect
 
 1. `session_send` が user message と turn 開始を記録し、`llm` effect を作る。
-2. host は状態の checkpoint を保存した後に provider I/O を開始する。
-3. MoonBit provider codec が完全に検証した SSE frame の text / reasoning delta を host が drain し、
+2. native runtime は状態の checkpoint を保存した後に provider I/O を開始する。
+3. MoonBit provider codec が完全に検証した SSE frame の text / reasoning delta を native runtime が drain し、
    `stream_project(effect_id, content, reasoning)` が active turn / step に provisional event を記録する。
-4. host は最大 4096 UTF-16 code units の batch（Unicode scalar 境界を維持）を checkpoint し、browser と session API
+4. native runtime は最大 4096 UTF-16 code units の batch（Unicode scalar 境界を維持）を checkpoint し、browser と session API
    が stream 中に provisional transcript を表示できる。partial row は provider の次の model context には含めない。
 5. EOF で decoder が response を共通形式へ正規化し、`complete(effect_id, result)` が outstanding ID と
    projected delta との一致を検証する。
 6. tool がある場合は schema を検証し、read を開始するか、write / shell の承認を待つ。
-7. host は承認の記録も保存してから実行する。結果を `complete` に戻し、次の LLM step に進む。
+7. native runtime は承認の記録も保存してから実行する。結果を `complete` に戻し、次の LLM step に進む。
 8. tool のない最終応答で `completed`。cancel、provider error、step / token / capacity 上限は明示的に終了する。
 
-`effect: "read"` として登録した連続 call は、最大 4 件の bounded rolling pool で並列実行します。host は
+`effect: "read"` として登録した連続 call は、最大 4 件の bounded rolling pool で並列実行します。native runtime は
 すべての `tool/request` を checkpoint してから IO を開始します。読み取りが返る順は自由ですが、受理した completion は
 call ID と effect ID の組として永続化し、tool result と次の model context には元の call 順で追加します。pool が空くと
 同じ Read group の次の call を開始します。最大数は upstream の既定 10 ではなく、この port の 4 です。
@@ -56,7 +57,7 @@ startup descriptor の静的 policy です。truncated arguments や未登録 to
 再実行しません。
 
 SSE decoder は分割された text / reasoning / tool arguments を逐次解析します。完全に検証された text / reasoning frame
-だけが stream event になり、tool arguments や reasoning signature は projection しません。host は有限の 16 Mi-unit
+だけが stream event になり、tool arguments や reasoning signature は projection しません。native runtime は有限の 16 Mi-unit
 queue に Unicode scalar 境界を守った segment として追加し、onDelta callback 自身は state mutation や checkpoint を
 待ちません。MoonBit state mutation と checkpoint は serialized owner だけが実行し、512 code units ごと、または
 100 ms ごとに bounded batch を engine に渡します。cancel preflight は進行中 callback と projection/checkpoint を
@@ -72,7 +73,7 @@ effect は再発行しません。通常 CLI text stdout は final assistant mes
 
 `session_prune_tool_results` は、idle または completed の native v1 session に対する明示的な state-change operation です。
 active turn、approval 待ち、read-only Session v4 import には適用できません。browser の **Trim outputs**、HTTP / gpui API、
-または `node host/cli.mjs prune-session SESSION_ID` から実行できます。
+または `dsh-native prune-session SESSION_ID` から実行できます。
 
 この処理は upstream の pinned
 [compaction-tool-result-pruner](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/compaction/compaction-tool-result-pruner)
@@ -85,7 +86,7 @@ CLI はそれぞれ `--threshold-chars`、`--head-chars`、`--tail-chars` を受
 pruning は original `tool/result` を変更せず、source / call identity、budgets、code point counts、projected content を持つ
 `tool/result/pruned` event を追加します。restore は参照 sequence、call identity、budgets、counts、再計算した content を照合します。
 `Session.messages()` と transcript には full original output を残し、browser は該当する行に “trimmed for model context” と表示します。
-次の provider request は replay 検証済み event から組み立てた projection を使います。host の既存 serialized mutation path が
+次の provider request は replay 検証済み event から組み立てた projection を使います。native runtime の serialized mutation path が
 成功した操作を checkpoint してから応答するため、保存失敗は session update を公開せず、provider/tool I/O も開始しません。
 
 これは手動の bounded projection です。token meter、pressure trigger、summary generation、自動 live compaction、spill は含みません。
@@ -95,7 +96,7 @@ capacity refusal は candidate snapshot を採用せず、元の transcript / ev
 
 ### Durable provider retry
 
-`engine/retry.mbt` が retry eligibility、attempt budget、delay、effect / turn / step identity を決めます。host は provider error を
+`engine/retry.mbt` が retry eligibility、attempt budget、delay、effect / turn / step identity を決めます。native runtime は provider error を
 stable code に分類し、`llm/retry` を append して atomic snapshot に保存した後だけ cancellable backoff を始めます。
 backoff が完了したら MoonBit が `llm/retry-started` を append し、2 回目の checkpoint が成功した後だけ次の request を送ります。
 途中の failure や保存失敗では次の provider call を開始しません。restore 時の pending retry は通常の interrupted turn として閉じ、
@@ -122,12 +123,12 @@ mutating operation は candidate state に適用し、容量と終了可能性�
 
 effect ID は engine 内の単調増加 ID に app incarnation を付けて公開します。
 古い `stop` / `start` 間の完了通知、cancel 後の応答、重複した完了通知は新しい turn を進めません。
-同じ JavaScript facade を複数 host が同時に所有することも拒否します。
+各 native runtime は独自の API、store、workspace owner を持ち、command receipt の identity と data-directory lock で所有権を分離します。
 
-host の state mutation と checkpoint は直列化します。shutdown は新しい delta callback の登録を止め、
+native runtime の state mutation と checkpoint は直列化します。shutdown は新しい delta callback の登録を止め、
 すでに受理した callback と queue の全 batch を serialized owner が drain してから engine の cancel と最終
 checkpoint を行います。fetch / subprocess も abort して終了を待ち、最後に lock と gpui 所有オブジェクトを解放します。
-checkpoint に失敗した場合は新しい外部作用を続行せず、host を失敗状態にします。
+checkpoint に失敗した場合は新しい外部作用を続行せず、runtime を失敗状態にします。
 
 ## 永続化と容量
 
@@ -164,7 +165,7 @@ import 済み v4 history は immutable な履歴であり、新しい turn も c
 | 1 セッションの canonical JSON | 262,144 UTF-16 code units。events と messages、終了時の記録余地を含む |
 | 1 prompt | 16,384 文字 |
 | engine が受け取る response text / tool arguments / tool result | 各 65,536 文字 |
-| host が返す tool output | UTF-8 で 65,536 bytes、打切りマーカー込み |
+| native runtime が返す tool output | UTF-8 で 65,536 bytes、打切りマーカー込み |
 | 1 model step の tool 数 | 16 |
 | 1 turn の model step | 既定 16、指定範囲 1–64 |
 | HTTP request / MCP line / CLI import file | 1 MiB |
@@ -177,10 +178,15 @@ capacity を超える completion は、採用前の履歴を保ったまま `ses
 
 | Endpoint | 内容 |
 | --- | --- |
-| `GET /health` | host status と backend の mode / model |
-| `GET /api/state` | UI 用の session snapshot |
+| `GET /api/metadata` | workspace、repository、provider、model の安全な表示情報 |
+| `GET /api/v1/snapshot` | workspace identity と UI 用 snapshot |
+| `GET /api/v1/sessions/{id}` | session projection |
+| `GET /api/v1/events` | cursor / session scope 付き event stream |
+| `GET /api/v1/commands/{id}` | durable command receipt |
+| `POST /api/v1/commands` | versioned remote command を受け付ける |
 | `POST /api/call` | `{operation, input}` を gpui registry に dispatch |
 | `POST /mcp` | gpui が扱う JSON-RPC request / response |
+| `GET /` と allowlist static paths | compiled browser / service-worker assets、pinned CSS、PWA metadata |
 
 listen address は loopback に限定します。Host / Origin 検証と body 上限を適用し、static file は許可した asset のみを提供します。
 public deployment や multi-user authentication は未実装です。

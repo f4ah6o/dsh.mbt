@@ -698,9 +698,8 @@ fn paint(app : BrowserApp) -> Unit {
   let scale = browser_device_scale().min(3.0)
   let snapshot_json = app.snapshot.stringify()
   let extent = @app.measure_ui(snapshot_json, width).max(0)
-  dom_set_element_style(
-    "scene-spacer", "height", "{(extent - height).max(0)}px",
-  )
+  let spacer_height = (extent - height).max(0)
+  dom_set_element_style("scene-spacer", "height", "\{spacer_height}px")
   dom_set_element_style("transcript-canvas", "height", "\{height}px")
   if dom_measure("transcript-canvas", "width").to_int() !=
     (width.to_double() * scale).round().to_int() ||
@@ -762,6 +761,7 @@ fn paint(app : BrowserApp) -> Unit {
       )
   }
   let follow = browser_json_bool(app.client.state(), "follow_latest")
+  dom_set_boolean_property("jump-latest", "disabled", extent <= height)
   dom_set_boolean_property("jump-latest", "hidden", follow || extent <= height)
 }
 
@@ -872,7 +872,11 @@ fn apply_panel_state(app : BrowserApp, focus? : Bool = false) -> Unit {
 
   let modal_sidebar = app.mobile_sidebar_open && mobile_sidebar
   let modal_context = app.context_panel_open && mobile_context
-  let sidebar_hidden = app.sidebar_collapsed && !modal_sidebar
+  let sidebar_hidden = if mobile_sidebar {
+    !app.mobile_sidebar_open
+  } else {
+    app.sidebar_collapsed
+  }
   let context_hidden = !app.context_panel_open
   apply_panel_accessibility(
     "yk-mobile-navigation", sidebar_hidden, modal_sidebar,

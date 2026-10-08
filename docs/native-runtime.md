@@ -1,14 +1,21 @@
 # Native runtime
 
-The native command runs the MoonBit runtime and loopback HTTP carrier without Node.js. It serves the committed browser shell assets from `web/` and the generated files under `_build/js/release/build/`. Build the JavaScript app and client bridge before starting the service; the native target does not produce those files. Regenerating the Yami-kumo shell itself requires Node.js and npm (`npm ci && npm run build:shell`).
+The native executable is the sole product host. MoonBit owns CLI parsing,
+session and provider behavior, HTTP/MCP service, browser behavior, persistence,
+and tool policy. Narrow C FFI supplies operating-system primitives such as
+no-follow filesystem operations, process creation, cryptographic primitives,
+signals, and terminal detection; the audited boundary is listed in
+[ffi-boundary.md](ffi-boundary.md). No Node.js or npm package is loaded by the
+product build or runtime.
+
+Build the executable and all browser assets with the pinned MoonBit toolchain:
 
 ```sh
 moon update
 moon install
-moon build app --target js --release
-moon build client --target js --release
+sh scripts/build.sh
 moon run native --target native --release -- \
-  --serve --data-dir /absolute/path/to/dsh-data \
+  web --data-dir /absolute/path/to/dsh-data \
   --workspace /absolute/path/to/project --port 3210
 ```
 
@@ -18,31 +25,36 @@ For a credential-free offline check, add `--demo`:
 
 ```sh
 moon run native --target native --release -- \
-  --serve --demo --data-dir /absolute/path/to/dsh-demo-data \
+  web --demo --data-dir /absolute/path/to/dsh-demo-data \
   --workspace /absolute/path/to/project --port 3210
 ```
 
 This mode uses a deterministic provider response, never reads provider API-key environment variables, and never makes provider network requests. Its first response requests an approved workspace write; the next response includes the tool result. The demo writes `native-demo.txt` inside the selected workspace.
 
-The foreground CLI uses the same native runtime and persists its session after each command. For example, `--run` starts a session and prints its ID and any pending approval call. Resume that session by passing the JSON field `approval_revision` to the `--approval-revision` option and `pending_approval.call_id` to `--approve-call`:
+The foreground CLI uses the same native runtime and checkpoints each command. In an interactive terminal, `run` asks before each write, edit, or shell operation. Noninteractive runs cancel and fail when a tool needs approval; use an explicit startup policy with `--approve-writes` or `--approve-tools`. Automatic shell approval requires both `--allow-shell` and `--approve-tools bash`:
 
 ```sh
 moon run native --target native --release -- \
-  --run 'Create and verify a durable file.' --demo \
-  --data-dir /absolute/path/to/dsh-demo-data \
-  --workspace /absolute/path/to/project
-
-moon run native --target native --release -- \
-  --session SESSION_ID --approve-call CALL_ID --approval-revision REVISION --demo \
+  run 'Create and verify a durable file.' --demo --approve-writes \
   --data-dir /absolute/path/to/dsh-demo-data \
   --workspace /absolute/path/to/project
 ```
 
-Create an independent branch from a settled native v1 conversation with `--fork SESSION_ID`. It returns a completed command receipt containing the new idle session. The child preserves the validated transcript and parent link; it does not resume or replay provider, approval, retry, or tool work.
+`--approve-call` and `--deny-call` act on a session that is already waiting for approval, for example one started from the browser or MCP carrier. Pass its current `approval_revision` and `pending_approval.call_id`; stale or mismatched decisions are rejected:
 
 ```sh
 moon run native --target native --release -- \
-  --fork SESSION_ID --data-dir /absolute/path/to/dsh-demo-data \
+  --session SESSION_ID --approve-call CALL_ID --approval-revision REVISION \
+  --demo \
+  --data-dir /absolute/path/to/dsh-demo-data \
+  --workspace /absolute/path/to/project
+```
+
+Create an independent branch from a settled native v1 conversation with `fork-session SESSION_ID`. It returns a completed command receipt containing the new idle session. The child preserves the validated transcript and parent link; it does not resume or replay provider, approval, retry, or tool work.
+
+```sh
+moon run native --target native --release -- \
+  fork-session SESSION_ID --data-dir /absolute/path/to/dsh-demo-data \
   --workspace /absolute/path/to/project
 ```
 
@@ -50,7 +62,7 @@ moon run native --target native --release -- \
 
 ## Data directory compatibility
 
-On first open, the native host can read supported legacy dsh session snapshots and Session v4 inputs, then writes the native versioned envelope and receipt ledger. This conversion is one-way: the Node host rejects a native envelope. Back up the data directory before opening it with the native host, and do not alternate Node and native writers or run them concurrently against the same directory.
+On first open, the native runtime can read supported legacy dsh session snapshots and Session v4 inputs, then writes the native versioned envelope and receipt ledger. This conversion is one-way; older Node-host versions reject the native envelope. The Node host is retired in this version. Back up the data directory before opening it with the native runtime, and do not run an older writer against that directory afterward.
 
 ### Optional live SIWC smoke
 
@@ -82,7 +94,7 @@ export DSH_TAILNET_HOST='machine.example-tailnet.ts.net'
 export DSH_TAILNET_ALLOWED_USERS='owner@example.com'
 export DSH_TAILNET_PORT=8443 # optional; defaults to 443
 moon run native --target native --release -- \
-  --serve --data-dir /absolute/path/to/dsh-data \
+  web --data-dir /absolute/path/to/dsh-data \
   --workspace /absolute/path/to/project --port 3210
 ```
 

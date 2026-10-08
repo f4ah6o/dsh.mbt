@@ -223,22 +223,60 @@ async test "native workspace tools preserve file and process behavior" {
     assert_true(bounded_output.length() <= TOOL_OUTPUT_LIMIT)
     assert_true(bounded_output.contains("[output truncated]"))
 
-    // The shell leader exits immediately. Its delayed child retains the
-    // captured output pipe; the timeout must kill the whole worker session.
-    let timeout_result = tools.execute(
-      safety_tool_request(
-        "bash",
-        Json::object({
-          "command": Json::string(
-            "(sleep 0.7; printf escaped > descendant-alive.txt) & exit 0",
-          ),
-          "timeout": Json::number(150.0),
-        }),
-      ),
-    )
-    assert_true(!safety_tool_ok(timeout_result))
-    @async.sleep(900)
-    assert_true(!@fs.exists(workspace + "/descendant-alive.txt"))
+    // The shell leader exits immediately. Its child announces readiness and
+    // waits for a release marker while retaining the captured output pipe.
+    // Timeout cleanup must kill the whole process group before release.
+    let timeout_started = @async.now()
+    let timeout_task = group.spawn(no_wait=true, async fn() {
+      tools.execute(
+        safety_tool_request(
+          "bash",
+          Json::object({
+            "command": Json::string(
+              "(printf ready > timeout-child-ready.txt; while [ ! -f timeout-release.txt ]; do /bin/sleep 0.01; done; printf escaped > timeout-descendant-alive.txt) & exit 0",
+            ),
+            "timeout": Json::number(500.0),
+          }),
+        ),
+      )
+    })
+    let mut timeout_child_ready = false
+    for _ in 0..<1000 {
+      if @fs.exists(workspace + "/timeout-child-ready.txt") {
+        timeout_child_ready = true
+        break
+      }
+      @async.sleep(5)
+    }
+    if !timeout_child_ready {
+      fail("timeout child did not become ready before cleanup test")
+    }
+    let timeout_result = timeout_task.wait()
+    let timeout_elapsed_ms = (@async.now() - timeout_started).to_int()
+    let timeout_failed = !safety_tool_ok(timeout_result)
+    if !timeout_failed {
+      fail(
+        "timeout child process survived; result=" +
+        timeout_result.stringify() +
+        "; elapsed_ms=" +
+        timeout_elapsed_ms.to_string() +
+        "; ready=" +
+        timeout_child_ready.to_string(),
+      )
+    }
+    @fs.write_file(workspace + "/timeout-release.txt", @utf8.encode("release"))
+    @async.sleep(250)
+    if @fs.exists(workspace + "/timeout-descendant-alive.txt") {
+      fail(
+        "timeout process group escaped; result=" +
+        timeout_result.stringify() +
+        "; elapsed_ms=" +
+        timeout_elapsed_ms.to_string() +
+        "; ready=" +
+        timeout_child_ready.to_string() +
+        "; released=true; marker=true",
+      )
+    }
 
     // Explicit caller cancellation must finish the same process-group cleanup
     // as timeout cancellation. The child ignores TERM, so only group KILL can
@@ -250,7 +288,7 @@ async test "native workspace tools preserve file and process behavior" {
             "bash",
             Json::object({
               "command": Json::string(
-                "printf started > cancel-started.txt; (trap '' TERM; sleep 2; printf escaped > cancel-descendant-alive.txt) & wait",
+                "(trap '' TERM; printf ready > cancel-child-ready.txt; while [ ! -f cancel-release.txt ]; do /bin/sleep 0.01; done; printf escaped > cancel-descendant-alive.txt) & wait",
               ),
               "timeout": Json::number(10000.0),
             }),
@@ -260,21 +298,30 @@ async test "native workspace tools preserve file and process behavior" {
       no_wait=true,
       allow_failure=true,
     )
-    let mut cancellation_started = false
-    for _ in 0..<100 {
-      if @fs.exists(workspace + "/cancel-started.txt") {
-        cancellation_started = true
+    let mut cancellation_child_ready = false
+    for _ in 0..<1000 {
+      if @fs.exists(workspace + "/cancel-child-ready.txt") {
+        cancellation_child_ready = true
         break
       }
-      @async.sleep(10)
+      @async.sleep(5)
     }
-    assert_true(cancellation_started)
+    if !cancellation_child_ready {
+      fail("cancel child did not become ready before cleanup test")
+    }
     cancellation_task.cancel()
     ignore(cancellation_task.wait()) catch {
       @async.WaitedTaskAlreadyCancelled => ()
       _ => ()
     }
-    @async.sleep(2300)
-    assert_true(!@fs.exists(workspace + "/cancel-descendant-alive.txt"))
+    @fs.write_file(workspace + "/cancel-release.txt", @utf8.encode("release"))
+    @async.sleep(250)
+    if @fs.exists(workspace + "/cancel-descendant-alive.txt") {
+      fail(
+        "cancelled process group escaped; child_ready=" +
+        cancellation_child_ready.to_string() +
+        "; released=true; marker=true",
+      )
+    }
   }
 }

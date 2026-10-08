@@ -722,7 +722,7 @@ async fn NativeService::handle_post(
     }
   }
   if path == "/mcp" {
-    match self.runtime.mcp_handle(body) {
+    match self.runtime.mcp_handle(body, group) {
       Err(error) => self.respond_json(connection, 503, { "error": error })
       Ok(response) =>
         if response.is_empty() {
@@ -767,7 +767,7 @@ async fn NativeService::handle_command(
   }
   match self.runtime.accept_remote_command(command, identity_key) {
     Err(error) => self.respond_json(connection, 409, { "error": error })
-    Ok((receipt, effects, should_start)) => {
+    Ok((receipt, effects, should_start, control)) => {
       if should_start {
         let command_id = string_field(receipt, "command_id").unwrap_or("")
         let accepted_revision = int_field(receipt, "accepted_revision").unwrap_or(
@@ -775,7 +775,11 @@ async fn NativeService::handle_command(
         )
         group.spawn_bg(no_wait=true) <| () => {
           self.runtime.run_command_job(
-            command_id, identity_key, accepted_revision, effects,
+            command_id,
+            identity_key,
+            accepted_revision,
+            effects,
+            control~,
           )
         }
       }

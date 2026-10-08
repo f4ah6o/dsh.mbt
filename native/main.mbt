@@ -139,7 +139,7 @@ async fn native_cli_command(
     Err(error) => return Err(error)
   }
   let identity_key = runtime.state.identity_key
-  let (receipt, effects, should_start) = match
+  let (receipt, effects, should_start, control) = match
     runtime.accept_remote_command(command, identity_key) {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -147,7 +147,11 @@ async fn native_cli_command(
   if should_start {
     let accepted_revision = int_field(receipt, "accepted_revision").unwrap_or(0)
     runtime.run_command_job(
-      command_id, identity_key, accepted_revision, effects,
+      command_id,
+      identity_key,
+      accepted_revision,
+      effects,
+      control~,
     )
   }
   match runtime.find_receipt(command_id, identity_key) {

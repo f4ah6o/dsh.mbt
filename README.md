@@ -1,21 +1,12 @@
 # dsh.mbt
 
-[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) の MoonBit 移植。
-セッション、イベントログ、LLM / tool loop、承認、provider wire protocol、共有 client を MoonBit で実装し、
-UI と capability API に [gpui-mbt/gpui.mbt](https://github.com/gpui-mbt/gpui.mbt) を使います。
-Node.js host と native MoonBit host の両方を提供します。native service / CLI は Node.js を実行依存にしません。
+[DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) の MoonBit 移植です。session、event log、agent / tool loop、承認、provider protocol、HTTP/MCP service、CLI、browser UI の product logic は MoonBit で動きます。native executable が唯一の product runtime です。Node.js は build/check/test tooling にだけ使い、browser JavaScript と service worker は MoonBit compiler の生成物です。
 
-**現在は最初の動作する移植版です。** ブラウザ / CLI から会話し、ローカルツールを実行して履歴を保存できます。
-upstream 全機能の互換移植は進行中です。Session v4 は明示的な read-only import に限って対応し、
-Cordis / npm plugin 互換、subagent、live compaction、native window などは未実装です。
-importer は一部の compaction checkpoint と transcript pruning を履歴表示用に復元しますが、
-agent の context 管理や長い会話の継続には使いません。
-詳細な対応範囲は [移植状況](docs/port-status.md) に記載しています。
-今回の native / SIWC / iOS 実装と A01–A18 の受入状況は[実装状況](docs/implementation-status.md)を参照してください。
+**現在は最初の動作する移植版です。** browser / CLI から会話し、workspace tool を実行して履歴を保存できます。Session v4 は明示的な read-only import に限って対応し、Cordis / npm plugin 互換、subagent、live compaction、native window などは未実装です。対応範囲と差分は[移植状況](docs/port-status.md)、今回の native / SIWC / iOS 実装は[実装状況](docs/implementation-status.md)を参照してください。
 
-## Node.js host を起動
+## Build and run
 
-Node.js **24 以上**、Git、固定版の MoonBit toolchain を使用します。native build / tests と turtles には C compiler が必要です。
+必要なのは固定版 MoonBit toolchain、Git、C compiler と submodule です。Node.js / npm はテストや開発スクリプトに使いますが、build と product runtime には不要です。
 
 ```sh
 git clone --recurse-submodules https://github.com/f4ah6o/dsh.mbt.git
@@ -27,218 +18,115 @@ export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 
 moon update
 moon install
-npm ci
-npm run verify:env
-npm run demo
+sh scripts/build.sh
 ```
 
-表示された `http://127.0.0.1:3080` を開きます。**demo は API key 不要の固定応答**で、
-実際の workspace `glob` ツールを使って一連の処理を確認できます。
-browser shell を再生成して build する場合は `npm ci` が必要です。Node host の実行時に npm パッケージを読み込むことはなく、
-native service は checkout に含まれる生成済み shell asset を配信するため Node.js を必要としません。
-既存 checkout の場合は `git submodule update --init --recursive` で依存を揃えてください。
+`sh scripts/build.sh` は native executable、MoonBit browser module、MoonBit service worker と pinned Yami-kumo CSS を生成・配置します。Node/npm を呼びません。checkout 済みの生成 assets で起動する場合は build を省略できます。
 
-### DeepSeek API を使う
+API key を使わない browser demo は native service を loopback で起動します。
 
 ```sh
-npm run build
-export DEEPSEEK_API_KEY='your-api-key'
-node host/cli.mjs web --workspace /absolute/path/to/project
-```
-
-既定は `deepseek-flash` と Messages API の `https://api.deepseek.com/anthropic`。
-モデルと API root は `--model` / `--base-url` で変更できます。認証情報は host の環境変数から読みます。
-
-OpenAI Chat Completions 互換 endpoint は、利用先に合わせてモデルを明示します。
-
-```sh
-export OPENAI_API_KEY='your-api-key'
-node host/cli.mjs web --mode openai --model MODEL --base-url https://YOUR-PROVIDER/v1
-```
-
-`DSH_API_KEY`、`DSH_MODE`、`DSH_MODEL`、`DSH_BASE_URL` でも設定できます。
-`--base-url` 末尾の `/v1` は重複させずに結合します。
-
-### CLI
-
-```sh
-node host/cli.mjs run "この workspace のファイルを確認してください" --demo --json
-node host/cli.mjs run "README を確認してください" --workspace /absolute/path/to/project
-node host/cli.mjs run "続きを進めてください" --session SESSION_ID
-node host/cli.mjs import-session /path/to/session.v4.jsonl --json
-node host/cli.mjs prune-session SESSION_ID
-node host/cli.mjs fork-session SESSION_ID
-# budgets are optional: --threshold-chars 8192 --head-chars 4096 --tail-chars 1024
-node host/cli.mjs --help
-```
-
-`run` は完了した会話を出力します。`--json` はセッション全体を出力します。
-同じ workspace の `.dsh.mbt/sessions.json` に履歴を保存し、次回起動で復元します。
-保存先は `--data-dir` で指定できます。同一データディレクトリを複数プロセスから同時に開くことはできません。
-`import-session` は upstream Session v4 を検証して、再開できない読み取り専用履歴として保存します。
-記録された tool、inbox、permission、preset は履歴に残しますが、実行や権限設定には使いません。
-`fork-session` は Session v4 の読み込み履歴を除く idle / completed / failed / cancelled の session から、履歴付きの独立した idle session を作ります。
-provider、tool、承認待ち、retry の処理は引き継いだり再実行したりしません。
-
-### Node.js を使わない native host
-
-native service / CLI は Node.js なしで実行できます。MoonBit toolchain と依存を用意した後、API key 不要の browser demo は次のように起動します。
-native service が配信する browser bridge を先に JavaScript target で build します。
-
-```sh
-moon build app --target js --release
-moon build client --target js --release
 moon run native --target native --release -- \
-  --serve --demo --data-dir /absolute/path/to/dsh-demo-data \
+  web --demo --data-dir /absolute/path/to/dsh-demo-data \
   --workspace /absolute/path/to/project --port 3210
 ```
 
-`http://127.0.0.1:3210` を開きます。この demo は固定応答で provider network request をせず、workspace 内に `native-demo.txt` を作成します。
-Node host は DeepSeek Messages と OpenAI Chat Completions 互換 endpoint を API key で利用します。
-native host はこの二つに加えて OpenAI Responses API を API key または ChatGPT SIWC で利用できます。SIWC の認証情報は native host の保護された credential store に保管されます。
-実アカウント smoke は任意で、リポジトリの検証ではまだ実行していません。API key、SIWC、Tailnet Serve の手順は
-[native runtime guide](docs/native-runtime.md) を参照してください。
+`http://127.0.0.1:3210` を開きます。demo provider は外部 request を送りません。browser UI から workspace tool を試せます。
 
-Native v1 の data directory は新しい versioned envelope と receipt を保存します。Node host はそれを拒否するため、
-native host は対応する legacy snapshot / Session v4 input を読み込んで native envelope に更新できますが、変換は一方向です。
-初回 native 起動前に data directory を backup し、同じ directory を Node / native host 間で切り替えないでください。
-native iOS / 実機の tailnet 接続は別途受入確認が必要です。
+### Provider configuration
 
-### ブラウザ UI とデータ
+DeepSeek を使うには API key を environment に渡し、native service を起動します。
 
-Node host と native host は Yami-kumo の AppShell を使う共通の日本語ブラウザ UI を提供します。会話を検索でき、画面幅に応じて navigation と詳細パネルが drawer として開きます。
-sidebar には workspace 名、詳細パネルには選択中の session の状態、turn、履歴、保存元、親 session と Git repository / branch、会話 header には provider / model を表示します。settled session の分岐と tool output の手動整理も UI から実行できます。
-日本語フォントは詳細パネルで選び、設定はそのブラウザのローカルストレージに保存します。Session log は host の data directory に保存し、公式 API へアップロードしません。
-この UI の変更はブラウザが対象で、iOS アプリの表示は変更しません。
+```sh
+export DEEPSEEK_API_KEY='your-api-key'
+moon run native --target native --release -- \
+  web --workspace /absolute/path/to/project --data-dir /absolute/path/to/dsh-data
+```
 
-`prune-session` は imported ではない idle / completed session で、長い tool result の今後の model context を縮めます。
-既定の trigger は 8,192 Unicode code points、保持する先頭 / 末尾は 4,096 / 1,024 code points です。
-元の tool output と transcript はそのまま保存し、次の provider request だけに marker 付き projection を使います。
-browser の **Trim outputs** と `session_prune_tool_results` API でも実行できます。これは手動操作であり、
-自動 context compaction、token meter、summary、spill は実装しません。pruning event も保存領域を使うため、
-1 session の 262,144 UTF-16 code unit 上限は変わりません。詳細は [アーキテクチャ](docs/architecture.md) を参照してください。
+既定は `deepseek-flash` と Messages API の `https://api.deepseek.com/anthropic` です。OpenAI Chat Completions 互換 endpoint は model を明示します。
 
-### Provider retry
+```sh
+export OPENAI_API_KEY='your-api-key'
+moon run native --target native --release -- \
+  web --mode openai --model MODEL --base-url https://YOUR-PROVIDER/v1 \
+  --workspace /absolute/path/to/project
+```
 
-一時的な provider failure では、同じ未完了 request を最大 5 回まで再試行します。既定の backoff は 500 ms から始まり、
-最大 10 秒まで倍増します。`--max-retries 0` で無効化でき、CLI と host API の上限は 5 です。
-retry は各 provider request を新たに送信するため、provider 側では再度課金される場合があります。
+`DSH_API_KEY`、`DSH_MODE`、`DSH_MODEL`、`DSH_BASE_URL` も使えます。`--base-url` の `/v1` は重複させず結合します。OpenAI Responses は Platform API key と ChatGPT SIWC をサポートします。SIWC の credential は owner-only native store に保存します。実アカウント smoke は任意で、通常の検証では実行しません。詳細は[native runtime guide](docs/native-runtime.md)を参照してください。
 
-対象は空応答、HTTP 408 / 429 / 5xx、timeout、および識別できた一時的な transport failure です。
-HTTP 4xx（408 / 429 を除く）、authentication、malformed response は retry しません。正の `Retry-After` は 10 秒以内のときだけ
-backoff を置き換え、上限を超える値は retry を止めます。受理した stream delta が一つでもある request は再試行しません。
-MoonBit は retry schedule と開始を event log に記録してから host が待機・再接続し、shutdown や reopen で provider / tool を
-重複実行しません。upstream と異なり jitter は使いません。`Session v4` read-only importer は `llm/retry` と
-`llm/retry-started` の schema と相関を検証して raw history に保持しますが、待機や provider request は再生しません。
-実装範囲と差分は [移植状況](docs/port-status.md) を参照してください。
+## CLI
 
-## ツールと承認
+native executable は `run`、`import-session`、`prune-session`、`fork-session`、`web`、`mcp` subcommand を提供します。MoonBit から直接起動する例です。
 
-| ツール | 主な引数 | 実行条件 |
+```sh
+moon run native --target native --release -- \
+  run 'この workspace のファイルを確認してください' --workspace /absolute/path/to/project --json
+
+moon run native --target native --release -- \
+  import-session /path/to/session.v4.jsonl --workspace /absolute/path/to/project --json
+
+moon run native --target native --release -- \
+  prune-session SESSION_ID --threshold-chars 8192 --head-chars 4096 --tail-chars 1024
+
+moon run native --target native --release -- \
+  fork-session SESSION_ID --workspace /absolute/path/to/project
+
+moon run native --target native --release -- --help
+```
+
+`run` は完了した会話を出力し、`--json` は session JSON を返します。`--data-dir` を省略すると workspace の `.dsh.mbt` を使います。同じ data directory を複数 runtime で同時に開けません。CLI の write / edit / bash は承認が必要です。対話端末では Allow を尋ね、非対話では turn を cancel して失敗します。`--approve-writes` と `--approve-tools write,edit` は明示した startup approval policy です。bash の自動承認には `--allow-shell --approve-tools bash` の両方が必要です。
+
+`import-session` は bounded な upstream Session v4 JSONL を検証し、read-only history として保存します。記録された tool、permission、preset は実行や有効化に使いません。`fork-session` は settled な未 import session から idle child を作り、provider / tool / approval / retry を再生しません。native CLI は gpui MCP protocol を `mcp` subcommand から newline-delimited stdio で公開します。
+
+## Browser UI and data
+
+Browser UI は MoonBit module から生成される JavaScript と service worker、pinned Yami-kumo styles で構成します。React や Node.js host は product runtime に含みません。日本語 UI は会話検索、responsive navigation / details drawer、session details、fork、tool output pruning を提供します。設定は browser local storage、session は native data directory に保存し、公式 API に履歴をアップロードしません。iOS UI は別の受け入れ範囲です。
+
+Native v1 は versioned data envelope と command receipt を保存します。初回起動時に対応する legacy snapshot / Session v4 input を native envelope に一方向変換します。旧版 Node host はこの envelope を読めないため、upgrade 前に data directory を backup してください。旧 Node host はこの版では配布しません。migration の境界は[native runtime guide](docs/native-runtime.md#data-directory-compatibility)に記載しています。
+
+`prune-session` は imported ではない idle / completed session の長い tool result を、将来の provider context 向けに縮めます。既定値は trigger 8,192、head 4,096、tail 1,024 Unicode code points です。元の output と transcript は保持します。browser の **Trim outputs** と `session_prune_tool_results` API からも実行できます。自動 context compaction、token meter、summary、spill は未実装です。詳しくは[アーキテクチャ](docs/architecture.md)を参照してください。
+
+## Provider retry
+
+一時的な provider failure は、同じ未完了 request を最大 5 回まで再試行します。backoff は 500 ms から始まり、最大 10 秒まで deterministic exponential に増えます。`--max-retries 0` で無効化できます。HTTP 408 / 429 / 5xx、timeout、空応答、一部の transport failure を対象にし、authentication、その他の 4xx、malformed response は再試行しません。受理済み stream delta 後も再試行しません。schedule と start は event log に checkpoint し、restore は未確定 request を再送しません。retry は provider に新しい request を送り、再課金される場合があります。upstream と異なり jitter は使いません。
+
+## Tools and approvals
+
+| Tool | Principal arguments | Run policy |
 | --- | --- | --- |
-| `read` | `file_path`, 任意の `offset`, `limit` | 自動実行 |
-| `glob` | `pattern`, 任意の `path` | 自動実行 |
-| `grep` | `pattern`, 任意の `path` | 自動実行、検索時間と出力に上限 |
-| `write` | `file_path`, `content` | 呼出しごとに承認 |
-| `edit` | `file_path`, `old_string`, `new_string`, 任意の `replace_all` | 呼出しごとに承認 |
-| `bash` | `command`, 任意の `description`, `timeout` | `--allow-shell` と呼出しごとの承認 |
+| `read` | `file_path`, optional `offset`, `limit` | Automatic |
+| `glob` | `pattern`, optional `path` | Automatic |
+| `grep` | `pattern`, optional `path` | Automatic, bounded search/output |
+| `write` | `file_path`, `content` | Per-call approval |
+| `edit` | `file_path`, `old_string`, `new_string`, optional `replace_all` | Per-call approval |
+| `bash` | `command`, optional `description`, `timeout` | `--allow-shell` and per-call approval |
 
-ブラウザの **Allow once / Deny**、または対話 CLI で承認します。
-明示的な起動方針として `--approve-writes`、`--approve-tools write,edit` も使用できます。
-shell の自動承認には `--allow-shell --approve-tools bash` の両方が必要です。
-非対話 CLI で承認待ちになると、その turn をキャンセルして終了コード 2 を返します。
-既に完了したツールの作用は取り消しません。
+File tools stay within the workspace and reject traversal, symlinks, and protected runtime data. Native glob implements a documented subset. Regex grep is disabled on macOS when a hard worker memory limit cannot be enforced. Bash runs as a normal OS child process in the workspace; there is no OS filesystem/network sandbox, so enable it only when its host-user permissions are appropriate.
 
-ファイルツールは workspace 内に限定し、パストラバーサル、symlink、履歴保存ディレクトリへのアクセスを拒否します。
-`bash` は workspace を作業ディレクトリにする通常の OS 子プロセスです。
-**OS の filesystem / network sandbox は実装していません。** shell を有効にする場合はその権限でコマンドが動きます。
+## API and verification
 
-## gpui-mbt の利用
-
-| 依存 | 実際の使用箇所 |
-| --- | --- |
-| [gpui.mbt](https://github.com/gpui-mbt/gpui.mbt) | MoonBit の flex layout / ElementTree / SceneSnapshot による会話描画。`App` が所有する typed capability registry、GUI binding、MCP protocol。 |
-| [hotpath.mbt](https://github.com/gpui-mbt/hotpath.mbt) | capability 呼出しの計測・集計。`profile_stats` API で取得。 |
-| [turtles.mbt](https://github.com/gpui-mbt/turtles.mbt) | 実際の `plugins/plugins.mbt` と同じテストを使う native mutation gate。 |
-
-3 リポジトリは Git submodule で固定します。MoonBit module 名はそれぞれ `f4ah6o/gpui`、
-`f4ah6o/hotpath`、`f4ah6o/turtles` です。`moon.work` はローカルの固定 revision を使います。
-
-browser は [Yami-kumo](https://github.com/f4ah6o/Yami-kumo/tree/de8e3a3e167df2d721273f6a8f12c5df961d636d/src/shell)
-の `AppShell` と responsive shell CSS を使います。React はこの application shell を描画し、既存の browser controller を
-DOM が mount された後に読み込みます。会話 state、provider / tool loop、capability dispatch は MoonBit と host が所有し、
-conversation scene は `ui/transcript.mbt` と gpui browser renderer が生成・描画します。composer、承認、session 選択、
-Text view は DOM に残り、IME、キーボード操作、選択可能な transcript を提供します。
-
-`npm run build:shell` は `ui/` の shell source から `web/yami-kumo-shell.js` と
-`web/yami-kumo-shell.css` を再生成します。生成物も commit するため、Node を使わない native build は npm を呼び出しません。
-
-## API
-
-ブラウザと CLI は同じ MoonBit engine を使い、操作の schema 検証と dispatch は gpui の capability registry が担当します。
+Browser and CLI use the same MoonBit engine and capability registry. The native loopback service exposes `/api/v1/*`, `/api/call`, `/api/metadata`, and `/mcp`. MCP uses gpui's fixed **`2026-07-28` / `server/discover`** protocol without translating the older `initialize` handshake. See [architecture](docs/architecture.md) for request and safety boundaries.
 
 ```sh
-curl -sS http://127.0.0.1:3080/api/call \
-  -H 'Content-Type: application/json' \
-  -d '{"operation":"session_create","input":{"id":"example","title":"Example"}}'
-
-curl -sS http://127.0.0.1:3080/api/call \
-  -H 'Content-Type: application/json' \
-  -d '{"operation":"session_send","input":{"session_id":"example","prompt":"List the files"}}'
+npm ci                    # test-only Node/Playwright tooling
+npm test                  # format/check, MoonBit matrix, native build, browser modules and native browser smoke
+npm run mutation:list     # list production plugin mutation cases
+npm run mutation          # run the pinned turtles mutation gate
 ```
 
-返却形式は `{ "ok": true, "result": ... }` または `{ "ok": false, "error": "..." }`。
-`session_send` は処理の受付を返します。完了は `session_get` で確認します。
+The portable MoonBit packages run on JS, native, Wasm, and Wasm GC. CI separately proves that the product build and native verification work with Node.js and npm absent. The real Chromium smoke uses a temporary native demo service and workspace; set `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` when Chromium is installed outside Playwright's default cache. Test fixtures are keyless and local.
 
-公開操作は `session_create`、`session_import`、`session_list`、`session_get`、`session_send`、
-`session_fork`、`session_prune_tool_results`、`session_cancel`、`tool_approve`、`plugin_list`、`profile_stats`。
-`session_fork` は settled な未 import session から新しい idle session を作成し、親 session と履歴を保ちますが、外部処理は再生しません。
-`session_prune_tool_results` は imported ではない completed / idle session に使え、budgets は
-`threshold_chars`、`head_chars`、`tail_chars` で指定できます。`session_list` は一覧用の要約を返します。
-Node host は loopback のみで待ち受けます。native service も loopback に bind し、設定した owner allowlist を通る Tailscale Serve 経由で tailnet client に接続できます。
-実際の Tailscale Serve と tailnet 端末接続の受入確認は未実施です。設定と境界は [native runtime guide](docs/native-runtime.md) を参照してください。
+The retired Node host's tests and their native replacements are mapped in [the retirement crosswalk](docs/node-host-retirement-test-crosswalk.md). Dated results for the previous implementation remain in [verification history](docs/verification.md); current migration checks are recorded there separately.
 
-`session_import` は `jsonl` に Session v4 archive 全体を受け取ります。import は read-only で、
-再オープン時も原文と派生 messages / status / pending inbox / tool outcome を再検証します。
-これは deterministic history projection であり、agent loop の再開、provider request、tool execution は行いません。
+## Documents
 
-`POST /mcp` と `node host/cli.mjs mcp` は gpui の MCP protocol を直接公開します。
-この固定版は **`2026-07-28` / `server/discover`** を使用します。
-旧 `initialize` handshake への変換はなく、tool の `structuredContent` は JSON 文字列です。
-具体的なリクエストと境界仕様は [アーキテクチャ](docs/architecture.md) を参照してください。
-
-## 検証
-
-```sh
-npm test                 # format / own warnings / portable MoonBit / build / host / web / integration
-npm run mutation:list    # production plugin の mutation 対象を列挙
-npm run mutation         # 固定 turtles を build し、実際に mutation test を実行
-node web/browser-smoke.mjs # optional real Chromium / browser UI acceptance
-```
-
-MoonBit の portable package は JS / native / Wasm / Wasm GC の全 target で検証します。
-`app` は JavaScript FFI 用です。workspace 全体を無指定でテストすると、gpui の OS 専用 backend や example も対象になるため、
-用意した package selector を使ってください。
-GitHub Actions の CI workflow は `native-without-node` と `portable-and-host` の 2 job で実行し、native build / CLI を Node.js なしでも確認します。
-
-テストは API key を使いません。pinned upstream の tool-call-turn と parallel-tool-calls fixture を keyless なローカル HTTP provider に流し、
-承認済みの `echo SNAPSHOT_OK`、2 件の Read call と call-order の tool result、手動 pruning 後の縮んだ request context、
-元の tool output の保持、次のモデル応答 `DONE`、保存と再読込まで再現します。
-任意の実 Chromium 検証は `web/browser-smoke.mjs` にあります。Playwright と Chromium を用意して
-`npm run build && node web/browser-smoke.mjs` を実行すると、versioned browser shell、responsive drawers、
-MoonBit scene renderer、session 操作、approval、imported history を確認し、screenshots を `_build/browser-smoke/`
-に保存します。セットアップ方法は [検証記録](docs/verification.md) を参照してください。
-Session v4 importer の対応 event と明示的な制約は [移植状況](docs/port-status.md) を参照してください。
-詳細な結果と再実行方法は [検証記録](docs/verification.md) を参照してください。
-
-## ドキュメント
-
-- [アーキテクチャ・API・所有権](docs/architecture.md)
-- [移植済み範囲と upstream との差分](docs/port-status.md)
-- [Native runtime、SIWC、Tailscale Serve](docs/native-runtime.md)
-- [native / SIWC / iOS の実装状況と受入条件](docs/implementation-status.md)
-- [検証記録](docs/verification.md)
-- [次の移植作業と受入条件](issues/open/0001-upstream-parity.md)
-- [Engine の境界仕様](engine/README.md)
-- [Provider の wire protocol](provider/README.md)
-- [ライセンスと第三者ソース](THIRD_PARTY_NOTICES.md)
+- [Architecture, API, and ownership](docs/architecture.md)
+- [Implemented scope and upstream differences](docs/port-status.md)
+- [Native runtime, SIWC, and Tailscale Serve](docs/native-runtime.md)
+- [Implementation status and acceptance conditions](docs/implementation-status.md)
+- [Node host retirement test crosswalk](docs/node-host-retirement-test-crosswalk.md)
+- [Verification record](docs/verification.md)
+- [Remaining parity work](issues/open/0001-upstream-parity.md)
+- [Engine boundary](engine/README.md)
+- [Provider wire protocol](provider/README.md)
+- [Third-party licenses](THIRD_PARTY_NOTICES.md)

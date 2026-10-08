@@ -113,6 +113,7 @@ async fn native_mcp_stdio_write(line : String) -> Result[Unit, String] {
 ///|
 async fn native_mcp_stdio_line(
   runtime : NativeRuntime,
+  group : @async.TaskGroup[Result[Unit, String]],
   bytes : Array[Byte],
 ) -> Result[Unit, String] {
   let line = match native_mcp_decode_line(bytes) {
@@ -122,7 +123,7 @@ async fn native_mcp_stdio_line(
   if line.trim().is_empty() {
     return Ok(())
   }
-  let response = match runtime.mcp_handle(line) {
+  let response = match runtime.mcp_handle(line, group) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -136,6 +137,7 @@ async fn native_mcp_stdio_line(
 ///|
 async fn native_mcp_stdio_frames(
   runtime : NativeRuntime,
+  group : @async.TaskGroup[Result[Unit, String]],
   frames : Array[NativeMcpFrame],
 ) -> Result[Unit, String] {
   for frame in frames {
@@ -145,7 +147,7 @@ async fn native_mcp_stdio_frames(
         Err(error) => return Err(error)
       }
     } else {
-      match native_mcp_stdio_line(runtime, frame.bytes) {
+      match native_mcp_stdio_line(runtime, group, frame.bytes) {
         Ok(_) => ()
         Err(error) => return Err(error)
       }
@@ -158,13 +160,22 @@ async fn native_mcp_stdio_frames(
 /// Serve the newline-delimited gpui MCP protocol over standard input/output.
 /// Invalid UTF-8 and oversized lines receive JSON-RPC parse errors. Oversized
 /// input is discarded through its newline so the next request stays aligned.
-async fn native_mcp_stdio(runtime : NativeRuntime) -> Result[Unit, String] {
+async fn native_mcp_stdio_loop(
+  runtime : NativeRuntime,
+  group : @async.TaskGroup[Result[Unit, String]],
+) -> Result[Unit, String] {
   let framer = NativeMcpFramer::new()
   while @stdio.stdin.read_some(max_len=8192) is Some(chunk) {
-    match native_mcp_stdio_frames(runtime, framer.feed(chunk)) {
+    match native_mcp_stdio_frames(runtime, group, framer.feed(chunk)) {
       Ok(_) => ()
       Err(error) => return Err(error)
     }
   }
-  native_mcp_stdio_frames(runtime, framer.finish())
+  native_mcp_stdio_frames(runtime, group, framer.finish())
+}
+
+///|
+/// Keep background provider and tool work structured under the stdio carrier.
+async fn native_mcp_stdio(runtime : NativeRuntime) -> Result[Unit, String] {
+  @async.with_task_group() <| group => { native_mcp_stdio_loop(runtime, group) }
 }

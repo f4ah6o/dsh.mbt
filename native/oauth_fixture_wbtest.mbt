@@ -691,11 +691,20 @@ async test "OAuth GET deadline and body limit cover streamed responses" {
       second_endpoints,
       second_endpoint,
       "models",
-      timeout_ms=1000,
+      // The full native package test runs many local HTTP fixtures in parallel.
+      // Keep the body limit assertion independent of scheduler load; the
+      // separate timeout case above still checks the deadline path at 50 ms.
+      timeout_ms=5000,
     )
-    assert_true(
-      response is Err(error) && error.contains("AUTH_RESPONSE_TOO_LARGE"),
-    )
+    match response {
+      Err(error) if error.contains("AUTH_RESPONSE_TOO_LARGE") => ()
+      Err(error) => fail("expected AUTH_RESPONSE_TOO_LARGE, got " + error)
+      Ok((status, _)) =>
+        fail(
+          "expected AUTH_RESPONSE_TOO_LARGE, got accepted HTTP status " +
+          status.to_string(),
+        )
+    }
     oversized.wait()
   }
   second_server.close()

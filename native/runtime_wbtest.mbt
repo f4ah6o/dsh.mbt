@@ -243,15 +243,13 @@ async test "native runtime replays an accepted in-flight command before schedule
       command_id,
       "finish this turn",
     )
-    let (first_receipt, effects, first_accepted) = runtime
+    let (first_receipt, effects, first_accepted, active) = runtime
       .accept_remote_command(command, runtime.state.identity_key)
       .unwrap()
     assert_true(first_accepted)
     assert_eq(effects.length(), 1)
     assert_eq(string_field(first_receipt, "status"), Some("accepted"))
-    let active = runtime.scheduler
-      .begin(session_id, command_id, runtime.state.revision)
-      .unwrap()
+    let active = active.unwrap()
 
     // The HTTP carrier parses each retry into a fresh command value. Keep the
     // original unsigned input shape instead of reusing the first call's value.
@@ -261,7 +259,7 @@ async test "native runtime replays an accepted in-flight command before schedule
       command_id,
       "finish this turn",
     )
-    let (replayed_receipt, replayed_effects, replayed_accepted) = runtime
+    let (replayed_receipt, replayed_effects, replayed_accepted, _) = runtime
       .accept_remote_command(duplicate, runtime.state.identity_key)
       .unwrap()
     assert_eq(string_field(replayed_receipt, "command_id"), Some(command_id))
@@ -275,7 +273,7 @@ async test "native runtime replays an accepted in-flight command before schedule
       command_id,
       "changed payload",
     )
-    let (conflict_receipt, conflict_effects, conflict_accepted) = runtime
+    let (conflict_receipt, conflict_effects, conflict_accepted, _) = runtime
       .accept_remote_command(conflicting, runtime.state.identity_key)
       .unwrap()
     assert_eq(string_field(conflict_receipt, "status"), Some("rejected"))
@@ -356,7 +354,7 @@ async test "native fork command and CLI receipt replay the same durable child wi
       {},
     )
     let identity = runtime.state.identity_key
-    let (accepted, accepted_effects, should_start) = runtime
+    let (accepted, accepted_effects, should_start, control) = runtime
       .accept_remote_command(command, identity)
       .unwrap()
     assert_eq(string_field(accepted, "status"), Some("accepted"))
@@ -367,6 +365,7 @@ async test "native fork command and CLI receipt replay the same durable child wi
       identity,
       int_field(accepted, "accepted_revision").unwrap(),
       accepted_effects,
+      control~,
     )
     let receipt = runtime.find_receipt(command_id, identity).unwrap().unwrap()
     assert_eq(string_field(receipt, "status"), Some("completed"))
@@ -382,7 +381,7 @@ async test "native fork command and CLI receipt replay the same durable child wi
       "session_fork",
       {},
     )
-    let (replayed, replayed_effects, replayed_accepted) = runtime
+    let (replayed, replayed_effects, replayed_accepted, _) = runtime
       .accept_remote_command(duplicate, identity)
       .unwrap()
     assert_eq(string_field(replayed, "status"), Some("completed"))
@@ -418,7 +417,7 @@ async test "native fork command and CLI receipt replay the same durable child wi
       "session_fork",
       {},
     )
-    let (restart_replay, restart_effects, restart_accepted) = reopened
+    let (restart_replay, restart_effects, restart_accepted, _) = reopened
       .accept_remote_command(after_restart, identity)
       .unwrap()
     assert_eq(string_field(restart_replay, "status"), Some("completed"))
@@ -470,12 +469,15 @@ async test "native MCP carrier checkpoints gpui protocol operations" {
         }),
       }),
     }).stringify()
-    let response = match runtime.mcp_handle(line) {
+    let response = match runtime.mcp_handle(line, group) {
       Ok(value) => value
       Err(error) => fail(error)
     }
     let response_json = @json.parse(response)
     assert_eq(string_field(response_json, "id"), Some("native-mcp-create"))
+    if object_field(response_json, "error") is Some(_) {
+      fail("MCP create failed: " + response)
+    }
     let current = runtime
       .invoke("session_get", { "session_id": "mcp-checkpointed-session" })
       .unwrap().0
@@ -540,7 +542,7 @@ async test "native remote fork rejects a live source without creating a child or
       "session_fork",
       {},
     )
-    let (receipt, effects, should_start) = runtime
+    let (receipt, effects, should_start, _) = runtime
       .accept_remote_command(command, runtime.state.identity_key)
       .unwrap()
     assert_eq(string_field(receipt, "status"), Some("rejected"))
@@ -595,7 +597,7 @@ async test "native runtime marks accepted receipts uncertain after restart witho
       "session_create",
       { "id": session_id.to_json(), "title": "Prior completed session" },
     )
-    let (completed_accepted, completed_effects, completed_should_start) = first
+    let (completed_accepted, completed_effects, completed_should_start, _) = first
       .accept_remote_command(completed_command, identity_key)
       .unwrap()
     assert_true(completed_should_start)
@@ -624,7 +626,7 @@ async test "native runtime marks accepted receipts uncertain after restart witho
       "host_effect_complete",
       {},
     )
-    let (rejected, rejected_effects, rejected_should_start) = first
+    let (rejected, rejected_effects, rejected_should_start, _) = first
       .accept_remote_command(rejected_command, identity_key)
       .unwrap()
     assert_eq(string_field(rejected, "status"), Some("rejected"))
@@ -641,7 +643,7 @@ async test "native runtime marks accepted receipts uncertain after restart witho
       command_id,
       "do not replay this accepted command",
     )
-    let (accepted, effects, should_start) = first
+    let (accepted, effects, should_start, _) = first
       .accept_remote_command(command, identity_key)
       .unwrap()
     assert_true(should_start)
@@ -693,7 +695,7 @@ async test "native runtime marks accepted receipts uncertain after restart witho
       command_id,
       "do not replay this accepted command",
     )
-    let (replayed, replay_effects, replay_started) = reopened
+    let (replayed, replay_effects, replay_started, _) = reopened
       .accept_remote_command(retry, identity_key)
       .unwrap()
     assert_eq(string_field(replayed, "status"), Some("uncertain"))
@@ -786,7 +788,7 @@ async test "native runtime preserves a pending approval across host restart" {
       approval_revision,
     )
     let identity_key = reopened.state.identity_key
-    let (accepted, effects, should_start) = reopened
+    let (accepted, effects, should_start, control) = reopened
       .accept_remote_command(command, identity_key)
       .unwrap()
     assert_true(should_start)
@@ -797,6 +799,7 @@ async test "native runtime preserves a pending approval across host restart" {
       identity_key,
       int_field(accepted, "accepted_revision").unwrap(),
       effects,
+      control~,
     )
     let completed = reopened
       .find_receipt(command_id, identity_key)

@@ -1,6 +1,28 @@
 # 検証記録
 
-## Yami-kumo browser shell increment
+## Native MoonBit product runtime and Node-host retirement
+
+2026-10-08、macOS arm64、Node.js `26.8.2`、MoonBit runner / compiler / core
+`0.10.14+7d59c7ec9`、Playwright `1.64.0` で検証しました。`npm ci` と
+`npm test` は PASS。Chromium smoke は cached Chromium 1228 を使い、provider
+fixtures は loopback / keyless です。
+
+| gate | 結果 |
+| --- | --- |
+| `npm run check` | PASS。all-target portable checks、native / browser / service-worker checks、10 JavaScript source/test syntax checks、pure-source inventory、C FFI inventory。自作 warning 0、pinned hotpath warnings のみ。 |
+| `npm run test:moon` | portable suites は Wasm、Wasm GC、JS、native で各 140 / 140 PASS。native-only packages は 68 / 68 PASS、additional browser/app fixtures は 15 / 15 PASS。 |
+| `npm run build` | PASS。native executable、generated browser module / service worker、pinned Yami-kumo CSS を生成。 |
+| `npm run test:web` | 7 / 7 PASS。generated MoonBit module mount、service-worker generation switching、bounded asset cache、API bypass。 |
+| `npm run test:integration` | PASS。real Chromium を strict-CSP native demo service に接続。long imported transcript の scroll range / jump-latest と mobile closed sidebar の inertness / focusability を含み、send / approval / fork / prune / import / offline recovery / auth-race smoke を通過。 |
+| Node/npm を PATH から外した `moon run scripts/native-verify.mbtx --target native` | PASS。native format/check/build、208 / 208 MoonBit tests、CLI help、compiled browser / service worker と pinned CSS の比較、checkpoint / approval / tool / context / durable reload demo。 |
+
+この verifier は native product build と runtime acceptance に Node/npm が不要なことを確認します。Browser の開発時 syntax / package checks、Playwright と real Chromium は test tooling で、production runtime に読み込まれません。
+
+OAuth oversized-response fixture は最初の full native-package run で generic assertion に失敗しましたが、その assertion は response status / actual result / elapsed time を記録しておらず、原因を遡及できません。fixture の HTTP timeout を 1 秒から 5 秒にして unexpected result を診断に含め、その後の native-package と no-Node aggregate runs は pass しました。元の一回の失敗を network close/reset race、body-limit behavior、または product regression と断定しません。
+
+Process-group timeout/cancellation verification initially used a child wall-clock delay and had a failure in one aggregate run; that observation alone did not establish the cause. The current fixture uses a ready/release handshake: descendants announce readiness, retain the captured pipe, and can write an escape marker only after cleanup returns and the test releases them. The focused native test, 68-test native package, and no-Node 208-test suite pass with that deterministic check. The earlier delay-only failure is not attributed to a specific production defect.
+
+## Historical: Yami-kumo browser shell increment (Node host active)
 
 2026-10-08、macOS arm64、Node.js `26.8.2`、MoonBit runner `0.1.20260920` と
 compiler / core `0.10.14+7d59c7ec9` で検証しました。`npm ci` と `npm test` は PASS。

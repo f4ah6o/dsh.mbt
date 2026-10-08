@@ -84,6 +84,24 @@ async function postNativeCommand(page, operation, sessionId, input) {
   }, { operation, sessionId, input });
 }
 
+const longImportedText = "Older archived transcript content. ".repeat(1800);
+const importedAssistantRow = JSON.stringify({
+  type: "assistant/message",
+  data: {
+    turn: 1,
+    step: 1,
+    message: {
+      role: "assistant",
+      id: "import-assistant",
+      source: { kind: "model", provider: "fixture", model: "fixture-model" },
+      content: [{
+        type: "text",
+        text: "Imported history stays read only. " + longImportedText,
+      }],
+    },
+  },
+  surfaceOp: "append",
+});
 const importedHistoryJsonl = [
   '{"type":"session","version":4,"id":"browser-import-fixture","createdAt":1,"isSeeded":false,"delegationDepth":0}',
   '{"type":"turn/start","data":{"turn":1}}',
@@ -91,7 +109,7 @@ const importedHistoryJsonl = [
   '{"type":"user/message","data":{"role":"user","id":"import-user","source":{"kind":"user"},"content":[{"type":"text","text":"Imported Japanese history"}]},"surfaceOp":"append"}',
   '{"type":"request/header","data":{"reason":"initial","header":{"config":{"provider":"fixture","model":"fixture-model"}}}}',
   '{"type":"request/context","data":{"provider":"fixture","model":"fixture-model"}}',
-  '{"type":"assistant/message","data":{"turn":1,"step":1,"message":{"role":"assistant","id":"import-assistant","source":{"kind":"model","provider":"fixture","model":"fixture-model"},"content":[{"type":"text","text":"Imported history stays read only."}]}},"surfaceOp":"append"}',
+  importedAssistantRow,
   '{"type":"step/end","data":{"turn":1,"step":1}}',
   '{"type":"turn/end","data":{"turn":1,"reason":{"kind":"completed"}}}',
 ].join("\n");
@@ -346,9 +364,27 @@ async function testNativeDemo(browserInstance) {
   await page.locator("#sidebar-toggle").click();
 
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.locator("#navigation-toggle").click();
   const navigation = page.locator("#yk-mobile-navigation");
+  assert.equal(await navigation.getAttribute("aria-hidden"), "true");
+  assert.notEqual(await navigation.getAttribute("inert"), null);
+  const contextPanel = page.locator("#yk-context-panel");
+  assert.equal(await contextPanel.getAttribute("aria-hidden"), "true");
+  assert.notEqual(await contextPanel.getAttribute("inert"), null);
+  await page.locator("#navigation-toggle").focus();
+  for (let index = 0; index < 24; index += 1) {
+    await page.keyboard.press("Tab");
+    assert.equal(
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest("#yk-mobile-navigation")),
+      ),
+      false,
+      "Tab never enters the closed, inert mobile navigation",
+    );
+  }
+  await page.locator("#navigation-toggle").click();
   assert.equal(await navigation.getAttribute("aria-modal"), "true");
+  assert.equal(await navigation.getAttribute("aria-hidden"), "false");
+  assert.equal(await navigation.getAttribute("inert"), null);
   assert.equal(await page.locator("#navigation-toggle").getAttribute("aria-expanded"), "true");
   const focusable = navigation.locator(
     'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
@@ -365,6 +401,33 @@ async function testNativeDemo(browserInstance) {
   await page.keyboard.press("Escape");
   assert.equal(await page.locator("#navigation-toggle").getAttribute("aria-expanded"), "false");
   assert.equal(await page.evaluate(() => document.activeElement?.id), "navigation-toggle");
+  assert.equal(await navigation.getAttribute("aria-hidden"), "true");
+  assert.notEqual(await navigation.getAttribute("inert"), null);
+  for (let index = 0; index < 24; index += 1) {
+    await page.keyboard.press("Tab");
+    assert.equal(
+      await page.evaluate(() =>
+        Boolean(document.activeElement?.closest("#yk-mobile-navigation")),
+      ),
+      false,
+      "Tab never enters the closed mobile navigation after Escape",
+    );
+  }
+  await page.setViewportSize({ width: 1280, height: 844 });
+  await page.waitForFunction(
+    () => document.getElementById("yk-mobile-navigation")?.getAttribute("aria-hidden") === "false",
+  );
+  assert.equal(await navigation.getAttribute("inert"), null);
+  await page.locator("#new-session").focus();
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.id),
+    "new-session",
+    "the desktop sidebar is visible and keyboard-focusable after resizing",
+  );
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.waitForFunction(
+    () => document.getElementById("yk-mobile-navigation")?.getAttribute("aria-hidden") === "true",
+  );
 
   await page.locator("#prompt").fill("未送信の下書き");
   await page.waitForTimeout(300);
@@ -437,6 +500,64 @@ async function testNativeDemo(browserInstance) {
   assert.match(await page.locator("#composer-hint").textContent(), /読み取り専用/);
   assert.match(await page.locator("#text-transcript").textContent(), /Imported history stays read only/);
   assert.equal(await page.locator("#send").isDisabled(), true);
+  const transcriptScroll = page.locator("#transcript-scroll");
+  if (await page.locator("#text-view").getAttribute("aria-pressed") === "true") {
+    await page.locator("#text-view").click();
+  }
+  await page.waitForFunction(
+    () => document.getElementById("transcript-scroll")?.hidden === false,
+  );
+  await page.waitForFunction(
+    () => {
+      const scroll = document.getElementById("transcript-scroll");
+      const spacer = document.getElementById("scene-spacer");
+      return scroll && spacer &&
+        Number.parseFloat(spacer.style.height) > scroll.clientHeight &&
+        scroll.scrollHeight > scroll.clientHeight;
+    },
+    null,
+    { timeout: 20_000 },
+  );
+  const longHistory = await transcriptScroll.evaluate((scroll) => {
+    const spacer = document.getElementById("scene-spacer");
+    return {
+      clientHeight: scroll.clientHeight,
+      scrollHeight: scroll.scrollHeight,
+      scrollTop: scroll.scrollTop,
+      spacerHeight: Number.parseFloat(spacer.style.height),
+    };
+  });
+  assert.ok(
+    longHistory.spacerHeight > longHistory.clientHeight,
+    "the measured canvas extent creates a spacer taller than the viewport: " + JSON.stringify(longHistory),
+  );
+  assert.ok(
+    longHistory.scrollHeight > longHistory.clientHeight,
+    "long imported history creates a nonzero scroll range: " + JSON.stringify(longHistory),
+  );
+  await transcriptScroll.evaluate((scroll) => {
+    scroll.scrollTop = Math.floor((scroll.scrollHeight - scroll.clientHeight) / 2);
+    scroll.dispatchEvent(new Event("scroll"));
+  });
+  await page.waitForFunction(
+    () => document.getElementById("jump-latest")?.hidden === false &&
+      document.getElementById("jump-latest")?.disabled === false,
+    null,
+    { timeout: 10_000 },
+  );
+  const olderPosition = await transcriptScroll.evaluate((scroll) => ({
+    scrollTop: scroll.scrollTop,
+    maxScroll: scroll.scrollHeight - scroll.clientHeight,
+  }));
+  assert.ok(
+    olderPosition.scrollTop > 0 && olderPosition.scrollTop < olderPosition.maxScroll,
+    "the canvas can scroll to older transcript content: " + JSON.stringify(olderPosition),
+  );
+  await page.locator("#jump-latest").click();
+  await page.waitForFunction(() => {
+    const scroll = document.getElementById("transcript-scroll");
+    return scroll && scroll.scrollTop + scroll.clientHeight >= scroll.scrollHeight - 2;
+  }, null, { timeout: 10_000 });
 
   const violations = await page.evaluate(() => window.__dshCspViolations);
   assert.deepEqual(violations, [], `no CSP violations occur: ${JSON.stringify(violations)}`);

@@ -103,6 +103,79 @@ async test "native CLI imports bounded Session v4 history without replay" {
 }
 
 ///|
+async test "native CLI product imports the pinned Session v4 catalog inertly and restores it" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-cli-v4-catalog")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let current_dir = @env.current_dir().unwrap_or_else(() => {
+      fail("cannot resolve test checkout")
+    })
+    let catalog = current_dir + "/tests/fixtures/upstream-session-v4"
+    let archives : Array[String] = []
+    @fs.walk(catalog, (directory, names) => {
+      if !directory.contains("/provider-retry") {
+        for name in names {
+          if name == "session.v4.jsonl" {
+            archives.push(directory + "/" + name)
+          }
+        }
+      }
+    })
+    assert_eq(archives.length(), 25)
+
+    let data_dir = fixture + "/data"
+    let runtime = match NativeRuntime::open(data_dir, workspace, false, true) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let imported_ids : Array[(String, String)] = []
+    for archive_path in archives {
+      let archive = @fs.read_file(archive_path).text()
+      let (imported, effects) = match
+        runtime.invoke("session_import", { "jsonl": archive.to_json() }) {
+        Ok(value) => value
+        Err(error) => fail(archive_path + ": " + error)
+      }
+      assert_true(effects.is_empty())
+      assert_eq(
+        string_field(imported, "source_format"),
+        Some("deepseek-session-v4"),
+      )
+      let status = string_field(imported, "status").unwrap_or("")
+      assert_true(status != "running")
+      imported_ids.push((string_field(imported, "id").unwrap(), status))
+    }
+    assert_eq(imported_ids.length(), 25)
+    runtime.close().unwrap()
+
+    let restored = match NativeRuntime::open(data_dir, workspace, false, true) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(restored.close()))
+    })
+    for (session_id, status) in imported_ids {
+      let (session, effects) = restored
+        .invoke("session_get", { "session_id": session_id.to_json() })
+        .unwrap()
+      assert_true(effects.is_empty())
+      assert_eq(
+        string_field(session, "source_format"),
+        Some("deepseek-session-v4"),
+      )
+      assert_eq(string_field(session, "status"), Some(status))
+    }
+    restored.close().unwrap()
+  }
+}
+
+///|
 async test "native CLI rejects oversized and nonregular Session v4 paths before reading" {
   let fixture = @fs.tmpdir(prefix="dsh-native-cli-import-bounds")
   @async.with_task_group() <| group => {
@@ -145,6 +218,40 @@ async test "native CLI explicit write approval completes the demo safely" {
     let session = object_field(result, "session").unwrap()
     assert_eq(string_field(session, "status"), Some("completed"))
     assert_true(@fs.exists(workspace + "/native-demo.txt"))
+    runtime.close().unwrap()
+  }
+}
+
+///|
+async test "native CLI cancels a pending approval when stdin is noninteractive" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-cli-noninteractive-approval")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let runtime = match
+      NativeRuntime::open(fixture + "/data", workspace, false, true) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "noninteractive-approval-session"
+    let (_, create_effects) = runtime
+      .invoke("session_create", { "id": session_id, "title": "Approval" })
+      .unwrap()
+    assert_true(create_effects.is_empty())
+    let result = native_cli_action(runtime, [
+      "dsh-native", "--run", "create a demo file", "--session", session_id,
+    ])
+    assert_true(result is Err(_))
+    assert_true(!@fs.exists(workspace + "/native-demo.txt"))
+    let (session, effects) = runtime
+      .invoke("session_get", { "session_id": session_id })
+      .unwrap()
+    assert_true(effects.is_empty())
+    assert_eq(string_field(session, "status"), Some("cancelled"))
     runtime.close().unwrap()
   }
 }
