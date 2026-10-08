@@ -365,6 +365,9 @@ async function testNativeDemo(browserInstance) {
 
   await page.setViewportSize({ width: 390, height: 844 });
   const navigation = page.locator("#yk-mobile-navigation");
+  await page.waitForFunction(
+    () => document.getElementById("yk-mobile-navigation")?.getAttribute("aria-hidden") === "true",
+  );
   assert.equal(await navigation.getAttribute("aria-hidden"), "true");
   assert.notEqual(await navigation.getAttribute("inert"), null);
   const contextPanel = page.locator("#yk-context-panel");
@@ -460,8 +463,31 @@ async function testNativeDemo(browserInstance) {
     true,
     "the native API is unreachable while the cached shell still mounts",
   );
+  await page.locator("#connection-error").waitFor({ state: "visible", timeout: 20_000 });
+  await page.evaluate(() => {
+    window.__dshOnlineEventCount = 0;
+    window.addEventListener("online", () => { window.__dshOnlineEventCount += 1; });
+  });
+  const recoveredSnapshot = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.pathname === "/api/v1/snapshot" && response.status() === 200;
+  }, { timeout: 20_000 });
   await context.setOffline(false);
-  await page.locator("#reconnect").click();
+  // Allow a real Chromium online event to reach the page before using the
+  // fallback for builds where the emulation only changes network reachability.
+  await page.waitForTimeout(100);
+  const onlineState = await page.evaluate(() => ({
+    online: navigator.onLine,
+    eventCount: window.__dshOnlineEventCount,
+  }));
+  assert.equal(onlineState.online, true, "the browser network is restored before recovery");
+  // Playwright's offline emulation does not dispatch Window.online on every
+  // pinned Chromium build. Drive that standard browser event only when absent.
+  if (onlineState.eventCount === 0) {
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+  }
+  const recoveredResponse = await recoveredSnapshot;
+  assert.equal(recoveredResponse.ok(), true, "the online handler receives a fresh native snapshot");
   await waitForConnectedWorkspace(page);
   await page.waitForFunction(
     () => document.getElementById("connection-error")?.hidden === true,
