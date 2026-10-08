@@ -1,48 +1,79 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
-import os from 'node:os';
+#!/usr/bin/env node
+import { execFileSync } from 'node:child_process';
+import { copyFile, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { build } from 'esbuild';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const checkOnly = process.argv.includes('--check');
-const outputDirectory = checkOnly
-  ? await mkdtemp(path.join(os.tmpdir(), 'dsh-shell-build-'))
-  : path.join(root, 'web');
-const generatedFiles = ['yami-kumo-shell.js', 'yami-kumo-shell.css'];
+const buildDirectory = path.join(root, '_build/js/release/build/f4ah6o/dsh/browser');
+const browserModule = path.join(buildDirectory, 'browser.js');
+const serviceWorkerModule = path.join(buildDirectory, 'sw/sw.js');
+const yamiSource = path.join(root, 'vendor/yami-kumo');
+const shellStyles = [
+  path.join(root, 'ui/yami-kumo/styles.css'),
+  path.join(root, 'ui/dsh.css'),
+];
+const outputs = [
+  {
+    destination: path.join(root, 'web/moonbit/browser.js'),
+    source: browserModule,
+  },
+  {
+    destination: path.join(root, 'web/sw.js'),
+    source: serviceWorkerModule,
+  },
+  {
+    destination: path.join(root, 'web/kumo-standalone.css'),
+    source: path.join(yamiSource, 'styles/kumo-standalone.css'),
+  },
+  {
+    destination: path.join(root, 'web/yami-kumo-components.css'),
+    source: path.join(yamiSource, 'styles/yami-kumo-components.css'),
+  },
+  {
+    destination: path.join(root, 'web/yami-kumo-shell.css'),
+    sources: shellStyles,
+  },
+];
 
-async function compile() {
-  await build({
-    absWorkingDir: root,
-    entryPoints: ['ui/main.tsx'],
-    outfile: path.join(outputDirectory, 'yami-kumo-shell.js'),
-    bundle: true,
-    format: 'esm',
-    platform: 'browser',
-    target: ['es2022'],
-    jsx: 'automatic',
-    minify: true,
-    legalComments: 'inline',
-    treeShaking: true,
-    define: { 'process.env.NODE_ENV': '"production"' },
-    logLevel: 'silent',
-  });
+async function expectedBytes(output) {
+  if (output.sources) {
+    const parts = await Promise.all(output.sources.map((source) => readFile(source)));
+    return Buffer.concat(parts.flatMap((part, index) =>
+      index === 0 ? [part] : [Buffer.from('\n'), part],
+    ));
+  }
+  return readFile(output.source);
 }
 
-try {
-  await compile();
-  if (checkOnly) {
-    for (const name of generatedFiles) {
-      const actual = await readFile(path.join(root, 'web', name)).catch(() => null);
-      const expected = await readFile(path.join(outputDirectory, name));
-      if (!actual || !actual.equals(expected)) {
-        throw new Error(`web/${name} is stale; run npm run build:shell and commit the rebuilt asset.`);
-      }
+execFileSync('moon', ['build', 'browser', '--target', 'js', '--release'], {
+  cwd: root,
+  stdio: 'inherit',
+});
+execFileSync('moon', ['build', 'browser/sw', '--target', 'js', '--release'], {
+  cwd: root,
+  stdio: 'inherit',
+});
+
+if (checkOnly) {
+  for (const output of outputs) {
+    const actual = await readFile(output.destination).catch(() => null);
+    const expected = await expectedBytes(output);
+    if (!actual || !actual.equals(expected)) {
+      const relative = path.relative(root, output.destination).split(path.sep).join('/');
+      throw new Error(`${relative} is stale; run npm run build:shell and commit the rebuilt asset.`);
     }
-    process.stdout.write('Yami-kumo browser shell matches its checked-in build.\n');
-  } else {
-    process.stdout.write('Built web/yami-kumo-shell.js and web/yami-kumo-shell.css.\n');
   }
-} finally {
-  if (checkOnly) await rm(outputDirectory, { recursive: true, force: true });
+  process.stdout.write('MoonBit browser and service-worker modules plus pinned Yami-kumo CSS match their sources.\n');
+} else {
+  for (const output of outputs) {
+    await mkdir(path.dirname(output.destination), { recursive: true });
+    if (output.sources) {
+      await writeFile(output.destination, await expectedBytes(output));
+    } else if (output.source !== output.destination) {
+      await copyFile(output.source, output.destination);
+    }
+  }
+  process.stdout.write('Built web/moonbit/browser.js and web/sw.js with pinned Yami-kumo CSS assets.\n');
 }

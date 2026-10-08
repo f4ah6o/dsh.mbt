@@ -21,6 +21,19 @@ fn native_runtime_command(
 }
 
 ///|
+test "native remote session projection exposes tool-result presence without raw events" {
+  let raw = @json.parse(
+    "{\"id\":\"s1\",\"events\":[{\"type\":\"tool/result\",\"data\":{\"content\":\"private event result\"}}]}",
+  )
+  let projected = native_safe_session(raw)
+  assert_true(object_field(projected, "has_tool_results") is Some(Json::True))
+  assert_true(!projected.stringify().contains("private event result"))
+
+  let empty = native_safe_session(@json.parse("{\"id\":\"s2\",\"events\":[]}"))
+  assert_true(object_field(empty, "has_tool_results") is Some(Json::False))
+}
+
+///|
 fn native_runtime_approval_command(
   workspace_id : String,
   session_id : String,

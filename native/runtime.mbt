@@ -392,6 +392,11 @@ fn native_safe_session(value : Json) -> Json {
     Some(pending) => string_field(pending, "call_id")
     None => None
   }
+  let has_tool_results = match object_field(value, "events") {
+    Some(Json::Array(events)) =>
+      events.any(event => string_field(event, "type") == Some("tool/result"))
+    _ => false
+  }
   let mut approval_revision : Int? = None
   let safe_events : Array[Json] = []
   match object_field(value, "events") {
@@ -428,6 +433,7 @@ fn native_safe_session(value : Json) -> Json {
   if approval_revision is Some(revision) {
     result["approval_revision"] = revision.to_json()
   }
+  result["has_tool_results"] = has_tool_results.to_json()
   result["events"] = Json::array(safe_events)
   Json::object(result)
 }
