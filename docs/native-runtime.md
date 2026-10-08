@@ -1,10 +1,12 @@
 # Native runtime
 
-The native command runs the MoonBit runtime and loopback HTTP carrier without Node.js. It serves the committed browser shell assets from `web/` and the generated files under `_build/js/release/build/`. Regenerating the Yami-kumo shell requires Node.js and npm (`npm ci && npm run build:shell`); the native host itself does not run that build step.
+The native command runs the MoonBit runtime and loopback HTTP carrier without Node.js. It serves the committed browser shell assets from `web/` and the generated files under `_build/js/release/build/`. Build the JavaScript app and client bridge before starting the service; the native target does not produce those files. Regenerating the Yami-kumo shell itself requires Node.js and npm (`npm ci && npm run build:shell`).
 
 ```sh
 moon update
 moon install
+moon build app --target js --release
+moon build client --target js --release
 moon run native --target native --release -- \
   --serve --data-dir /absolute/path/to/dsh-data \
   --workspace /absolute/path/to/project --port 3210
