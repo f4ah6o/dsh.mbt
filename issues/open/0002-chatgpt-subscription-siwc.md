@@ -3,6 +3,7 @@
 状態: 実装差分あり / open。fixture 検証済み、実アカウント SIWC smoke は未実行。
 Model: gpt-5.6-sol
 Updated: 2026-10-07
+Rechecked: 2026-10-09 against main `5af0d83` — 実アカウント SIWC smoke と opt-in integration test が未実行のため open を維持。
 
 実装結果と残る受入条件は[実装状況](../../docs/implementation-status.md#issue-9-sign-in-with-chatgpt)に記録する。
 

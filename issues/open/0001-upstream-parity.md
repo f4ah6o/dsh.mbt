@@ -3,6 +3,7 @@
 状態: open。最初の browser / CLI 実行経路は [移植状況](../../docs/port-status.md) を参照。
 Model: gpt-6-luna
 Updated: 2026-10-07
+Rechecked: 2026-10-09 against main `5af0d83` — v0–v3 migration、v4 writer、subagent / background workflow 等の未実装項目が残るため open を維持。
 upstream baseline は `5badb15009ae1756c3afe0ae0cef1faafc290ccc`。
 
 ## 1. Session v4 と replay
