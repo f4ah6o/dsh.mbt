@@ -112,39 +112,52 @@ async test "native static host exposes only the compiled MoonBit browser shell" 
       Err(error) => fail(error)
     }
     assert_eq(
+      service.static_asset("/"),
+      Some(("index.html", "text/html; charset=utf-8")),
+    )
+    assert_eq(
+      service.static_asset("/index.html"),
+      Some(("index.html", "text/html; charset=utf-8")),
+    )
+    assert_eq(
       service.static_asset("/moonbit/browser.js"),
-      Some(
-        (
-          source_root + "/web/moonbit/browser.js",
-          "text/javascript; charset=utf-8",
-        ),
-      ),
+      Some(("moonbit/browser.js", "text/javascript; charset=utf-8")),
     )
     assert_eq(
       service.static_asset("/kumo-standalone.css"),
-      Some(
-        (source_root + "/web/kumo-standalone.css", "text/css; charset=utf-8"),
-      ),
+      Some(("kumo-standalone.css", "text/css; charset=utf-8")),
     )
     assert_eq(
       service.static_asset("/yami-kumo-components.css"),
-      Some(
-        (
-          source_root + "/web/yami-kumo-components.css",
-          "text/css; charset=utf-8",
-        ),
-      ),
+      Some(("yami-kumo-components.css", "text/css; charset=utf-8")),
     )
     assert_eq(
       service.static_asset("/yami-kumo-shell.css"),
-      Some(
-        (source_root + "/web/yami-kumo-shell.css", "text/css; charset=utf-8"),
-      ),
+      Some(("yami-kumo-shell.css", "text/css; charset=utf-8")),
     )
     assert_eq(
       service.static_asset("/sw.js"),
-      Some((source_root + "/web/sw.js", "text/javascript; charset=utf-8")),
+      Some(("sw.js", "text/javascript; charset=utf-8")),
     )
+    assert_eq(
+      service.static_asset("/manifest.webmanifest"),
+      Some(("manifest.webmanifest", "application/manifest+json")),
+    )
+    assert_eq(
+      service.static_asset("/icon.svg"),
+      Some(("icon.svg", "image/svg+xml")),
+    )
+    for
+      path in [
+        "/index.html", "/moonbit/browser.js", "/kumo-standalone.css", "/yami-kumo-components.css",
+        "/yami-kumo-shell.css", "/manifest.webmanifest", "/icon.svg", "/sw.js",
+      ] {
+      match native_embedded_web_asset(path) {
+        Some(contents) => assert_true(!contents.is_empty())
+        None => fail("missing embedded web asset " + path)
+      }
+    }
+    assert_true(native_embedded_web_asset("/not-an-asset") is None)
     assert_true(service.static_asset("/legacy-app.js") is None)
     assert_true(service.static_asset("/remote-app.js") is None)
     let custom_assets = fixture + "/web-assets"
@@ -165,13 +178,10 @@ async test "native static host exposes only the compiled MoonBit browser shell" 
     }
     assert_eq(
       custom_service.static_asset("/moonbit/browser.js"),
-      Some(
-        (
-          resolved_custom_assets + "/moonbit/browser.js",
-          "text/javascript; charset=utf-8",
-        ),
-      ),
+      Some(("moonbit/browser.js", "text/javascript; charset=utf-8")),
     )
+    assert_eq(custom_service.web_root, Some(resolved_custom_assets))
+    assert_eq(service.web_root, None)
     let policy = service.content_security_policy(3210)
     assert_true(policy.contains("style-src 'self'"))
     assert_true(!policy.contains("unsafe-inline"))

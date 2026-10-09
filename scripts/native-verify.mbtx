@@ -81,7 +81,7 @@ fn normalize_diagnostic_path(path : String) -> String {
 async fn check_native_packages() -> Unit {
   let packages = [
     "engine", "provider", "auth", "protocol", "client", "plugins", "api", "ui", "native", "runtime", "cmd/dsh",
-    "verification/retry_math",
+    "desktop", "verification/retry_math",
   ]
   let args = ["check"] + packages + ["--target", "native", "--json", "--frozen"]
   println("[native verify] moon " + args.join(" "))
@@ -209,7 +209,7 @@ async fn assert_asset_matches(source : String, destination : String) -> Unit {
 async fn main {
   run_moon([
     "fmt", "--check", "engine", "provider", "auth", "protocol", "client", "plugins",
-    "api", "ui", "native", "runtime", "cmd/dsh", "browser", "browser/sw", "verification/retry_math",
+    "api", "ui", "native", "runtime", "cmd/dsh", "browser", "browser/sw", "desktop", "verification/retry_math",
   ])
   check_native_packages()
   let worker_root = @fs.tmpdir(prefix="dsh-native-worker-build")
@@ -225,13 +225,12 @@ async fn main {
   }
   run_moon([
     "test", "engine", "provider", "auth", "protocol", "client", "plugins", "api",
-    "ui", "runtime", "native", "verification/retry_math", "--target", "native", "--frozen",
+    "ui", "runtime", "native", "desktop", "verification/retry_math", "--target", "native", "--frozen",
     "--target-dir", worker_root + "/test",
   ], extra_env={ "DSH_NATIVE_WORKER_BIN": worker_binary })
   run_moon([
     "run", "native", "--target", "native", "--release", "--frozen", "--", "--help",
   ])
-  test_cli_source_install()
   run_moon(["build", "browser", "--target", "js", "--release", "--frozen"])
   run_moon(["build", "browser/sw", "--target", "js", "--release", "--frozen"])
   if !@fs.exists("web/moonbit") {
@@ -281,5 +280,15 @@ async fn main {
       fail("no-Node web asset build did not produce " + path)
     }
   }
+  let bundle_status = @process.run(
+    "sh",
+    ["scripts/generate-bundled-web.sh", "--check"],
+    stdout=@stdio.stdout,
+    stderr=@stdio.stderr,
+  )
+  if bundle_status != 0 {
+    fail("embedded browser bundle differs from the no-Node compiler output")
+  }
+  test_cli_source_install()
   run_native_demo()
 }

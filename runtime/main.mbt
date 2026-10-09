@@ -89,6 +89,7 @@ fn native_usage() -> String {
   "  dsh --auth-status|--sign-in|--models|--sign-out|--select-model MODEL --data-dir PATH --workspace PATH\n\n" +
   "  dsh web --data-dir PATH --workspace PATH [--port PORT] [--assets-dir PATH] [--allow-shell] [--demo]\n" +
   "  dsh mcp --data-dir PATH --workspace PATH [--allow-shell] [--demo]\n\n" +
+  "  dsh desktop [--app-path /absolute/path/to/Dsh.app] [desktop options]\n\n" +
   "Provider options: --mode deepseek|openai|openai-responses --model NAME --base-url URL --max-retries 0..5\n" +
   "Approval options: --allow-shell, --approve-writes, --approve-tools write,edit,bash\n" +
   "Use --json to print command results as JSON. API keys are read from DSH_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY.\n\n" +
@@ -491,6 +492,14 @@ pub async fn run_cli() -> Unit {
       status.to_string() +
       ")",
     )
+  }
+  if raw_args.length() > 1 && raw_args[1] == "desktop" {
+    let desktop_args = raw_args[2:].to_owned()
+    match native_desktop_launch(desktop_args) {
+      Ok(_) => ()
+      Err(error) => abort(error)
+    }
+    return
   }
   let args = native_cli_default_web(native_cli_normalize_args(raw_args))
   match native_cli_validate_args(args) {

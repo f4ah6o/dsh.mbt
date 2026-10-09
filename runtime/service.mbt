@@ -27,7 +27,7 @@ fn native_configure_service_signal_policy(args : Array[String]) -> Unit {
 ///|
 priv struct NativeService {
   runtime : NativeRuntime
-  web_root : String
+  web_root : String?
   requested_port : Int
   tailnet_host : String?
   tailnet_owner : String?
@@ -119,16 +119,23 @@ async fn NativeService::new(
     Ok(value) => value
     Err(error) => return Err(error)
   }
-  let root = @fs.realpath(source_root) catch {
-    _ => return Err("cannot resolve native service source directory")
-  }
-  let web_assets_path = match assets_dir {
-    Some(path) if path.has_prefix("/") => path
-    Some(path) => root + "/" + path
-    None => root + "/web"
-  }
-  let web_root = @fs.realpath(web_assets_path) catch {
-    _ => return Err("cannot resolve native service web assets")
+  let web_root = match assets_dir {
+    None => None
+    Some(path) => {
+      let web_assets_path = if path.has_prefix("/") {
+        path
+      } else {
+        let root = @fs.realpath(source_root) catch {
+          _ => return Err("cannot resolve native service source directory")
+        }
+        root + "/" + path
+      }
+      Some(
+        @fs.realpath(web_assets_path) catch {
+          _ => return Err("cannot resolve native service web assets")
+        },
+      )
+    }
   }
   Ok({
     runtime,
@@ -1091,9 +1098,24 @@ async fn NativeService::serve_static(
 ) -> Unit {
   match self.static_asset(path) {
     None => self.respond_json(connection, 404, { "error": "not found" })
-    Some((asset_path, mime)) => {
-      let contents = @fs.read_file(asset_path).text() catch {
-        _ => {
+    Some((relative, mime)) => {
+      let contents = match self.web_root {
+        None => native_embedded_web_asset("/" + relative)
+        Some(root) =>
+          Some(
+            @fs.read_file(root + "/" + relative).text() catch {
+              _ => {
+                self.respond_json(connection, 404, {
+                  "error": "asset not found",
+                })
+                return
+              }
+            },
+          )
+      }
+      let contents = match contents {
+        Some(value) => value
+        None => {
           self.respond_json(connection, 404, { "error": "asset not found" })
           return
         }
@@ -1120,15 +1142,11 @@ fn NativeService::static_asset(
   self : NativeService,
   path : String,
 ) -> (String, String)? {
+  ignore(self)
   let (relative, mime) = match path {
-    "/index.html" => ("index.html", "text/html; charset=utf-8")
+    "/" | "/index.html" => ("index.html", "text/html; charset=utf-8")
     "/moonbit/browser.js" =>
-      return Some(
-        (
-          self.web_root + "/moonbit/browser.js",
-          "text/javascript; charset=utf-8",
-        ),
-      )
+      ("moonbit/browser.js", "text/javascript; charset=utf-8")
     "/kumo-standalone.css" => ("kumo-standalone.css", "text/css; charset=utf-8")
     "/yami-kumo-components.css" =>
       ("yami-kumo-components.css", "text/css; charset=utf-8")
@@ -1139,7 +1157,7 @@ fn NativeService::static_asset(
     "/sw.js" => ("sw.js", "text/javascript; charset=utf-8")
     _ => return None
   }
-  Some((self.web_root + "/" + relative, mime))
+  Some((relative, mime))
 }
 
 ///|

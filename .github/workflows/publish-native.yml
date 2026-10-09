@@ -1,9 +1,29 @@
-name: Publish native executables for moon-binstall
+name: Publish native release assets
 
 on:
   pull_request:
     paths:
       - ".github/workflows/publish-native.yml"
+      - "scripts/**"
+      - "cmd/**"
+      - "runtime/**"
+      - "native/**"
+      - "desktop/**"
+      - "browser/**"
+      - "web/**"
+      - "vendor/gpui"
+      - "vendor/gpui/**"
+      - "**/*.mbt"
+      - "**/*.mbtx"
+      - "**/moon.pkg"
+      - "**/moon.pkg.json"
+      - "moon.mod"
+      - "moon.work"
+      - "moon.lock"
+      - ".moonbit-version"
+      - "LICENSE"
+      - "THIRD_PARTY_NOTICES.md"
+      - "licenses/**"
   push:
     tags:
       - "v*"
@@ -42,27 +62,42 @@ jobs:
         run: |
           moon update
           moon install
-      - name: Build dsh Moon CLI executable
-        run: moon build cmd/dsh --target native --release --frozen
+      - name: Build the embedded web UI and dsh CLI executable
+        run: |
+          if [ "$RUNNER_OS" = macOS ]; then
+            MACOSX_DEPLOYMENT_TARGET=13.0 sh scripts/build.sh
+          else
+            sh scripts/build.sh
+          fi
       - name: Package raw release asset
         shell: bash
         run: |
           set -euo pipefail
-          binaries=$(find _build/native/release/build -type f -name 'dsh.exe' -print)
+          if [ "${{ matrix.platform }}" = darwin-aarch64 ]; then
+            native_build_root=_build/native-macos-13.0/native/release/build
+          else
+            native_build_root=_build/native/release/build
+          fi
+          binaries=$(find "$native_build_root" -type f -path '*/cmd/dsh/dsh.exe' -print)
           count=$(printf '%s\n' "$binaries" | grep -c . || true)
           if [ "$count" -ne 1 ]; then
             printf 'Expected exactly one dsh.exe, got %s\n' "$count" >&2
             exit 1
           fi
           mkdir -p release
-          cp -- "$binaries" "release/dsh-${{ matrix.platform }}"
+          cp "$binaries" "release/dsh-${{ matrix.platform }}"
           chmod 755 "release/dsh-${{ matrix.platform }}"
           test -s "release/dsh-${{ matrix.platform }}"
-      - name: Smoke check
-        shell: bash
+      - name: Smoke test the packaged CLI and embedded browser assets
+        run: sh scripts/smoke-release-cli.sh "release/dsh-${{ matrix.platform }}"
+      - name: Build and package the macOS app
+        if: matrix.platform == 'darwin-aarch64'
         run: |
-          set -euo pipefail
-          "./release/dsh-${{ matrix.platform }}" --help
+          sh scripts/build-desktop.sh --build
+          sh scripts/package-macos-app.sh _build/macos/Dsh.app release/Dsh-macos-arm64.zip
+      - name: Validate the extracted macOS app bundle in hosted CI
+        if: matrix.platform == 'darwin-aarch64'
+        run: sh scripts/smoke-release-macos.sh --bundle-only release/Dsh-macos-arm64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.platform }}
@@ -88,5 +123,14 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          test "$(find release -type f | wc -l)" -eq 3
-          gh release create "${GITHUB_REF_NAME}" release/* --verify-tag --generate-notes --title "${GITHUB_REF_NAME}"
+          expected=(
+            release/dsh-linux-x86_64
+            release/dsh-linux-aarch64
+            release/dsh-darwin-aarch64
+            release/Dsh-macos-arm64.zip
+          )
+          test "$(find release -maxdepth 1 -type f | wc -l | tr -d ' ')" -eq "${#expected[@]}"
+          for asset in "${expected[@]}"; do
+            test -s "$asset"
+          done
+          gh release create "${GITHUB_REF_NAME}" "${expected[@]}" --verify-tag --generate-notes --title "${GITHUB_REF_NAME}"

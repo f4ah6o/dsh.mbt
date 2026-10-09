@@ -8,6 +8,11 @@ signals, and terminal detection; the audited boundary is listed in
 [ffi-boundary.md](ffi-boundary.md). No Node.js or npm package is loaded by the
 product build or runtime.
 
+The macOS GPUI desktop app uses this same runtime for sessions, provider work,
+tool approval, and persistence. See the [native desktop guide](desktop.md) for
+installation, `dsh desktop` launch, local builds, and the current text-input
+limitations.
+
 Build the executable and all browser assets with the pinned MoonBit toolchain:
 
 ```sh
@@ -18,6 +23,8 @@ moon run native --target native --release -- \
   web --data-dir /absolute/path/to/dsh-data \
   --workspace /absolute/path/to/project --port 3210
 ```
+
+`sh scripts/build.sh` also builds the installable `cmd/dsh` executable after refreshing `runtime/bundled_web.mbt`. The generated bundle contains the compiled MoonBit browser module and service worker, the pinned styles, `index.html`, the web manifest, and the icon. Both `moon install ./cmd/dsh` and release executables serve these assets from any working directory. Pass `--assets-dir PATH` only when an explicit filesystem asset override is needed; the directory is resolved at service startup.
 
 The server binds only to `127.0.0.1`. The browser carrier uses the same durable command, receipt, snapshot, approval, and effect path as native clients.
 
