@@ -4,6 +4,7 @@
 
 ### Added
 
+- Moon CLI から `moon install ./cmd/dsh --bin DIR` で install できる `dsh` entrypoint と、`moon-binstall` 用の release binary を追加した。registry dependency は未公開のため source install には recursive submodule checkout が必要。配布 binary の browser UI には `--assets-dir` で checkout の built assets を指定する。
 - OpenAI Responses API に API key / ChatGPT SIWC の native provider 経路を追加した。SIWC は OAuth・PKCE・OIDC 検証、保護された credential store、model discovery、refresh rotation を使う。実アカウント smoke は未実行。
 - Node を実行依存としない MoonBit native CLI / loopback service、永続 command receipt、snapshot / SSE 同期、最大 4 件の Read pool、session 単位 cancel、共有 client と SwiftUI + MoonC iOS embedding spike を追加した。gpui iOS host は未実装。
 - typed command / event / effect API、再試行上限の小さな moon prove 対象、native verification の .mbtx entry point を追加した。

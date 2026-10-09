@@ -19,7 +19,7 @@ const NATIVE_AUTH_HTTP_TIMEOUT_MS : Int = 15000
 const NATIVE_AUTH_RESPONSE_BYTE_LIMIT : Int = 1048576
 
 ///|
-struct AuthEndpoints {
+priv struct AuthEndpoints {
   authorize : String
   token : String
   discovery : String
@@ -65,6 +65,12 @@ pub(all) enum NativeAuthMode {
   ApiKey
   ChatGPT
 } derive(Eq)
+
+///|
+pub extend NativeProtocol with Eq::{equal, not_equal}
+
+///|
+pub extend NativeAuthMode with Eq::{equal, not_equal}
 
 ///|
 pub fn NativeProviderSelection::model(self : NativeProviderSelection) -> String {
@@ -138,7 +144,7 @@ pub fn NativeProviderSelection::api_key(
 }
 
 ///|
-struct NativePreparedSignIn {
+priv struct NativePreparedSignIn {
   server : @http.Server
   attempt : @auth.LoginAttempt
   expected_generation : String
@@ -149,7 +155,7 @@ struct NativePreparedSignIn {
 /// Native credential coordinator. The protected file is the single durable
 /// unit for credentials, generation, selected model, and account-scoped model
 /// catalog.
-pub struct NativeAuth {
+priv struct NativeAuth {
   root : SafeRoot
   host_id : String
   gate : @async.Mutex
@@ -212,7 +218,7 @@ fn NativeAuth::open(store : NativeStore) -> Result[NativeAuth, String] {
 }
 
 ///|
-struct NativeAuthLoaded {
+priv struct NativeAuthLoaded {
   credential : @auth.Credential?
   generation : String
   selected_model : String?
@@ -371,7 +377,7 @@ fn NativeAuth::persist_locked(self : NativeAuth) -> Result[Unit, String] {
 
 ///|
 /// Credential-free projection for local UI and v1 snapshots.
-pub fn NativeAuth::status(self : NativeAuth) -> Json {
+fn NativeAuth::status(self : NativeAuth) -> Json {
   if self.closed {
     return {
       "state": "signed_out",
@@ -415,7 +421,7 @@ pub fn NativeAuth::status(self : NativeAuth) -> Json {
 ///|
 /// Mark an OAuth attempt before handing it to a host-owned background task.
 /// Repeated requests do not start a second browser flow.
-pub fn NativeAuth::begin_sign_in(self : NativeAuth) -> Result[Json, String] {
+fn NativeAuth::begin_sign_in(self : NativeAuth) -> Result[Json, String] {
   if self.closed {
     return Err("AUTH_CLOSED: authentication manager is closed")
   }
@@ -438,7 +444,7 @@ fn NativeAuth::visible_models(self : NativeAuth) -> Array[Json] {
 ///|
 /// Refresh the account-visible model catalog. The Responses provider only
 /// accepts models returned for this credential and marked `visibility=list`.
-pub async fn NativeAuth::models(self : NativeAuth) -> Result[Json, String] {
+async fn NativeAuth::models(self : NativeAuth) -> Result[Json, String] {
   self.models_with(async fn(endpoints, token) {
     oauth_fetch_models(endpoints, token)
   })
@@ -523,7 +529,7 @@ async fn NativeAuth::models_with(
 ///|
 /// Persist a model only after the selected account's fresh model list confirms
 /// it. The UI selection then changes the next provider effect's request.
-pub async fn NativeAuth::select_model(
+async fn NativeAuth::select_model(
   self : NativeAuth,
   model : String,
 ) -> Result[Json, String] {
@@ -585,7 +591,7 @@ pub async fn NativeAuth::select_model(
 
 ///|
 /// Capture immutable provider selection at engine effect dispatch.
-pub fn NativeAuth::provider_selection(
+fn NativeAuth::provider_selection(
   self : NativeAuth,
 ) -> Result[NativeProviderSelection, String] {
   if self.closed {
@@ -629,7 +635,7 @@ pub fn NativeAuth::provider_selection(
 /// Copy the authorized credential and refresh it before expiry. Concurrent
 /// requests serialize refresh rotation and persist the replacement before it
 /// can be used by another call.
-pub async fn NativeAuth::credential_for_selection(
+async fn NativeAuth::credential_for_selection(
   self : NativeAuth,
   selection : NativeProviderSelection,
 ) -> Result[@auth.Credential, String] {
@@ -766,7 +772,7 @@ async fn NativeAuth::refresh_locked_with(
 ///|
 /// Reject a late HTTP result when sign-out, reauthorization, or account switch
 /// changed the selected generation while the effect was in flight.
-pub fn NativeAuth::validate_generation(
+fn NativeAuth::validate_generation(
   self : NativeAuth,
   selection : NativeProviderSelection,
 ) -> Result[Unit, String] {
@@ -799,7 +805,7 @@ fn NativeAuth::credential_snapshot(
 }
 
 ///|
-pub async fn NativeAuth::sign_in(self : NativeAuth) -> Result[Json, String] {
+async fn NativeAuth::sign_in(self : NativeAuth) -> Result[Json, String] {
   self.login_gate.acquire()
   defer self.login_gate.release()
   if self.closed {
@@ -1201,7 +1207,7 @@ async fn NativeAuth::commit_sign_in_with(
 }
 
 ///|
-pub async fn NativeAuth::sign_out(self : NativeAuth) -> Result[Json, String] {
+async fn NativeAuth::sign_out(self : NativeAuth) -> Result[Json, String] {
   self.gate.acquire()
   defer self.gate.release()
   if self.closed {
@@ -1246,7 +1252,7 @@ pub async fn NativeAuth::sign_out(self : NativeAuth) -> Result[Json, String] {
 }
 
 ///|
-pub fn NativeAuth::close(self : NativeAuth) -> Unit {
+fn NativeAuth::close(self : NativeAuth) -> Unit {
   if !self.closed {
     match self.pending_browser_sign_in_server {
       Some(server) => server.close()

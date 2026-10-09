@@ -8,7 +8,7 @@ const NATIVE_ENVELOPE_SCHEMA : String = "dsh.native-host-v1"
 const SNAPSHOT_LIMIT : Int = 33554432
 
 ///|
-struct NativeState {
+priv struct NativeState {
   engine : Json
   mut receipts : Array[Json]
   server_id : String
@@ -20,7 +20,7 @@ struct NativeState {
 }
 
 ///|
-struct NativeStore {
+priv struct NativeStore {
   root : SafeRoot
   path : String
   token : String

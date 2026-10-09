@@ -25,9 +25,8 @@ fn native_configure_service_signal_policy(args : Array[String]) -> Unit {
 }
 
 ///|
-struct NativeService {
+priv struct NativeService {
   runtime : NativeRuntime
-  source_root : String
   web_root : String
   requested_port : Int
   tailnet_host : String?
@@ -111,6 +110,7 @@ async fn NativeService::new(
   runtime : NativeRuntime,
   source_root : String,
   requested_port : Int,
+  assets_dir? : String? = None,
 ) -> Result[NativeService, String] {
   if requested_port < 0 || requested_port > 65535 {
     return Err("HTTP port must be between 0 and 65535")
@@ -122,12 +122,16 @@ async fn NativeService::new(
   let root = @fs.realpath(source_root) catch {
     _ => return Err("cannot resolve native service source directory")
   }
-  let web_root = @fs.realpath(root + "/web") catch {
+  let web_assets_path = match assets_dir {
+    Some(path) if path.has_prefix("/") => path
+    Some(path) => root + "/" + path
+    None => root + "/web"
+  }
+  let web_root = @fs.realpath(web_assets_path) catch {
     _ => return Err("cannot resolve native service web assets")
   }
   Ok({
     runtime,
-    source_root: root,
     web_root,
     requested_port,
     tailnet_host: tailnet_config.map(config => config.0),
@@ -1121,7 +1125,7 @@ fn NativeService::static_asset(
     "/moonbit/browser.js" =>
       return Some(
         (
-          self.source_root + "/web/moonbit/browser.js",
+          self.web_root + "/moonbit/browser.js",
           "text/javascript; charset=utf-8",
         ),
       )

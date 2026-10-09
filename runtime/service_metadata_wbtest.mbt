@@ -147,6 +147,31 @@ async test "native static host exposes only the compiled MoonBit browser shell" 
     )
     assert_true(service.static_asset("/legacy-app.js") is None)
     assert_true(service.static_asset("/remote-app.js") is None)
+    let custom_assets = fixture + "/web-assets"
+    @fs.mkdir(custom_assets)
+    @fs.mkdir(custom_assets + "/moonbit")
+    let resolved_custom_assets = @fs.realpath(custom_assets) catch {
+      _ => fail("cannot resolve custom test web assets")
+    }
+    let custom_service = match
+      NativeService::new(
+        runtime,
+        source_root,
+        0,
+        assets_dir=Some(custom_assets),
+      ) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    assert_eq(
+      custom_service.static_asset("/moonbit/browser.js"),
+      Some(
+        (
+          resolved_custom_assets + "/moonbit/browser.js",
+          "text/javascript; charset=utf-8",
+        ),
+      ),
+    )
     let policy = service.content_security_policy(3210)
     assert_true(policy.contains("style-src 'self'"))
     assert_true(!policy.contains("unsafe-inline"))

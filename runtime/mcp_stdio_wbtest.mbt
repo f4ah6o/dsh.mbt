@@ -67,6 +67,20 @@ test "MCP stdio framing preserves a partial valid UTF-8 request at EOF" {
 test "native CLI parser preserves node host rejection of missing and extra args" {
   assert_true(native_cli_validate_args(["dsh-native", "--data-dir"]) is Err(_))
   assert_true(
+    native_cli_validate_args(
+      native_cli_normalize_args([
+        "dsh", "web", "--assets-dir", "/tmp/dsh-web-assets", "--demo",
+      ]),
+    )
+    is Ok(_),
+  )
+  assert_true(
+    native_cli_validate_args(
+      native_cli_normalize_args(["dsh", "web", "--assets-dir"]),
+    )
+    is Err(_),
+  )
+  assert_true(
     native_cli_validate_args(["dsh-native", "--workspace", "--demo"]) is Err(_),
   )
   assert_true(native_cli_validate_args(["dsh-native", "--unknown"]) is Err(_))

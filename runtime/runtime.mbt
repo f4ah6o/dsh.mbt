@@ -2,7 +2,7 @@
 /// Native runtime boundary. All HarnessApi changes and durable checkpoints are
 /// serialized by `gate`; effects are returned only after the matching snapshot
 /// has reached stable storage.
-struct NativeRuntime {
+priv struct NativeRuntime {
   api : @api.HarnessApi
   store : NativeStore
   auth : NativeAuth
@@ -18,7 +18,7 @@ struct NativeRuntime {
 ///|
 /// Immutable host-level provider settings. API-key bytes are read into an
 /// effect-local value immediately before dispatch and never stored here.
-struct NativeProviderConfig {
+priv struct NativeProviderConfig {
   protocol : NativeProtocol
   auth_mode : NativeAuthMode
   model : String
