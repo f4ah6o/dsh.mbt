@@ -24,6 +24,21 @@ fn native_hook_test_tools(workspace : String) -> NativeTools {
 }
 
 ///|
+fn native_hook_shell_quote(value : String) -> String {
+  let output = StringBuilder()
+  output.write_char('\'')
+  for character in value {
+    if character == '\'' {
+      output.write_string("'\\''")
+    } else {
+      output.write_char(character)
+    }
+  }
+  output.write_char('\'')
+  output.to_string()
+}
+
+///|
 fn native_hook_has_successful_write_result(session : Json) -> Bool {
   match object_field(session, "events") {
     Some(Json::Array(events)) =>
@@ -358,6 +373,43 @@ async test "native hook subprocess bounds streams, scrubs env, and kills timeout
     )
     @async.sleep(100)
     assert_false(@fs.exists(workspace + "/hook-cancel-reaped-alive"))
+  }
+}
+
+///|
+async test "native worker closes inherited descriptors above stdio" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-worker-fds")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let tools = native_hook_test_tools(workspace)
+    group.add_defer(() => tools.root.close())
+
+    // The outer worker shell deliberately passes fd 9 into another worker.
+    // The inner command reports whether the worker preserved that descriptor.
+    let inner_script = "if [ -e /dev/fd/9 ]; then printf inherited; else printf closed; fi"
+    let nested_worker_command = "exec 9>/dev/null; " +
+      native_hook_shell_quote(tools.worker_launcher) +
+      " --internal-worker 512 5 " +
+      tools.workspace_device.to_string() +
+      " " +
+      tools.workspace_inode.to_string() +
+      " \"${CLAUDE_PROJECT_DIR}\" /bin/sh -c " +
+      native_hook_shell_quote(inner_script)
+    let capture = match
+      native_run_hook_command(
+        tools,
+        { command: nested_worker_command, timeout_ms: 5000, },
+        "{}\n",
+      ) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    assert_eq(capture.exit_code, 0)
+    assert_eq(capture.stdout, "closed")
+    assert_eq(capture.stderr, "")
+    assert_false(capture.truncated)
   }
 }
 
