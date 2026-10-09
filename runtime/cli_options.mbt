@@ -1,11 +1,11 @@
 ///|
 fn native_cli_is_value_option(argument : String) -> Bool {
   [
-    "--workspace", "--data-dir", "--mcp-config", "--skill-dir", "--mode", "--model",
-    "--base-url", "--port", "--assets-dir", "--max-retries", "--host", "--session",
-    "--title", "--threshold-chars", "--head-chars", "--tail-chars", "--approve-tools",
-    "--approval-revision", "--run", "--fork", "--import-session", "--prune-session",
-    "--approve-call", "--deny-call", "--select-model",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--skill-dir",
+    "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
+    "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
+    "--approve-tools", "--approval-revision", "--run", "--fork", "--import-session",
+    "--prune-session", "--approve-call", "--deny-call", "--select-model",
   ].contains(argument)
 }
 
@@ -18,11 +18,11 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
     "web", "run", "import-session", "prune-session", "fork-session", "mcp",
   ]
   let value_options = [
-    "--workspace", "--data-dir", "--mcp-config", "--skill-dir", "--mode", "--model",
-    "--base-url", "--port", "--assets-dir", "--max-retries", "--host", "--session",
-    "--title", "--threshold-chars", "--head-chars", "--tail-chars", "--approve-tools",
-    "--approval-revision", "--run", "--fork", "--import-session", "--prune-session",
-    "--approve-call", "--deny-call", "--select-model",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--skill-dir",
+    "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
+    "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
+    "--approve-tools", "--approval-revision", "--run", "--fork", "--import-session",
+    "--prune-session", "--approve-call", "--deny-call", "--select-model",
   ]
   let mut command_index = -1
   let mut scan = 1
@@ -60,10 +60,10 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
   let mut after_separator = false
   let mut index = 2
   let subcommand_value_options = [
-    "--workspace", "--data-dir", "--mcp-config", "--skill-dir", "--mode", "--model",
-    "--base-url", "--port", "--assets-dir", "--max-retries", "--host", "--session",
-    "--title", "--threshold-chars", "--head-chars", "--tail-chars", "--approve-tools",
-    "--approval-revision",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--skill-dir",
+    "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
+    "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
+    "--approve-tools", "--approval-revision",
   ]
   while index < reordered.length() {
     let argument = reordered[index]
@@ -247,11 +247,11 @@ fn native_cli_paths(args : Array[String]) -> Result[(String, String), String] {
 /// The subcommand aliases have already been normalized to their long options.
 fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
   let value_options = [
-    "--workspace", "--data-dir", "--mcp-config", "--skill-dir", "--mode", "--model",
-    "--base-url", "--port", "--assets-dir", "--max-retries", "--host", "--session",
-    "--title", "--threshold-chars", "--head-chars", "--tail-chars", "--approve-tools",
-    "--run", "--fork", "--import-session", "--prune-session", "--approve-call", "--deny-call",
-    "--approval-revision", "--select-model",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--skill-dir",
+    "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
+    "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
+    "--approve-tools", "--run", "--fork", "--import-session", "--prune-session",
+    "--approve-call", "--deny-call", "--approval-revision", "--select-model",
   ]
   let boolean_options = [
     "--serve", "--mcp", "--demo", "--enable-skills", "--allow-shell", "--approve-writes",
@@ -293,6 +293,13 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
     return Err("choose either web or mcp mode")
   }
   let run = native_option(args, "--run")
+  let hooks_config = native_option(args, "--hooks-config")
+  if hooks_config == Some("") {
+    return Err("--hooks-config requires a nonempty path")
+  }
+  if native_cli_options(args, "--hooks-config").length() > 1 {
+    return Err("--hooks-config may only be specified once")
+  }
   let imported_path = native_option(args, "--import-session")
   let prune = native_option(args, "--prune-session")
   let fork = native_option(args, "--fork")
@@ -348,6 +355,9 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
     .filter(value => value)
     .length()
   let service_count = [is_serve, is_mcp].filter(value => value).length()
+  if !help && hooks_config is Some(_) && run is None && service_count == 0 {
+    return Err("--hooks-config requires run, web, or mcp mode")
+  }
   let auth_count = [
       native_flag(args, "--auth-status"),
       native_flag(args, "--sign-in"),

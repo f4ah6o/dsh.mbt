@@ -10,6 +10,27 @@ test "native CLI preserves subcommand arguments and bounds retry and approval op
     native_cli_normalize_args(["dsh-native", "web", "--port", "3210", "--demo"]),
     ["dsh-native", "--port", "3210", "--demo", "--serve"],
   )
+  let hook_args = native_cli_normalize_args([
+    "dsh-native", "run", "Use configured hooks", "--hooks-config", "hooks.json",
+  ])
+  assert_eq(hook_args, [
+    "dsh-native", "--hooks-config", "hooks.json", "--run", "Use configured hooks",
+  ])
+  assert_eq(native_cli_options(hook_args, "--hooks-config"), ["hooks.json"])
+  assert_true(native_cli_validate_args(hook_args) is Ok(_))
+  assert_true(
+    native_cli_validate_args([
+      "dsh-native", "--hooks-config", "hooks.json", "--hooks-config", "other.json",
+      "--run", "Use configured hooks",
+    ])
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args([
+      "dsh-native", "--hooks-config", "hooks.json", "--session", "session-7",
+    ])
+    is Err(_),
+  )
   assert_eq(
     native_cli_normalize_args([
       "dsh-native", "--demo", "run", "Find", "files", "--approve-writes",

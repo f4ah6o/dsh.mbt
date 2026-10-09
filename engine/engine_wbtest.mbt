@@ -338,6 +338,140 @@ test "read calls overlap while durable results stay in model order" {
 }
 
 ///|
+test "known host outcome stays behind earlier reads and finalizes before restore" {
+  let (engine, llm) = started_engine()
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([
+          ("read-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("read-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let reads = engine.take_effects()
+  assert_eq(reads.length(), 2)
+  ignore(
+    success(
+      engine.record_effect_outcome(
+        id_of(reads[0]),
+        fixture("{\"ok\":true,\"content\":\"alpha\"}"),
+      ),
+    ),
+  )
+  ignore(
+    success(
+      engine.complete(
+        id_of(reads[1]),
+        fixture("{\"ok\":true,\"content\":\"beta\"}"),
+      ),
+    ),
+  )
+  let pending = get_session(engine)
+  assert_eq(
+    array_value(required_field(pending, "messages"), "messages", 100).length(),
+    2,
+  )
+  let pending_events = array_value(
+    required_field(pending, "events"),
+    "events",
+    100,
+  )
+  assert_true(
+    pending_events.any(event => {
+      required_string(event, "type") == "tool/completed" &&
+      required_string(required_field(event, "data"), "call_id") == "read-a" &&
+      required_string(required_field(event, "data"), "source") == "effect-known"
+    }),
+  )
+  assert_true(
+    pending_events.any(event => {
+      required_string(event, "type") == "tool/completed" &&
+      required_string(required_field(event, "data"), "call_id") == "read-b" &&
+      required_string(required_field(event, "data"), "source") == "effect"
+    }),
+  )
+  assert_true(
+    !pending_events.any(event => required_string(event, "type") == "tool/result"),
+  )
+  let provider = success(
+    engine.complete(
+      id_of(reads[0]),
+      fixture(
+        "{\"ok\":false,\"error\":\"PostToolUse hook blocked the result\"}",
+      ),
+    ),
+  )
+  assert_eq(get_status(provider), "running")
+  let followup = engine.take_effects()
+  assert_eq(followup.length(), 1)
+  let history = array_value(
+    required_field(required_field(followup[0], "request"), "messages"),
+    "messages",
+    100,
+  )
+  assert_eq(required_string(history[2], "tool_call_id"), "read-a")
+  assert_eq(required_field(history[2], "is_error"), boolean(true))
+  assert_true(required_string(history[2], "content").contains("PostToolUse"))
+  assert_eq(required_string(history[3], "tool_call_id"), "read-b")
+  assert_eq(required_field(history[3], "is_error"), boolean(false))
+  assert_eq(required_string(history[3], "content"), "beta")
+  let finished = success(
+    engine.complete(id_of(followup[0]), stop_response("Done")),
+  )
+  assert_eq(get_status(finished), "completed")
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session(restored), finished)
+}
+
+///|
+test "session cancellation commits a known host outcome and restores it without replay" {
+  let (engine, llm) = started_engine()
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([
+          ("read-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("read-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let reads = engine.take_effects()
+  ignore(
+    success(
+      engine.record_effect_outcome(
+        id_of(reads[0]),
+        fixture("{\"ok\":true,\"content\":\"alpha\"}"),
+      ),
+    ),
+  )
+  let cancelled = success(
+    engine.invoke("session_cancel", fixture("{\"session_id\":\"test\"}")),
+  )
+  assert_eq(get_status(cancelled), "cancelled")
+  let messages = array_value(
+    required_field(cancelled, "messages"),
+    "messages",
+    100,
+  )
+  assert_eq(required_string(messages[2], "tool_call_id"), "read-a")
+  assert_eq(required_string(messages[2], "content"), "alpha")
+  assert_eq(required_field(messages[2], "is_error"), boolean(false))
+  assert_eq(required_string(messages[3], "tool_call_id"), "read-b")
+  assert_eq(required_field(messages[3], "is_error"), boolean(true))
+  assert_eq(engine.take_effects().length(), 0)
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session(restored), cancelled)
+  assert_eq(restored.take_effects().length(), 0)
+}
+
+///|
 test "read pool is bounded and replenishes as individual effects settle" {
   let (engine, llm) = started_engine()
   let calls = []

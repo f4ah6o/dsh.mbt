@@ -101,18 +101,19 @@ fn native_usage() -> String {
   "Usage:\n" +
   "  dsh --help\n" +
   "  dsh --demo --data-dir PATH --workspace PATH\n\n" +
-  "  dsh run PROMPT [--session ID] [--mcp-config PATH] [--demo] --data-dir PATH --workspace PATH\n" +
+  "  dsh run PROMPT [--session ID] [--mcp-config PATH] [--hooks-config PATH] [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh import-session PATH [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh prune-session ID [--threshold-chars N --head-chars N --tail-chars N] --data-dir PATH --workspace PATH\n" +
   "  dsh fork-session ID [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh --session ID --approve-call CALL_ID --approval-revision REV [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh --session ID --deny-call CALL_ID --approval-revision REV [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh --auth-status|--sign-in|--models|--sign-out|--select-model MODEL --data-dir PATH --workspace PATH\n\n" +
-  "  dsh web --data-dir PATH --workspace PATH [--mcp-config PATH] [--port PORT] [--assets-dir PATH] [--allow-shell] [--demo]\n" +
-  "  dsh mcp --data-dir PATH --workspace PATH [--mcp-config PATH] [--allow-shell] [--demo]\n\n" +
-  "  dsh desktop [--app-path /absolute/path/to/Dsh.app] [--mcp-config PATH] [desktop options]\n\n" +
+  "  dsh web --data-dir PATH --workspace PATH [--mcp-config PATH] [--hooks-config PATH] [--port PORT] [--assets-dir PATH] [--allow-shell] [--demo]\n" +
+  "  dsh mcp --data-dir PATH --workspace PATH [--mcp-config PATH] [--hooks-config PATH] [--allow-shell] [--demo]\n\n" +
+  "  dsh desktop [--app-path /absolute/path/to/Dsh.app] [--mcp-config PATH] [--hooks-config PATH] [desktop options]\n\n" +
   "Provider options: --mode deepseek|openai|openai-responses --model NAME --base-url URL --max-retries 0..5\n" +
   "MCP options: --mcp-config PATH starts trusted external stdio servers; calls require approval by default.\n" +
+  "Hook options: --hooks-config PATH opts in to strict Claude Code PreToolUse/PostToolUse command hooks; commands run as trusted host code.\n" +
   "Skill options: --enable-skills discovers workspace skills; repeat --skill-dir PATH to add workspace-relative roots.\n" +
   "Approval options: --allow-shell, --approve-writes, --approve-tools write,edit,bash,mcp__SERVER__TOOL\n" +
   "Use --json to print command results as JSON. API keys are read from DSH_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY.\n\n" +
@@ -566,6 +567,7 @@ pub async fn run_cli() -> Unit {
         base_url_override=native_option(args, "--base-url").unwrap_or(""),
         max_retries~,
         mcp_config_path=native_option(args, "--mcp-config"),
+        hooks_config_path=native_option(args, "--hooks-config"),
         enable_skills=native_flag(args, "--enable-skills"),
         skill_dirs=native_cli_options(args, "--skill-dir"),
       ) {
@@ -611,6 +613,7 @@ pub async fn run_cli() -> Unit {
         base_url_override=native_option(args, "--base-url").unwrap_or(""),
         max_retries~,
         mcp_config_path=native_option(args, "--mcp-config"),
+        hooks_config_path=native_option(args, "--hooks-config"),
         enable_skills=native_flag(args, "--enable-skills"),
         skill_dirs=native_cli_options(args, "--skill-dir"),
       ) {
@@ -661,6 +664,7 @@ pub async fn run_cli() -> Unit {
         base_url_override=native_option(args, "--base-url").unwrap_or(""),
         max_retries~,
         mcp_config_path=native_option(args, "--mcp-config"),
+        hooks_config_path=native_option(args, "--hooks-config"),
         enable_skills=native_flag(args, "--enable-skills"),
         skill_dirs=native_cli_options(args, "--skill-dir"),
       ) {

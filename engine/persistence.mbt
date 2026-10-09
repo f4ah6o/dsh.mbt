@@ -672,7 +672,7 @@ fn restore_session(
           match source {
             "effect" => {
               let effect_id = required_string(data, "effect_id", max=128)
-              if call.stage != Dispatched ||
+              if (call.stage != Dispatched && call.stage != OutcomeKnown) ||
                 call.effect_id != Some(effect_id) ||
                 session.active_tool_effects.get(effect_id) != Some(call.id) {
                 raise Invalid(
@@ -681,6 +681,16 @@ fn restore_session(
               }
               session.active_tool_effects.remove(effect_id)
               call.effect_id = None
+            }
+            "effect-known" => {
+              let effect_id = required_string(data, "effect_id", max=128)
+              if call.stage != Dispatched ||
+                call.effect_id != Some(effect_id) ||
+                session.active_tool_effects.get(effect_id) != Some(call.id) {
+                raise Invalid(
+                  "Known tool outcome does not match an active call effect",
+                )
+              }
             }
             "interrupted" => {
               if !is_error {
@@ -729,7 +739,11 @@ fn restore_session(
             }
             _ => raise Invalid("Unknown tool completion source")
           }
-          call.stage = Completed
+          call.stage = if source == "effect-known" {
+            OutcomeKnown
+          } else {
+            Completed
+          }
           call.completed_content = Some(content)
           call.completed_error = Some(is_error)
         }
@@ -752,6 +766,24 @@ fn restore_session(
               call.completed_error != Some(is_error) {
               raise Invalid("Tool result differs from its durable completion")
             }
+            call.completed_content = None
+            call.completed_error = None
+          } else if call.stage == OutcomeKnown {
+            if call.completed_content != Some(content) ||
+              call.completed_error != Some(is_error) {
+              raise Invalid("Tool result differs from its known outcome")
+            }
+            let effect_id = match call.effect_id {
+              Some(effect_id) => effect_id
+              None => raise Invalid("Known tool result has no active effect")
+            }
+            if session.active_tool_effects.get(effect_id) != Some(call.id) {
+              raise Invalid(
+                "Known tool result does not match its active call effect",
+              )
+            }
+            session.active_tool_effects.remove(effect_id)
+            call.effect_id = None
             call.completed_content = None
             call.completed_error = None
           } else if call.stage == Dispatched {

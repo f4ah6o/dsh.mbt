@@ -25,6 +25,7 @@ pub fn HarnessApi::mcp_handle(Self, String) -> String?
 pub fn HarnessApi::new(external_mcp_tools? : Array[Json], skill_tool? : Json?) -> Result[Self, String]
 pub fn HarnessApi::project_effect_stream(Self, @engine.EffectId, String, String) -> Result[Json, String]
 pub fn HarnessApi::project_stream(Self, String, String, String) -> Result[Json, String]
+pub fn HarnessApi::record_effect_outcome(Self, @engine.EffectId, Json) -> Result[Json, String]
 pub fn HarnessApi::restore(Self, Json) -> Result[Unit, String]
 pub fn HarnessApi::schedule_retry(Self, String, Json) -> Result[Json, String]
 pub fn HarnessApi::snapshot(Self) -> Json

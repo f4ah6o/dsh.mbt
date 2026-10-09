@@ -237,6 +237,31 @@ pub fn Engine::complete(
 }
 
 ///|
+/// Durably record a known host tool outcome while keeping its effect active.
+/// Native hosts use this before advisory PostToolUse work so cancellation can
+/// settle the actual outcome without replaying the tool.
+pub fn Engine::record_effect_outcome(
+  self : Engine,
+  effect_id : String,
+  result : Json,
+) -> Result[Json, String] {
+  let candidate = self.copy_state()
+  match candidate.record_effect_outcome_impl(effect_id, result) {
+    Err(error) => Err(error)
+    Ok(value) =>
+      if candidate.within_capacity() {
+        self.adopt(candidate)
+        Ok(value)
+      } else {
+        let effect = self.effects.get(effect_id).unwrap()
+        let session = self.sessions.get(effect.session_id).unwrap()
+        self.terminate(session, Failed, "session_capacity", CAPACITY_ERROR)
+        Ok(session.json())
+      }
+  }
+}
+
+///|
 /// Typed counterpart for native runtimes that already hold an effect value.
 pub fn Engine::complete_effect(
   self : Engine,

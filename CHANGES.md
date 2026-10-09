@@ -16,6 +16,30 @@
 
 ### Migration
 
+## 0.1.5 - 2026-10-09
+
+### Added
+
+- Add explicit `--hooks-config PATH` support to native `run`, `web`, `mcp`, and `desktop` for bounded PreToolUse and PostToolUse command hooks. The supported literal matcher, command/result subset, limits, and upstream differences are documented in the [native runtime guide](docs/native-runtime.md#native-command-hooks).
+
+### Changed
+
+- A matching PostToolUse hook checkpoints the actual host tool outcome before the hook runs, so cancellation or restart can settle that known outcome without replaying the tool.
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+- Hook commands are trusted host shell code and run only when an explicit config path is supplied. Their environment is rebuilt from a small allowlist and does not inherit provider credentials.
+
+### Migration
+
+- Stores with `effect-known` events require dsh 0.1.5 or later; dsh 0.1.4 and earlier reject that event source. dsh 0.1.5 continues to read earlier native snapshots.
+
 ## 0.1.4 - 2026-10-09
 
 ### Added
