@@ -37,6 +37,11 @@ priv struct DesktopState {
   mut height : Double
   mut scale : Double
   mut last_poll : Int64
+  mut settings_open : Bool
+  mut settings_focus : Int
+  mut settings_scroll : Int
+  mut auth_busy : Bool
+  mut auth_error : String
   mut render_count : Int
   mut click_count : Int
   mut resize_seen : Bool
@@ -103,6 +108,11 @@ fn desktop_state(
     resize_armed: false,
     resize_baseline_width: 0.0,
     resize_baseline_height: 0.0,
+    settings_open: false,
+    settings_focus: 0,
+    settings_scroll: 0,
+    auth_busy: false,
+    auth_error: "",
     send_seen: false,
     approval_seen: false,
     complete_seen: false,

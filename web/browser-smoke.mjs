@@ -21,6 +21,7 @@ const failures = [];
 const contexts = [];
 const pages = [];
 let browser;
+let settingsScreenshotSaved = false;
 
 function observePage(page) {
   pages.push(page);
@@ -48,6 +49,32 @@ async function waitForConnectedWorkspace(page) {
     null,
     { timeout: 20_000 },
   );
+}
+
+async function openSettings(page) {
+  await page.waitForFunction(
+    () => document.getElementById("settings-page")?.hidden === true &&
+      document.getElementById("account-bar")?.hidden === true,
+  );
+  await page.locator("#settings-open").click();
+  await page.waitForFunction(
+    () => document.getElementById("settings-page")?.hidden === false &&
+      document.getElementById("conversation-page")?.hidden === true &&
+      document.getElementById("account-bar")?.hidden === false,
+  );
+  assert.equal(
+    await page.locator("#settings-close").evaluate((node) => document.activeElement === node),
+    true,
+    "opening Settings moves focus to its close control",
+  );
+  if (!settingsScreenshotSaved) {
+    await mkdir(screenshotDirectory, { recursive: true });
+    await page.screenshot({
+      path: path.join(screenshotDirectory, "settings.png"),
+      fullPage: true,
+    });
+    settingsScreenshotSaved = true;
+  }
 }
 
 async function postNativeCommand(page, operation, sessionId, input) {
@@ -275,6 +302,20 @@ async function testNativeDemo(browserInstance) {
   await assertReadableSessionOption(
     page,
     ".session-option[aria-current='page']",
+  );
+  await page.locator("#prompt").fill("keep this draft while changing settings");
+  await openSettings(page);
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.getElementById("settings-page")?.hidden === true);
+  assert.equal(
+    await page.locator("#prompt").inputValue(),
+    "keep this draft while changing settings",
+    "closing Settings preserves the conversation draft",
+  );
+  assert.equal(
+    await page.locator("#settings-open").evaluate((node) => document.activeElement === node),
+    true,
+    "closing Settings restores focus to the toolbar launcher",
   );
   await page.locator("#prompt").fill("Browser smoke 日本語");
   await page.locator("#send").click();
@@ -605,6 +646,11 @@ async function testCompiledAuthModelFlow(browserInstance) {
   let invalidAuthorizationUrl = false;
   let failFirstModelRefresh = true;
   let rejectNextModel = false;
+  let holdNextModelRejection = false;
+  let releaseRejectedModel;
+  let signalRejectedModel;
+  const rejectedModelStarted = new Promise((resolve) => { signalRejectedModel = resolve; });
+  const rejectedModelGate = new Promise((resolve) => { releaseRejectedModel = resolve; });
   await page.addInitScript(() => {
     window.__dshBlockPopup = false;
     window.__dshAuthTabs = [];
@@ -689,6 +735,11 @@ async function testCompiledAuthModelFlow(browserInstance) {
     if (operation === "auth_select_model") {
       if (rejectNextModel) {
         rejectNextModel = false;
+        if (holdNextModelRejection) {
+          holdNextModelRejection = false;
+          signalRejectedModel();
+          await rejectedModelGate;
+        }
         await route.fulfill({
           contentType: "application/json",
           body: JSON.stringify({ ok: false, error: "fixture selection rejected" }),
@@ -707,19 +758,28 @@ async function testCompiledAuthModelFlow(browserInstance) {
 
   await page.goto(baseURL, { waitUntil: "domcontentloaded" });
   await waitForConnectedWorkspace(page);
+  await openSettings(page);
   await page.evaluate(() => { window.__dshBlockPopup = true; });
   await page.locator("#auth-sign-in").click();
   await page.waitForFunction(
-    () => document.getElementById("run-error")?.textContent?.includes("ポップアップ"),
+    () => {
+      const error = document.getElementById("settings-error");
+      return error?.hidden === false && error.textContent?.includes("ポップアップ");
+    },
   );
+  assert.equal(await page.locator("#settings-error").isVisible(), true, "blocked-popup errors are visible in Settings");
   assert.equal(signInRequests, 0, "a blocked popup does not ask the host to start sign-in");
 
   await page.evaluate(() => { window.__dshBlockPopup = false; });
   invalidAuthorizationUrl = true;
   await page.locator("#auth-sign-in").click();
   await page.waitForFunction(
-    () => document.getElementById("run-error")?.textContent?.includes("無効な ChatGPT 認証 URL"),
+    () => {
+      const error = document.getElementById("settings-error");
+      return error?.hidden === false && error.textContent?.includes("無効な ChatGPT 認証 URL");
+    },
   );
+  assert.equal(await page.locator("#settings-error").isVisible(), true, "rejected authorization URLs are visible in Settings");
   assert.equal(signInRequests, 1);
   assert.deepEqual(
     await page.evaluate(() => window.__dshAuthTabs.map((tab) => tab.closed)),
@@ -764,13 +824,33 @@ async function testCompiledAuthModelFlow(browserInstance) {
   rejectNextModel = true;
   await page.locator("#model-picker").selectOption("alternate-model");
   await page.waitForFunction(
-    () => document.getElementById("run-error")?.textContent?.includes("fixture selection rejected"),
+    () => {
+      const error = document.getElementById("settings-error");
+      return error?.hidden === false && error.textContent?.includes("fixture selection rejected");
+    },
   );
+  assert.equal(await page.locator("#settings-error").isVisible(), true, "rejected model selections are visible in Settings");
   assert.equal(
     await page.locator("#model-picker").inputValue(),
     "fixture-model",
     "a failed remote model selection restores the previously active model",
   );
+
+  holdNextModelRejection = true;
+  rejectNextModel = true;
+  await page.locator("#model-picker").selectOption("alternate-model");
+  await rejectedModelStarted;
+  await page.locator("#settings-close").click();
+  await page.waitForFunction(() => document.getElementById("settings-page")?.hidden === true);
+  releaseRejectedModel();
+  await page.locator("#run-error").waitFor({ state: "visible" });
+  await page.waitForFunction(
+    () => {
+      const error = document.getElementById("run-error");
+      return error?.hidden === false && error.textContent?.includes("fixture selection rejected");
+    },
+  );
+  assert.equal(await page.locator("#run-error").isVisible(), true, "a model-selection error remains visible after Settings closes");
 }
 
 async function testCorruptSnapshotRecovery(browserInstance) {
@@ -873,6 +953,7 @@ async function testStaleAuthCatalogCannotOverwriteNewAccount(browserInstance) {
 
   await page.goto(baseURL, { waitUntil: "domcontentloaded" });
   await waitForConnectedWorkspace(page);
+  await openSettings(page);
   await page.locator("#auth-sign-in").click();
   await profileAStarted;
   connectedProfile = "profile-b";

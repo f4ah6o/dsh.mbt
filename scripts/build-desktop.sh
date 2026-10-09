@@ -197,6 +197,10 @@ case "$MODE" in
     done
     sips -s format png "$FRAME_PPM" --out "$FRAME_ROOT/dsh-desktop-frame.png" >/dev/null
     echo "$FRAME_ROOT/dsh-desktop-frame.png"
+    SETTINGS_PPM="${FRAME_PPM}.settings.ppm"
+    SETTINGS_PNG="${FRAME_PPM%.ppm}.settings.png"
+    sips -s format png "$SETTINGS_PPM" --out "$SETTINGS_PNG" >/dev/null
+    echo "$SETTINGS_PNG"
     ;;
   run|--run)
     /usr/bin/open -n -a "$APP_BUNDLE" --args "$@"

@@ -71,6 +71,151 @@ pub async fn NativeDesktop::snapshot(
 }
 
 ///|
+/// Return the credential-free SIWC projection used by the desktop Settings page.
+pub fn NativeDesktop::auth_status(self : NativeDesktop) -> Json {
+  self.runtime.auth.status()
+}
+
+///|
+/// Mark a browser sign-in attempt active before the desktop launches its task.
+pub async fn NativeDesktop::auth_begin_sign_in(
+  self : NativeDesktop,
+) -> Result[Bool, String] {
+  match self.runtime.auth.begin_sign_in() {
+    Err(error) => Err(error)
+    Ok(result) => {
+      let started = match result {
+        Object(fields) =>
+          match fields.get("started") {
+            Some(Json::True) => true
+            _ => false
+          }
+        _ => false
+      }
+      match self.runtime.touch_projection() {
+        Ok(_) => Ok(started)
+        Err(error) => Err(error)
+      }
+    }
+  }
+}
+
+///|
+/// Start the host-browser SIWC flow and checkpoint its final account projection.
+pub async fn NativeDesktop::auth_sign_in(
+  self : NativeDesktop,
+) -> Result[Json, String] {
+  match self.runtime.auth.sign_in() {
+    Ok(status) =>
+      match self.runtime.touch_projection() {
+        Ok(_) => Ok(status)
+        Err(error) => Err(error)
+      }
+    Err(error) => {
+      ignore(self.runtime.touch_projection())
+      Err(error)
+    }
+  }
+}
+
+///|
+fn native_desktop_auth_profile(status : Json) -> String {
+  let account = object_field(status, "account").unwrap_or(Json::null())
+  string_field(account, "profile_id").unwrap_or("")
+}
+
+///|
+fn native_desktop_auth_profile_matches(
+  status : Json,
+  profile_id : String,
+) -> Bool {
+  !profile_id.is_empty() && native_desktop_auth_profile(status) == profile_id
+}
+
+///|
+/// Remove the connected account only when the Settings view still refers to
+/// that same profile, matching the local service's stale-account fence.
+pub async fn NativeDesktop::auth_sign_out(
+  self : NativeDesktop,
+  profile_id : String,
+) -> Result[Json, String] {
+  if !native_desktop_auth_profile_matches(
+      self.runtime.auth.status(),
+      profile_id,
+    ) {
+    return Err("the selected ChatGPT profile is no longer active")
+  }
+  match self.runtime.auth.sign_out_for_profile(Some(profile_id)) {
+    Ok(result) =>
+      match self.runtime.touch_projection() {
+        Ok(_) => Ok(result)
+        Err(error) => Err(error)
+      }
+    Err(error) => Err(error)
+  }
+}
+
+///|
+/// Refresh only the model catalog for the profile currently shown in Settings.
+pub async fn NativeDesktop::auth_refresh_models(
+  self : NativeDesktop,
+  profile_id : String,
+) -> Result[Json, String] {
+  if !native_desktop_auth_profile_matches(
+      self.runtime.auth.status(),
+      profile_id,
+    ) {
+    return Err("the selected ChatGPT profile is no longer active")
+  }
+  let result = match self.runtime.auth.models() {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  if !native_desktop_auth_profile_matches(
+      self.runtime.auth.status(),
+      profile_id,
+    ) {
+    return Err("the selected ChatGPT profile changed while listing models")
+  }
+  match self.runtime.touch_projection() {
+    Ok(_) => Ok(result)
+    Err(error) => Err(error)
+  }
+}
+
+///|
+/// Select a model after checking that the account shown by Settings is still
+/// the active account. NativeAuth validates the slug against that account's
+/// visible model catalog before persisting the selection.
+pub async fn NativeDesktop::auth_select_model(
+  self : NativeDesktop,
+  profile_id : String,
+  model : String,
+) -> Result[Json, String] {
+  if !native_desktop_auth_profile_matches(
+      self.runtime.auth.status(),
+      profile_id,
+    ) {
+    return Err("the selected ChatGPT profile is no longer active")
+  }
+  let result = match
+    self.runtime.auth.select_model_for_profile(model, Some(profile_id)) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  if !native_desktop_auth_profile_matches(
+      self.runtime.auth.status(),
+      profile_id,
+    ) {
+    return Err("the selected ChatGPT profile changed while choosing a model")
+  }
+  match self.runtime.touch_projection() {
+    Ok(_) => Ok(result)
+    Err(error) => Err(error)
+  }
+}
+
+///|
 /// Submit a protocol command through the durable native command boundary.
 /// Provider and tool effects run in the supplied background task group so the
 /// UI event loop stays responsive while a turn is active.

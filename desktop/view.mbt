@@ -221,6 +221,7 @@ fn desktop_button_rect(
 ) -> @primitives.Rect {
   match name {
     "new" => desktop_rect(16.0, 62.0, 204.0, 38.0)
+    "settings-open" => desktop_rect(16.0, height - 54.0, 204.0, 38.0)
     "send" => desktop_rect(width - 156.0, height - 54.0, 136.0, 38.0)
     "cancel" => desktop_rect(width - 294.0, height - 54.0, 120.0, 38.0)
     "allow" => desktop_rect(width - 156.0, height - 54.0, 136.0, 38.0)
@@ -228,6 +229,148 @@ fn desktop_button_rect(
     "composer" => desktop_rect(260.0, height - 134.0, width - 280.0, 70.0)
     _ => desktop_rect(0.0, 0.0, 0.0, 0.0)
   }
+}
+
+///|
+fn desktop_settings_button_rect(
+  name : String,
+  width : Double,
+  height : Double,
+) -> @primitives.Rect {
+  let content_x = 480.0
+  let content_width = (width - 512.0).max(240.0)
+  match name {
+    "settings-close" => desktop_rect(width - 94.0, 18.0, 72.0, 34.0)
+    "settings-nav-chatgpt" => desktop_rect(258.0, 94.0, 194.0, 38.0)
+    "auth-sign-in" => desktop_rect(content_x + 16.0, 252.0, 172.0, 34.0)
+    "auth-models-retry" => desktop_rect(content_x + 16.0, 252.0, 156.0, 34.0)
+    "auth-sign-out" => desktop_rect(content_x + 180.0, 252.0, 112.0, 34.0)
+    _ => desktop_rect(0.0, 0.0, content_width, height)
+  }
+}
+
+///|
+fn desktop_settings_visible_model_rows(height : Double) -> Int {
+  ((height - 432.0) / 44.0).to_int().max(1).min(9)
+}
+
+///|
+fn desktop_settings_max_scroll(model_count : Int, height : Double) -> Int {
+  (model_count - desktop_settings_visible_model_rows(height)).max(0)
+}
+
+///|
+fn desktop_settings_clamp_scroll(
+  settings_scroll : Int,
+  model_count : Int,
+  height : Double,
+) -> Int {
+  settings_scroll.max(0).min(desktop_settings_max_scroll(model_count, height))
+}
+
+///|
+fn desktop_auth_model_label(model : Json) -> String {
+  let slug = desktop_json_string(model, "slug")
+  let display_name = desktop_json_string(model, "display_name")
+  if display_name == "" {
+    slug
+  } else {
+    display_name
+  }
+}
+
+///|
+fn desktop_settings_model_rect(
+  visible_index : Int,
+  width : Double,
+  height : Double,
+) -> @primitives.Rect {
+  let content_x = 480.0
+  let content_width = (width - 512.0).max(240.0)
+  let top = 402.0 + visible_index.to_double() * 42.0
+  let row_height = (height - 24.0 - top).min(38.0).max(0.0)
+  desktop_rect(content_x + 12.0, top, content_width - 24.0, row_height)
+}
+
+///|
+fn desktop_settings_model_focus_at(
+  auth : Json,
+  settings_scroll : Int,
+  width : Double,
+  height : Double,
+  position : @primitives.Point,
+) -> Int? {
+  let model_count = desktop_auth_model_count(auth)
+  let first = desktop_settings_clamp_scroll(
+    settings_scroll, model_count, height,
+  )
+  for visible_index in 0..<desktop_settings_visible_model_rows(height) {
+    let model_index = first + visible_index
+    if model_index < model_count &&
+      desktop_settings_model_rect(visible_index, width, height).contains(
+        position,
+      ) {
+      return Some(model_index + 4)
+    }
+  }
+  None
+}
+
+///|
+fn desktop_add_focus_outline(
+  items : Array[@scene.SceneItem],
+  id : UInt64,
+  bounds : @primitives.Rect,
+) -> Unit {
+  let color = desktop_color(37, 99, 235)
+  desktop_add_quad(
+    items,
+    id,
+    desktop_rect(
+      bounds.left(),
+      bounds.top(),
+      bounds.right() - bounds.left(),
+      1.0,
+    ),
+    color,
+    None,
+  )
+  desktop_add_quad(
+    items,
+    id + 1,
+    desktop_rect(
+      bounds.left(),
+      bounds.bottom() - 1.0,
+      bounds.right() - bounds.left(),
+      1.0,
+    ),
+    color,
+    None,
+  )
+  desktop_add_quad(
+    items,
+    id + 2,
+    desktop_rect(
+      bounds.left(),
+      bounds.top(),
+      1.0,
+      bounds.bottom() - bounds.top(),
+    ),
+    color,
+    None,
+  )
+  desktop_add_quad(
+    items,
+    id + 3,
+    desktop_rect(
+      bounds.right() - 1.0,
+      bounds.top(),
+      1.0,
+      bounds.bottom() - bounds.top(),
+    ),
+    color,
+    None,
+  )
 }
 
 ///|
@@ -364,10 +507,10 @@ fn desktop_add_transcript(
     let block_height = desktop_block_height(block)
     if block_top + block_height >= area.top() && block_top <= area.bottom() {
       let fill = match block.role {
-        "user" => desktop_color(48, 66, 92)
-        "tool" => desktop_color(63, 55, 39)
-        "reasoning" => desktop_color(38, 48, 57)
-        _ => desktop_color(34, 46, 58)
+        "user" => desktop_color(235, 241, 247)
+        "tool" => desktop_color(247, 244, 237)
+        "reasoning" => desktop_color(246, 247, 248)
+        _ => desktop_color(249, 250, 251)
       }
       desktop_add_quad(
         items,
@@ -390,7 +533,7 @@ fn desktop_add_transcript(
         area.right() - area.left() - 56.0,
         12.0,
         block.label,
-        desktop_color(135, 185, 222),
+        desktop_color(71, 98, 122),
         Some(0),
       )
       next_id.val += 1
@@ -405,7 +548,7 @@ fn desktop_add_transcript(
             area.right() - area.left() - 56.0,
             14.0,
             line,
-            desktop_color(230, 236, 242),
+            desktop_color(31, 41, 55),
             Some(0),
           )
           next_id.val += 1
@@ -429,22 +572,27 @@ fn desktop_scene(
   scale : Double,
   focused : Bool,
   scroll_up : Double,
+  settings_open? : Bool = false,
+  auth_busy? : Bool = false,
+  auth_error? : String = "",
+  settings_scroll? : Int = 0,
+  settings_focus? : Int = 0,
 ) -> @scene.SceneSnapshot {
   let viewport = desktop_rect(0.0, 0.0, width, height)
   let items : Array[@scene.SceneItem] = []
-  desktop_add_quad(items, 1, viewport, desktop_color(15, 21, 29), None)
+  desktop_add_quad(items, 1, viewport, desktop_color(255, 255, 255), None)
   desktop_add_quad(
     items,
     2,
     desktop_rect(0.0, 0.0, 236.0, height),
-    desktop_color(22, 31, 41),
+    desktop_color(249, 250, 251),
     None,
   )
   desktop_add_quad(
     items,
     3,
     desktop_rect(236.0, 0.0, 1.0, height),
-    desktop_color(47, 61, 75),
+    desktop_color(229, 231, 235),
     None,
   )
   desktop_add_text(
@@ -455,7 +603,7 @@ fn desktop_scene(
     200.0,
     22.0,
     "dsh",
-    desktop_color(240, 247, 252),
+    desktop_color(17, 24, 39),
     None,
   )
   desktop_add_text(
@@ -466,7 +614,7 @@ fn desktop_scene(
     154.0,
     13.0,
     "ネイティブ会話",
-    desktop_color(126, 180, 216),
+    desktop_color(107, 114, 128),
     None,
   )
   desktop_add_button(
@@ -474,7 +622,7 @@ fn desktop_scene(
     10,
     desktop_button_rect("new", width, height),
     "+  新しいセッション",
-    desktop_color(43, 100, 145),
+    desktop_color(31, 41, 55),
     desktop_color(255, 255, 255),
   )
   desktop_add_text(
@@ -485,7 +633,7 @@ fn desktop_scene(
     200.0,
     12.0,
     "最近の会話",
-    desktop_color(134, 151, 167),
+    desktop_color(107, 114, 128),
     None,
   )
   let first_session = if sessions.length() > 9 {
@@ -507,7 +655,7 @@ fn desktop_scene(
         items,
         30 + row_index.to_uint64() * 2,
         row,
-        desktop_color(41, 56, 72),
+        desktop_color(233, 238, 245),
         None,
       )
     }
@@ -528,13 +676,21 @@ fn desktop_scene(
       13.0,
       title,
       if selected {
-        desktop_color(244, 248, 251)
+        desktop_color(17, 24, 39)
       } else {
-        desktop_color(173, 189, 202)
+        desktop_color(75, 85, 99)
       },
       None,
     )
   }
+  desktop_add_button(
+    items,
+    58,
+    desktop_button_rect("settings-open", width, height),
+    "設定",
+    desktop_color(243, 244, 246),
+    desktop_color(55, 65, 81),
+  )
   let projection = desktop_json_field(snapshot, "projection").unwrap_or(
     Json::null(),
   )
@@ -566,7 +722,7 @@ fn desktop_scene(
     width - 290.0,
     21.0,
     title,
-    desktop_color(240, 246, 250),
+    desktop_color(17, 24, 39),
     None,
   )
   desktop_add_text(
@@ -577,12 +733,12 @@ fn desktop_scene(
     width - 290.0,
     12.0,
     status_label,
-    desktop_color(127, 176, 208),
+    desktop_color(107, 114, 128),
     None,
   )
   desktop_add_transcript(items, Ref(10000), selected, width, height, scroll_up)
   let composer = desktop_button_rect("composer", width, height)
-  desktop_add_quad(items, 300, composer, desktop_color(27, 37, 48), None)
+  desktop_add_quad(items, 300, composer, desktop_color(255, 255, 255), None)
   desktop_add_quad(
     items,
     301,
@@ -592,7 +748,7 @@ fn desktop_scene(
       composer.right() - composer.left(),
       1.0,
     ),
-    desktop_color(61, 80, 98),
+    desktop_color(209, 213, 219),
     None,
   )
   let composer_width = composer.right() - composer.left() - 28.0
@@ -627,7 +783,7 @@ fn desktop_scene(
         composer_width,
         13.0,
         line,
-        desktop_color(235, 240, 245),
+        desktop_color(31, 41, 55),
         None,
       )
       line_y += 18.0
@@ -643,7 +799,7 @@ fn desktop_scene(
       composer_width,
       13.0,
       "メッセージを入力 (Command-V で貼り付け)",
-      desktop_color(120, 139, 155),
+      desktop_color(156, 163, 175),
       None,
     )
   }
@@ -658,7 +814,7 @@ fn desktop_scene(
       width - 580.0,
       12.0,
       safe_error,
-      desktop_color(244, 144, 132),
+      desktop_color(185, 28, 28),
       None,
     )
   } else if safe_status != "" {
@@ -670,7 +826,7 @@ fn desktop_scene(
       width - 580.0,
       12.0,
       safe_status,
-      desktop_color(142, 178, 195),
+      desktop_color(107, 114, 128),
       None,
     )
   }
@@ -682,15 +838,15 @@ fn desktop_scene(
         350,
         desktop_button_rect("deny", width, height),
         "拒否",
-        desktop_color(89, 57, 56),
-        desktop_color(255, 236, 232),
+        desktop_color(254, 242, 242),
+        desktop_color(153, 27, 27),
       )
       desktop_add_button(
         items,
         352,
         desktop_button_rect("allow", width, height),
         "承認して続行",
-        desktop_color(35, 128, 89),
+        desktop_color(22, 101, 52),
         desktop_color(255, 255, 255),
       )
     }
@@ -701,8 +857,8 @@ fn desktop_scene(
           350,
           desktop_button_rect("cancel", width, height),
           "キャンセル",
-          desktop_color(73, 54, 55),
-          desktop_color(255, 234, 231),
+          desktop_color(254, 242, 242),
+          desktop_color(153, 27, 27),
         )
       } else {
         desktop_add_button(
@@ -710,10 +866,15 @@ fn desktop_scene(
           352,
           desktop_button_rect("send", width, height),
           "送信  Enter",
-          desktop_color(43, 100, 145),
+          desktop_color(31, 41, 55),
           desktop_color(255, 255, 255),
         )
       }
+  }
+  if settings_open {
+    desktop_add_settings(
+      items, snapshot, width, height, auth_busy, auth_error, settings_scroll, settings_focus,
+    )
   }
   match
     @scene.SceneSnapshot::new(
@@ -734,7 +895,7 @@ fn desktop_scene(
           @scene.SceneItem::quad(
             1,
             viewport,
-            desktop_color(15, 21, 29),
+            desktop_color(255, 255, 255),
             @scene.AffineTransform::identity(),
             1.0,
             None,
@@ -743,6 +904,420 @@ fn desktop_scene(
           Err(_) => abort("desktop fallback scene is valid")
         },
       ]).unwrap()
+  }
+}
+
+///|
+fn desktop_add_settings(
+  items : Array[@scene.SceneItem],
+  snapshot : Json,
+  width : Double,
+  height : Double,
+  auth_busy : Bool,
+  auth_error : String,
+  settings_scroll : Int,
+  settings_focus : Int,
+) -> Unit {
+  // Settings replaces the conversation workspace while keeping the history
+  // sidebar visible, matching the Electron shell's navigation hierarchy.
+  desktop_add_quad(
+    items,
+    500,
+    desktop_rect(236.0, 0.0, width - 236.0, height),
+    desktop_color(255, 255, 255),
+    None,
+  )
+  desktop_add_text(
+    items,
+    501,
+    264.0,
+    22.0,
+    320.0,
+    21.0,
+    "設定",
+    desktop_color(17, 24, 39),
+    None,
+  )
+  desktop_add_button(
+    items,
+    502,
+    desktop_settings_button_rect("settings-close", width, height),
+    "閉じる",
+    desktop_color(243, 244, 246),
+    desktop_color(55, 65, 81),
+  )
+  if settings_focus == 0 {
+    desktop_add_focus_outline(
+      items,
+      300000,
+      desktop_settings_button_rect("settings-close", width, height),
+    )
+  }
+  desktop_add_quad(
+    items,
+    504,
+    desktop_rect(236.0, 66.0, width - 236.0, 1.0),
+    desktop_color(229, 231, 235),
+    None,
+  )
+  desktop_add_text(
+    items,
+    505,
+    270.0,
+    74.0,
+    170.0,
+    12.0,
+    "サービス",
+    desktop_color(107, 114, 128),
+    None,
+  )
+  desktop_add_quad(
+    items,
+    506,
+    desktop_settings_button_rect("settings-nav-chatgpt", width, height),
+    desktop_color(239, 243, 248),
+    None,
+  )
+  desktop_add_text(
+    items,
+    507,
+    282.0,
+    105.0,
+    164.0,
+    13.0,
+    "ChatGPT",
+    desktop_color(31, 41, 55),
+    None,
+  )
+  if settings_focus == 1 {
+    desktop_add_focus_outline(
+      items,
+      300004,
+      desktop_settings_button_rect("settings-nav-chatgpt", width, height),
+    )
+  }
+
+  let auth = desktop_json_field(snapshot, "auth").unwrap_or(
+    Json::empty_object(),
+  )
+  let account = desktop_json_field(auth, "account").unwrap_or(Json::null())
+  let state = desktop_json_string(auth, "state")
+  let connected = state == "connected" &&
+    desktop_json_string(account, "profile_id") != ""
+  let content_x = 480.0
+  let content_width = (width - 512.0).max(240.0)
+
+  desktop_add_text(
+    items,
+    510,
+    content_x,
+    92.0,
+    content_width,
+    20.0,
+    "ChatGPT",
+    desktop_color(17, 24, 39),
+    None,
+  )
+  desktop_add_text(
+    items,
+    511,
+    content_x,
+    122.0,
+    content_width,
+    13.0,
+    "アカウントと利用するモデルを管理します。",
+    desktop_color(107, 114, 128),
+    None,
+  )
+  desktop_add_quad(
+    items,
+    512,
+    desktop_rect(content_x, 158.0, content_width, 148.0),
+    desktop_color(255, 255, 255),
+    None,
+  )
+  desktop_add_quad(
+    items,
+    513,
+    desktop_rect(content_x, 158.0, content_width, 1.0),
+    desktop_color(229, 231, 235),
+    None,
+  )
+  desktop_add_quad(
+    items,
+    514,
+    desktop_rect(content_x, 305.0, content_width, 1.0),
+    desktop_color(229, 231, 235),
+    None,
+  )
+  desktop_add_text(
+    items,
+    515,
+    content_x + 12.0,
+    172.0,
+    content_width - 24.0,
+    13.0,
+    "アカウント",
+    desktop_color(31, 41, 55),
+    None,
+  )
+  let status_label = if connected {
+    "接続済み"
+  } else if state == "signing_in" {
+    "ブラウザーでサインイン中..."
+  } else if state == "reauth_required" {
+    "再認証が必要です"
+  } else {
+    "未接続"
+  }
+  desktop_add_text(
+    items,
+    516,
+    content_x + 12.0,
+    198.0,
+    content_width - 24.0,
+    12.0,
+    status_label,
+    if connected {
+      desktop_color(22, 101, 52)
+    } else {
+      desktop_color(107, 114, 128)
+    },
+    None,
+  )
+  let email = desktop_json_string(account, "email")
+  if email != "" {
+    desktop_add_text(
+      items,
+      517,
+      content_x + 92.0,
+      198.0,
+      content_width - 112.0,
+      12.0,
+      email,
+      desktop_color(75, 85, 99),
+      None,
+    )
+  }
+  if connected {
+    desktop_add_button(
+      items,
+      518,
+      desktop_settings_button_rect("auth-models-retry", width, height),
+      if auth_busy {
+        "読み込み中..."
+      } else {
+        "モデルを更新"
+      },
+      desktop_color(243, 244, 246),
+      desktop_color(55, 65, 81),
+    )
+    if settings_focus == 2 {
+      desktop_add_focus_outline(
+        items,
+        300008,
+        desktop_settings_button_rect("auth-models-retry", width, height),
+      )
+    }
+    desktop_add_button(
+      items,
+      520,
+      desktop_settings_button_rect("auth-sign-out", width, height),
+      "サインアウト",
+      desktop_color(243, 244, 246),
+      desktop_color(55, 65, 81),
+    )
+    if settings_focus == 3 {
+      desktop_add_focus_outline(
+        items,
+        300012,
+        desktop_settings_button_rect("auth-sign-out", width, height),
+      )
+    }
+    let scopes = desktop_json_array(auth, "scopes")
+    let plan = desktop_json_string(auth, "plan_usage")
+    desktop_add_text(
+      items,
+      522,
+      content_x + 12.0,
+      224.0,
+      155.0,
+      11.0,
+      if plan == "enabled" {
+        "モデル利用可能"
+      } else {
+        "利用権限を確認中"
+      },
+      desktop_color(107, 114, 128),
+      None,
+    )
+    if scopes.length() > 0 {
+      desktop_add_text(
+        items,
+        523,
+        content_x + 176.0,
+        224.0,
+        content_width - 188.0,
+        11.0,
+        scopes.length().to_string() + " 個の権限を利用中",
+        desktop_color(107, 114, 128),
+        None,
+      )
+    }
+  } else {
+    desktop_add_button(
+      items,
+      518,
+      desktop_settings_button_rect("auth-sign-in", width, height),
+      if auth_busy {
+        "サインイン中..."
+      } else {
+        "ChatGPT にサインイン"
+      },
+      desktop_color(31, 41, 55),
+      desktop_color(255, 255, 255),
+    )
+    if settings_focus == 2 {
+      desktop_add_focus_outline(
+        items,
+        300008,
+        desktop_settings_button_rect("auth-sign-in", width, height),
+      )
+    }
+    desktop_add_text(
+      items,
+      520,
+      content_x + 200.0,
+      260.0,
+      content_width - 216.0,
+      11.0,
+      "認証は既定のブラウザーで行います。",
+      desktop_color(107, 114, 128),
+      None,
+    )
+  }
+
+  desktop_add_text(
+    items,
+    530,
+    content_x,
+    330.0,
+    content_width,
+    16.0,
+    "モデル",
+    desktop_color(17, 24, 39),
+    None,
+  )
+  desktop_add_text(
+    items,
+    531,
+    content_x,
+    354.0,
+    content_width,
+    11.0,
+    "会話で使うモデルを選択します。",
+    desktop_color(107, 114, 128),
+    None,
+  )
+  if !connected {
+    desktop_add_text(
+      items,
+      532,
+      content_x + 12.0,
+      402.0,
+      content_width - 24.0,
+      12.0,
+      "サインインすると利用可能なモデルが表示されます。",
+      desktop_color(107, 114, 128),
+      None,
+    )
+  } else {
+    let models = desktop_json_array(auth, "models")
+    let selected_model = desktop_json_string(auth, "selected_model")
+    let visible = desktop_settings_visible_model_rows(height)
+    let first = desktop_settings_clamp_scroll(
+      settings_scroll,
+      models.length(),
+      height,
+    )
+    let last = (first + visible).min(models.length())
+    if models.is_empty() {
+      desktop_add_text(
+        items,
+        532,
+        content_x + 12.0,
+        402.0,
+        content_width - 24.0,
+        12.0,
+        "モデル一覧がありません。モデルを更新してください。",
+        desktop_color(107, 114, 128),
+        None,
+      )
+    }
+    for model_index = first; model_index < last; model_index = model_index + 1 {
+      let model = models[model_index]
+      let slug = desktop_json_string(model, "slug")
+      let label = desktop_auth_model_label(model)
+      let visible_index = model_index - first
+      let row = desktop_settings_model_rect(visible_index, width, height)
+      let is_selected = slug != "" && slug == selected_model
+      if is_selected {
+        desktop_add_quad(
+          items,
+          540 + model_index.to_uint64() * 3,
+          row,
+          desktop_color(239, 243, 248),
+          None,
+        )
+      }
+      if settings_focus == model_index + 4 {
+        desktop_add_focus_outline(
+          items,
+          301000 + model_index.to_uint64() * 4,
+          row,
+        )
+      }
+      desktop_add_text(
+        items,
+        541 + model_index.to_uint64() * 3,
+        row.left() + 10.0,
+        row.top() + 9.0,
+        row.right() - row.left() - 112.0,
+        12.0,
+        label,
+        desktop_color(31, 41, 55),
+        None,
+      )
+      desktop_add_text(
+        items,
+        542 + model_index.to_uint64() * 3,
+        row.right() - 98.0,
+        row.top() + 9.0,
+        90.0,
+        11.0,
+        if is_selected {
+          "選択中"
+        } else {
+          ""
+        },
+        desktop_color(37, 99, 235),
+        None,
+      )
+    }
+  }
+  let safe_error = desktop_renderable_text(auth_error, 200)
+  if safe_error != "" {
+    desktop_add_text(
+      items,
+      599,
+      content_x,
+      height - 30.0,
+      content_width,
+      11.0,
+      safe_error,
+      desktop_color(185, 28, 28),
+      None,
+    )
   }
 }
 

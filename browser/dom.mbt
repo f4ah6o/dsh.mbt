@@ -88,6 +88,10 @@ extern "js" fn dom_focus(id : String) -> Unit =
   #| (id) => document.getElementById(id)?.focus()
 
 ///|
+extern "js" fn dom_move_element(id : String, parent_id : String) -> Unit =
+  #| (id, parentId) => { const node = document.getElementById(id); const parent = document.getElementById(parentId); if (node && parent) parent.appendChild(node); }
+
+///|
 extern "js" fn dom_prevent_default(event : BrowserValue) -> Unit =
   #| (event) => event.preventDefault()
 

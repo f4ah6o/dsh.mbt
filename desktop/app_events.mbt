@@ -21,7 +21,9 @@ async fn desktop_handle_event(
     }
     @platform.ScaleChanged | @platform.FocusChanged(_) => state.dirty = true
     @platform.Input(@primitives.TextInput(text~)) =>
-      desktop_insert_text(state, text)
+      if !state.settings_open {
+        desktop_insert_text(state, text)
+      }
     @platform.Input(@primitives.KeyPressed(key~, modifiers~, repeat=_)) =>
       desktop_handle_key(state, key, modifiers)
     @platform.Input(
@@ -31,10 +33,23 @@ async fn desktop_handle_event(
         ..
       )
     ) => desktop_handle_click(state, position)
-    @platform.Input(@primitives.Scroll(position=_, delta~, ..)) => {
-      state.scroll_up += delta.y()
-      if state.scroll_up < 0.0 {
-        state.scroll_up = 0.0
+    @platform.Input(@primitives.Scroll(position~, delta~, ..)) => {
+      if state.settings_open {
+        let auth = desktop_auth_status(state.snapshot)
+        if desktop_auth_connected(auth) &&
+          position.y() >= 390.0 &&
+          position.y() < state.height - 20.0 {
+          state.settings_scroll = desktop_settings_clamp_scroll(
+            state.settings_scroll - delta.y().to_int(),
+            desktop_auth_model_count(auth),
+            state.height,
+          )
+        }
+      } else {
+        state.scroll_up += delta.y()
+        if state.scroll_up < 0.0 {
+          state.scroll_up = 0.0
+        }
       }
       state.dirty = true
     }
@@ -109,6 +124,11 @@ async fn desktop_pump(
       state.scale,
       state.focused,
       state.scroll_up,
+      settings_open=state.settings_open,
+      auth_busy=state.auth_busy,
+      auth_error=state.auth_error,
+      settings_scroll=state.settings_scroll,
+      settings_focus=state.settings_focus,
     )
     match state.host.present(state.window, frame) {
       Ok(_) => {

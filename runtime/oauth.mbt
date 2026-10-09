@@ -533,8 +533,24 @@ async fn NativeAuth::select_model(
   self : NativeAuth,
   model : String,
 ) -> Result[Json, String] {
+  self.select_model_for_profile(model, None)
+}
+
+///|
+async fn NativeAuth::select_model_for_profile(
+  self : NativeAuth,
+  model : String,
+  expected_profile : String?,
+) -> Result[Json, String] {
   if model.is_empty() || model.length() > 256 {
     return Err("INVALID_MODEL: model slug is empty or too long")
+  }
+  match expected_profile {
+    Some(profile_id) if !native_desktop_auth_profile_matches(
+        self.status(),
+        profile_id,
+      ) => return Err("the selected ChatGPT profile is no longer active")
+    _ => ()
   }
   let listed = match self.models() {
     Ok(value) => value
@@ -563,6 +579,14 @@ async fn NativeAuth::select_model(
   defer self.gate.release()
   if self.closed || self.credential is None {
     return Err("AUTH_REQUIRED: connect a ChatGPT account first")
+  }
+  match expected_profile {
+    Some(profile_id) if !native_desktop_auth_profile_matches(
+        self.status(),
+        profile_id,
+      ) =>
+      return Err("the selected ChatGPT profile changed while choosing a model")
+    _ => ()
   }
   let credential = self.credential.unwrap()
   if self.model_identity != Some(credential.identity_for_native()) {
@@ -1208,10 +1232,25 @@ async fn NativeAuth::commit_sign_in_with(
 
 ///|
 async fn NativeAuth::sign_out(self : NativeAuth) -> Result[Json, String] {
+  self.sign_out_for_profile(None)
+}
+
+///|
+async fn NativeAuth::sign_out_for_profile(
+  self : NativeAuth,
+  expected_profile : String?,
+) -> Result[Json, String] {
   self.gate.acquire()
   defer self.gate.release()
   if self.closed {
     return Err("AUTH_CLOSED: authentication manager is closed")
+  }
+  match expected_profile {
+    Some(profile_id) if !native_desktop_auth_profile_matches(
+        self.status(),
+        profile_id,
+      ) => return Err("the selected ChatGPT profile is no longer active")
+    _ => ()
   }
   let old_credential = self.credential
   let old_generation = self.generation
