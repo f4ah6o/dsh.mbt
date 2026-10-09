@@ -1,8 +1,8 @@
 ///|
 fn native_cli_is_value_option(argument : String) -> Bool {
   [
-    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--skill-dir",
-    "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--lsp-config",
+    "--skill-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
     "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
     "--approve-tools", "--approval-revision", "--run", "--fork", "--import-session",
     "--prune-session", "--approve-call", "--deny-call", "--select-model",
@@ -18,8 +18,8 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
     "web", "run", "import-session", "prune-session", "fork-session", "mcp", "acp",
   ]
   let value_options = [
-    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--skill-dir",
-    "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--lsp-config",
+    "--skill-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
     "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
     "--approve-tools", "--approval-revision", "--run", "--fork", "--import-session",
     "--prune-session", "--approve-call", "--deny-call", "--select-model",
@@ -60,8 +60,8 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
   let mut after_separator = false
   let mut index = 2
   let subcommand_value_options = [
-    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--skill-dir",
-    "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--lsp-config",
+    "--skill-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
     "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
     "--approve-tools", "--approval-revision",
   ]
@@ -249,8 +249,8 @@ fn native_cli_paths(args : Array[String]) -> Result[(String, String), String] {
 /// The subcommand aliases have already been normalized to their long options.
 fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
   let value_options = [
-    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--skill-dir",
-    "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--lsp-config",
+    "--skill-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
     "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
     "--approve-tools", "--run", "--fork", "--import-session", "--prune-session",
     "--approve-call", "--deny-call", "--approval-revision", "--select-model",
@@ -297,11 +297,18 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
   }
   let run = native_option(args, "--run")
   let hooks_config = native_option(args, "--hooks-config")
+  let lsp_config = native_option(args, "--lsp-config")
   if hooks_config == Some("") {
     return Err("--hooks-config requires a nonempty path")
   }
   if native_cli_options(args, "--hooks-config").length() > 1 {
     return Err("--hooks-config may only be specified once")
+  }
+  if lsp_config == Some("") {
+    return Err("--lsp-config requires a nonempty path")
+  }
+  if native_cli_options(args, "--lsp-config").length() > 1 {
+    return Err("--lsp-config may only be specified once")
   }
   let imported_path = native_option(args, "--import-session")
   let prune = native_option(args, "--prune-session")
@@ -477,10 +484,10 @@ fn native_cli_approved_tools(
         if name.is_empty() {
           continue
         }
-        if !["write", "edit", "bash"].contains(name) &&
+        if !["write", "edit", "bash", "lsp"].contains(name) &&
           !native_cli_is_mcp_tool_name(name) {
           return Err(
-            "--approve-tools accepts write, edit, bash, or exact mcp__ tool names",
+            "--approve-tools accepts write, edit, bash, lsp, or exact mcp__ tool names",
           )
         }
         if !approved.contains(name) {

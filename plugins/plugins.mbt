@@ -261,6 +261,36 @@ pub fn skill_tool(model_catalog : Array[(String, String)]) -> Json {
 }
 
 ///|
+/// Build the model-facing LSP navigation tool. Native runtime registration is
+/// opt-in and classifies it as a write effect because configured server
+/// commands are trusted host programs even though the four LSP operations are
+/// read-only.
+pub fn lsp_tool() -> Json {
+  {
+    "name": "lsp",
+    "description": "Query a configured language server for precise code navigation. operation is one of goToDefinition, findReferences, goToImplementation, hover. file_path must be within the selected workspace; line and character are one-based UTF-16 positions. findReferences includes the declaration. The configured server runs as trusted host code and this call requires approval.",
+    "effect": "write",
+    "input_schema": builtin_schema(
+      {
+        "operation": {
+          "type": "string",
+          "enum": [
+            "goToDefinition", "findReferences", "goToImplementation", "hover",
+          ],
+        },
+        "file_path": {
+          "type": "string",
+          "description": "A workspace-relative source file path",
+        },
+        "line": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+        "character": { "type": "integer", "minimum": 1, "maximum": 1000000 },
+      },
+      ["operation", "file_path", "line", "character"],
+    ),
+  }
+}
+
+///|
 pub fn defaults() -> Result[Registry, String] {
   let registry = Registry::new()
   for

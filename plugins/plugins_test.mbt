@@ -113,3 +113,47 @@ test "skill loader descriptor is read-only and carries exact catalog entries" {
     _ => fail("empty skill catalog must be described to the provider")
   }
 }
+
+///|
+test "LSP tool is opt-in and uses the exact four-operation approval-gated schema" {
+  assert_false(
+    @plugins.builtin_tools().any(tool => {
+      match tool {
+        { "name": String("lsp"), .. } => true
+        _ => false
+      }
+    }),
+  )
+  match @plugins.lsp_tool() {
+    {
+      "name": String("lsp"),
+      "effect": String("write"),
+      "input_schema": {
+        "additionalProperties": False,
+        "properties": {
+          "operation": { "enum": Array(operations), .. },
+          "file_path": { "type": String("string"), .. },
+          "line": { "minimum": Number(1.0, ..), .. },
+          "character": { "minimum": Number(1.0, ..), .. },
+          ..
+        },
+        "required": Array(required),
+        ..
+      },
+      ..
+    } => {
+      let names = operations.map(value => {
+        match value {
+          String(name) => name
+          _ => fail("LSP operation enum must contain strings")
+        }
+      })
+      assert_eq(names, [
+        "goToDefinition", "findReferences", "goToImplementation", "hover",
+      ])
+      assert_eq(required.length(), 4)
+      assert_true(@plugins.lsp_tool().stringify().contains("requires approval"))
+    }
+    _ => fail("LSP descriptor must use the bounded approval-gated schema")
+  }
+}

@@ -16,6 +16,28 @@
 
 ### Migration
 
+## 0.1.7 - 2026-10-10
+
+### Added
+
+- Add opt-in native LSP navigation for `run`, `web`, `mcp`, `acp`, and `desktop` through `--lsp-config PATH`, with per-call approval and a bounded four-operation local-server subset. ([native runtime guide](docs/native-runtime.md#native-lsp-navigation), [remaining port work](issues/open/0001-upstream-parity.md))
+
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+- Configured LSP commands run as trusted host code when `--lsp-config` is supplied; calls require approval by default.
+
+### Migration
+
+- Reopen a data directory with a persisted LSP catalog using the matching `--lsp-config`; dsh 0.1.7 or later can adopt a first catalog only when there are no historical LSP calls.
+
 ## 0.1.6 - 2026-10-10
 
 ### Added

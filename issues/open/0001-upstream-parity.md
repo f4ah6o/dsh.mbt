@@ -86,7 +86,7 @@ pruning event 自体が保存量を増やすため、262,144 UTF-16 code unit �
 ## 3. 拡張機能と tool 統合
 
 MoonBit の typed service / lifetime を定義して、startup metadata から動的な拡張境界へ進める。
-External MCP client、workspace skills、native command hook subset は限定対応済み。ACP、追加 hook event、LSP、subagent の順に相関と終了条件を仕様化する。
+External MCP client、workspace skills、native command hook、ACP、LSP navigation の bounded subset は実装済み。各上流機能との残差を維持し、追加 hook event、LSP 対応範囲、subagent の相関と終了条件を仕様化する。
 Cordis / npm plugin をそのまま動かす場合は別の互換 host を設計し、MoonBit-only plugin とは区別する。
 
 部分対応（2026-10-07）: `effect: "read"` に静的分類した連続 tool call は最大 4 件の rolling pool で並列実行し、
@@ -148,6 +148,31 @@ additional directory と client MCP mounts は拒否します。prompt block は
 image / audio / embedded context、list / load / resume、persistent grant、raw stream delta は提供しません。JSON line は 1 MiB、
 nesting は 24、prompt は 16,384 characters、block は 64 個までです。authMethods は空です。実 provider credential を使う ACP smoke test
 は未実行です。本 issue は open のままです。
+
+LSP navigation の部分対応（2026-10-10）: pinned upstream
+[`packages/lsp`](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/lsp)、
+[`packages/lsp/lsp-stdio`](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/lsp/lsp-stdio)、
+[`packages/lsp/tool-lsp`](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/lsp/tool-lsp)
+を参照し、native `--lsp-config PATH` と `run` / `web` / `mcp` / `acp` / `desktop` 向け
+`lsp` tool を追加しました。設定 server は必要な query まで lazy start し、trusted
+direct-argv stdio process として動作します。対応 operation は `goToDefinition`、
+`findReferences`、`goToImplementation`、`hover` です。extension-to-language routing、
+one-based UTF-16 positions、SafeRoot による source / result path checks、transient
+`didOpen` / query / `didClose`、bounded workspace-relative locations、UTF-16 / capability
+negotiation、bounded Content-Length JSON-RPC、timeout / cancellation / malformed protocol /
+disconnect 時の process-group cleanup、graceful close、per-call approval、durable config
+fingerprint を実装します。`initializationOptions` / `configuration` の値は保存せず、非 secret
+`settingsRevision` で設定変更を追跡します。
+
+これは upstream LSP / Cordis ABI 全体の互換ではありません。remote server、hot reload、
+dynamic provider、`didChange`、diagnostics UI、workspace edits、upstream pooled retry、
+workspace 外 URI の結果は対象外です。失敗した request は自動 retry / replay しません。
+poison された worker は次の独立した approved call で evict され、新しい worker を開始できますが、
+失敗した call 自体は再実行しません。LSP server は利用者権限で動く trusted host code で、
+workspace path boundary は OS sandbox ではありません。2026-10-10 に local macOS
+`/usr/bin/clangd` を使った C definition lookup が成功し、keyless
+fake-server tests でより広い protocol / failure paths を検証しました。これは単一 server の local smoke
+であり、cross-language、Linux/V8、live-provider acceptance は確認していません。本 issue は open のままです。
 
 受入条件:
 

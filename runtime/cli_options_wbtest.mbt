@@ -18,6 +18,19 @@ test "native CLI preserves subcommand arguments and bounds retry and approval op
   ])
   assert_true(native_cli_validate_args(acp_args) is Ok(_))
   assert_true(
+    native_cli_validate_args([
+      "dsh-native", "--lsp-config", "lsp.json", "--auth-status",
+    ])
+    is Ok(_),
+  )
+  assert_true(
+    native_cli_validate_args([
+      "dsh-native", "--lsp-config", "lsp.json", "--approve-call", "call-1", "--session",
+      "session-1", "--approval-revision", "0",
+    ])
+    is Ok(_),
+  )
+  assert_true(
     native_cli_validate_args(["dsh-native", "--serve", "--acp"]) is Err(_),
   )
   let hook_args = native_cli_normalize_args([

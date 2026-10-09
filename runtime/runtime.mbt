@@ -11,6 +11,7 @@ priv struct NativeRuntime {
   skills : NativeSkills
   hooks : NativeHooks
   external_mcp : NativeMcpPool
+  lsp : NativeLspPool
   scheduler : NativeScheduler
   gate : @async.Mutex
   mut state : NativeState
@@ -122,6 +123,7 @@ async fn NativeRuntime::open(
   enable_skills? : Bool = false,
   skill_dirs? : Array[String] = [],
   hooks_config_path? : String? = None,
+  lsp_config_path? : String? = None,
 ) -> Result[NativeRuntime, String] {
   let provider_config = match
     native_provider_config(
@@ -212,17 +214,54 @@ async fn NativeRuntime::open(
       return Err(error)
     }
   }
+  let lsp_open = @async.handle_cancellation(() => {
+    NativeLspPool::open(
+      lsp_config_path, worker_launcher, workspace_path, workspace_device, workspace_inode,
+    )
+  })
+  let lsp = match lsp_open {
+    None => {
+      @async.protect_from_cancel(async fn() {
+        external_mcp.close()
+        ignore(store.close())
+        workspace_root.close()
+      })
+      return Err("native LSP configuration loading was cancelled")
+    }
+    Some(Ok(value)) => value
+    Some(Err(error)) => {
+      external_mcp.close()
+      ignore(store.close())
+      workspace_root.close()
+      return Err(error)
+    }
+  }
   if loaded.engine != Json::null() &&
     !native_mcp_catalog_matches_stored(
       loaded.external_mcp_catalog_hash,
       external_mcp.catalog_hash,
       loaded.engine,
     ) {
+    lsp.close()
     external_mcp.close()
     ignore(store.close())
     workspace_root.close()
     return Err(
       "stored external MCP tool catalog differs from the configured servers; reopen with the same --mcp-config and tool schemas",
+    )
+  }
+  if loaded.engine != Json::null() &&
+    !native_lsp_catalog_matches_stored(
+      loaded.lsp_catalog_hash,
+      lsp.catalog_hash,
+      loaded.engine,
+    ) {
+    lsp.close()
+    external_mcp.close()
+    ignore(store.close())
+    workspace_root.close()
+    return Err(
+      "stored LSP catalog differs from the configured servers; reopen with the same --lsp-config",
     )
   }
   let recovered_receipts = native_mark_unfinished_receipts_uncertain(
@@ -236,9 +275,11 @@ async fn NativeRuntime::open(
       } else {
         None
       },
+      lsp_tool=lsp.descriptor,
     ) {
     Ok(api) => api
     Err(error) => {
+      lsp.close()
       external_mcp.close()
       ignore(store.close())
       workspace_root.close()
@@ -252,6 +293,7 @@ async fn NativeRuntime::open(
         Ok(_) => ()
         Err(error) => {
           api.close()
+          lsp.close()
           external_mcp.close()
           ignore(store.close())
           workspace_root.close()
@@ -263,6 +305,7 @@ async fn NativeRuntime::open(
     Ok(value) => value
     Err(error) => {
       api.close()
+      lsp.close()
       external_mcp.close()
       ignore(store.close())
       workspace_root.close()
@@ -272,6 +315,7 @@ async fn NativeRuntime::open(
   let identity_key = match service_tailnet_config_from_env() {
     Err(error) => {
       api.close()
+      lsp.close()
       external_mcp.close()
       ignore(store.close())
       workspace_root.close()
@@ -289,6 +333,7 @@ async fn NativeRuntime::open(
     Ok(value) => value
     Err(error) => {
       api.close()
+      lsp.close()
       external_mcp.close()
       ignore(store.close())
       workspace_root.close()
@@ -308,6 +353,7 @@ async fn NativeRuntime::open(
     skills,
     hooks,
     external_mcp,
+    lsp,
     gate: @async.Mutex::Mutex(),
     state: {
       engine: api.snapshot(),
@@ -319,6 +365,7 @@ async fn NativeRuntime::open(
       revision: loaded.revision + 1,
       auth_revision,
       external_mcp_catalog_hash: external_mcp.catalog_hash,
+      lsp_catalog_hash: lsp.catalog_hash,
     },
     stopped: false,
     closed: false,
@@ -328,6 +375,7 @@ async fn NativeRuntime::open(
     Err(error) => {
       runtime.stopped = true
       api.close()
+      lsp.close()
       external_mcp.close()
       auth.close()
       ignore(store.close())
@@ -354,6 +402,7 @@ fn NativeRuntime::checkpoint_locked(
     revision: self.state.revision + 1,
     auth_revision: self.state.auth_revision,
     external_mcp_catalog_hash: self.external_mcp.catalog_hash,
+    lsp_catalog_hash: self.lsp.catalog_hash,
   }
   match self.store.save(next) {
     Ok(_) => {
@@ -1889,6 +1938,8 @@ async fn NativeRuntime::run_tool_effect(
   }
   let tool_result = if self.external_mcp.has_tool(name) {
     self.external_mcp.execute(effect.request())
+  } else if name == "lsp" && self.lsp.descriptor is Some(_) {
+    self.lsp.execute(self.tools, effect.request())
   } else if name == "skill" && self.skills.enabled {
     self.skills.execute(self.tools.root, effect.request())
   } else {
@@ -1905,6 +1956,7 @@ async fn NativeRuntime::close(self : NativeRuntime) -> Result[Unit, String] {
     return Ok(())
   }
   self.external_mcp.close()
+  self.lsp.close()
   self.api.close()
   let checkpoint = self.checkpoint_locked()
   self.closed = true
