@@ -80,6 +80,14 @@ moon run native --target native --release -- --help
 
 ### `dsh` としてインストール
 
+Mooncakes registry から `dsh` command package を install できます。次の例では `dsh` を Moon の既定の `bin` directory に配置します。
+
+```sh
+moon install f4ah6o/dsh/cmd/dsh@0.1.2
+export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
+dsh --help
+```
+
 再帰 submodule を含む checkout から Moon CLI の source install を実行できます。次の例では `dsh` を Moon の `bin` directory に配置します。
 
 ```sh
@@ -94,7 +102,7 @@ dsh web --demo --data-dir /absolute/path/to/dsh-demo-data \
   --workspace /absolute/path/to/project --port 3210
 ```
 
-`dsh web` は browser assets を executable から配信するため、checkout 外から起動できます。埋め込み bundle は source install と release binary の両方に含まれます。`--assets-dir /path/to/web` を明示するとその directory の assets で override できます。Mooncakes registry からの install は、`f4ah6o/gpui` が registry に公開されていないため現在サポートしていません。`f4ah6o/hotpath@0.1.0` は registry から取得できます。再帰 submodule clone を使ってください。
+`dsh web` は browser assets を executable から配信するため、checkout 外から起動できます。埋め込み bundle は source install と release binary の両方に含まれます。`--assets-dir /path/to/web` を明示するとその directory の assets で override できます。source install には再帰 submodule clone を使ってください。
 
 事前に upstream [`moon-binstall`](https://github.com/f4ah6o/moon-binstall) を PATH に導入していれば、GitHub Release の対応 binary を `moon binstall dsh` で install できます。公開 asset は Linux x86-64 / ARM64 と macOS Apple Silicon 向けです。
 
