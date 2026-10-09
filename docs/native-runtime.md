@@ -181,6 +181,52 @@ moon run native --target native --release -- \
   --workspace /absolute/path/to/project
 ```
 
+## ACP stdio agent
+
+`dsh acp` exposes the native runtime as an ACP v1 agent over newline-delimited
+JSON-RPC on stdin and stdout. Start it from an ACP-compatible editor, or use
+the native executable directly for an offline smoke test:
+
+```sh
+dsh acp --demo --data-dir /absolute/path/to/dsh-data \
+  --workspace /absolute/path/to/project
+```
+
+Without `--demo`, provider setup follows the native runtime environment and
+options described above. The agent advertises only the session close
+capability, no image, audio, or embedded-context prompt capabilities, and no
+authentication methods. It accepts `initialize`, `authenticate`,
+`session/new`, `session/prompt`, `session/cancel`, and `session/close`; it does
+not implement session listing, loading, or resuming. A connection can be
+initialized once with protocol version 1.
+
+Each ACP session is bound to the one canonical workspace selected at startup.
+`session/new` requires an absolute `cwd` matching that workspace and rejects
+other working directories, additional directories, and ACP-provided MCP server
+mounts. Existing `--mcp-config` and hooks configuration still apply as startup
+settings. Prompt batches preserve order and accept text
+and `resource_link` blocks; a resource link is rendered as a bracketed name
+and URI in the prompt, and the referenced resource is not fetched. Images,
+audio, embedded context, and other content blocks are rejected. The prompt is
+limited to 16,384 characters, 64 blocks, and the same bounded JSON parser used
+by the ACP transport. Incoming lines are limited to 1 MiB and JSON container
+nesting to 24 levels.
+
+When a native tool needs approval, the agent emits a generic `tool_call` update
+before requesting an explicit `allow-once` or `reject-once` decision. Unknown,
+stale, malformed, and cancelled decisions fail closed. It emits only committed
+assistant message / thought chunks and committed tool lifecycle updates; raw
+provider stream deltas stay private. Cancellation, session close, and stdio EOF
+durably cancel outstanding native work and drain its task before the service
+returns. Restoring the native store retains the committed outcome and does not
+replay an interrupted provider request or tool call.
+
+This is a bounded agent-service increment, not full upstream ACP parity. It
+does not support ACP session list/load/resume, multi-workspace sessions,
+client-mounted MCP servers, resource fetching, attachments, streaming deltas,
+or persistent permission grants. Keyless tests cover the native demo path and
+approval lifecycle; they do not claim a live provider-account smoke test.
+
 ## Native command hooks
 
 `run`, `web`, `mcp`, and `desktop` accept `--hooks-config PATH`. This is an

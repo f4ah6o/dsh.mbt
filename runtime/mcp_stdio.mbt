@@ -35,7 +35,7 @@ fn NativeMcpFramer::take_line(
     self.buffered[self.buffered.length() - 1] == b'\r' {
     ignore(self.buffered.pop())
   }
-  let frame = { bytes: self.buffered, too_large: false, }
+  let frame : NativeMcpFrame = { bytes: self.buffered, too_large: false, }
   self.buffered = []
   frame
 }

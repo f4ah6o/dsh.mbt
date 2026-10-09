@@ -2,7 +2,7 @@
 
 状態: open。最初の browser / CLI 実行経路は [移植状況](../../docs/port-status.md) を参照。
 Model: gpt-6-luna
-Updated: 2026-10-09
+Updated: 2026-10-10
 upstream baseline は `5badb15009ae1756c3afe0ae0cef1faafc290ccc`。
 
 ## 1. Session v4 と replay
@@ -134,6 +134,20 @@ hook command は設定した利用者の trusted shell code として動き、ch
 新しい `effect-known` event source を含む store は dsh 0.1.5 以降で開いてください。以前の native snapshot は
 0.1.5 で開けます。この additional durable content も既存 session capacity 上限を消費します。
 全 upstream lifecycle / event coverage は未実装のため、本 issue は open のままです。
+
+ACP の部分対応（2026-10-10）: pinned upstream `packages/acp` の automation-agent 方向を参照し、native `dsh acp` stdio
+service を追加しました。ACP v1 の initialize / authenticate、session new / prompt / cancel / close、ordered text / resource-link
+prompt subset、generic committed update、engine の per-call approval を接続します。allow-once / reject-once は pending native call ID、
+prompt generation、durable approval revision に結び、unknown / stale / cancelled response は許可しません。cancel / close / EOF は
+durable native cancellation 後に active task を drain し、reopen は中断した provider / tool effect を再送しません。実行 service は native
+runtime のみを使い、stdio integration と native demo runtime の keyless tests で session isolation、pending approval、busy prompt、
+late reply、EOF、durable reopen を確認します。
+
+これは ACP 全体の互換ではありません。接続あたり initialize は一度、session は起動時の単一 canonical workspace に限り、
+additional directory と client MCP mounts は拒否します。prompt block は text と resource_link のみで、resource を fetch せず、
+image / audio / embedded context、list / load / resume、persistent grant、raw stream delta は提供しません。JSON line は 1 MiB、
+nesting は 24、prompt は 16,384 characters、block は 64 個までです。authMethods は空です。実 provider credential を使う ACP smoke test
+は未実行です。本 issue は open のままです。
 
 受入条件:
 
