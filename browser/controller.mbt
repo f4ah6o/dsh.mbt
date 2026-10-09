@@ -446,6 +446,8 @@ fn render_controls(app : BrowserApp) -> Unit {
   }
   dom_set_boolean_property("run-error", "hidden", error == "")
   dom_set_text("run-error", error)
+  dom_set_boolean_property("settings-error", "hidden", app.action_error == "")
+  dom_set_text("settings-error", app.action_error)
   dom_set_boolean_property("action-message", "hidden", app.action_message == "")
   dom_set_text("action-message", app.action_message)
   let status_key = "\{app.id}:\{session_status}:\{string_member(approval, "call_id")}"

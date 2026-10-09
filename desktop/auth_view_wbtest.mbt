@@ -24,3 +24,24 @@ test "ChatGPT settings keyboard focus follows available account controls" {
   assert_eq(desktop_auth_model_slug(connected, 1), "fixture-model-two")
   assert_eq(desktop_auth_model_slug(connected, 2), "")
 }
+
+///|
+test "native model rows clamp after catalog shrink and use provider display names" {
+  let height = 760.0
+  let visible = desktop_settings_visible_model_rows(height)
+  assert_eq(desktop_settings_max_scroll(2, height), 0)
+  assert_eq(desktop_settings_clamp_scroll(8, 2, height), 0)
+  assert_eq(desktop_settings_clamp_scroll(8, visible + 5, height), 5)
+
+  let provider_row = Json::object({
+    "slug": Json::string("gpt-test"),
+    "display_name": Json::string("GPT Test"),
+  })
+  assert_eq(desktop_auth_model_label(provider_row), "GPT Test")
+  assert_eq(
+    desktop_auth_model_label(
+      Json::object({ "slug": Json::string("slug-only") }),
+    ),
+    "slug-only",
+  )
+}

@@ -695,6 +695,16 @@ fn settings_page() -> @yami_kumo.Html {
           ],
         ),
         html_element("div", [html_class("settings-content")], [
+          html_element(
+            "div",
+            [
+              html_id("settings-error"),
+              html_class("notice error-notice settings-error"),
+              html_attribute("role", "alert"),
+              html_boolean_attribute("hidden"),
+            ],
+            [],
+          ),
           html_element("header", [html_class("settings-section-heading")], [
             html_element("h2", [], [html_text("ChatGPT プラン")]),
             html_element("p", [], [

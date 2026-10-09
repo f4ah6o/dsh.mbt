@@ -73,8 +73,27 @@ fn desktop_auth_scroll_for_focus(
   } else if model_index >= state.settings_scroll + visible {
     state.settings_scroll = model_index - visible + 1
   }
-  let maximum = (desktop_auth_model_count(auth) - visible).max(0)
-  state.settings_scroll = state.settings_scroll.min(maximum)
+  state.settings_scroll = desktop_settings_clamp_scroll(
+    state.settings_scroll,
+    desktop_auth_model_count(auth),
+    state.height,
+  )
+}
+
+///|
+fn desktop_auth_clamp_settings_controls(
+  state : DesktopState,
+  auth : Json,
+) -> Unit {
+  state.settings_focus = state.settings_focus
+    .max(0)
+    .min(desktop_auth_focus_count(auth) - 1)
+  state.settings_scroll = desktop_settings_clamp_scroll(
+    state.settings_scroll,
+    desktop_auth_model_count(auth),
+    state.height,
+  )
+  desktop_auth_scroll_for_focus(state, auth, state.settings_focus)
 }
 
 ///|
@@ -82,9 +101,7 @@ async fn desktop_auth_finish_action(state : DesktopState) -> Unit {
   desktop_refresh(state)
   state.auth_busy = false
   let auth = desktop_auth_status(state.snapshot)
-  state.settings_focus = state.settings_focus.min(
-    desktop_auth_focus_count(auth) - 1,
-  )
+  desktop_auth_clamp_settings_controls(state, auth)
   state.dirty = true
 }
 
@@ -228,6 +245,7 @@ async fn desktop_auth_handle_settings_key(
   modifiers : @primitives.Modifiers,
 ) -> Unit {
   let auth = desktop_auth_status(state.snapshot)
+  desktop_auth_clamp_settings_controls(state, auth)
   match key {
     @primitives.Escape => {
       state.settings_open = false
@@ -272,6 +290,7 @@ async fn desktop_auth_handle_settings_click(
   position : @primitives.Point,
 ) -> Unit {
   let auth = desktop_auth_status(state.snapshot)
+  desktop_auth_clamp_settings_controls(state, auth)
   let width = state.width
   let height = state.height
   if desktop_settings_button_rect("settings-close", width, height).contains(

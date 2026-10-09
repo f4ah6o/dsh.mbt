@@ -1291,6 +1291,10 @@ textarea:focus-visible,
   min-width: 0;
 }
 
+.settings-error {
+  margin: 0 0 16px;
+}
+
 .settings-section-heading {
   display: grid;
   gap: 7px;

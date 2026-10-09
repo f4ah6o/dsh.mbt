@@ -11,6 +11,7 @@ test "the MoonBit shell preserves browser entry points and Japanese accessibilit
   assert_true(html.contains("id=\"settings-open-sidebar\""))
   assert_true(html.contains("id=\"settings-page\""))
   assert_true(html.contains("id=\"settings-close\""))
+  assert_true(html.contains("id=\"settings-error\""))
   assert_true(html.contains("id=\"chatgpt-settings-slot\""))
   assert_true(html.contains("id=\"auth-sign-in\""))
   assert_true(html.contains("id=\"auth-sign-out\""))

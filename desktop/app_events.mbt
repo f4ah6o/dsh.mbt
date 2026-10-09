@@ -39,12 +39,11 @@ async fn desktop_handle_event(
         if desktop_auth_connected(auth) &&
           position.y() >= 390.0 &&
           position.y() < state.height - 20.0 {
-          state.settings_scroll = (state.settings_scroll - delta.y().to_int()).max(
-            0,
+          state.settings_scroll = desktop_settings_clamp_scroll(
+            state.settings_scroll - delta.y().to_int(),
+            desktop_auth_model_count(auth),
+            state.height,
           )
-          let maximum = (desktop_auth_model_count(auth) -
-          desktop_settings_visible_model_rows(state.height)).max(0)
-          state.settings_scroll = state.settings_scroll.min(maximum)
         }
       } else {
         state.scroll_up += delta.y()

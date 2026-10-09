@@ -255,6 +255,31 @@ fn desktop_settings_visible_model_rows(height : Double) -> Int {
 }
 
 ///|
+fn desktop_settings_max_scroll(model_count : Int, height : Double) -> Int {
+  (model_count - desktop_settings_visible_model_rows(height)).max(0)
+}
+
+///|
+fn desktop_settings_clamp_scroll(
+  settings_scroll : Int,
+  model_count : Int,
+  height : Double,
+) -> Int {
+  settings_scroll.max(0).min(desktop_settings_max_scroll(model_count, height))
+}
+
+///|
+fn desktop_auth_model_label(model : Json) -> String {
+  let slug = desktop_json_string(model, "slug")
+  let display_name = desktop_json_string(model, "display_name")
+  if display_name == "" {
+    slug
+  } else {
+    display_name
+  }
+}
+
+///|
 fn desktop_settings_model_rect(
   visible_index : Int,
   width : Double,
@@ -1185,8 +1210,12 @@ fn desktop_add_settings(
   } else {
     let models = desktop_json_array(auth, "models")
     let selected_model = desktop_json_string(auth, "selected_model")
-    let first = settings_scroll.max(0).min(models.length())
     let visible = desktop_settings_visible_model_rows(height)
+    let first = desktop_settings_clamp_scroll(
+      settings_scroll,
+      models.length(),
+      height,
+    )
     let last = (first + visible).min(models.length())
     if models.is_empty() {
       desktop_add_text(
@@ -1204,11 +1233,7 @@ fn desktop_add_settings(
     for model_index = first; model_index < last; model_index = model_index + 1 {
       let model = models[model_index]
       let slug = desktop_json_string(model, "slug")
-      let label = if desktop_json_string(model, "name") == "" {
-        slug
-      } else {
-        desktop_json_string(model, "name")
-      }
+      let label = desktop_auth_model_label(model)
       let visible_index = model_index - first
       let row = desktop_settings_model_rect(visible_index, width, height)
       let is_selected = slug != "" && slug == selected_model
