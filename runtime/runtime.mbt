@@ -9,6 +9,7 @@ priv struct NativeRuntime {
   provider_config : NativeProviderConfig
   tools : NativeTools
   skills : NativeSkills
+  hooks : NativeHooks
   external_mcp : NativeMcpPool
   scheduler : NativeScheduler
   gate : @async.Mutex
@@ -120,6 +121,7 @@ async fn NativeRuntime::open(
   mcp_config_path? : String? = None,
   enable_skills? : Bool = false,
   skill_dirs? : Array[String] = [],
+  hooks_config_path? : String? = None,
 ) -> Result[NativeRuntime, String] {
   let provider_config = match
     native_provider_config(
@@ -130,6 +132,10 @@ async fn NativeRuntime::open(
   }
   let workspace_path = @fs.realpath(workspace) catch {
     _ => return Err("cannot resolve workspace directory")
+  }
+  let hooks = match NativeHooks::load(hooks_config_path, workspace_path) {
+    Ok(value) => value
+    Err(error) => return Err(error)
   }
   let workspace_root = match SafeRoot::open(workspace_path) {
     Ok(root) => root
@@ -300,6 +306,7 @@ async fn NativeRuntime::open(
       workspace_device, workspace_inode,
     ),
     skills,
+    hooks,
     external_mcp,
     gate: @async.Mutex::Mutex(),
     state: {
@@ -1609,7 +1616,8 @@ async fn NativeRuntime::run_effects_in_control(
                 effect,
               ) {
                 match effect.kind() {
-                  @engine.EffectType::Tool => self.run_tool_effect(effect)
+                  @engine.EffectType::Tool =>
+                    self.run_tool_effect(effect, control=Some(control))
                   @engine.EffectType::Provider =>
                     self.run_provider_effect(effect)
                 }
@@ -1723,14 +1731,162 @@ async fn NativeRuntime::complete(
 }
 
 ///|
+/// Persist the actual host result before running advisory post-tool hooks.
+/// If cancellation or restart interrupts a hook, the engine can settle this
+/// known outcome without replaying the external effect.
+async fn NativeRuntime::record_tool_outcome(
+  self : NativeRuntime,
+  effect : @engine.EngineEffect,
+  result : Json,
+) -> Result[Unit, String] {
+  self.gate.acquire()
+  defer self.gate.release()
+  if self.stopped || self.closed {
+    return Err("native runtime is stopped")
+  }
+  match self.api.record_effect_outcome(effect.id(), result) {
+    Err(error) => Err(error)
+    Ok(session) =>
+      match self.checkpoint_locked() {
+        Err(error) => Err(error)
+        Ok(_) if native_effect_outcome_was_admitted(
+            session,
+            effect.id().as_string(),
+          ) => Ok(())
+        Ok(_) =>
+          Err(
+            "known tool outcome was not admitted; the session reached a terminal state",
+          )
+      }
+  }
+}
+
+///|
+fn native_effect_outcome_was_admitted(
+  session : Json,
+  effect_id : String,
+) -> Bool {
+  string_field(session, "status") == Some("running") &&
+  (match object_field(session, "events") {
+    Some(Json::Array(events)) =>
+      events.any(event => {
+        if string_field(event, "type") != Some("tool/completed") {
+          false
+        } else {
+          let data = object_field(event, "data").unwrap_or(Json::null())
+          string_field(data, "source") == Some("effect-known") &&
+          string_field(data, "effect_id") == Some(effect_id)
+        }
+      })
+    _ => false
+  })
+}
+
+///|
+async fn NativeRuntime::finish_tool_effect(
+  self : NativeRuntime,
+  effect : @engine.EngineEffect,
+  session_id : String,
+  tool_result : Json,
+  control? : NativeJobControl? = None,
+) -> Result[(Json, Array[@engine.EngineEffect]), String] {
+  let name = string_field(effect.request(), "name").unwrap_or("")
+  let post_hook_matches = self.hooks.has_post_tool_match(name)
+  if post_hook_matches {
+    match
+      @async.protect_from_cancel(async fn() {
+        self.record_tool_outcome(effect, tool_result)
+      }) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
+  }
+  if control is Some(value) && value.cancelled.val {
+    if !post_hook_matches {
+      @async.protect_from_cancel(async fn() {
+        ignore(self.complete(effect.id(), tool_result))
+      })
+    }
+    return Err("native command was cancelled after tool execution")
+  }
+  let post_action = if post_hook_matches {
+    let post_outcome = @async.handle_cancellation(async fn() {
+      self.hooks.after_tool(
+        self.tools,
+        session_id,
+        effect.request(),
+        tool_result,
+      )
+    })
+    match post_outcome {
+      Some(value) => value
+      None =>
+        // The engine has a durable staged outcome and cancellation will settle
+        // it while retiring this effect. Do not race a second completion.
+        return Err("native command was cancelled after tool execution")
+    }
+  } else {
+    Ok(NativeHookAction::Continue)
+  }
+  if control is Some(value) && value.cancelled.val {
+    if !post_hook_matches {
+      @async.protect_from_cancel(async fn() {
+        ignore(self.complete(effect.id(), tool_result))
+      })
+    }
+    return Err("native command was cancelled after tool execution")
+  }
+  let final_result = match post_action {
+    Err(_) =>
+      tool_error(
+        "PostToolUse hook returned an unsupported result after the tool ran; side effects may already have occurred",
+      )
+    Ok(NativeHookAction::Deny(reason)) =>
+      tool_error(
+        "PostToolUse hook blocked the result after the tool ran; side effects may already have occurred: " +
+        native_hook_limit_reason(reason),
+      )
+    Ok(NativeHookAction::Continue) => tool_result
+  }
+  self.complete(effect.id(), final_result)
+}
+
+///|
 async fn NativeRuntime::run_tool_effect(
   self : NativeRuntime,
   effect : @engine.EngineEffect,
+  control? : NativeJobControl? = None,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
   if effect.kind() != @engine.EffectType::Tool {
     return Err("effect is not a tool")
   }
   let name = string_field(effect.request(), "name").unwrap_or("")
+  let session_id = effect.session_id().as_string()
+  let pre_action = self.hooks.before_tool(
+    self.tools,
+    session_id,
+    effect.request(),
+  )
+  if control is Some(value) && value.cancelled.val {
+    return Err("native command was cancelled")
+  }
+  match pre_action {
+    Err(_) =>
+      return self.complete(
+        effect.id(),
+        tool_error(
+          "PreToolUse hook returned an unsupported result; tool was not run",
+        ),
+      )
+    Ok(NativeHookAction::Deny(reason)) =>
+      return self.complete(
+        effect.id(),
+        tool_error(
+          "blocked by PreToolUse hook: " + native_hook_limit_reason(reason),
+        ),
+      )
+    Ok(NativeHookAction::Continue) => ()
+  }
   let tool_result = if self.external_mcp.has_tool(name) {
     self.external_mcp.execute(effect.request())
   } else if name == "skill" && self.skills.enabled {
@@ -1738,7 +1894,7 @@ async fn NativeRuntime::run_tool_effect(
   } else {
     self.tools.execute(effect.request())
   }
-  self.complete(effect.id(), tool_result)
+  self.finish_tool_effect(effect, session_id, tool_result, control~)
 }
 
 ///|

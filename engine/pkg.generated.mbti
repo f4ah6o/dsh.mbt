@@ -32,6 +32,7 @@ pub fn Engine::invoke(Self, String, Json) -> Result[Json, String]
 pub fn Engine::new(Array[Json]) -> Self
 pub fn Engine::project_effect_stream(Self, EffectId, String, String) -> Result[Json, String]
 pub fn Engine::project_stream(Self, String, String, String) -> Result[Json, String]
+pub fn Engine::record_effect_outcome(Self, String, Json) -> Result[Json, String]
 pub fn Engine::restore(Self, Json) -> Result[Unit, String]
 pub fn Engine::schedule_effect_retry(Self, EffectId, Json) -> Result[Json, String]
 pub fn Engine::schedule_retry(Self, String, Json) -> Result[Json, String]

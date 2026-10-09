@@ -43,6 +43,7 @@ priv enum CallStage {
   Approved
   Denied
   Dispatched
+  OutcomeKnown
   Completed
   Settled
 } derive(Eq)

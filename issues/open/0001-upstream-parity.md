@@ -86,7 +86,7 @@ pruning event 自体が保存量を増やすため、262,144 UTF-16 code unit �
 ## 3. 拡張機能と tool 統合
 
 MoonBit の typed service / lifetime を定義して、startup metadata から動的な拡張境界へ進める。
-external MCP client と workspace skills は限定対応済み。ACP、hooks、LSP、subagent の順に相関と終了条件を仕様化する。
+External MCP client、workspace skills、native command hook subset は限定対応済み。ACP、追加 hook event、LSP、subagent の順に相関と終了条件を仕様化する。
 Cordis / npm plugin をそのまま動かす場合は別の互換 host を設計し、MoonBit-only plugin とは区別する。
 
 部分対応（2026-10-07）: `effect: "read"` に静的分類した連続 tool call は最大 4 件の rolling pool で並列実行し、
@@ -112,6 +112,28 @@ replacement と durable catalog message、runtime skill registry、full YAML / a
 Cordis / npm code は含みません。catalog は起動時の provider tool description です。skill を含む store の
 reopen には `--enable-skills` が必要で、同じ custom roots を指定して継続利用してください。upstream の
 dynamic scoped registry / lifecycle semantics は引き続き未実装で、本 issue は open のままです。
+
+native command hooks の部分対応（2026-10-09）: pinned upstream `hooks` と
+`hooks-claude-code` を参照し、native `run` / `web` / `mcp` / `desktop` に明示的な
+`--hooks-config PATH` を追加しました。現行範囲は `PreToolUse` / `PostToolUse` の command hooks、
+literal exact matcher / `|` alternatives / `*`、JSON stdin、64 KiB config / stdin、各出力 16 KiB、
+1–120 秒 timeout、process-group cancellation cleanup です。PreToolUse は engine の必要な approval 後に
+実行され、hook の `allow` は approval を迂回しません。exit 2 と対応する `block` / `deny` は拒否し、
+PostToolUse が拒否しても実行済み write / remote call は巻き戻しません。
+
+PostToolUse に一致する tool は host outcome を `effect-known` source の durable event として hook の前に
+checkpoint します。cancel / restore は既知の結果を順序通り settle し、external tool や hook を再実行しません。
+通常の no-hook / no-match tool 経路には追加 event を書きません。keyless integration は explicit approval、
+pre-denial、successful post-hook reopen、post-cancel と uncertain receipt replay / reopen、並列 read の結果順、
+overflow / timeout / explicit cancellation を検証します。
+
+これは upstream 互換全体ではありません。regex / partial wildcard、その他 event、async / prompt hooks、
+`ask` による新しい approval prompt、feedback / `additionalContext`、`${CLAUDE_PLUGIN_ROOT}`、
+hook-specific diagnostic event は未対応です。config / structured result は厳密に検証し、1–120 秒を上限とします。
+hook command は設定した利用者の trusted shell code として動き、child environment は small allowlist に限定します。
+新しい `effect-known` event source を含む store は dsh 0.1.5 以降で開いてください。以前の native snapshot は
+0.1.5 で開けます。この additional durable content も既存 session capacity 上限を消費します。
+全 upstream lifecycle / event coverage は未実装のため、本 issue は open のままです。
 
 受入条件:
 

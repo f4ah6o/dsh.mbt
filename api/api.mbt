@@ -427,6 +427,22 @@ pub fn HarnessApi::complete_effect(
 }
 
 ///|
+/// Record a known host tool outcome without retiring its effect. Native hosts
+/// use this to protect completed side effects while they run post-tool hooks.
+pub fn HarnessApi::record_effect_outcome(
+  self : HarnessApi,
+  id : @engine.EffectId,
+  result : Json,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.record_effect_outcome", () => {
+    self.engine.record_effect_outcome(id.as_string(), result)
+  })
+}
+
+///|
 pub fn HarnessApi::schedule_retry(
   self : HarnessApi,
   id : String,

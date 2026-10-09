@@ -191,6 +191,32 @@ fn Engine::stage_host_tool_result(
 }
 
 ///|
+/// Record that the host effect succeeded before running advisory post-tool
+/// hooks. The active effect stays fenced until the host supplies its final
+/// hook-adjusted result or the session is cancelled/restored.
+fn Session::stage_host_tool_outcome(
+  self : Session,
+  call : ToolCall,
+  effect_id : String,
+  content : String,
+  is_error : Bool,
+) -> Unit {
+  call.stage = OutcomeKnown
+  call.completed_content = Some(content)
+  call.completed_error = Some(is_error)
+  self.append(
+    "tool/completed",
+    object([
+      ("source", Json::string("effect-known")),
+      ("call_id", Json::string(call.id)),
+      ("effect_id", Json::string(effect_id)),
+      ("content", Json::string(content)),
+      ("is_error", boolean(is_error)),
+    ]),
+  )
+}
+
+///|
 fn Engine::complete_tool_effect(
   self : Engine,
   session : Session,
@@ -209,7 +235,8 @@ fn Engine::complete_tool_effect(
     Some(call) => call
     None => raise Invalid("Tool effect call is missing")
   }
-  if call.stage != Dispatched || call.effect_id != Some(effect_id) {
+  if (call.stage != Dispatched && call.stage != OutcomeKnown) ||
+    call.effect_id != Some(effect_id) {
     raise Invalid("Tool effect no longer matches its call")
   }
   let is_error = !bool_value(required_field(result, "ok"), "ok")
@@ -219,6 +246,49 @@ fn Engine::complete_tool_effect(
     required_string(result, "content")
   }
   self.stage_host_tool_result(session, call, effect_id, content, is_error)
+}
+
+///|
+fn Engine::record_effect_outcome_impl(
+  self : Engine,
+  effect_id : String,
+  result : Json,
+) -> Result[Json, String] {
+  try {
+    let effect = match self.effects.get(effect_id) {
+      Some(effect) => effect
+      None => raise Invalid("Unknown or settled effect: \{effect_id}")
+    }
+    let session = self.lookup(effect.session_id)
+    let call_id = match effect.call_id {
+      Some(call_id) => call_id
+      None => raise Invalid("Tool effect has no call identity")
+    }
+    if effect.kind != ToolExecution ||
+      session.status != Running ||
+      session.turn_id != effect.turn_id ||
+      session.step != effect.step ||
+      session.active_tool_effects.get(effect_id) != Some(call_id) {
+      raise Invalid("Tool effect is no longer active for this session")
+    }
+    let call = match session.call_by_id(call_id) {
+      Some(call) => call
+      None => raise Invalid("Tool effect call is missing")
+    }
+    if call.stage != Dispatched || call.effect_id != Some(effect_id) {
+      raise Invalid("Tool effect no longer matches its call")
+    }
+    let is_error = !bool_value(required_field(result, "ok"), "ok")
+    let content = if is_error {
+      required_string(result, "error")
+    } else {
+      required_string(result, "content")
+    }
+    session.stage_host_tool_outcome(call, effect_id, content, is_error)
+    Ok(session.json())
+  } catch {
+    Invalid(message) => Err(message)
+  }
 }
 
 ///|

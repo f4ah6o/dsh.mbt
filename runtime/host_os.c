@@ -20,6 +20,8 @@
 #include <dlfcn.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
+#elif defined(__linux__)
+#include <sys/syscall.h>
 #endif
 #endif
 
@@ -663,6 +665,87 @@ static int dsh_parse_number_field(char **cursor, char *limit,
 }
 
 /*
+ * The async process backend creates pipes with pipe() and marks them
+ * close-on-exec in a separate call. A concurrent spawn can therefore inherit
+ * another worker's pipe ends during that interval. Keep only this worker's
+ * stdio when it execs the requested program so those transient descriptors
+ * cannot keep sibling captures open.
+ */
+static int dsh_close_worker_descriptors_from(const char *directory_path) {
+  DIR *directory = opendir(directory_path);
+  if (!directory) return errno;
+  int directory_fd = dirfd(directory);
+  if (directory_fd < 0) {
+    int saved = errno;
+    closedir(directory);
+    return saved;
+  }
+  size_t capacity = 32;
+  size_t count = 0;
+  int *descriptors = (int *)malloc(capacity * sizeof(int));
+  if (!descriptors) {
+    closedir(directory);
+    return ENOMEM;
+  }
+  int saved = 0;
+  errno = 0;
+  struct dirent *entry;
+  while ((entry = readdir(directory)) != NULL) {
+    char *end = NULL;
+    errno = 0;
+    long descriptor = strtol(entry->d_name, &end, 10);
+    if (errno || end == entry->d_name || *end != '\0' ||
+        descriptor <= STDERR_FILENO || descriptor == directory_fd ||
+        descriptor > INT_MAX) {
+      errno = 0;
+      continue;
+    }
+    if (count == capacity) {
+      if (capacity > SIZE_MAX / (2 * sizeof(int))) {
+        saved = ENOMEM;
+        break;
+      }
+      capacity *= 2;
+      int *larger = (int *)realloc(descriptors, capacity * sizeof(int));
+      if (!larger) {
+        saved = errno ? errno : ENOMEM;
+        break;
+      }
+      descriptors = larger;
+    }
+    descriptors[count++] = (int)descriptor;
+  }
+  if (!saved && errno) saved = errno;
+  if (closedir(directory) != 0 && !saved) saved = errno;
+  if (!saved) {
+    for (size_t i = 0; i < count; ++i) {
+      if (close(descriptors[i]) != 0 && errno != EBADF) {
+        saved = errno;
+        break;
+      }
+    }
+  }
+  free(descriptors);
+  if (saved) return saved;
+  return 0;
+}
+
+static int dsh_close_worker_descriptors(void) {
+#ifdef __APPLE__
+  return dsh_close_worker_descriptors_from("/dev/fd");
+#elif defined(__linux__)
+#ifdef SYS_close_range
+  if (syscall(SYS_close_range, STDERR_FILENO + 1, ~0U, 0U) == 0) return 0;
+#endif
+  /* Do not infer an upper bound from RLIMIT_NOFILE: an inherited descriptor
+   * can exceed a soft limit lowered after it was opened. */
+  return dsh_close_worker_descriptors_from("/proc/self/fd");
+#else
+  return ENOTSUP;
+#endif
+}
+
+/*
  * The official async process API does not expose posix_spawn attributes.
  * This child trampoline applies hard resource caps and creates a new session
  * before executing a workspace tool. Its PID is therefore the process-group
@@ -823,6 +906,12 @@ int dsh_exec_worker(const uint8_t *payload, int length) {
     return ESTALE;
   }
   close(workspace_fd);
+  int close_status = dsh_close_worker_descriptors();
+  if (close_status != 0) {
+    free(argv);
+    free(storage);
+    return close_status;
+  }
   execvp(argv[0], argv);
   int saved = errno;
   free(argv);

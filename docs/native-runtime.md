@@ -181,6 +181,93 @@ moon run native --target native --release -- \
   --workspace /absolute/path/to/project
 ```
 
+## Native command hooks
+
+`run`, `web`, `mcp`, and `desktop` accept `--hooks-config PATH`. This is an
+explicit opt-in to running trusted shell commands as the host user. The same
+option works when launching the desktop app with `dsh desktop`; use an absolute
+config path there because LaunchServices may choose a different process launch
+directory. For CLI and service commands, a relative config path is resolved
+from the process launch directory, independently of `--workspace`. Hook
+commands themselves run with the selected workspace as their working
+directory.
+
+The config may contain a top-level `hooks` object, or put these events at the
+root. Only command-based `PreToolUse` and `PostToolUse` groups are supported:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "write|edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR}/scripts/check-write.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "mcp__docs-server__lookup",
+        "hooks": [{ "command": "/absolute/path/to/audit-hook" }]
+      }
+    ]
+  }
+}
+```
+
+The `matcher` is an exact tool name, `*` for every tool, or literal names
+separated by `|`. Tool names may contain letters, digits, `_`, and `-`, which
+covers public MCP aliases. Regex and partial wildcards such as `write.*` are
+rejected. An omitted matcher applies to every tool. Each event accepts at most
+16 groups and 32 commands; each command is limited to 8,192 characters. The
+config is limited to 64 KiB. `timeout` is an integer number of seconds from 1
+to 120, defaulting to 10 seconds (upstream allows longer waits). Each hook
+receives one JSON object on stdin, limited to 64 KiB. Stdout and stderr are
+captured independently up to 16 KiB each; overflow is treated as an unsupported
+result.
+
+The payload includes `session_id`, an empty `transcript_path`, the canonical
+workspace `cwd`, `hook_event_name`, `tool_name`, `tool_input`, and
+`tool_use_id`; PostToolUse also includes the string `tool_response`. Pass data
+through stdin rather than interpolating tool input into command text. The child
+gets only `PATH`, `LANG`, `LC_ALL`, and `CLAUDE_PROJECT_DIR`; it does not inherit
+provider credentials or the rest of the host environment. Quote workspace
+paths in shell commands as `"${CLAUDE_PROJECT_DIR}"`.
+
+PreToolUse runs after the engine has recorded the call and received any
+required explicit approval. A hook's `allow` result never approves a tool or
+overrides the engine's approval gate. Exit status 2 denies and uses stderr as
+the reason. On exit status 0, the supported structured results are top-level
+`decision: "block"` / `"approve"` and matching
+`hookSpecificOutput.permissionDecision: "allow"` / `"deny"`; exit codes other
+than 0 or 2, spawn errors, and timeout are nonblocking. A structured `ask`
+cannot open a new approval prompt at this point and is rejected safely.
+PostToolUse runs after the tool has acted; a deny or malformed response marks
+the result as an error but cannot undo a write or remote call. If cancellation
+or shutdown stops PostToolUse after the tool completed, the known result is
+checkpointed and settled without replay.
+
+The parser rejects unknown config fields, unsupported events, malformed JSON,
+unknown result fields, unsupported feedback or `additionalContext`, and
+truncated output; these strict errors differ from upstream's permissive
+handling. Only live PreToolUse and PostToolUse command hooks run. Restore,
+Session v4 import, receipt replay, and retries do not rerun hooks. Arbitrary
+async/prompt hooks, `${CLAUDE_PLUGIN_ROOT}` substitution, and dedicated durable
+`hook/*` diagnostic events are not implemented. A matching PostToolUse hook
+adds a durable `effect-known` result event before running the hook. Native
+session capacity limits still apply to this additional stored result.
+
+Stores that contain `effect-known` events from this opt-in path require dsh
+0.1.5 or later: dsh 0.1.4 and earlier readers reject this event source. dsh
+0.1.5 can still read earlier native snapshots. A matching post-hook result is
+checkpointed even when the hook later denies it, so restore can settle the
+known tool outcome without repeating host work.
+
 `--approve-call` and `--deny-call` act on a session that is already waiting for approval, for example one started from the browser or MCP carrier. Pass its current `approval_revision` and `pending_approval.call_id`; stale or mismatched decisions are rejected:
 
 ```sh

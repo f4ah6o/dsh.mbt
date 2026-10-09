@@ -9,6 +9,7 @@ priv struct DesktopConfig {
   base_url : String
   max_retries : Int
   mcp_config_path : String?
+  hooks_config_path : String?
   enable_skills : Bool
   skill_dirs : Array[String]
   smoke : Bool
@@ -192,8 +193,8 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
     "/tmp/dsh-desktop-frame.ppm",
   )
   let values = [
-    "--workspace", "--data-dir", "--mcp-config", "--skill-dir", "--mode", "--model",
-    "--base-url", "--max-retries", "--frame-output",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--skill-dir",
+    "--mode", "--model", "--base-url", "--max-retries", "--frame-output",
   ]
   let flags = [
     "--demo", "--allow-shell", "--enable-skills", "--smoke", "--offline-e2e", "--visual-smoke",
@@ -219,6 +220,9 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
   if desktop_argument_values(args, "--skill-dir").length() > 8 {
     return Err("--skill-dir may be specified at most 8 times")
   }
+  if desktop_argument_values(args, "--hooks-config").length() > 1 {
+    return Err("--hooks-config may only be specified once")
+  }
   Ok({
     workspace,
     data_dir,
@@ -229,6 +233,7 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
     base_url: desktop_argument_value(args, "--base-url").unwrap_or(""),
     max_retries,
     mcp_config_path: desktop_argument_value(args, "--mcp-config"),
+    hooks_config_path: desktop_argument_value(args, "--hooks-config"),
     enable_skills: desktop_argument_flag(args, "--enable-skills"),
     skill_dirs: desktop_argument_values(args, "--skill-dir"),
     smoke: desktop_argument_flag(args, "--smoke"),
@@ -239,7 +244,7 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
 
 ///|
 fn desktop_usage() -> String {
-  "Usage: dsh-desktop [--workspace PATH] [--data-dir PATH] [--mcp-config PATH] [--enable-skills] [--skill-dir PATH] [--mode MODE] [--model NAME] [--base-url URL] [--max-retries 0..5] [--allow-shell] [--demo]\n" +
+  "Usage: dsh-desktop [--workspace PATH] [--data-dir PATH] [--mcp-config PATH] [--hooks-config PATH] [--enable-skills] [--skill-dir PATH] [--mode MODE] [--model NAME] [--base-url URL] [--max-retries 0..5] [--allow-shell] [--demo]\n" +
   "       dsh-desktop --smoke [--workspace PATH] [--data-dir PATH]\n" +
   "       dsh-desktop --offline-e2e --workspace PATH --data-dir PATH [--frame-output FILE]\n\n" +
   "A native macOS conversation window backed by dsh's local runtime. Send a prompt, review tool calls, and approve or deny them in the transcript. Use Command-V to paste and Up/Down or PageUp/PageDown to scroll history. Japanese input through system IME composition is not supported by the current GPUI text host; paste works."

@@ -11,6 +11,7 @@ async fn desktop_run(config : DesktopConfig) -> Result[Unit, String] {
       base_url=config.base_url,
       max_retries=config.max_retries,
       mcp_config_path=config.mcp_config_path,
+      hooks_config_path=config.hooks_config_path,
       enable_skills=config.enable_skills,
       skill_dirs=config.skill_dirs,
     ) {

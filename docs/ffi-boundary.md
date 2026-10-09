@@ -39,6 +39,11 @@ stdout/stderr flushing, and the low-level SHA-256 / RS256 primitives used by
 MoonBit authentication code. Its filesystem walk rejects absolute paths and
 `.` / `..` components as a syscall-level guard; MoonBit still owns workspace
 admission, path normalization, bounds, tool policy, and error semantics.
+The process trampoline pins and verifies the workspace before changing
+directory, applies resource limits, then closes every inherited descriptor
+above stdin/stdout/stderr before executing the requested program. This also
+contains transient pipe descriptors inherited during concurrent native
+spawns.
 `oauth_os.c` supplies entropy, Unix time, and launching a validated authorization
 URL in the host browser. `signal_os.c` installs and restores minimal SIGINT /
 SIGTERM handlers and reports the requested signal; MoonBit owns shutdown and

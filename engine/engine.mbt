@@ -715,7 +715,11 @@ fn Engine::terminate(
         session.cursor + 1,
       )
     }
-    if call.stage == Completed {
+    if call.stage == OutcomeKnown {
+      call.stage = Completed
+      call.effect_id = None
+      session.commit_completed_tool_result(call)
+    } else if call.stage == Completed {
       session.commit_completed_tool_result(call)
     } else {
       if call.stage == Dispatched {
