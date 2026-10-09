@@ -164,3 +164,20 @@ The retired Node host's tests and their native replacements are mapped in [the r
 - [Engine boundary](engine/README.md)
 - [Provider wire protocol](provider/README.md)
 - [Third-party licenses](THIRD_PARTY_NOTICES.md)
+
+## Versioned native releases
+
+Edit the `version` field in `moon.mod` to the intended SemVer version
+(e.g., `0.1.0` to `0.1.1`) and merge that change into `main`.
+The release workflow compares the previous and new **version values**, not
+just the file modification date. On a version increase it validates
+version consistency, builds three native platforms, then creates the
+immutable `vX.Y.Z` tag and GitHub Release for the matching commit.
+Other changes to `moon.mod` do not publish. Version downgrades fail.
+
+An explicitly pushed `vX.Y.Z` tag remains supported only when the tag
+matches `moon.mod`; the workflow never edits source versions or bumps
+versions on its own. Publishing requires successful binary builds and
+GitHub Actions permission to create a Release.
+
+The `dsh` executable is built from the tagged commit.
