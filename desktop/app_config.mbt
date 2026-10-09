@@ -8,6 +8,7 @@ priv struct DesktopConfig {
   model : String
   base_url : String
   max_retries : Int
+  mcp_config_path : String?
   smoke : Bool
   offline_e2e : Bool
   frame_output : String
@@ -171,8 +172,8 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
     "/tmp/dsh-desktop-frame.ppm",
   )
   let values = [
-    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--max-retries",
-    "--frame-output",
+    "--workspace", "--data-dir", "--mcp-config", "--mode", "--model", "--base-url",
+    "--max-retries", "--frame-output",
   ]
   let flags = [
     "--demo", "--allow-shell", "--smoke", "--offline-e2e", "--visual-smoke",
@@ -200,6 +201,7 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
     model: desktop_argument_value(args, "--model").unwrap_or(""),
     base_url: desktop_argument_value(args, "--base-url").unwrap_or(""),
     max_retries,
+    mcp_config_path: desktop_argument_value(args, "--mcp-config"),
     smoke: desktop_argument_flag(args, "--smoke"),
     offline_e2e,
     frame_output,
@@ -208,7 +210,7 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
 
 ///|
 fn desktop_usage() -> String {
-  "Usage: dsh-desktop [--workspace PATH] [--data-dir PATH] [--mode MODE] [--model NAME] [--base-url URL] [--max-retries 0..5] [--allow-shell] [--demo]\n" +
+  "Usage: dsh-desktop [--workspace PATH] [--data-dir PATH] [--mcp-config PATH] [--mode MODE] [--model NAME] [--base-url URL] [--max-retries 0..5] [--allow-shell] [--demo]\n" +
   "       dsh-desktop --smoke [--workspace PATH] [--data-dir PATH]\n" +
   "       dsh-desktop --offline-e2e --workspace PATH --data-dir PATH [--frame-output FILE]\n\n" +
   "A native macOS conversation window backed by dsh's local runtime. Send a prompt, review tool calls, and approve or deny them in the transcript. Use Command-V to paste and Up/Down or PageUp/PageDown to scroll history. Japanese input through system IME composition is not supported by the current GPUI text host; paste works."

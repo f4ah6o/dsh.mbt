@@ -20,6 +20,7 @@ async test "native snapshot writes exceed the workspace file limit but stay boun
       epoch: "test-epoch",
       revision: 1,
       auth_revision: 0,
+      external_mcp_catalog_hash: None,
     }
     assert_true(store.save(state) is Ok(_))
     let loaded = match store.load() {

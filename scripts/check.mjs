@@ -131,7 +131,7 @@ function checkFfiInventory() {
     'dsh_fs_set_root_mode', 'dsh_fs_stat_fd', 'dsh_fs_stat_root', 'dsh_fs_unlink',
     'dsh_kill_process', 'dsh_kill_process_group', 'dsh_os_executable_path', 'dsh_os_flush_stderr',
     'dsh_os_flush_stdout', 'dsh_os_hard_worker_memory_supported', 'dsh_os_hostname',
-    'dsh_os_pid', 'dsh_os_process_alive', 'dsh_os_stdin_is_terminal',
+    'dsh_os_pid', 'dsh_os_process_alive', 'dsh_os_process_group_alive', 'dsh_os_stdin_is_terminal',
     'dsh_os_timestamp', 'dsh_os_uid', 'dsh_service_signals_install',
     'dsh_service_signals_requested', 'dsh_service_signals_restore',
   ].sort();

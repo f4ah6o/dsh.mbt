@@ -47,6 +47,82 @@ moon run native --target native --release -- \
   --workspace /absolute/path/to/project
 ```
 
+## External MCP stdio tools
+
+`run`, `web`, `mcp`, and `desktop` accept `--mcp-config PATH` to start configured
+MCP servers over newline-delimited JSON-RPC on stdio. The config is read only at
+startup. A minimal file looks like this:
+
+```json
+{
+  "servers": [
+    {
+      "name": "docs",
+      "command": "/absolute/path/to/mcp-server",
+      "args": ["--stdio"],
+      "cwd": "/absolute/path/to/project",
+      "env": { "SERVICE_TOKEN": "DOCS_SERVICE_TOKEN" },
+      "toolCallTimeoutMs": 60000
+    }
+  ]
+}
+```
+
+`name`, `command`, and `args` identify a server process; `cwd`, `env`, and
+`toolCallTimeoutMs` are optional. The default working directory is the selected
+workspace, and the default call timeout is 60 seconds. The `env` object maps
+child variable names to names of variables already present in the host
+environment. It never contains secret bytes. The child receives a small
+baseline environment (`PATH`, `LANG`, `LC_ALL`) plus only those explicit
+mappings; stderr is discarded. Commands are executed directly with argv, not
+through a shell. Because an MCP server runs with the current user's operating
+system privileges, configure only servers you trust.
+
+Each discovered tool is exposed as `mcp__SERVER__TOOL` (with a stable suffix
+when normalization or length limits require one). Calls are serialized per
+server. Calls require explicit approval by default, including tools whose
+server claims they are read-only. Foreground `dsh run` may auto-approve an exact
+external name only when it is listed with `--approve-tools
+mcp__SERVER__TOOL`. Text results are projected into the conversation;
+image and audio content is omitted. The runtime accepts object input schemas
+using `type`, `properties`, `required`, boolean `additionalProperties`, `items`,
+and `enum`, plus bounded `$schema`, `$id`, `title`, `description`, `default`,
+`examples`, `deprecated`, `readOnly`, and `writeOnly` annotations. Unsupported
+schema keywords and tools requiring MCP task execution are rejected during
+startup.
+
+The config supports up to 8 servers and 64 tools total. It and the child
+environment values are not written to the native data directory. The store
+records a fingerprint of the discovered tool names, descriptions, and schemas
+so persisted calls are only restored against the same catalog. Keep that
+catalog stable and pass a matching `--mcp-config` on every later open, including
+when reopening from `web` or the desktop app. A mismatch is rejected before the
+stored engine is adopted. Native-only data created before this feature can
+adopt its first catalog if it contains no historical `mcp__` tool calls.
+
+If stdio fails, the server exits, the request times out or is cancelled, or the
+server sends malformed JSON-RPC after a `tools/call` was sent, the result says
+the remote outcome is unknown. The failed connection is closed and the call is
+never replayed after reopening the session. A complete JSON-RPC response with
+`isError: true` or invalid MCP content is treated as a known server/tool-result
+error.
+
+For example, start a local browser service and a foreground CLI session with
+the same config:
+
+```sh
+moon run native --target native --release -- \
+  web --mcp-config /absolute/path/to/mcp.json \
+  --data-dir /absolute/path/to/dsh-data \
+  --workspace /absolute/path/to/project
+
+moon run native --target native --release -- \
+  run 'Find the relevant documentation.' \
+  --mcp-config /absolute/path/to/mcp.json \
+  --data-dir /absolute/path/to/dsh-data \
+  --workspace /absolute/path/to/project
+```
+
 `--approve-call` and `--deny-call` act on a session that is already waiting for approval, for example one started from the browser or MCP carrier. Pass its current `approval_revision` and `pending_approval.call_id`; stale or mismatched decisions are rejected:
 
 ```sh

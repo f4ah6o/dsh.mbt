@@ -8,6 +8,7 @@ priv struct NativeRuntime {
   auth : NativeAuth
   provider_config : NativeProviderConfig
   tools : NativeTools
+  external_mcp : NativeMcpPool
   scheduler : NativeScheduler
   gate : @async.Mutex
   mut state : NativeState
@@ -115,6 +116,7 @@ async fn NativeRuntime::open(
   model_override? : String = "",
   base_url_override? : String = "",
   max_retries? : Int = 5,
+  mcp_config_path? : String? = None,
 ) -> Result[NativeRuntime, String] {
   let provider_config = match
     native_provider_config(
@@ -174,12 +176,38 @@ async fn NativeRuntime::open(
     workspace_root.close()
     return Err("host data directory must be separate from the workspace root")
   }
+  let external_mcp = match
+    NativeMcpPool::open(
+      mcp_config_path, worker_launcher, workspace_path, workspace_device, workspace_inode,
+    ) {
+    Ok(value) => value
+    Err(error) => {
+      ignore(store.close())
+      workspace_root.close()
+      return Err(error)
+    }
+  }
+  if loaded.engine != Json::null() &&
+    !native_mcp_catalog_matches_stored(
+      loaded.external_mcp_catalog_hash,
+      external_mcp.catalog_hash,
+      loaded.engine,
+    ) {
+    external_mcp.close()
+    ignore(store.close())
+    workspace_root.close()
+    return Err(
+      "stored external MCP tool catalog differs from the configured servers; reopen with the same --mcp-config and tool schemas",
+    )
+  }
   let recovered_receipts = native_mark_unfinished_receipts_uncertain(
     loaded.receipts,
   )
-  let api = match @api.HarnessApi::new() {
+  let api = match
+    @api.HarnessApi::new(external_mcp_tools=external_mcp.descriptors) {
     Ok(api) => api
     Err(error) => {
+      external_mcp.close()
       ignore(store.close())
       workspace_root.close()
       return Err(error)
@@ -192,6 +220,7 @@ async fn NativeRuntime::open(
         Ok(_) => ()
         Err(error) => {
           api.close()
+          external_mcp.close()
           ignore(store.close())
           workspace_root.close()
           return Err("cannot restore native engine snapshot: " + error)
@@ -202,6 +231,7 @@ async fn NativeRuntime::open(
     Ok(value) => value
     Err(error) => {
       api.close()
+      external_mcp.close()
       ignore(store.close())
       workspace_root.close()
       return Err(error)
@@ -210,6 +240,7 @@ async fn NativeRuntime::open(
   let identity_key = match service_tailnet_config_from_env() {
     Err(error) => {
       api.close()
+      external_mcp.close()
       ignore(store.close())
       workspace_root.close()
       return Err(error)
@@ -231,6 +262,7 @@ async fn NativeRuntime::open(
     Ok(value) => value
     Err(error) => {
       api.close()
+      external_mcp.close()
       ignore(store.close())
       workspace_root.close()
       return Err(error)
@@ -246,6 +278,7 @@ async fn NativeRuntime::open(
       workspace_root, workspace_path, blocked_path, allow_shell, worker_launcher,
       workspace_device, workspace_inode,
     ),
+    external_mcp,
     gate: @async.Mutex::Mutex(),
     state: {
       engine: api.snapshot(),
@@ -256,6 +289,7 @@ async fn NativeRuntime::open(
       epoch,
       revision: loaded.revision + 1,
       auth_revision,
+      external_mcp_catalog_hash: external_mcp.catalog_hash,
     },
     stopped: false,
     closed: false,
@@ -265,6 +299,7 @@ async fn NativeRuntime::open(
     Err(error) => {
       runtime.stopped = true
       api.close()
+      external_mcp.close()
       auth.close()
       ignore(store.close())
       workspace_root.close()
@@ -289,6 +324,7 @@ fn NativeRuntime::checkpoint_locked(
     epoch: self.state.epoch,
     revision: self.state.revision + 1,
     auth_revision: self.state.auth_revision,
+    external_mcp_catalog_hash: self.external_mcp.catalog_hash,
   }
   match self.store.save(next) {
     Ok(_) => {
@@ -1656,7 +1692,12 @@ async fn NativeRuntime::run_tool_effect(
   if effect.kind() != @engine.EffectType::Tool {
     return Err("effect is not a tool")
   }
-  let tool_result = self.tools.execute(effect.request())
+  let name = string_field(effect.request(), "name").unwrap_or("")
+  let tool_result = if self.external_mcp.has_tool(name) {
+    self.external_mcp.execute(effect.request())
+  } else {
+    self.tools.execute(effect.request())
+  }
   self.complete(effect.id(), tool_result)
 }
 
@@ -1667,6 +1708,7 @@ async fn NativeRuntime::close(self : NativeRuntime) -> Result[Unit, String] {
   if self.closed {
     return Ok(())
   }
+  self.external_mcp.close()
   self.api.close()
   let checkpoint = self.checkpoint_locked()
   self.closed = true
@@ -1863,8 +1905,10 @@ async fn verify_native_demo_reload(
   data_dir : String,
   workspace : String,
   demo_id : String,
+  mcp_config_path? : String? = None,
 ) -> Result[Unit, String] {
-  let runtime = match NativeRuntime::open(data_dir, workspace, false, false) {
+  let runtime = match
+    NativeRuntime::open(data_dir, workspace, false, false, mcp_config_path~) {
     Ok(runtime) => runtime
     Err(error) => return Err("cannot reopen native demo state: " + error)
   }

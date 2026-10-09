@@ -16,6 +16,16 @@
 
 ### Migration
 
+## 0.1.3 - 2026-10-09
+
+### Added
+
+- Add an opt-in native MCP stdio client for `dsh run`, `web`, `mcp`, and `desktop`, configured with `--mcp-config`. It discovers and routes bounded tool catalogs and injects child environment values by host variable name. Every external tool call requires approval by default; foreground `dsh run` can auto-approve a specific public tool name through `--approve-tools`. Native persistence fingerprints the discovered catalog so incompatible schemas cannot be adopted on reopen. The implementation supports a bounded JSON Schema subset and text results; it does not implement MCP task execution or remote transports. ([native runtime guide](docs/native-runtime.md#external-mcp-stdio-tools), [remaining port work](issues/open/0001-upstream-parity.md))
+
+### Changed
+
+- Native-only session stores created before 0.1.3 can adopt their first external MCP catalog when they have no historical `mcp__` tool calls. Once a catalog has been persisted, later opens require the same discovered tool catalog.
+
 ## 0.1.2 - 2026-10-09
 
 ### Added
