@@ -63,3 +63,53 @@ test "unknown tool effects fail atomically and schemas reject extra properties" 
     }
   }
 }
+
+///|
+test "skill loader descriptor is read-only and carries exact catalog entries" {
+  let tool = @plugins.skill_tool([
+    ("review-plan", "Review plans against project constraints"),
+    ("test-workflow", "Run the repository's test workflow"),
+  ])
+  match tool {
+    {
+      "name": String("skill"),
+      "description": String(description),
+      "effect": String("read"),
+      "input_schema": {
+        "additionalProperties": False,
+        "properties": { "name": { "type": String("string"), .. }, .. },
+        "required": Array(required),
+        "type": String("object"),
+        ..
+      },
+      ..
+    } => {
+      assert_true(description.contains("review-plan"))
+      assert_true(description.contains("test-workflow"))
+      assert_false(
+        description.contains(
+          "No model-invocable workspace skills are available",
+        ),
+      )
+      assert_true(
+        description.contains("Review plans against project constraints"),
+      )
+      assert_eq(required.length(), 1)
+      match required[0] {
+        String("name") => ()
+        _ => fail("skill loader requires the skill name")
+      }
+    }
+    _ => fail("skill loader must use the bounded read-only tool schema")
+  }
+  let empty_tool = @plugins.skill_tool([])
+  match empty_tool {
+    { "description": String(description), .. } =>
+      assert_true(
+        description.contains(
+          "No model-invocable workspace skills are available",
+        ),
+      )
+    _ => fail("empty skill catalog must be described to the provider")
+  }
+}

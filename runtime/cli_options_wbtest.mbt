@@ -31,6 +31,24 @@ test "native CLI preserves subcommand arguments and bounds retry and approval op
     native_cli_approved_tools(["dsh-native", "--approve-tools", "bash"], false)
     is Err(_),
   )
+  let skill_args = native_cli_normalize_args([
+    "dsh-native", "run", "Use a skill", "--enable-skills", "--skill-dir", "tools/skills",
+    "--skill-dir", "extra/skills",
+  ])
+  assert_eq(skill_args, [
+    "dsh-native", "--enable-skills", "--skill-dir", "tools/skills", "--skill-dir",
+    "extra/skills", "--run", "Use a skill",
+  ])
+  assert_eq(native_cli_options(skill_args, "--skill-dir"), [
+    "tools/skills", "extra/skills",
+  ])
+  assert_true(
+    native_cli_validate_args([
+      "dsh-native", "--skill-dir", "tools/skills", "--run", "Use a skill",
+    ])
+    is Err(_),
+  )
+  assert_true(native_cli_validate_args(skill_args) is Ok(_))
 }
 
 ///|

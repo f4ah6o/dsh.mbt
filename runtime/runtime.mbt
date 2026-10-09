@@ -8,6 +8,7 @@ priv struct NativeRuntime {
   auth : NativeAuth
   provider_config : NativeProviderConfig
   tools : NativeTools
+  skills : NativeSkills
   external_mcp : NativeMcpPool
   scheduler : NativeScheduler
   gate : @async.Mutex
@@ -117,6 +118,8 @@ async fn NativeRuntime::open(
   base_url_override? : String = "",
   max_retries? : Int = 5,
   mcp_config_path? : String? = None,
+  enable_skills? : Bool = false,
+  skill_dirs? : Array[String] = [],
 ) -> Result[NativeRuntime, String] {
   let provider_config = match
     native_provider_config(
@@ -176,6 +179,22 @@ async fn NativeRuntime::open(
     workspace_root.close()
     return Err("host data directory must be separate from the workspace root")
   }
+  let blocked_path = if store.path().has_prefix(workspace_path + "/") {
+    Some(store.path()[workspace_path.length() + 1:].to_owned())
+  } else {
+    None
+  }
+  let skills = match
+    NativeSkills::discover(
+      workspace_root, enable_skills, skill_dirs, blocked_path,
+    ) {
+    Ok(value) => value
+    Err(error) => {
+      ignore(store.close())
+      workspace_root.close()
+      return Err(error)
+    }
+  }
   let external_mcp = match
     NativeMcpPool::open(
       mcp_config_path, worker_launcher, workspace_path, workspace_device, workspace_inode,
@@ -204,7 +223,14 @@ async fn NativeRuntime::open(
     loaded.receipts,
   )
   let api = match
-    @api.HarnessApi::new(external_mcp_tools=external_mcp.descriptors) {
+    @api.HarnessApi::new(
+      external_mcp_tools=external_mcp.descriptors,
+      skill_tool=if enable_skills {
+        Some(@plugins.skill_tool(skills.model_catalog()))
+      } else {
+        None
+      },
+    ) {
     Ok(api) => api
     Err(error) => {
       external_mcp.close()
@@ -253,11 +279,6 @@ async fn NativeRuntime::open(
   } else {
     loaded.auth_revision + 1
   }
-  let blocked_path = if store.path().has_prefix(workspace_path + "/") {
-    Some(store.path()[workspace_path.length() + 1:].to_owned())
-  } else {
-    None
-  }
   let auth = match NativeAuth::open(store) {
     Ok(value) => value
     Err(error) => {
@@ -278,6 +299,7 @@ async fn NativeRuntime::open(
       workspace_root, workspace_path, blocked_path, allow_shell, worker_launcher,
       workspace_device, workspace_inode,
     ),
+    skills,
     external_mcp,
     gate: @async.Mutex::Mutex(),
     state: {
@@ -353,6 +375,10 @@ async fn NativeRuntime::invoke(
   defer self.gate.release()
   if self.stopped || self.closed {
     return Err("native runtime is stopped")
+  }
+  let input = match self.prepare_input(operation, input) {
+    Ok(value) => value
+    Err(error) => return Err(error)
   }
   let result = match self.api.invoke(operation, input) {
     Ok(value) => value
@@ -878,14 +904,26 @@ async fn NativeRuntime::accept_remote_command(
         None => ()
       }
     }
-    match self.api.invoke(command.operation, input) {
+    let dispatch_input = match self.prepare_input(command.operation, input) {
+      Ok(value) => value
       Err(error) => {
         status = "rejected"
         error_message = Some(bounded_tool_text(error))
+        Json::null()
       }
-      Ok(value) => {
-        result = Some(value)
-        effects = self.api.take_typed_effects()
+    }
+    if status == "rejected" {
+      ()
+    } else {
+      match self.api.invoke(command.operation, dispatch_input) {
+        Err(error) => {
+          status = "rejected"
+          error_message = Some(bounded_tool_text(error))
+        }
+        Ok(value) => {
+          result = Some(value)
+          effects = self.api.take_typed_effects()
+        }
       }
     }
   }
@@ -1695,6 +1733,8 @@ async fn NativeRuntime::run_tool_effect(
   let name = string_field(effect.request(), "name").unwrap_or("")
   let tool_result = if self.external_mcp.has_tool(name) {
     self.external_mcp.execute(effect.request())
+  } else if name == "skill" && self.skills.enabled {
+    self.skills.execute(self.tools.root, effect.request())
   } else {
     self.tools.execute(effect.request())
   }

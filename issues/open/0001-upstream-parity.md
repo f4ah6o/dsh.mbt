@@ -2,7 +2,7 @@
 
 状態: open。最初の browser / CLI 実行経路は [移植状況](../../docs/port-status.md) を参照。
 Model: gpt-6-luna
-Updated: 2026-10-07
+Updated: 2026-10-09
 upstream baseline は `5badb15009ae1756c3afe0ae0cef1faafc290ccc`。
 
 ## 1. Session v4 と replay
@@ -86,7 +86,7 @@ pruning event 自体が保存量を増やすため、262,144 UTF-16 code unit �
 ## 3. 拡張機能と tool 統合
 
 MoonBit の typed service / lifetime を定義して、startup metadata から動的な拡張境界へ進める。
-external MCP client、ACP、hooks、LSP、skills、subagent の順に相関と終了条件を仕様化する。
+external MCP client と workspace skills は限定対応済み。ACP、hooks、LSP、subagent の順に相関と終了条件を仕様化する。
 Cordis / npm plugin をそのまま動かす場合は別の互換 host を設計し、MoonBit-only plugin とは区別する。
 
 部分対応（2026-10-07）: `effect: "read"` に静的分類した連続 tool call は最大 4 件の rolling pool で並列実行し、
@@ -96,6 +96,22 @@ Cordis / npm plugin をそのまま動かす場合は別の互換 host を設計
 parallel-tool-calls fixture の keyless runtime 経路と、pool refill、barrier、approval、cancel、capacity、reopen を検証します。
 upstream default pool size 10 ではなく 4 に制限し、dynamic safety classification、parallel write / shell、full upstream tool policy は
 引き続き未実装です。本 issue 全体は open のままです。
+
+workspace skill の部分対応（2026-10-09）: pinned upstream の `skill`, `skill-filesystem`,
+`tool-skill` を元に、native runtime の `--enable-skills` と repeatable `--skill-dir PATH`、
+workspace 内 `.dsh/skills` / `.agents/skills` / custom roots の決定的な discovery、bounded
+frontmatter、model / user invocation controls、provider tool schema の static summary catalog、
+read-only `skill` loader を追加しました。ユーザーの `/name` は user-invocable skill の本文と
+provenance marker を user message に追加し、checkpoint 後に provider effect を返します。tool body と
+source は result に含まれ、restore 時に同じ `skill` tool が無ければ engine validation が store を拒否します。
+ordinary store は skill tool を有効にして開けます。symlink と protected runtime store を避け、body / result /
+catalog の各上限を適用し、rename / policy change / disappearance を再読込時に再検証します。
+
+これは upstream と同じ機能面全体ではありません。user-home / bundled / URL roots、file watcher、live catalog
+replacement と durable catalog message、runtime skill registry、full YAML / arbitrary metadata、resource loader、
+Cordis / npm code は含みません。catalog は起動時の provider tool description です。skill を含む store の
+reopen には `--enable-skills` が必要で、同じ custom roots を指定して継続利用してください。upstream の
+dynamic scoped registry / lifecycle semantics は引き続き未実装で、本 issue は open のままです。
 
 受入条件:
 

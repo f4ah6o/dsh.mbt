@@ -2,7 +2,7 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) の MoonBit 移植です。session、event log、agent / tool loop、承認、provider protocol、HTTP/MCP service、CLI、browser UI の product logic は MoonBit で動きます。native executable が唯一の product runtime です。Node.js は build/check/test tooling にだけ使い、browser JavaScript と service worker は MoonBit compiler の生成物です。
 
-**現在は最初の動作する移植版です。** browser / CLI と macOS native desktop app から会話し、workspace tool と opt-in の外部 MCP stdio tool を実行して履歴を保存できます。Session v4 は明示的な read-only import に限って対応し、Cordis / npm plugin 互換、subagent、live compaction などは未実装です。対応範囲と差分は[移植状況](docs/port-status.md)、native MCP server の設定と制約は[native runtime guide](docs/native-runtime.md#external-mcp-stdio-tools)、今回の native / SIWC / iOS 実装は[実装状況](docs/implementation-status.md)を参照してください。
+**現在は最初の動作する移植版です。** browser / CLI と macOS native desktop app から会話し、workspace tool、opt-in の外部 MCP stdio tool、opt-in の workspace skill を実行して履歴を保存できます。Session v4 は明示的な read-only import に限って対応し、Cordis / npm plugin 互換、subagent、live compaction などは未実装です。対応範囲と差分は[移植状況](docs/port-status.md)、native MCP server と workspace skill の設定・制約は[native runtime guide](docs/native-runtime.md#workspace-skills)、今回の native / SIWC / iOS 実装は[実装状況](docs/implementation-status.md)を参照してください。
 
 ## Build and run
 
@@ -60,7 +60,8 @@ native executable は `run`、`import-session`、`prune-session`、`fork-session
 
 ```sh
 moon run native --target native --release -- \
-  run 'この workspace のファイルを確認してください' --workspace /absolute/path/to/project --json
+  run 'この workspace のファイルを確認してください' --enable-skills \
+  --workspace /absolute/path/to/project --json
 
 moon run native --target native --release -- \
   import-session /path/to/session.v4.jsonl --workspace /absolute/path/to/project --json
@@ -76,14 +77,14 @@ moon run native --target native --release -- --help
 
 `run` は完了した会話を出力し、`--json` は session JSON を返します。`--data-dir` を省略すると workspace の `.dsh.mbt` を使います。同じ data directory を複数 runtime で同時に開けません。CLI の write / edit / bash は承認が必要です。対話端末では Allow を尋ね、非対話では turn を cancel して失敗します。`--approve-writes` と `--approve-tools write,edit` は明示した startup approval policy です。bash の自動承認には `--allow-shell --approve-tools bash` の両方が必要です。外部 MCP server は `run`、`web`、`mcp`、`desktop` に `--mcp-config PATH` を渡して opt-in します。外部 MCP tool call は既定で毎回承認を求めます。`dsh run` では `--approve-tools mcp__SERVER__TOOL` に exact tool name を明示した場合だけ、自動承認できます。
 
-`import-session` は bounded な upstream Session v4 JSONL を検証し、read-only history として保存します。記録された tool、permission、preset は実行や有効化に使いません。`fork-session` は settled な未 import session から idle child を作り、provider / tool / approval / retry を再生しません。native CLI は gpui MCP protocol を `mcp` subcommand から newline-delimited stdio で公開します。
+`import-session` は bounded な upstream Session v4 JSONL を検証し、read-only history として保存します。記録された tool、permission、preset は実行や有効化に使いません。`fork-session` は settled な未 import session から idle child を作り、provider / tool / approval / retry を再生しません。native CLI は gpui MCP protocol を `mcp` subcommand から newline-delimited stdio で公開します。Workspace skill は `--enable-skills` で opt-in し、既定の `.dsh/skills` / `.agents/skills` と最大 8 個の workspace-relative `--skill-dir PATH` を読みます。`--skill-dir` は `run`、`web`、`mcp`、`desktop` で指定でき、各 runtime を再度開く際にも `--enable-skills` を維持してください。skill tool call を含む store はこの tool が無効だと restore できません。
 
 ### `dsh` としてインストール
 
 Mooncakes registry から `dsh` command package を install できます。次の例では `dsh` を Moon の既定の `bin` directory に配置します。
 
 ```sh
-moon install f4ah6o/dsh/cmd/dsh@0.1.3
+moon install f4ah6o/dsh/cmd/dsh@0.1.4
 export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 dsh --help
 ```
@@ -129,11 +130,12 @@ Native v1 は versioned data envelope と command receipt を保存します。�
 | `read` | `file_path`, optional `offset`, `limit` | Automatic |
 | `glob` | `pattern`, optional `path` | Automatic |
 | `grep` | `pattern`, optional `path` | Automatic, bounded search/output |
+| `skill` | exact `name` from the workspace skill catalog | Automatic read; only with `--enable-skills` |
 | `write` | `file_path`, `content` | Per-call approval |
 | `edit` | `file_path`, `old_string`, `new_string`, optional `replace_all` | Per-call approval |
 | `bash` | `command`, optional `description`, `timeout` | `--allow-shell` and per-call approval |
 
-File tools stay within the workspace and reject traversal, symlinks, and protected runtime data. Native glob implements a documented subset. Regex grep is disabled on macOS when a hard worker memory limit cannot be enforced. Bash runs as a normal OS child process in the workspace; there is no OS filesystem/network sandbox, so enable it only when its host-user permissions are appropriate.
+File tools and the skill loader stay within the workspace, reject traversal and symlinks, and avoid the protected runtime store. Skills are loaded from bounded Markdown frontmatter and returned as instructions; they do not run scripts, Cordis plugins, or npm code. The native catalog is static for each runtime start. Keep `--enable-skills` and the selected workspace roots enabled when reopening stores that contain skill calls. Native glob implements a documented subset. Regex grep is disabled on macOS when a hard worker memory limit cannot be enforced. Bash runs as a normal OS child process in the workspace; there is no OS filesystem/network sandbox, so enable it only when its host-user permissions are appropriate.
 
 ## API and verification
 

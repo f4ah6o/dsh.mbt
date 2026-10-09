@@ -16,6 +16,26 @@
 
 ### Migration
 
+## 0.1.4 - 2026-10-09
+
+### Added
+
+- Add opt-in native workspace skills for `dsh run`, `web`, `mcp`, and `desktop`. `--enable-skills` scans `.dsh/skills` and `.agents/skills`; repeatable workspace-relative `--skill-dir` adds custom roots. A model-facing read-only loader returns bounded skill instructions, while a leading user `/name` invokes only user-enabled skills. This is a static workspace-only subset; it does not load Cordis/npm plugins or execute skill scripts. ([native runtime guide](docs/native-runtime.md#workspace-skills), [remaining port work](issues/open/0001-upstream-parity.md))
+
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
+- Keep `--enable-skills` enabled when reopening a store with historical skill tool calls; the engine requires their registered tool schema during restore. Stores without historical skill calls can opt in to skills when reopened.
+
 ## 0.1.3 - 2026-10-09
 
 ### Added

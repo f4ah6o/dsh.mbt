@@ -238,7 +238,7 @@ fn native_effect_is_parallel_read(effect : @engine.EngineEffect) -> Bool {
     return false
   }
   match object_field(effect.request(), "name") {
-    Some(Json::String(name)) => ["read", "glob", "grep"].contains(name)
+    Some(Json::String(name)) => ["read", "glob", "grep", "skill"].contains(name)
     _ => false
   }
 }
