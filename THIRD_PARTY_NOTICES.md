@@ -17,7 +17,7 @@ invoked.
 
 The `vendor/gpui` Git submodule pins
 [gpui-mbt/gpui.mbt](https://github.com/gpui-mbt/gpui.mbt) at
-`7335e13abe85c65d2a0f60571adc68faa8e64cdd`. Its MoonBit module name is
+`2c6e9a3df469922f79d7b2b8eb977a0524086486`. Its MoonBit module name is
 `f4ah6o/gpui`. Licensed under Apache License 2.0; see
 [`vendor/gpui/LICENSE`](vendor/gpui/LICENSE).
 

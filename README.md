@@ -2,7 +2,7 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) の MoonBit 移植です。session、event log、agent / tool loop、承認、provider protocol、HTTP/MCP service、CLI、browser UI の product logic は MoonBit で動きます。native executable が唯一の product runtime です。Node.js は build/check/test tooling にだけ使い、browser JavaScript と service worker は MoonBit compiler の生成物です。
 
-**現在は最初の動作する移植版です。** browser / CLI から会話し、workspace tool を実行して履歴を保存できます。Session v4 は明示的な read-only import に限って対応し、Cordis / npm plugin 互換、subagent、live compaction、native window などは未実装です。対応範囲と差分は[移植状況](docs/port-status.md)、今回の native / SIWC / iOS 実装は[実装状況](docs/implementation-status.md)を参照してください。
+**現在は最初の動作する移植版です。** browser / CLI と macOS native desktop app から会話し、workspace tool を実行して履歴を保存できます。Session v4 は明示的な read-only import に限って対応し、Cordis / npm plugin 互換、subagent、live compaction などは未実装です。対応範囲と差分は[移植状況](docs/port-status.md)、今回の native / SIWC / iOS 実装は[実装状況](docs/implementation-status.md)を参照してください。
 
 ## Build and run
 
@@ -21,7 +21,7 @@ moon install
 sh scripts/build.sh
 ```
 
-`sh scripts/build.sh` は native executable、MoonBit browser module、MoonBit service worker と Mooncakes から導入した Yami-kumo CSS を生成・配置します。Node/npm を呼びません。fresh checkout では service 起動や web test の前に build が必要です。`npm test` は最初に build を実行します。`npm run check` は生成 assets がない状態でも実行でき、存在する場合は MoonBit compiler output と比較します。`web/moonbit/browser.js` と `web/sw.js` は compiler 生成物で Git 管理せず、build 後も browser の runtime URL は同じです。
+`sh scripts/build.sh` は MoonBit browser module と service worker、Mooncakes から導入した Yami-kumo CSS を生成・配置し、すべての browser assets を `runtime/bundled_web.mbt` に埋め込んでから native runtime と `dsh` CLI を build します。Node/npm は使いません。fresh checkout の `npm run check` は compiler 生成 assets の freshness check を skip し、assets が build 済みなら embedded bundle との一致も確認します。`web/moonbit/browser.js` と `web/sw.js` は compiler 生成物で Git 管理せず、build 後も browser の runtime URL は同じです。
 
 API key を使わない browser demo は native service を loopback で起動します。
 
@@ -90,17 +90,21 @@ mkdir -p "${MOON_HOME:-$HOME/.moon}/bin"
 moon install ./cmd/dsh --bin "${MOON_HOME:-$HOME/.moon}/bin"
 export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 dsh --help
+dsh web --demo --data-dir /absolute/path/to/dsh-demo-data \
+  --workspace /absolute/path/to/project --port 3210
 ```
 
-`dsh` の terminal CLI と MCP server は checkout 外から実行できます。Mooncakes registry からの install は、`f4ah6o/gpui` が registry に公開されていないため現在サポートしていません。`f4ah6o/hotpath@0.1.0` は registry から取得できます。再帰 submodule clone を使ってください。
+`dsh web` は browser assets を executable から配信するため、checkout 外から起動できます。埋め込み bundle は source install と release binary の両方に含まれます。`--assets-dir /path/to/web` を明示するとその directory の assets で override できます。Mooncakes registry からの install は、`f4ah6o/gpui` が registry に公開されていないため現在サポートしていません。`f4ah6o/hotpath@0.1.0` は registry から取得できます。再帰 submodule clone を使ってください。
 
 事前に upstream [`moon-binstall`](https://github.com/f4ah6o/moon-binstall) を PATH に導入していれば、GitHub Release の対応 binary を `moon binstall dsh` で install できます。公開 asset は Linux x86-64 / ARM64 と macOS Apple Silicon 向けです。
 
+### macOS native app
+
+GitHub Release の `Dsh-macos-arm64.zip` に macOS 13+ / Apple Silicon 向けの `Dsh.app` を含めます。`/Applications` または `~/Applications` に置くと、`dsh desktop` から起動できます。インストール、source build、UI と現在の IME 制約は[native desktop guide](docs/desktop.md)を参照してください。release app は ad-hoc signed で、Developer ID signed / notarized ではありません。
+
 ## Browser UI and data
 
-Browser UI は MoonBit module から生成される JavaScript と service worker、Mooncakes の `f4ah6o/yami_kumo@0.1.0` から導入する styles で構成します。React や Node.js host は product runtime に含みません。日本語 UI は会話検索、responsive navigation / details drawer、session details、fork、tool output pruning を提供します。設定は browser local storage、session は native data directory に保存し、公式 API に履歴をアップロードしません。iOS UI は別の受け入れ範囲です。
-
-配布 binary には browser assets を埋め込んでいません。checkout 外で web service を起動する場合は、checkout で `sh scripts/build.sh` を実行してから `dsh web --assets-dir /path/to/dsh.mbt/web ...` を指定してください。terminal と MCP の利用には web assets は不要です。
+Browser UI は MoonBit module から生成される JavaScript と service worker、Mooncakes の `f4ah6o/yami_kumo@0.1.0` から導入する styles で構成します。これらと HTML、manifest、icon を `dsh` executable に埋め込み、`dsh web` から配信します。React や Node.js host は product runtime に含みません。日本語 UI は会話検索、responsive navigation / details drawer、session details、fork、tool output pruning を提供します。設定は browser local storage、session は native data directory に保存し、公式 API に履歴をアップロードしません。iOS UI は別の受け入れ範囲です。
 
 Native v1 は versioned data envelope と command receipt を保存します。初回起動時に対応する legacy snapshot / Session v4 input を native envelope に一方向変換します。旧版 Node host はこの envelope を読めないため、upgrade 前に data directory を backup してください。旧 Node host はこの版では配布しません。migration の境界は[native runtime guide](docs/native-runtime.md#data-directory-compatibility)に記載しています。
 

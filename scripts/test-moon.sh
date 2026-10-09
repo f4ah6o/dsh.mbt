@@ -20,4 +20,5 @@ if [ ! -x "$native_worker" ]; then
 fi
 DSH_NATIVE_WORKER_BIN="$native_worker" moon test runtime --target native --frozen --target-dir "$native_test_root/tests"
 
+sh scripts/build.sh
 sh scripts/test-install.sh

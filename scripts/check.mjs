@@ -8,7 +8,7 @@ const portablePackages = [
   'verification/retry_math',
 ];
 const ownPackages = [
-  ...portablePackages, 'app', 'native', 'runtime', 'cmd/dsh', 'browser', 'browser/sw',
+  ...portablePackages, 'app', 'native', 'runtime', 'cmd/dsh', 'browser', 'browser/sw', 'desktop',
 ];
 
 function checkPackages(packages, target) {
@@ -99,7 +99,7 @@ function checkPureMoonBitInventory() {
   const forbidden = [];
   for (const directory of [
     'app', 'auth', 'browser', 'client', 'cmd', 'engine', 'host', 'native', 'plugins',
-    'provider', 'protocol', 'runtime', 'ui', 'web',
+    'provider', 'protocol', 'runtime', 'ui', 'web', 'desktop',
   ]) {
     forbidden.push(...sourceFiles(join(projectRoot, directory)).map(file =>
       relative(projectRoot, file).split(sep).join('/')).filter(path => {
@@ -145,7 +145,7 @@ function checkFfiInventory() {
   const unexpectedFfi = [];
   for (const directory of [
     'app', 'auth', 'browser', 'client', 'engine', 'plugins', 'provider',
-    'protocol', 'ui', 'verification', 'cmd',
+    'protocol', 'ui', 'verification', 'cmd', 'desktop',
   ]) {
     for (const file of moonBitFiles(join(projectRoot, directory))) {
       const source = readFileSync(file, 'utf8');
@@ -177,9 +177,15 @@ try {
   run('moon', ['fmt', '--check', ...ownPackages]);
   checkPackages(portablePackages, 'all');
   checkPackages(['app'], 'js');
-  checkPackages(['native', 'runtime', 'cmd/dsh'], 'native');
+  checkPackages(['native', 'runtime', 'cmd/dsh', 'desktop'], 'native');
   checkPackages(['browser', 'browser/sw'], 'js');
   checkPureMoonBitInventory();
+  if (existsSync(join(projectRoot, 'web/moonbit/browser.js')) &&
+      existsSync(join(projectRoot, 'web/sw.js'))) {
+    run('sh', ['scripts/generate-bundled-web.sh', '--check']);
+  } else {
+    console.log('Embedded bundle freshness check skipped; compiled web assets are absent.');
+  }
   checkFfiInventory();
   const files = ['web', 'scripts', 'tests']
     .flatMap(directory => javascriptFiles(join(projectRoot, directory)));
