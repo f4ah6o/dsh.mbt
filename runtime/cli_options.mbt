@@ -1,10 +1,10 @@
 ///|
 fn native_cli_is_value_option(argument : String) -> Bool {
   [
-    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--port", "--max-retries",
-    "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
-    "--approve-tools", "--approval-revision", "--run", "--fork", "--import-session",
-    "--prune-session", "--approve-call", "--deny-call", "--select-model",
+    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir",
+    "--max-retries", "--host", "--session", "--title", "--threshold-chars", "--head-chars",
+    "--tail-chars", "--approve-tools", "--approval-revision", "--run", "--fork",
+    "--import-session", "--prune-session", "--approve-call", "--deny-call", "--select-model",
   ].contains(argument)
 }
 
@@ -17,10 +17,10 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
     "web", "run", "import-session", "prune-session", "fork-session", "mcp",
   ]
   let value_options = [
-    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--port", "--max-retries",
-    "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
-    "--approve-tools", "--approval-revision", "--run", "--fork", "--import-session",
-    "--prune-session", "--approve-call", "--deny-call", "--select-model",
+    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir",
+    "--max-retries", "--host", "--session", "--title", "--threshold-chars", "--head-chars",
+    "--tail-chars", "--approve-tools", "--approval-revision", "--run", "--fork",
+    "--import-session", "--prune-session", "--approve-call", "--deny-call", "--select-model",
   ]
   let mut command_index = -1
   let mut scan = 1
@@ -58,9 +58,9 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
   let mut after_separator = false
   let mut index = 2
   let subcommand_value_options = [
-    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--port", "--max-retries",
-    "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
-    "--approve-tools", "--approval-revision",
+    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir",
+    "--max-retries", "--host", "--session", "--title", "--threshold-chars", "--head-chars",
+    "--tail-chars", "--approve-tools", "--approval-revision",
   ]
   while index < reordered.length() {
     let argument = reordered[index]
@@ -244,9 +244,9 @@ fn native_cli_paths(args : Array[String]) -> Result[(String, String), String] {
 /// The subcommand aliases have already been normalized to their long options.
 fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
   let value_options = [
-    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--port", "--max-retries",
-    "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
-    "--approve-tools", "--run", "--fork", "--import-session", "--prune-session",
+    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir",
+    "--max-retries", "--host", "--session", "--title", "--threshold-chars", "--head-chars",
+    "--tail-chars", "--approve-tools", "--run", "--fork", "--import-session", "--prune-session",
     "--approve-call", "--deny-call", "--approval-revision", "--select-model",
   ]
   let boolean_options = [

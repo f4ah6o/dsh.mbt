@@ -42,16 +42,16 @@ jobs:
         run: |
           moon update
           moon install
-      - name: Build MoonBit native executable
-        run: moon build native --target native --release --frozen
+      - name: Build dsh Moon CLI executable
+        run: moon build cmd/dsh --target native --release --frozen
       - name: Package raw release asset
         shell: bash
         run: |
           set -euo pipefail
-          binaries=$(find _build/native/release/build -type f -name 'native.exe' -print)
+          binaries=$(find _build/native/release/build -type f -name 'dsh.exe' -print)
           count=$(printf '%s\n' "$binaries" | grep -c . || true)
           if [ "$count" -ne 1 ]; then
-            printf 'Expected exactly one native.exe, got %s\n' "$count" >&2
+            printf 'Expected exactly one dsh.exe, got %s\n' "$count" >&2
             exit 1
           fi
           mkdir -p release

@@ -2,7 +2,7 @@
 /// Native runtime boundary. All HarnessApi changes and durable checkpoints are
 /// serialized by `gate`; effects are returned only after the matching snapshot
 /// has reached stable storage.
-struct NativeRuntime {
+priv struct NativeRuntime {
   api : @api.HarnessApi
   store : NativeStore
   auth : NativeAuth
@@ -18,7 +18,7 @@ struct NativeRuntime {
 ///|
 /// Immutable host-level provider settings. API-key bytes are read into an
 /// effect-local value immediately before dispatch and never stored here.
-struct NativeProviderConfig {
+priv struct NativeProviderConfig {
   protocol : NativeProtocol
   auth_mode : NativeAuthMode
   model : String
@@ -137,14 +137,17 @@ async fn NativeRuntime::open(
       return Err(error)
     }
   }
-  let process_args = @env.args()
-  if process_args.length() == 0 {
-    workspace_root.close()
-    return Err("cannot locate native worker executable")
+  let worker_path = match @env.get_env_var("DSH_NATIVE_WORKER_BIN") {
+    Some(path) => path
+    None =>
+      match native_executable_path() {
+        Ok(path) => path
+        Err(error) => {
+          workspace_root.close()
+          return Err(error)
+        }
+      }
   }
-  let worker_path = @env.get_env_var("DSH_NATIVE_WORKER_BIN").unwrap_or(
-    process_args[0],
-  )
   let worker_launcher = @fs.realpath(worker_path) catch {
     _ => {
       workspace_root.close()

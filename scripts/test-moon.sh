@@ -18,4 +18,6 @@ if [ ! -x "$native_worker" ]; then
   echo "Native worker executable is missing: $native_worker" >&2
   exit 1
 fi
-DSH_NATIVE_WORKER_BIN="$native_worker" moon test native --target native --frozen --target-dir "$native_test_root/tests"
+DSH_NATIVE_WORKER_BIN="$native_worker" moon test runtime --target native --frozen --target-dir "$native_test_root/tests"
+
+sh scripts/test-install.sh

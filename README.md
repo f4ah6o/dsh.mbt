@@ -78,9 +78,29 @@ moon run native --target native --release -- --help
 
 `import-session` は bounded な upstream Session v4 JSONL を検証し、read-only history として保存します。記録された tool、permission、preset は実行や有効化に使いません。`fork-session` は settled な未 import session から idle child を作り、provider / tool / approval / retry を再生しません。native CLI は gpui MCP protocol を `mcp` subcommand から newline-delimited stdio で公開します。
 
+### `dsh` としてインストール
+
+再帰 submodule を含む checkout から Moon CLI の source install を実行できます。次の例では `dsh` を Moon の `bin` directory に配置します。
+
+```sh
+git clone --recurse-submodules https://github.com/f4ah6o/dsh.mbt.git
+cd dsh.mbt
+moon update
+mkdir -p "${MOON_HOME:-$HOME/.moon}/bin"
+moon install ./cmd/dsh --bin "${MOON_HOME:-$HOME/.moon}/bin"
+export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
+dsh --help
+```
+
+`dsh` の terminal CLI と MCP server は checkout 外から実行できます。Mooncakes registry からの install は、`f4ah6o/gpui` が registry に公開されていないため現在サポートしていません。`f4ah6o/hotpath@0.1.0` は registry から取得できます。再帰 submodule clone を使ってください。
+
+事前に upstream [`moon-binstall`](https://github.com/f4ah6o/moon-binstall) を PATH に導入していれば、GitHub Release の対応 binary を `moon binstall dsh` で install できます。公開 asset は Linux x86-64 / ARM64 と macOS Apple Silicon 向けです。
+
 ## Browser UI and data
 
 Browser UI は MoonBit module から生成される JavaScript と service worker、Mooncakes の `f4ah6o/yami_kumo@0.1.0` から導入する styles で構成します。React や Node.js host は product runtime に含みません。日本語 UI は会話検索、responsive navigation / details drawer、session details、fork、tool output pruning を提供します。設定は browser local storage、session は native data directory に保存し、公式 API に履歴をアップロードしません。iOS UI は別の受け入れ範囲です。
+
+配布 binary には browser assets を埋め込んでいません。checkout 外で web service を起動する場合は、checkout で `sh scripts/build.sh` を実行してから `dsh web --assets-dir /path/to/dsh.mbt/web ...` を指定してください。terminal と MCP の利用には web assets は不要です。
 
 Native v1 は versioned data envelope と command receipt を保存します。初回起動時に対応する legacy snapshot / Session v4 input を native envelope に一方向変換します。旧版 Node host はこの envelope を読めないため、upgrade 前に data directory を backup してください。旧 Node host はこの版では配布しません。migration の境界は[native runtime guide](docs/native-runtime.md#data-directory-compatibility)に記載しています。
 

@@ -11,14 +11,14 @@ const TOOL_MAX_VISITED : Int = 10000
 const TOOL_GLOB_MATCH_STEPS : Int = 20000000
 
 ///|
-struct ToolWalkBudget {
+priv struct ToolWalkBudget {
   mut visited : Int
   mut truncated : Bool
   files : Array[String]
 }
 
 ///|
-struct GlobMatchBudget {
+priv struct GlobMatchBudget {
   mut steps : Int
 }
 
@@ -135,7 +135,7 @@ fn NativeTools::resolve_path(
 }
 
 ///|
-struct NativeTools {
+priv struct NativeTools {
   root : SafeRoot
   workspace : String
   blocked_path : String?
@@ -612,7 +612,7 @@ async fn NativeTools::bash_tool(self : NativeTools, args : Json) -> Json {
 }
 
 ///|
-struct ProcessCapture {
+priv struct ProcessCapture {
   code : Int
   output : String
   truncated : Bool

@@ -2,7 +2,7 @@
 /// Host-wide effect scheduler. It bounds concurrent provider and process work
 /// across sessions and fences a job that starts after its cancellation was
 /// durably accepted.
-struct NativeScheduler {
+priv struct NativeScheduler {
   gate : @async.Mutex
   active : Map[String, NativeJobControl]
   cancelled_through : Map[String, Int]
@@ -10,7 +10,7 @@ struct NativeScheduler {
 }
 
 ///|
-struct NativeJobControl {
+priv struct NativeJobControl {
   session_id : String
   command_id : String
   accepted_revision : Int
@@ -19,7 +19,7 @@ struct NativeJobControl {
 }
 
 ///|
-struct NativeReadGroup {
+priv struct NativeReadGroup {
   queue : @aqueue.Queue[NativeEffectWork]
   gate : @async.Mutex
   pending : Ref[Int]
@@ -27,13 +27,13 @@ struct NativeReadGroup {
 }
 
 ///|
-enum NativeEffectWork {
+priv enum NativeEffectWork {
   Run(@engine.EngineEffect)
   Stop
 }
 
 ///|
-suberror NativeSchedulerFailure {
+priv suberror NativeSchedulerFailure {
   NativeSchedulerFailure(String)
 }
 

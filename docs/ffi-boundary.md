@@ -7,8 +7,8 @@ approval decisions, command scheduling, persistence formats, or UI state.
 
 ## Native C boundary
 
-The native executable links three C files: `native/host_os.c`,
-`native/oauth_os.c`, and `native/signal_os.c`. The reviewed C surface is limited
+The native executable links three C files: `runtime/host_os.c`,
+`runtime/oauth_os.c`, and `runtime/signal_os.c`. The reviewed C surface is limited
 to these `extern "C"` symbols:
 
 ```text
@@ -23,7 +23,8 @@ dsh_fs_root_matches            dsh_fs_set_root_mode
 dsh_fs_stat_fd                  dsh_fs_stat_root
 dsh_fs_unlink                   dsh_kill_process
 dsh_kill_process_group          dsh_os_flush_stderr
-dsh_os_flush_stdout             dsh_os_hard_worker_memory_supported
+dsh_os_executable_path          dsh_os_flush_stdout
+dsh_os_hard_worker_memory_supported
 dsh_os_hostname                 dsh_os_pid
 dsh_os_process_alive            dsh_os_stdin_is_terminal
 dsh_os_timestamp                dsh_os_uid
@@ -47,7 +48,7 @@ files, and do not decide which workspace operation is allowed. Return values
 are primitive statuses, bytes, descriptors, or metadata for MoonBit to check.
 No product protocol or approval logic is embedded in a C helper.
 
-`native/host_os.mbt`, `native/oauth.mbt`, and `native/service.mbt` contain the
+`runtime/host_os.mbt`, `runtime/oauth.mbt`, and `runtime/service.mbt` contain the
 MoonBit declarations. `scripts/check.mjs` compares every discovered native C
 extern against the explicit allow-list above and confirms each symbol has a C
 definition. Any change fails the check until this document and the list are

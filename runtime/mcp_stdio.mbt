@@ -8,14 +8,14 @@ const NATIVE_MCP_TOO_LARGE : String = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\
 const NATIVE_MCP_INVALID_UTF8 : String = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"MCP line is not valid UTF-8\"}}"
 
 ///|
-struct NativeMcpFrame {
+priv struct NativeMcpFrame {
   bytes : Array[Byte]
   too_large : Bool
 }
 
 ///|
 /// Stateful bounded framing for the newline-delimited MCP stdio carrier.
-struct NativeMcpFramer {
+priv struct NativeMcpFramer {
   mut buffered : Array[Byte]
   mut discarding : Bool
 }

@@ -28,7 +28,8 @@ flowchart TD
 | `api/` | gpui `App` / registry / typed capability / GUI binding / MCP、hotpath 計測 |
 | `ui/` | gpui による transcript layout、visible scene、scroll bounds |
 | `app/` | MoonBit application composition と明示的な start / stop boundary |
-| `native/` | HTTP、CLI、MCP、provider transport、workspace tools、atomic persistence、scheduler、shutdown |
+| `runtime/` | Native CLI / HTTP / MCP、provider transport、workspace tools、atomic persistence、scheduler、shutdown library |
+| `native/`, `cmd/dsh/` | `moon run native` と `moon install ./cmd/dsh` 向けの薄い executable entrypoints |
 | `browser/`, `web/` | MoonBit browser / service-worker package、生成 JavaScript、pinned static CSS |
 
 ## 状態遷移と effect
@@ -73,7 +74,7 @@ effect は再発行しません。通常 CLI text stdout は final assistant mes
 
 `session_prune_tool_results` は、idle または completed の native v1 session に対する明示的な state-change operation です。
 active turn、approval 待ち、read-only Session v4 import には適用できません。browser の **Trim outputs**、HTTP / gpui API、
-または `dsh-native prune-session SESSION_ID` から実行できます。
+または `dsh prune-session SESSION_ID` から実行できます。
 
 この処理は upstream の pinned
 [compaction-tool-result-pruner](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/compaction/compaction-tool-result-pruner)

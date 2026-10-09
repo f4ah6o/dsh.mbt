@@ -34,7 +34,7 @@ fn native_provider_responses_mime_is_allowed(content_type : String?) -> Bool {
 }
 
 ///|
-enum NativeProviderRead {
+priv enum NativeProviderRead {
   Data(Bytes)
   End
   IdleTimeout
@@ -181,7 +181,7 @@ fn native_provider_is_failure_json(value : Json) -> Bool {
 /// Send one Responses request using an immutable account/model snapshot. The
 /// callback receives validated stream lifecycle events as they arrive; the
 /// normalized completed response is returned only after a valid terminal event.
-pub async fn NativeAuth::run_responses(
+async fn NativeAuth::run_responses(
   self : NativeAuth,
   selection : NativeProviderSelection,
   request : Json,
@@ -299,7 +299,7 @@ async fn NativeAuth::run_responses_inner(
 /// Execute one explicit API-key provider request. The runtime supplies an
 /// effect-local key snapshot; keys are never stored in provider selection or
 /// included in errors. ChatGPT OAuth is handled only by run_responses.
-pub async fn native_run_api_key(
+async fn native_run_api_key(
   selection : NativeProviderSelection,
   request : Json,
   api_key : String,

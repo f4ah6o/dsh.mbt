@@ -7,7 +7,9 @@ const portablePackages = [
   'engine', 'provider', 'auth', 'protocol', 'client', 'plugins', 'api', 'ui',
   'verification/retry_math',
 ];
-const ownPackages = [...portablePackages, 'app', 'native', 'browser', 'browser/sw'];
+const ownPackages = [
+  ...portablePackages, 'app', 'native', 'runtime', 'cmd/dsh', 'browser', 'browser/sw',
+];
 
 function checkPackages(packages, target) {
   const result = capture('moon', ['check', ...packages, '--target', target, '--json']);
@@ -96,8 +98,8 @@ function checkPureMoonBitInventory() {
     path === 'web/browser-smoke.mjs';
   const forbidden = [];
   for (const directory of [
-    'app', 'auth', 'browser', 'client', 'engine', 'host', 'native', 'plugins',
-    'provider', 'protocol', 'ui', 'web',
+    'app', 'auth', 'browser', 'client', 'cmd', 'engine', 'host', 'native', 'plugins',
+    'provider', 'protocol', 'runtime', 'ui', 'web',
   ]) {
     forbidden.push(...sourceFiles(join(projectRoot, directory)).map(file =>
       relative(projectRoot, file).split(sep).join('/')).filter(path => {
@@ -127,14 +129,14 @@ function checkFfiInventory() {
     'dsh_fs_list_dir', 'dsh_fs_mapping_matches', 'dsh_fs_open_file',
     'dsh_fs_open_root', 'dsh_fs_read_fd', 'dsh_fs_root_matches',
     'dsh_fs_set_root_mode', 'dsh_fs_stat_fd', 'dsh_fs_stat_root', 'dsh_fs_unlink',
-    'dsh_kill_process', 'dsh_kill_process_group', 'dsh_os_flush_stderr',
+    'dsh_kill_process', 'dsh_kill_process_group', 'dsh_os_executable_path', 'dsh_os_flush_stderr',
     'dsh_os_flush_stdout', 'dsh_os_hard_worker_memory_supported', 'dsh_os_hostname',
     'dsh_os_pid', 'dsh_os_process_alive', 'dsh_os_stdin_is_terminal',
     'dsh_os_timestamp', 'dsh_os_uid', 'dsh_service_signals_install',
     'dsh_service_signals_requested', 'dsh_service_signals_restore',
   ].sort();
   const declarations = [];
-  for (const file of moonBitFiles(join(projectRoot, 'native'))) {
+  for (const file of moonBitFiles(join(projectRoot, 'runtime'))) {
     const source = readFileSync(file, 'utf8');
     for (const match of source.matchAll(/extern\s+"C"\s+fn[\s\S]*?=\s*"(dsh_[^"]+)"/g)) {
       declarations.push(match[1]);
@@ -143,7 +145,7 @@ function checkFfiInventory() {
   const unexpectedFfi = [];
   for (const directory of [
     'app', 'auth', 'browser', 'client', 'engine', 'plugins', 'provider',
-    'protocol', 'ui', 'verification',
+    'protocol', 'ui', 'verification', 'cmd',
   ]) {
     for (const file of moonBitFiles(join(projectRoot, directory))) {
       const source = readFileSync(file, 'utf8');
@@ -162,7 +164,7 @@ function checkFfiInventory() {
     throw new Error('Native C FFI changed; update and review docs/ffi-boundary.md.\n' +
       'Expected: ' + auditedSymbols.join(', ') + '\nFound: ' + actual.join(', '));
   }
-  const cSources = ['native/host_os.c', 'native/oauth_os.c', 'native/signal_os.c']
+  const cSources = ['runtime/host_os.c', 'runtime/oauth_os.c', 'runtime/signal_os.c']
     .map(path => readFileSync(join(projectRoot, path), 'utf8')).join('\n');
   const missing = auditedSymbols.filter(symbol =>
     !new RegExp('\\b' + symbol + '\\s*\\(').test(cSources));
@@ -175,7 +177,7 @@ try {
   run('moon', ['fmt', '--check', ...ownPackages]);
   checkPackages(portablePackages, 'all');
   checkPackages(['app'], 'js');
-  checkPackages(['native'], 'native');
+  checkPackages(['native', 'runtime', 'cmd/dsh'], 'native');
   checkPackages(['browser', 'browser/sw'], 'js');
   checkPureMoonBitInventory();
   checkFfiInventory();

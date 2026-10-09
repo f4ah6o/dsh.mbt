@@ -1,5 +1,5 @@
 ///|
-struct NativeFixtureHttpResponse {
+priv struct NativeFixtureHttpResponse {
   code : Int
   reason : String
   body : String

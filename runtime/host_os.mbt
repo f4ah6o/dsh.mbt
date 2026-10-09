@@ -17,6 +17,13 @@ extern "C" fn c_pid() -> Int = "dsh_os_pid"
 extern "C" fn c_uid() -> Int = "dsh_os_uid"
 
 ///|
+#borrow(buffer)
+extern "C" fn c_executable_path(
+  buffer : FixedArray[Byte],
+  capacity : Int,
+) -> Int = "dsh_os_executable_path"
+
+///|
 extern "C" fn c_flush_stdout() -> Int = "dsh_os_flush_stdout"
 
 ///|
@@ -369,6 +376,25 @@ pub fn os_pid() -> Int {
 ///|
 pub fn os_uid() -> Int {
   c_uid()
+}
+
+///|
+fn native_executable_path() -> Result[String, String] {
+  let buffer : FixedArray[Byte] = FixedArray::make(4096, b'\x00')
+  let length = c_executable_path(buffer, buffer.length())
+  if length < 0 {
+    return Err(os_error("native executable path", -length))
+  }
+  if length == 0 || length >= buffer.length() {
+    return Err("native executable path is empty or exceeds the 4095-byte limit")
+  }
+  let value = @utf8.decode(bytes_from_fixedarray(buffer, length)) catch {
+    _ => return Err("native executable path is not valid UTF-8")
+  }
+  if !value.has_prefix("/") {
+    return Err("native executable path is not absolute")
+  }
+  Ok(value)
 }
 
 ///|
