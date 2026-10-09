@@ -85,7 +85,10 @@ provenance marker to that user message before checkpointing it. Unknown names
 and skills with `user-invocable: false` remain ordinary prompt text. Skills
 with `disable-model-invocation: true` are omitted from the tool catalog and
 refused by the model loader, while remaining directly invocable by the user
-unless separately disabled.
+unless separately disabled. Direct expansion is limited to 16,384 UTF-16 units
+including the original prompt and rendered skill body; larger model-invocable
+skills can be loaded through the `skill` tool, while user-only skills must be
+shortened.
 
 The catalog is a static provider tool description rather than an upstream
 durable catalog message. Root changes are picked up after restarting the
