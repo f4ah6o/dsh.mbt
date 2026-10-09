@@ -18,6 +18,7 @@ if [ ! -x "$native_worker" ]; then
   echo "Native worker executable is missing: $native_worker" >&2
   exit 1
 fi
+node scripts/test-acp-stdio.mjs "$native_worker"
 DSH_NATIVE_WORKER_BIN="$native_worker" moon test runtime --target native --frozen --target-dir "$native_test_root/tests"
 
 sh scripts/build.sh

@@ -110,6 +110,7 @@ fn native_usage() -> String {
   "  dsh --auth-status|--sign-in|--models|--sign-out|--select-model MODEL --data-dir PATH --workspace PATH\n\n" +
   "  dsh web --data-dir PATH --workspace PATH [--mcp-config PATH] [--hooks-config PATH] [--port PORT] [--assets-dir PATH] [--allow-shell] [--demo]\n" +
   "  dsh mcp --data-dir PATH --workspace PATH [--mcp-config PATH] [--hooks-config PATH] [--allow-shell] [--demo]\n\n" +
+  "  dsh acp --data-dir PATH --workspace PATH [--mcp-config PATH] [--hooks-config PATH] [--allow-shell] [--demo]\n\n" +
   "  dsh desktop [--app-path /absolute/path/to/Dsh.app] [--mcp-config PATH] [--hooks-config PATH] [desktop options]\n\n" +
   "Provider options: --mode deepseek|openai|openai-responses --model NAME --base-url URL --max-retries 0..5\n" +
   "MCP options: --mcp-config PATH starts trusted external stdio servers; calls require approval by default.\n" +
@@ -624,6 +625,46 @@ pub async fn run_cli() -> Unit {
       Err(error) => {
         ignore(runtime.close())
         abort("native MCP carrier failed: " + error)
+      }
+      Ok(_) =>
+        match runtime.close() {
+          Err(error) => abort("native runtime shutdown failed: " + error)
+          Ok(_) => ()
+        }
+    }
+    return
+  }
+  if native_flag(args, "--acp") {
+    let (data_dir, workspace) = match native_cli_paths(args) {
+      Ok(value) => value
+      Err(error) => abort(error)
+    }
+    let max_retries = match native_cli_retry_limit(args) {
+      Ok(value) => value
+      Err(error) => abort(error)
+    }
+    let runtime = match
+      NativeRuntime::open(
+        data_dir,
+        workspace,
+        native_flag(args, "--allow-shell"),
+        native_flag(args, "--demo"),
+        mode_override=native_option(args, "--mode").unwrap_or(""),
+        model_override=native_option(args, "--model").unwrap_or(""),
+        base_url_override=native_option(args, "--base-url").unwrap_or(""),
+        max_retries~,
+        mcp_config_path=native_option(args, "--mcp-config"),
+        hooks_config_path=native_option(args, "--hooks-config"),
+        enable_skills=native_flag(args, "--enable-skills"),
+        skill_dirs=native_cli_options(args, "--skill-dir"),
+      ) {
+      Err(error) => abort("native runtime could not start: " + error)
+      Ok(runtime) => runtime
+    }
+    match native_acp_stdio(runtime) {
+      Err(error) => {
+        ignore(runtime.close())
+        abort("native ACP carrier failed: " + error)
       }
       Ok(_) =>
         match runtime.close() {

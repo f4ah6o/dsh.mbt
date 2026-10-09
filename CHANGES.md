@@ -16,6 +16,24 @@
 
 ### Migration
 
+## 0.1.6 - 2026-10-10
+
+### Added
+
+- Add a native ACP stdio agent at `dsh acp`. The bounded ACP v1 subset supports initialization, authentication handshake, durable sessions, text and resource-link prompts, one-shot tool approval, cancellation, close, and committed session updates. It uses the native runtime and does not replay interrupted provider or tool work. Unsupported ACP features and limits are listed in the [native runtime guide](docs/native-runtime.md#acp-stdio-agent).
+
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
 ## 0.1.5 - 2026-10-09
 
 ### Added

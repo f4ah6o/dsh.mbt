@@ -2,7 +2,7 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) の MoonBit 移植です。session、event log、agent / tool loop、承認、provider protocol、HTTP/MCP service、CLI、browser UI の product logic は MoonBit で動きます。native executable が唯一の product runtime です。Node.js は build/check/test tooling にだけ使い、browser JavaScript と service worker は MoonBit compiler の生成物です。
 
-**現在は最初の動作する移植版です。** browser / CLI と macOS native desktop app から会話し、workspace tool、opt-in の外部 MCP stdio tool、workspace skill、限定的な opt-in command hook を実行して履歴を保存できます。Session v4 は明示的な read-only import に限って対応し、Cordis / npm plugin 互換、subagent、live compaction などは未実装です。対応範囲と差分は[移植状況](docs/port-status.md)、native MCP server、workspace skill、hook の設定・制約は[native runtime guide](docs/native-runtime.md)、今回の native / SIWC / iOS 実装は[実装状況](docs/implementation-status.md)を参照してください。
+**現在は最初の動作する移植版です。** browser / CLI と macOS native desktop app から会話し、workspace tool、opt-in の外部 MCP stdio tool、workspace skill、限定的な opt-in command hook を実行して履歴を保存できます。Native executable は限定的な ACP stdio agent としても動作します。Session v4 は明示的な read-only import に限って対応し、Cordis / npm plugin 互換、subagent、live compaction などは未実装です。対応範囲と差分は[移植状況](docs/port-status.md)、native MCP server、ACP、workspace skill、hook の設定・制約は[native runtime guide](docs/native-runtime.md)、今回の native / SIWC / iOS 実装は[実装状況](docs/implementation-status.md)を参照してください。
 
 ## Build and run
 
@@ -56,7 +56,7 @@ moon run native --target native --release -- \
 
 ## CLI
 
-native executable は `run`、`import-session`、`prune-session`、`fork-session`、`web`、`mcp` subcommand を提供します。MoonBit から直接起動する例です。
+native executable は `run`、`import-session`、`prune-session`、`fork-session`、`web`、`mcp`、`acp` subcommand を提供します。MoonBit から直接起動する例です。
 
 ```sh
 moon run native --target native --release -- \
@@ -72,6 +72,9 @@ moon run native --target native --release -- \
 moon run native --target native --release -- \
   fork-session SESSION_ID --workspace /absolute/path/to/project
 
+moon run native --target native --release -- \
+  acp --demo --workspace /absolute/path/to/project
+
 moon run native --target native --release -- --help
 ```
 
@@ -84,7 +87,7 @@ moon run native --target native --release -- --help
 Mooncakes registry から `dsh` command package を install できます。次の例では `dsh` を Moon の既定の `bin` directory に配置します。
 
 ```sh
-moon install f4ah6o/dsh/cmd/dsh@0.1.5
+moon install f4ah6o/dsh/cmd/dsh@0.1.6
 export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 dsh --help
 ```

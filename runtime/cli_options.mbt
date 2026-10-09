@@ -15,7 +15,7 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
     return args
   }
   let commands = [
-    "web", "run", "import-session", "prune-session", "fork-session", "mcp",
+    "web", "run", "import-session", "prune-session", "fork-session", "mcp", "acp",
   ]
   let value_options = [
     "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--skill-dir",
@@ -164,9 +164,10 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
       }
     }
     "mcp" => normalized.push("--mcp")
+    "acp" => normalized.push("--acp")
     _ => ()
   }
-  if command == "web" || command == "mcp" {
+  if command == "web" || command == "mcp" || command == "acp" {
     for positional in positionals {
       normalized.push(positional)
     }
@@ -183,7 +184,7 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
 ///|
 fn native_cli_has_unknown_command(args : Array[String]) -> Bool {
   let commands = [
-    "web", "run", "import-session", "prune-session", "fork-session", "mcp",
+    "web", "run", "import-session", "prune-session", "fork-session", "mcp", "acp",
   ]
   let mut index = 1
   while index < args.length() {
@@ -206,6 +207,7 @@ fn native_cli_default_web(args : Array[String]) -> Array[String] {
   if native_cli_has_unknown_command(args) ||
     native_flag(args, "--serve") ||
     native_flag(args, "--mcp") ||
+    native_flag(args, "--acp") ||
     native_flag(args, "--demo") ||
     native_flag(args, "--help") ||
     native_flag(args, "-h") ||
@@ -254,7 +256,7 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
     "--approve-call", "--deny-call", "--approval-revision", "--select-model",
   ]
   let boolean_options = [
-    "--serve", "--mcp", "--demo", "--enable-skills", "--allow-shell", "--approve-writes",
+    "--serve", "--mcp", "--acp", "--demo", "--enable-skills", "--allow-shell", "--approve-writes",
     "--json", "--help", "-h", "--auth-status", "--sign-in", "--sign-out", "--models",
   ]
   let positionals : Array[String] = []
@@ -289,8 +291,9 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
   let help = native_flag(args, "--help") || native_flag(args, "-h")
   let is_serve = native_flag(args, "--serve")
   let is_mcp = native_flag(args, "--mcp")
-  if is_serve && is_mcp {
-    return Err("choose either web or mcp mode")
+  let is_acp = native_flag(args, "--acp")
+  if [is_serve, is_mcp, is_acp].filter(value => value).length() > 1 {
+    return Err("choose only one of web, mcp, or acp mode")
   }
   let run = native_option(args, "--run")
   let hooks_config = native_option(args, "--hooks-config")
@@ -354,9 +357,9 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
     ]
     .filter(value => value)
     .length()
-  let service_count = [is_serve, is_mcp].filter(value => value).length()
+  let service_count = [is_serve, is_mcp, is_acp].filter(value => value).length()
   if !help && hooks_config is Some(_) && run is None && service_count == 0 {
-    return Err("--hooks-config requires run, web, or mcp mode")
+    return Err("--hooks-config requires run, web, mcp, or acp mode")
   }
   let auth_count = [
       native_flag(args, "--auth-status"),
@@ -374,7 +377,7 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
     return Err("choose one authentication action")
   }
   if !help && service_count > 0 && (action_count > 0 || auth_count > 0) {
-    return Err("web and mcp modes cannot be combined with CLI actions")
+    return Err("web, mcp, and acp modes cannot be combined with CLI actions")
   }
   if !help &&
     native_option(args, "--approve-call") is Some(_) &&
@@ -403,6 +406,7 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
   if positionals.length() > 0 && !help {
     if !is_serve &&
       !is_mcp &&
+      !is_acp &&
       action_count == 0 &&
       auth_count == 0 &&
       args.length() > 1 &&
