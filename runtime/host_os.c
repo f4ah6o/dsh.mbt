@@ -18,6 +18,9 @@
 #include <dirent.h>
 #include <signal.h>
 #include <dlfcn.h>
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #endif
 
 int dsh_fs_open_root(const char *path);
@@ -565,6 +568,34 @@ int dsh_fs_sync_directory(const char *path) {
 
 int dsh_os_uid(void) { return (int)getuid(); }
 int dsh_os_pid(void) { return (int)getpid(); }
+int dsh_os_executable_path(uint8_t *buffer, int capacity) {
+  if (!buffer || capacity < 2) return -EINVAL;
+#ifdef __APPLE__
+  uint32_t path_capacity = (uint32_t)capacity;
+  if (_NSGetExecutablePath((char *)buffer, &path_capacity) != 0) {
+    return -ENAMETOOLONG;
+  }
+  char *resolved = realpath((char *)buffer, NULL);
+  if (!resolved) return -errno;
+  size_t length = strlen(resolved);
+  if (length >= (size_t)capacity) {
+    free(resolved);
+    return -ENAMETOOLONG;
+  }
+  memcpy(buffer, resolved, length + 1);
+  free(resolved);
+  return (int)length;
+#elif defined(__linux__)
+  ssize_t length = readlink("/proc/self/exe", (char *)buffer,
+                            (size_t)capacity - 1);
+  if (length < 0) return -errno;
+  if (length >= capacity - 1) return -ENAMETOOLONG;
+  buffer[length] = '\0';
+  return (int)length;
+#else
+  return -ENOTSUP;
+#endif
+}
 int dsh_os_hostname(uint8_t *buffer, int capacity) {
   if (!buffer || capacity <= 1) return -EINVAL;
   char hostname[256];
@@ -814,6 +845,7 @@ int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer, int capacity
 int dsh_fs_sync_directory(const char *path) { (void)path; return ENOTSUP; }
 int dsh_os_uid(void) { return -1; }
 int dsh_os_pid(void) { return -1; }
+int dsh_os_executable_path(uint8_t *buffer, int capacity) { (void)buffer; (void)capacity; return -ENOTSUP; }
 int dsh_os_hostname(uint8_t *buffer, int capacity) { (void)buffer; (void)capacity; return -ENOTSUP; }
 int dsh_os_timestamp(uint8_t *buffer, int capacity) { (void)buffer; (void)capacity; return -ENOTSUP; }
 int dsh_os_process_alive(int pid) { (void)pid; return 1; }

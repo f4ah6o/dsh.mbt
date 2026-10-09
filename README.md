@@ -92,7 +92,7 @@ export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 dsh --help
 ```
 
-`dsh` の terminal CLI と MCP server は checkout 外から実行できます。Mooncakes registry からの install は、gpui / hotpath の依存が registry 公開されていないため現在サポートしていません。再帰 submodule clone を使ってください。
+`dsh` の terminal CLI と MCP server は checkout 外から実行できます。Mooncakes registry からの install は、`f4ah6o/gpui` が registry に公開されていないため現在サポートしていません。`f4ah6o/hotpath@0.1.0` は registry から取得できます。再帰 submodule clone を使ってください。
 
 事前に upstream [`moon-binstall`](https://github.com/f4ah6o/moon-binstall) を PATH に導入していれば、GitHub Release の対応 binary を `moon binstall dsh` で install できます。公開 asset は Linux x86-64 / ARM64 と macOS Apple Silicon 向けです。
 
