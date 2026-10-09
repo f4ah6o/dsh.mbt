@@ -126,6 +126,37 @@ OS sandbox、persistent terminal、SSH workspace、job / schedule、認証付き
 - remote API には authentication / authorization と複数利用者の分離を導入する。
 - 新しい production package を mutation gate に追加し、単なる mutant 列挙を成功扱いしない。
 
+## 6. ハーネス機能差レビューの補足（2026-10-09）
+
+上記 1〜5 節で追跡済みの session/replay、live compaction、Cordis/MCP/subagent、
+並列 Read、sandbox/SSH/terminal、画像/attachment、UI の要件は重複して列挙しない。
+今回の [公式 architecture](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md) /
+[package map](https://github.com/deepseek-ai/deepseek-harness/blob/master/packages/README.md) との比較で、
+未明文化だったハーネス機能群と完了判定を追加する。以下は実装完了の宣言ではなく **parity backlog** である。
+
+| 未明文化だった領域 | 現状・既存節との関係 | 追加する受入条件 |
+| --- | --- | --- |
+| Agent orchestration: `goal` / `plan` / `todo` / `workflow`、experimental Agent Teams | §3 の subagent、§5 の job/schedule は対象だが、目標・計画・タスクボード・協調実行の live semantics を未指定。現状は v4 import の inert metadata のみ。 | 親子/チームの所有権、タスク受渡し、終了・失敗・cancel・reopen の各状態を永続イベントから復元し、重複委譲・二重実行を防ぐ。experimental 機能は別 gate にする。 |
+| 外部情報・操作: Web search / public HTTPS fetch、browser-use / computer-use | §3 の外部 MCP / Skills と §5 の host capability とは別の tool/provider 群。現状 live 実装なし。 | ネットワーク宛先制限、権限、timeout、出力上限、cancel と途中失敗を provider ごとの結合テストで確認する。ブラウザ/デスクトップ操作は対象ウィンドウと操作先を識別し、誤操作を拒否する。 |
+| Interaction: permission preset、account authorization、ask-user | §3 の動的 tool policy、§5 の認証付き API を補完する。個別 tool Allow/Deny は既存だが、公式の preset / authorization / 対話ツールとは非互換。 | workspace・agent・session の policy scope、承認変更・失効・拒否、対話応答待ち、再接続・復元時に権限が昇格しないことを検証する。 |
+| 外部アプリ統合: TypeScript/Python SDK、SDK JSON-RPC / ACP wire protocol | §3 に ACP はあるが、独自 gpui MCP server の提供と公式 SDK/ACP wire compatibility は異なる。現状公式互換なし。 | supported protocol/version を明示し、外部 client との handshake、request/response、stream、cancel、resume、error mapping を conformance fixture で検証する。互換でない部分は明示する。 |
+| Session query / observability: searchable history、lineage、OTel telemetry | §1 の session replay と §5 の運用を補完する。現状 API timing 集計のみで、公式相当の session-query / OTel は未実装。 | 複数 session の検索・fork lineage・境界付き取得を reopen 後にも確認する。telemetry は無効化・機密情報の除外・export failure 時の動作を検証する。 |
+| 実行環境の差: PowerShell、persistent PTY、platform-specific sandbox | §5 の sandbox/terminal に包含されるが Windows の shell parity と OS 別境界が未明文化。現状 bash のみで OS sandbox なし。 | macOS/Linux/Windows 別の権限境界と process-tree 停止を明示し、使えない安全機構では fail-closed とする。 |
+
+### Parity の判定方法
+
+- **基準を分離する:** 現行移植基準 `5badb15009ae1756c3afe0ae0cef1faafc290ccc`（0.2.1-alpha.1）に存在する機能と、
+  公式 `master` に後から追加された機能は、実装着手前に upstream commit/feature provenance を確認して区別する。
+  上表に挙げたすべてが固定基準に存在したとは扱わない。
+- **サーバーとクライアントを分離する:** gpui MCP **server** が動くことを外部 MCP **client** 対応の PASS としない。
+  同様に native API の存在を公式 SDK / ACP wire 互換としない。
+- **ステータスを分離する:** `implemented` / `fixture PASS` / `live acceptance PASS` / `not run` /
+  `not implemented` を受入記録で区別する。SIWC 実アカウント、実 Tailnet、iPhone 実機の未実行 gate は
+  [実装状況](../../docs/implementation-status.md) に従い、fixture 成功だけで閉じない。
+- **優先順:** 長時間会話の context 管理（§2）→ MoonBit の動的 service 境界（§3）→ MCP client/Skills/LSP（§3）→
+  subagent と orchestration（§3・本節）→ sandbox / SDK・ACP compatibility（§5・本節）。
+  本節は既存 §1〜5 の要件を置換せず、未記載領域を追跡対象にする。
+
 ## gpui-mbt 依存の追跡
 
 `hotpath.mbt` の固定 revision は standalone LICENSE / manifest license field を含まない。
