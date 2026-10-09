@@ -28,6 +28,7 @@ priv struct BrowserApp {
   mut sidebar_collapsed : Bool
   mut mobile_sidebar_open : Bool
   mut context_panel_open : Bool
+  mut settings_open : Bool
   mut auth_models_in_flight_key : String?
 }
 
@@ -68,6 +69,7 @@ fn BrowserApp::new() -> BrowserApp {
     sidebar_collapsed: false,
     mobile_sidebar_open: false,
     context_panel_open: false,
+    settings_open: false,
     auth_models_in_flight_key: None,
   }
 }
@@ -987,6 +989,53 @@ fn close_panels(app : BrowserApp, restore_focus : Bool) -> Unit {
 }
 
 ///|
+fn apply_settings_state(app : BrowserApp) -> Unit {
+  let open = app.settings_open
+  dom_set_boolean_property("conversation-page", "hidden", open)
+  dom_set_attribute("conversation-page", "aria-hidden", open.to_string())
+  dom_set_boolean_property("settings-page", "hidden", !open)
+  dom_set_attribute("settings-page", "aria-hidden", (!open).to_string())
+  if open {
+    dom_remove_attribute("conversation-page", "inert")
+    dom_set_attribute("conversation-page", "inert", "")
+    dom_remove_attribute("settings-page", "inert")
+    dom_move_element("account-bar", "chatgpt-settings-slot")
+    dom_remove_attribute("account-bar", "hidden")
+  } else {
+    dom_remove_attribute("conversation-page", "inert")
+    dom_set_attribute("settings-page", "inert", "")
+    dom_set_boolean_property("account-bar", "hidden", true)
+    dom_move_element("account-bar", "chatgpt-account-anchor")
+  }
+  dom_set_attribute("settings-open", "aria-expanded", open.to_string())
+  dom_set_attribute("settings-open-sidebar", "aria-expanded", open.to_string())
+  dom_set_attribute("settings-open", "aria-pressed", open.to_string())
+  dom_set_attribute("settings-open-sidebar", "aria-pressed", open.to_string())
+}
+
+///|
+fn open_settings(app : BrowserApp) -> Unit {
+  app.settings_open = true
+  app.mobile_sidebar_open = false
+  app.context_panel_open = false
+  apply_panel_state(app)
+  apply_settings_state(app)
+  dom_focus("settings-close")
+}
+
+///|
+fn close_settings(app : BrowserApp, restore_focus : Bool) -> Unit {
+  if !app.settings_open {
+    return
+  }
+  app.settings_open = false
+  apply_settings_state(app)
+  if restore_focus {
+    dom_focus("settings-open")
+  }
+}
+
+///|
 fn set_japanese_font(key : String) -> Unit {
   let selected = normalize_japanese_font(key)
   let stack = japanese_font_stack(selected)
@@ -1626,6 +1675,9 @@ fn click_action(app : BrowserApp, event : BrowserValue) -> Unit {
       app.sidebar_collapsed = !app.sidebar_collapsed
       apply_panel_state(app)
     }
+    "settings-open" => open_settings(app)
+    "settings-close" => close_settings(app, true)
+    "settings-nav-chatgpt" => dom_focus("settings-title")
     "context-toggle" => {
       app.context_panel_open = !app.context_panel_open
       if app.context_panel_open {
@@ -1792,6 +1844,11 @@ fn on_document_click(app : BrowserApp, event : BrowserValue) -> Unit {
 ///|
 fn on_keyboard(app : BrowserApp, event : BrowserValue) -> Unit {
   let key = dom_event_string(event, "key")
+  if key == "Escape" && app.settings_open {
+    dom_prevent_default(event)
+    close_settings(app, true)
+    return
+  }
   if key == "Escape" && (app.mobile_sidebar_open || app.context_panel_open) {
     dom_prevent_default(event)
     close_panels(app, true)
@@ -2044,6 +2101,7 @@ fn initialize_browser(app : BrowserApp) -> Unit {
   })
   dom_on_media("(max-width: 820px)", () => apply_panel_state(app))
   dom_on_media("(max-width: 1180px)", () => apply_panel_state(app))
+  apply_settings_state(app)
   apply_panel_state(app)
   ignore(
     dom_interval(

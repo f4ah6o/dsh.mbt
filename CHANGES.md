@@ -4,6 +4,23 @@
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
+## 0.1.2 - 2026-10-09
+
+### Added
+
+- Browser and native desktop now keep ChatGPT SIWC account and model controls in a dedicated Settings page, with sign-in, sign-out, model refresh, and model selection available there.
 - `dsh` の source install と release binary に browser assets を埋め込み、checkout 外でも `dsh web` を使えるようにした。`--assets-dir` は明示的な asset override として引き続き使える。
 - macOS 13+ / Apple Silicon 向けの native GPUI `Dsh.app` と `dsh desktop` launcher を追加した。session、prompt、tool approval、cancel、transcript は既存の native runtime と durable store を共有する。release app は ad-hoc signed で、Developer ID signed / notarized ではない。IME composition は現 GPUI text host の制約により未対応。([native desktop guide](docs/desktop.md))
 - OpenAI Responses API に API key / ChatGPT SIWC の native provider 経路を追加した。SIWC は OAuth・PKCE・OIDC 検証、保護された credential store、model discovery、refresh rotation を使う。実アカウント smoke は未実行。

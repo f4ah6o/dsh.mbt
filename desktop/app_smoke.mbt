@@ -55,7 +55,7 @@ fn desktop_frame_has_japanese_heading(
         Ok(value) => value
         Err(error) => return Err(desktop_error_text(error))
       }
-      if red > 150 && green > 160 && blue > 170 {
+      if red < 100 && green < 110 && blue < 125 {
         pixels += 1
       }
       x += 1
@@ -80,7 +80,7 @@ fn desktop_frame_has_transcript(
         Ok(value) => value
         Err(error) => return Err(desktop_error_text(error))
       }
-      if red > 175 && green > 180 && blue > 185 {
+      if red < 100 && green < 110 && blue < 125 {
         pixels += 1
       }
       x += 1
@@ -88,6 +88,31 @@ fn desktop_frame_has_transcript(
     y += 1
   }
   Ok(pixels > 40)
+}
+
+///|
+fn desktop_frame_has_settings(
+  frame : @testing.FrameCapture,
+) -> Result[Bool, String] {
+  let scale_x = frame.width().to_double() / 1120.0
+  let scale_y = frame.height().to_double() / 760.0
+  let mut pixels = 0
+  let mut y = (90.0 * scale_y).to_int()
+  while y < (126.0 * scale_y).to_int() && y < frame.height() {
+    let mut x = (480.0 * scale_x).to_int()
+    while x < (680.0 * scale_x).to_int() && x < frame.width() {
+      let (red, green, blue, _) = match frame.pixel_rgba8(x, y) {
+        Ok(value) => value
+        Err(error) => return Err(desktop_error_text(error))
+      }
+      if red < 100 && green < 110 && blue < 125 {
+        pixels += 1
+      }
+      x += 1
+    }
+    y += 1
+  }
+  Ok(pixels > 8)
 }
 
 ///|
@@ -278,6 +303,30 @@ async fn desktop_run_offline_e2e(
     Ok(true) => ()
     Ok(false) =>
       return Err("owned GPUI frame contains no completed transcript pixels")
+    Err(error) => return Err(error)
+  }
+  state.settings_open = true
+  state.settings_focus = 1
+  state.focused = false
+  state.dirty = true
+  for _ in 0..<3 {
+    match desktop_pump(state, true) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
+  }
+  let settings_frame = match @testing.capture_frame(state.host, state.window) {
+    Ok(value) => value
+    Err(error) => return Err(desktop_error_text(error))
+  }
+  match settings_frame.write_ppm(state.config.frame_output + ".settings.ppm") {
+    Ok(_) => ()
+    Err(error) => return Err(desktop_error_text(error))
+  }
+  match desktop_frame_has_settings(settings_frame) {
+    Ok(true) => ()
+    Ok(false) =>
+      return Err("owned GPUI frame contains no ChatGPT Settings heading")
     Err(error) => return Err(error)
   }
   match state.host.request_close(state.window) {

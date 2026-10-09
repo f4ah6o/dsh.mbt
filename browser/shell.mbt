@@ -162,6 +162,17 @@ fn navigation_sidebar() -> @yami_kumo.Html {
         ]),
       ],
     ),
+    html_button(
+      "settings-open-sidebar",
+      "settings-open",
+      "⚙  設定",
+      "settings-nav-trigger",
+      @yami_kumo.ButtonVariant::Ghost,
+      extra_attrs=[
+        html_attribute("aria-controls", "settings-page"),
+        html_attribute("aria-expanded", "false"),
+      ],
+    ),
     html_element("p", [html_class("sidebar-note")], [
       html_text("ローカルエージェントのワークスペース"),
     ]),
@@ -262,6 +273,449 @@ fn context_panel() -> @yami_kumo.Html {
 }
 
 ///|
+fn chatgpt_account_panel() -> @yami_kumo.Html {
+  html_element(
+    "section",
+    [
+      html_id("account-bar"),
+      html_class("account-bar settings-account-card"),
+      html_attribute("aria-label", "ChatGPT アカウントとモデル"),
+      html_boolean_attribute("hidden"),
+    ],
+    [
+      html_element("div", [html_class("account-summary")], [
+        html_element(
+          "span",
+          [
+            html_id("auth-status"),
+            html_class("account-status"),
+            html_attribute("data-state", "signed_out"),
+          ],
+          [html_text("ChatGPT 未接続")],
+        ),
+        html_element(
+          "span",
+          [html_id("auth-detail"), html_class("account-detail")],
+          [],
+        ),
+        html_element(
+          "span",
+          [html_id("auth-guidance"), html_class("account-detail")],
+          [],
+        ),
+        html_element(
+          "a",
+          [
+            html_id("usage-link"),
+            html_class("account-link"),
+            html_attribute("href", "https://chatgpt.com/settings/usage"),
+            html_attribute("target", "_blank"),
+            html_attribute("rel", "noopener noreferrer"),
+            html_boolean_attribute("hidden"),
+          ],
+          [html_text("ChatGPT の利用状況を開く")],
+        ),
+      ]),
+      html_element("div", [html_class("account-actions")], [
+        html_element(
+          "label",
+          [html_class("model-control"), html_attribute("for", "model-picker")],
+          [
+            html_element("span", [], [html_text("使用するモデル")]),
+            html_element(
+              "select",
+              [
+                html_id("model-picker"),
+                action_attribute("model-change"),
+                html_boolean_attribute("disabled"),
+              ],
+              [
+                html_element("option", [html_attribute("value", "")], [
+                  html_text("ChatGPT に接続してモデルを表示"),
+                ]),
+              ],
+            ),
+          ],
+        ),
+        html_button(
+          "auth-sign-in",
+          "auth-sign-in",
+          "ChatGPT にサインイン",
+          "quiet-button",
+          @yami_kumo.Secondary,
+        ),
+        html_button(
+          "auth-models-retry",
+          "auth-models-retry",
+          "モデルを再読み込み",
+          "quiet-button",
+          @yami_kumo.Secondary,
+          disabled=true,
+        ),
+        html_button(
+          "auth-sign-out",
+          "auth-sign-out",
+          "接続を解除",
+          "quiet-button",
+          @yami_kumo.Secondary,
+          disabled=true,
+        ),
+        html_button(
+          "install-app",
+          "install-app",
+          "アプリをインストール",
+          "quiet-button",
+          @yami_kumo.Secondary,
+        ),
+      ]),
+    ],
+  )
+}
+
+///|
+fn conversation_page() -> @yami_kumo.Html {
+  html_element(
+    "div",
+    [html_id("conversation-page"), html_class("conversation-page")],
+    [
+      html_element(
+        "a",
+        [html_class("skip-link"), html_attribute("href", "#transcript-scroll")],
+        [html_text("会話へ移動")],
+      ),
+      html_element("header", [html_class("session-header")], [
+        html_element("div", [html_class("session-heading")], [
+          html_element("h1", [html_id("session-title")], [
+            html_text("エージェントのワークスペース"),
+          ]),
+          html_element("div", [html_class("status-row")], [
+            html_element(
+              "span",
+              [
+                html_id("status"),
+                html_class("status-pill"),
+                html_attribute("data-state", "idle"),
+              ],
+              [html_text("準備完了")],
+            ),
+            html_element(
+              "span",
+              [html_id("progress"), html_class("progress")],
+              [],
+            ),
+            html_element(
+              "span",
+              [html_id("provider-model"), html_class("provider-model")],
+              [html_text("プロバイダーを確認中…")],
+            ),
+          ]),
+        ]),
+        html_element("div", [html_class("header-actions")], [
+          html_button(
+            "text-view",
+            "text-view",
+            "テキスト表示",
+            "quiet-button",
+            @yami_kumo.ButtonVariant::Secondary,
+          ),
+          html_button(
+            "fork-session",
+            "fork-session",
+            "会話を分岐",
+            "quiet-button",
+            @yami_kumo.ButtonVariant::Secondary,
+            disabled=true,
+          ),
+          html_button(
+            "prune-results",
+            "prune-results",
+            "出力を整理",
+            "quiet-button",
+            @yami_kumo.ButtonVariant::Secondary,
+            disabled=true,
+          ),
+          html_button(
+            "cancel",
+            "cancel",
+            "停止",
+            "quiet-button",
+            @yami_kumo.ButtonVariant::Secondary,
+            disabled=true,
+          ),
+        ]),
+      ]),
+      html_element("div", [html_id("chatgpt-account-anchor")], [
+        chatgpt_account_panel(),
+      ]),
+      html_element(
+        "div",
+        [
+          html_id("connection-error"),
+          html_class("notice error-notice"),
+          html_attribute("role", "alert"),
+          html_boolean_attribute("hidden"),
+        ],
+        [
+          html_element("span", [html_id("connection-error-text")], []),
+          html_button(
+            "reconnect",
+            "reconnect",
+            "再接続",
+            "quiet-button",
+            @yami_kumo.ButtonVariant::Secondary,
+          ),
+        ],
+      ),
+      html_element(
+        "div",
+        [
+          html_id("run-error"),
+          html_class("notice error-notice"),
+          html_attribute("role", "alert"),
+          html_boolean_attribute("hidden"),
+        ],
+        [],
+      ),
+      html_element(
+        "div",
+        [
+          html_id("action-message"),
+          html_class("notice success-notice"),
+          html_attribute("role", "status"),
+          html_attribute("aria-live", "polite"),
+          html_boolean_attribute("hidden"),
+        ],
+        [],
+      ),
+      html_element(
+        "section",
+        [
+          html_id("transcript-area"),
+          html_class("transcript-area"),
+          html_attribute("aria-label", "会話"),
+        ],
+        [
+          html_element(
+            "div",
+            [
+              html_id("transcript-scroll"),
+              html_class("transcript-scroll"),
+              html_attribute("tabindex", "0"),
+              html_attribute("role", "region"),
+              html_attribute("aria-label", "会話の記録"),
+              html_attribute("aria-describedby", "transcript-help"),
+            ],
+            [
+              html_element(
+                "canvas",
+                [
+                  html_id("transcript-canvas"),
+                  html_attribute("aria-hidden", "true"),
+                ],
+                [],
+              ),
+              html_element(
+                "div",
+                [html_id("scene-spacer"), html_attribute("aria-hidden", "true")],
+                [],
+              ),
+            ],
+          ),
+          html_element(
+            "div",
+            [
+              html_id("text-transcript"),
+              html_class("text-transcript sr-only"),
+              html_attribute("role", "log"),
+              html_attribute("aria-label", "選択可能な会話の記録"),
+              html_attribute("aria-live", "off"),
+            ],
+            [],
+          ),
+          html_element(
+            "p",
+            [html_id("transcript-help"), html_class("sr-only")],
+            [
+              html_text(
+                "スクロールして会話を読めます。テキスト表示では文字を選択でき、スクリーンリーダーでも読み上げられます。",
+              ),
+            ],
+          ),
+          html_button(
+            "jump-latest",
+            "jump-latest",
+            "↓ 最新へ",
+            "jump-latest",
+            @yami_kumo.ButtonVariant::Secondary,
+            disabled=true,
+          ),
+        ],
+      ),
+      html_element(
+        "section",
+        [
+          html_id("approval"),
+          html_class("approval"),
+          html_attribute("aria-labelledby", "approval-title"),
+          html_boolean_attribute("hidden"),
+        ],
+        [
+          html_element("div", [html_class("approval-heading")], [
+            html_element("div", [], [
+              html_element("h2", [html_id("approval-title")], [
+                html_text("ツールの実行許可が必要です"),
+              ]),
+              html_element("p", [html_id("approval-description")], []),
+            ]),
+            html_element("span", [html_class("approval-tag")], [
+              html_text("確認"),
+            ]),
+          ]),
+          html_element(
+            "pre",
+            [
+              html_id("approval-arguments"),
+              html_attribute("tabindex", "0"),
+              html_attribute("aria-label", "ツールへの引数"),
+            ],
+            [],
+          ),
+          html_element("div", [html_class("approval-actions")], [
+            html_button(
+              "deny",
+              "deny",
+              "拒否",
+              "quiet-button",
+              @yami_kumo.ButtonVariant::SecondaryDestructive,
+            ),
+            html_button(
+              "approve",
+              "approve",
+              "今回のみ許可",
+              "primary-button",
+              @yami_kumo.ButtonVariant::Primary,
+            ),
+          ]),
+        ],
+      ),
+      html_element("form", [html_id("composer"), html_class("composer")], [
+        html_element(
+          "label",
+          [html_attribute("for", "prompt"), html_class("sr-only")],
+          [html_text("エージェントへのメッセージ")],
+        ),
+        html_element(
+          "textarea",
+          [
+            html_id("prompt"),
+            html_attribute("name", "prompt"),
+            html_attribute("rows", "3"),
+            html_attribute("maxlength", "16384"),
+            html_attribute(
+              "placeholder", "取り組みたいことを入力してください",
+            ),
+            html_attribute("autocomplete", "off"),
+            html_attribute("spellcheck", "true"),
+            html_boolean_attribute("required"),
+          ],
+          [],
+        ),
+        html_element("div", [html_class("composer-footer")], [
+          html_element("p", [html_id("composer-hint")], [
+            html_text("⌘ / Ctrl + Enter で送信"),
+          ]),
+          @yami_kumo.button(
+            @yami_kumo.fragment([
+              html_text("送信 "),
+              html_element("span", [html_attribute("aria-hidden", "true")], [
+                html_text("↑"),
+              ]),
+            ]),
+            variant=@yami_kumo.ButtonVariant::Primary,
+            button_type="submit",
+            class_name="primary-button",
+            attrs=[html_id("send"), action_attribute("send")],
+          ),
+        ]),
+      ]),
+    ],
+  )
+}
+
+///|
+fn settings_page() -> @yami_kumo.Html {
+  html_element(
+    "section",
+    [
+      html_id("settings-page"),
+      html_class("settings-page"),
+      html_attribute("aria-hidden", "true"),
+      html_attribute("inert", ""),
+      html_boolean_attribute("hidden"),
+      html_attribute("aria-labelledby", "settings-title"),
+    ],
+    [
+      html_element("header", [html_class("settings-page-header")], [
+        html_element("div", [], [
+          eyebrow("ワークスペース"),
+          html_element(
+            "h1",
+            [html_id("settings-title"), html_attribute("tabindex", "-1")],
+            [html_text("設定")],
+          ),
+        ]),
+        html_button(
+          "settings-close",
+          "settings-close",
+          "×  閉じる",
+          "quiet-button settings-close",
+          @yami_kumo.ButtonVariant::Secondary,
+          extra_attrs=[html_attribute("aria-label", "設定を閉じる")],
+        ),
+      ]),
+      html_element("div", [html_class("settings-layout")], [
+        html_element(
+          "nav",
+          [
+            html_class("settings-nav"),
+            html_attribute("aria-label", "設定セクション"),
+          ],
+          [
+            html_element("p", [html_class("settings-nav-title")], [
+              html_text("設定"),
+            ]),
+            html_button(
+              "settings-nav-chatgpt",
+              "settings-nav-chatgpt",
+              "◉  ChatGPT",
+              "settings-nav-item",
+              @yami_kumo.ButtonVariant::Ghost,
+              extra_attrs=[html_attribute("aria-current", "page")],
+            ),
+          ],
+        ),
+        html_element("div", [html_class("settings-content")], [
+          html_element("header", [html_class("settings-section-heading")], [
+            html_element("h2", [], [html_text("ChatGPT プラン")]),
+            html_element("p", [], [
+              html_text(
+                "ChatGPT アカウントと、Responses API で使用するモデルを管理します。認証情報はこのホストの保護されたストアに保存されます。",
+              ),
+            ]),
+          ]),
+          html_element("div", [html_class("settings-card")], [
+            html_element("div", [html_class("settings-card-heading")], [
+              html_element("h3", [], [html_text("アカウントとモデル")]),
+            ]),
+            html_element("div", [html_id("chatgpt-settings-slot")], []),
+          ]),
+        ]),
+      ]),
+    ],
+  )
+}
+
+///|
 fn workspace_main() -> @yami_kumo.Html {
   html_element("div", [html_class("dsh-workspace")], [
     html_element(
@@ -274,349 +728,8 @@ fn workspace_main() -> @yami_kumo.Html {
       ],
       [],
     ),
-    html_element(
-      "a",
-      [html_class("skip-link"), html_attribute("href", "#transcript-scroll")],
-      [html_text("会話へ移動")],
-    ),
-    html_element("header", [html_class("session-header")], [
-      html_element("div", [html_class("session-heading")], [
-        html_element("h1", [html_id("session-title")], [
-          html_text("エージェントのワークスペース"),
-        ]),
-        html_element("div", [html_class("status-row")], [
-          html_element(
-            "span",
-            [
-              html_id("status"),
-              html_class("status-pill"),
-              html_attribute("data-state", "idle"),
-            ],
-            [html_text("準備完了")],
-          ),
-          html_element("span", [html_id("progress"), html_class("progress")], []),
-          html_element(
-            "span",
-            [html_id("provider-model"), html_class("provider-model")],
-            [html_text("プロバイダーを確認中…")],
-          ),
-        ]),
-      ]),
-      html_element("div", [html_class("header-actions")], [
-        html_button(
-          "text-view",
-          "text-view",
-          "テキスト表示",
-          "quiet-button",
-          @yami_kumo.ButtonVariant::Secondary,
-        ),
-        html_button(
-          "fork-session",
-          "fork-session",
-          "会話を分岐",
-          "quiet-button",
-          @yami_kumo.ButtonVariant::Secondary,
-          disabled=true,
-        ),
-        html_button(
-          "prune-results",
-          "prune-results",
-          "出力を整理",
-          "quiet-button",
-          @yami_kumo.ButtonVariant::Secondary,
-          disabled=true,
-        ),
-        html_button(
-          "cancel",
-          "cancel",
-          "停止",
-          "quiet-button",
-          @yami_kumo.ButtonVariant::Secondary,
-          disabled=true,
-        ),
-      ]),
-    ]),
-    html_element(
-      "section",
-      [
-        html_class("account-bar"),
-        html_attribute("aria-label", "ChatGPT アカウントとモデル"),
-      ],
-      [
-        html_element("div", [html_class("account-summary")], [
-          html_element(
-            "span",
-            [
-              html_id("auth-status"),
-              html_class("account-status"),
-              html_attribute("data-state", "signed_out"),
-            ],
-            [html_text("ChatGPT 未接続")],
-          ),
-          html_element(
-            "span",
-            [html_id("auth-detail"), html_class("account-detail")],
-            [],
-          ),
-          html_element(
-            "span",
-            [html_id("auth-guidance"), html_class("account-detail")],
-            [],
-          ),
-          html_element(
-            "a",
-            [
-              html_id("usage-link"),
-              html_class("account-link"),
-              html_attribute("href", "https://chatgpt.com"),
-              html_attribute("target", "_blank"),
-              html_attribute("rel", "noopener noreferrer"),
-              html_boolean_attribute("hidden"),
-            ],
-            [html_text("ChatGPT を開く · 設定 → 使用状況")],
-          ),
-        ]),
-        html_element("div", [html_class("account-actions")], [
-          html_element(
-            "label",
-            [html_class("model-control"), html_attribute("for", "model-picker")],
-            [
-              html_element("span", [], [html_text("モデル")]),
-              html_element(
-                "select",
-                [
-                  html_id("model-picker"),
-                  action_attribute("model-change"),
-                  html_boolean_attribute("disabled"),
-                ],
-                [
-                  html_element("option", [html_attribute("value", "")], [
-                    html_text("ChatGPT に接続してモデルを表示"),
-                  ]),
-                ],
-              ),
-            ],
-          ),
-          html_button(
-            "auth-sign-in",
-            "auth-sign-in",
-            "ChatGPT にサインイン",
-            "quiet-button",
-            @yami_kumo.Secondary,
-          ),
-          html_button(
-            "auth-models-retry",
-            "auth-models-retry",
-            "モデルを再読み込み",
-            "quiet-button",
-            @yami_kumo.Secondary,
-            disabled=true,
-          ),
-          html_button(
-            "auth-sign-out",
-            "auth-sign-out",
-            "接続を解除",
-            "quiet-button",
-            @yami_kumo.Secondary,
-            disabled=true,
-          ),
-          html_button(
-            "install-app",
-            "install-app",
-            "インストール",
-            "quiet-button",
-            @yami_kumo.Secondary,
-          ),
-        ]),
-      ],
-    ),
-    html_element(
-      "div",
-      [
-        html_id("connection-error"),
-        html_class("notice error-notice"),
-        html_attribute("role", "alert"),
-        html_boolean_attribute("hidden"),
-      ],
-      [
-        html_element("span", [html_id("connection-error-text")], []),
-        html_button(
-          "reconnect",
-          "reconnect",
-          "再接続",
-          "quiet-button",
-          @yami_kumo.ButtonVariant::Secondary,
-        ),
-      ],
-    ),
-    html_element(
-      "div",
-      [
-        html_id("run-error"),
-        html_class("notice error-notice"),
-        html_attribute("role", "alert"),
-        html_boolean_attribute("hidden"),
-      ],
-      [],
-    ),
-    html_element(
-      "div",
-      [
-        html_id("action-message"),
-        html_class("notice success-notice"),
-        html_attribute("role", "status"),
-        html_attribute("aria-live", "polite"),
-        html_boolean_attribute("hidden"),
-      ],
-      [],
-    ),
-    html_element(
-      "section",
-      [
-        html_id("transcript-area"),
-        html_class("transcript-area"),
-        html_attribute("aria-label", "会話"),
-      ],
-      [
-        html_element(
-          "div",
-          [
-            html_id("transcript-scroll"),
-            html_class("transcript-scroll"),
-            html_attribute("tabindex", "0"),
-            html_attribute("role", "region"),
-            html_attribute("aria-label", "会話の記録"),
-            html_attribute("aria-describedby", "transcript-help"),
-          ],
-          [
-            html_element(
-              "canvas",
-              [
-                html_id("transcript-canvas"),
-                html_attribute("aria-hidden", "true"),
-              ],
-              [],
-            ),
-            html_element(
-              "div",
-              [html_id("scene-spacer"), html_attribute("aria-hidden", "true")],
-              [],
-            ),
-          ],
-        ),
-        html_element(
-          "div",
-          [
-            html_id("text-transcript"),
-            html_class("text-transcript sr-only"),
-            html_attribute("role", "log"),
-            html_attribute("aria-label", "選択可能な会話の記録"),
-            html_attribute("aria-live", "off"),
-          ],
-          [],
-        ),
-        html_element("p", [html_id("transcript-help"), html_class("sr-only")], [
-          html_text(
-            "スクロールして会話を読めます。テキスト表示では文字を選択でき、スクリーンリーダーでも読み上げられます。",
-          ),
-        ]),
-        html_button(
-          "jump-latest",
-          "jump-latest",
-          "↓ 最新へ",
-          "jump-latest",
-          @yami_kumo.ButtonVariant::Secondary,
-          disabled=true,
-        ),
-      ],
-    ),
-    html_element(
-      "section",
-      [
-        html_id("approval"),
-        html_class("approval"),
-        html_attribute("aria-labelledby", "approval-title"),
-        html_boolean_attribute("hidden"),
-      ],
-      [
-        html_element("div", [html_class("approval-heading")], [
-          html_element("div", [], [
-            html_element("h2", [html_id("approval-title")], [
-              html_text("ツールの実行許可が必要です"),
-            ]),
-            html_element("p", [html_id("approval-description")], []),
-          ]),
-          html_element("span", [html_class("approval-tag")], [
-            html_text("確認"),
-          ]),
-        ]),
-        html_element(
-          "pre",
-          [
-            html_id("approval-arguments"),
-            html_attribute("tabindex", "0"),
-            html_attribute("aria-label", "ツールへの引数"),
-          ],
-          [],
-        ),
-        html_element("div", [html_class("approval-actions")], [
-          html_button(
-            "deny",
-            "deny",
-            "拒否",
-            "quiet-button",
-            @yami_kumo.ButtonVariant::SecondaryDestructive,
-          ),
-          html_button(
-            "approve",
-            "approve",
-            "今回のみ許可",
-            "primary-button",
-            @yami_kumo.ButtonVariant::Primary,
-          ),
-        ]),
-      ],
-    ),
-    html_element("form", [html_id("composer"), html_class("composer")], [
-      html_element(
-        "label",
-        [html_attribute("for", "prompt"), html_class("sr-only")],
-        [html_text("エージェントへのメッセージ")],
-      ),
-      html_element(
-        "textarea",
-        [
-          html_id("prompt"),
-          html_attribute("name", "prompt"),
-          html_attribute("rows", "3"),
-          html_attribute("maxlength", "16384"),
-          html_attribute(
-            "placeholder", "取り組みたいことを入力してください",
-          ),
-          html_attribute("autocomplete", "off"),
-          html_attribute("spellcheck", "true"),
-          html_boolean_attribute("required"),
-        ],
-        [],
-      ),
-      html_element("div", [html_class("composer-footer")], [
-        html_element("p", [html_id("composer-hint")], [
-          html_text("⌘ / Ctrl + Enter で送信"),
-        ]),
-        @yami_kumo.button(
-          @yami_kumo.fragment([
-            html_text("送信 "),
-            html_element("span", [html_attribute("aria-hidden", "true")], [
-              html_text("↑"),
-            ]),
-          ]),
-          variant=@yami_kumo.ButtonVariant::Primary,
-          button_type="submit",
-          class_name="primary-button",
-          attrs=[html_id("send"), action_attribute("send")],
-        ),
-      ]),
-    ]),
+    conversation_page(),
+    settings_page(),
   ])
 }
 
@@ -652,7 +765,19 @@ pub fn shell_html() -> String {
       html_attribute("aria-expanded", "false"),
     ],
   )
-  let header_actions = html_button(
+  let settings_button = html_button(
+    "settings-open",
+    "settings-open",
+    "設定",
+    "quiet-button settings-open-trigger",
+    @yami_kumo.ButtonVariant::Secondary,
+    extra_attrs=[
+      html_attribute("aria-controls", "settings-page"),
+      html_attribute("aria-expanded", "false"),
+      html_attribute("aria-pressed", "false"),
+    ],
+  )
+  let sidebar_toggle = html_button(
     "sidebar-toggle",
     "sidebar-toggle",
     "ナビゲーションを隠す",
@@ -664,6 +789,7 @@ pub fn shell_html() -> String {
       html_attribute("aria-pressed", "false"),
     ],
   )
+  let header_actions = @yami_kumo.fragment([settings_button, sidebar_toggle])
   let context_toggle = html_button(
     "context-toggle",
     "context-toggle",

@@ -51,6 +51,18 @@ async fn desktop_handle_click(
   state.click_count += 1
   let width = state.width
   let height = state.height
+  if state.settings_open {
+    desktop_auth_handle_settings_click(state, position)
+    return
+  }
+  if desktop_button_rect("settings-open", width, height).contains(position) {
+    state.settings_open = true
+    state.settings_focus = 1
+    state.settings_scroll = 0
+    state.focused = false
+    state.dirty = true
+    return
+  }
   if desktop_button_rect("new", width, height).contains(position) {
     desktop_create_session(state)
     return
@@ -112,6 +124,10 @@ async fn desktop_handle_key(
   key : @primitives.Key,
   modifiers : @primitives.Modifiers,
 ) -> Unit {
+  if state.settings_open {
+    desktop_auth_handle_settings_key(state, key, modifiers)
+    return
+  }
   state.focused = true
   match desktop_insertable_key(key, modifiers) {
     Some(text) => {

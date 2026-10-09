@@ -21,6 +21,7 @@ const failures = [];
 const contexts = [];
 const pages = [];
 let browser;
+let settingsScreenshotSaved = false;
 
 function observePage(page) {
   pages.push(page);
@@ -48,6 +49,32 @@ async function waitForConnectedWorkspace(page) {
     null,
     { timeout: 20_000 },
   );
+}
+
+async function openSettings(page) {
+  await page.waitForFunction(
+    () => document.getElementById("settings-page")?.hidden === true &&
+      document.getElementById("account-bar")?.hidden === true,
+  );
+  await page.locator("#settings-open").click();
+  await page.waitForFunction(
+    () => document.getElementById("settings-page")?.hidden === false &&
+      document.getElementById("conversation-page")?.hidden === true &&
+      document.getElementById("account-bar")?.hidden === false,
+  );
+  assert.equal(
+    await page.locator("#settings-close").evaluate((node) => document.activeElement === node),
+    true,
+    "opening Settings moves focus to its close control",
+  );
+  if (!settingsScreenshotSaved) {
+    await mkdir(screenshotDirectory, { recursive: true });
+    await page.screenshot({
+      path: path.join(screenshotDirectory, "settings.png"),
+      fullPage: true,
+    });
+    settingsScreenshotSaved = true;
+  }
 }
 
 async function postNativeCommand(page, operation, sessionId, input) {
@@ -275,6 +302,20 @@ async function testNativeDemo(browserInstance) {
   await assertReadableSessionOption(
     page,
     ".session-option[aria-current='page']",
+  );
+  await page.locator("#prompt").fill("keep this draft while changing settings");
+  await openSettings(page);
+  await page.keyboard.press("Escape");
+  await page.waitForFunction(() => document.getElementById("settings-page")?.hidden === true);
+  assert.equal(
+    await page.locator("#prompt").inputValue(),
+    "keep this draft while changing settings",
+    "closing Settings preserves the conversation draft",
+  );
+  assert.equal(
+    await page.locator("#settings-open").evaluate((node) => document.activeElement === node),
+    true,
+    "closing Settings restores focus to the toolbar launcher",
   );
   await page.locator("#prompt").fill("Browser smoke 日本語");
   await page.locator("#send").click();
@@ -707,6 +748,7 @@ async function testCompiledAuthModelFlow(browserInstance) {
 
   await page.goto(baseURL, { waitUntil: "domcontentloaded" });
   await waitForConnectedWorkspace(page);
+  await openSettings(page);
   await page.evaluate(() => { window.__dshBlockPopup = true; });
   await page.locator("#auth-sign-in").click();
   await page.waitForFunction(
@@ -873,6 +915,7 @@ async function testStaleAuthCatalogCannotOverwriteNewAccount(browserInstance) {
 
   await page.goto(baseURL, { waitUntil: "domcontentloaded" });
   await waitForConnectedWorkspace(page);
+  await openSettings(page);
   await page.locator("#auth-sign-in").click();
   await profileAStarted;
   connectedProfile = "profile-b";

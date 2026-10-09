@@ -63,6 +63,12 @@ app checkpoints conversations in the same data directory used by other native
 dsh surfaces; close other dsh processes that use that directory before
 starting the desktop app.
 
+Choose **設定** in the left pane to open the ChatGPT account page. It supports
+host-browser sign-in, sign-out, refreshing the account's visible model list,
+and selecting the model used for conversations. Tab / Shift-Tab or the arrow
+keys move through settings controls; Escape or **閉じる** returns to the
+conversation composer.
+
 By default, the workspace is the current user's home directory and data is
 stored in `<workspace>/.dsh.mbt`. Pass `--workspace` and `--data-dir` to select
 explicit locations. Provider configuration uses the same `DSH_MODE`,
