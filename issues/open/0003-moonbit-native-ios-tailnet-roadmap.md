@@ -2,6 +2,7 @@
 
 状態: 部分実装 / open。native service と SwiftUI + MoonC Simulator embedding spike はあるが、formal gpui iOS host、real Tailscale、iPhone 実機 gate は未実行。
 Updated: 2026-10-07
+Rechecked: 2026-10-09 against main `5af0d83` — real Tailscale、formal gpui iOS host、iPhone 実機 gate が未実行のため open を維持。
 Baseline: `71a33a565455e167fa9dd687155fa794b6cc2414` (`main`)
 Guide baseline: `moonbitlang/moonbit-agent-guide@7262fb823452c20ffb6a01d4b06f9de639e7c774`
 関連: [0001 upstream parity](0001-upstream-parity.md)、[認証提案 PR #9](https://github.com/f4ah6o/dsh.mbt/pull/9)、[gpui.mbt モバイル設計 PR #43](https://github.com/gpui-mbt/gpui.mbt/pull/43)
