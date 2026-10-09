@@ -47,6 +47,64 @@ moon run native --target native --release -- \
   --workspace /absolute/path/to/project
 ```
 
+## Workspace skills
+
+Filesystem skills are opt-in. Pass `--enable-skills` to `run`, `web`, `mcp`, or
+`desktop`; repeated `--skill-dir PATH` options add workspace-relative roots.
+The runtime scans `.dsh/skills`, then `.agents/skills`, then up to eight custom
+roots in the order supplied. The first valid skill with a duplicate name wins.
+Each root supports direct `<name>.md` files and one-level skill bundles at
+`<directory>/SKILL.md`. Discovery is sorted by skill name and fixed for the
+runtime lifetime.
+
+Each skill starts with `---` YAML frontmatter containing `name` and
+`description`. The bounded scalar subset also accepts `whenToUse`,
+`disable-model-invocation`, and `user-invocable`; invocation fields require
+`true` or `false`. Unknown keys, duplicate keys, nested YAML, block values,
+legacy camelCase invocation flags, and malformed frontmatter are ignored as
+invalid skills. `whenToUse` is accepted but is not shown in the model catalog.
+Names use lowercase kebab case. Files are limited to 65,536 bytes, instruction
+bodies to 60,000 bytes, descriptions to 4,096 characters, and each root to
+1,024 entries. The catalog admits up to 64 valid skills and up to 16
+model-invocable skills; catalog summaries are normalized, escaped, and capped
+so the provider tool descriptor stays within the engine's 4,096-character
+limit.
+
+The provider-facing `skill` tool appears in the tool schema for every native
+provider mode when skills are enabled. It lists summaries for model-invocable
+skills only. The host rereads a requested skill with no-follow workspace file
+access, verifies the discovered name still matches, and rechecks the current
+model invocation policy before returning its full body. The result includes a
+stable source label and is limited to the normal 64 KiB tool-result budget;
+oversized instructions fail with an error rather than being truncated. The
+tool is classified as read-only and does not need approval.
+
+A user's first prompt token may directly invoke a user-enabled skill as
+`/name`. The host appends a canonical skill block and a `skill-invocation`
+provenance marker to that user message before checkpointing it. Unknown names
+and skills with `user-invocable: false` remain ordinary prompt text. Skills
+with `disable-model-invocation: true` are omitted from the tool catalog and
+refused by the model loader, while remaining directly invocable by the user
+unless separately disabled. Direct expansion is limited to 16,384 UTF-16 units
+including the original prompt and rendered skill body; larger model-invocable
+skills can be loaded through the `skill` tool, while user-only skills must be
+shortened.
+
+The catalog is a static provider tool description rather than an upstream
+durable catalog message. Root changes are picked up after restarting the
+runtime; there are no file watchers, live catalog replacement, user-home or
+bundled roots, URL resources, runtime-registered skills, or full YAML/metadata
+support. Skill bodies are treated as prompt instructions and referenced
+resources are not loaded automatically. The loader does not execute skill
+scripts or load npm/Cordis plugins.
+
+Keep `--enable-skills` enabled when reopening a store that contains skill tool
+calls: the engine validates historical tool calls against the registered tool
+catalog, so disabling the tool prevents that store from restoring. Completed
+skill results and their source labels are stored in the session history, and
+cancelled direct invocations keep the already-checkpointed user message.
+Ordinary stores without skill calls can be opened with skills enabled.
+
 ## External MCP stdio tools
 
 `run`, `web`, `mcp`, and `desktop` accept `--mcp-config PATH` to start configured

@@ -40,6 +40,27 @@ fn native_option(args : Array[String], name : String) -> String? {
 }
 
 ///|
+fn native_cli_options(args : Array[String], name : String) -> Array[String] {
+  let values : Array[String] = []
+  let mut index = if args.length() > 0 && args[0].has_prefix("-") {
+    0
+  } else {
+    1
+  }
+  while index < args.length() && args[index] != "--" {
+    if args[index] == name && index + 1 < args.length() {
+      values.push(args[index + 1])
+      index += 2
+    } else if native_cli_is_value_option(args[index]) {
+      index += 2
+    } else {
+      index += 1
+    }
+  }
+  values
+}
+
+///|
 fn native_worker_payload(args : Array[String]) -> Result[Bytes, String] {
   if args.length() < 8 ||
     args[1] != "--internal-worker" ||
@@ -92,6 +113,7 @@ fn native_usage() -> String {
   "  dsh desktop [--app-path /absolute/path/to/Dsh.app] [--mcp-config PATH] [desktop options]\n\n" +
   "Provider options: --mode deepseek|openai|openai-responses --model NAME --base-url URL --max-retries 0..5\n" +
   "MCP options: --mcp-config PATH starts trusted external stdio servers; calls require approval by default.\n" +
+  "Skill options: --enable-skills discovers workspace skills; repeat --skill-dir PATH to add workspace-relative roots.\n" +
   "Approval options: --allow-shell, --approve-writes, --approve-tools write,edit,bash,mcp__SERVER__TOOL\n" +
   "Use --json to print command results as JSON. API keys are read from DSH_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY.\n\n" +
   "The demo checkpoints a session, gates a write call on approval, runs the\n" +
@@ -544,6 +566,8 @@ pub async fn run_cli() -> Unit {
         base_url_override=native_option(args, "--base-url").unwrap_or(""),
         max_retries~,
         mcp_config_path=native_option(args, "--mcp-config"),
+        enable_skills=native_flag(args, "--enable-skills"),
+        skill_dirs=native_cli_options(args, "--skill-dir"),
       ) {
       Err(error) => abort("native runtime could not start: " + error)
       Ok(runtime) => runtime
@@ -587,6 +611,8 @@ pub async fn run_cli() -> Unit {
         base_url_override=native_option(args, "--base-url").unwrap_or(""),
         max_retries~,
         mcp_config_path=native_option(args, "--mcp-config"),
+        enable_skills=native_flag(args, "--enable-skills"),
+        skill_dirs=native_cli_options(args, "--skill-dir"),
       ) {
       Err(error) => abort("native runtime could not start: " + error)
       Ok(runtime) => runtime
@@ -635,6 +661,8 @@ pub async fn run_cli() -> Unit {
         base_url_override=native_option(args, "--base-url").unwrap_or(""),
         max_retries~,
         mcp_config_path=native_option(args, "--mcp-config"),
+        enable_skills=native_flag(args, "--enable-skills"),
+        skill_dirs=native_cli_options(args, "--skill-dir"),
       ) {
       Err(error) => abort("native runtime could not start: " + error)
       Ok(runtime) => runtime

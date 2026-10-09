@@ -4,6 +4,7 @@ import {
   "f4ah6o/dsh/provider",
   "f4ah6o/dsh/auth",
   "f4ah6o/dsh/protocol",
+  "f4ah6o/dsh/plugins",
   "moonbitlang/core/json",
   "moonbitlang/core/env",
   "moonbitlang/core/encoding/base64",

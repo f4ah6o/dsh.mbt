@@ -222,6 +222,45 @@ pub fn builtin_tools() -> Array[Json] {
 }
 
 ///|
+/// Build the native workspace skill loader descriptor. The catalog contains
+/// summaries only; full instruction bodies are read by the host after a call.
+pub fn skill_tool(model_catalog : Array[(String, String)]) -> Json {
+  let description = StringBuilder()
+  description.write_string(
+    "Load the full instructions for an exact model-invocable workspace skill. Use a matching skill before acting on a task. The catalog below contains summaries only; do not infer instructions until the skill has been loaded.\n\n<available_skills>\n",
+  )
+  if model_catalog.is_empty() {
+    description.write_string(
+      "No model-invocable workspace skills are available.\n",
+    )
+  }
+  for skill in model_catalog {
+    let name = skill.0
+    let summary = skill.1
+    description.write_string("- `")
+    description.write_string(name)
+    description.write_string("`: ")
+    description.write_string(summary)
+    description.write_char('\n')
+  }
+  description.write_string("</available_skills>")
+  {
+    "name": "skill",
+    "description": description.to_string(),
+    "effect": "read",
+    "input_schema": builtin_schema(
+      {
+        "name": {
+          "type": "string",
+          "description": "The exact kebab-case skill name from the available_skills catalog",
+        },
+      },
+      ["name"],
+    ),
+  }
+}
+
+///|
 pub fn defaults() -> Result[Registry, String] {
   let registry = Registry::new()
   for

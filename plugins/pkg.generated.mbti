@@ -1,0 +1,26 @@
+// Generated using `moon info`, DON'T EDIT IT
+package "f4ah6o/dsh/plugins"
+
+// Values
+pub fn builtin_tools() -> Array[Json]
+
+pub fn defaults() -> Result[Registry, String]
+
+pub fn skill_tool(Array[(String, String)]) -> Json
+
+// Errors
+
+// Types and methods
+pub struct Registry {
+  // private fields
+}
+pub fn Registry::contains(Self, String) -> Bool
+pub fn Registry::manifest(Self) -> Json
+pub fn Registry::mount(Self, String, Array[String], Array[Json]) -> Result[Unit, String]
+pub fn Registry::new() -> Self
+pub fn Registry::tools(Self) -> Array[Json]
+pub fn Registry::unmount(Self, String) -> Result[Unit, String]
+
+// Type aliases
+
+// Traits
