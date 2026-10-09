@@ -18,6 +18,7 @@ priv struct NativeState {
   revision : Int
   auth_revision : Int
   external_mcp_catalog_hash : String?
+  lsp_catalog_hash : String?
 }
 
 ///|
@@ -445,6 +446,7 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
         revision: 0,
         auth_revision: 0,
         external_mcp_catalog_hash: None,
+        lsp_catalog_hash: None,
       })
     }
     Ok(Some((text, version))) => {
@@ -476,6 +478,15 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
                 "native snapshot has an invalid external MCP catalog fingerprint",
               )
           }
+          let lsp_catalog_hash = match object_field(raw, "lsp_catalog_hash") {
+            None | Some(Json::Null) => None
+            Some(Json::String(value)) if native_mcp_valid_fingerprint(value) =>
+              Some(value)
+            _ =>
+              return Err(
+                "native snapshot has an invalid LSP catalog fingerprint",
+              )
+          }
           Ok({
             engine,
             receipts,
@@ -490,6 +501,7 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
             revision: int_field(raw, "revision").unwrap_or(0),
             auth_revision: int_field(raw, "auth_revision").unwrap_or(0),
             external_mcp_catalog_hash,
+            lsp_catalog_hash,
           })
         }
         Some("dsh.mbt-session-v1") | Some("deepseek-session-v4") =>
@@ -503,6 +515,7 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
             revision: 0,
             auth_revision: 0,
             external_mcp_catalog_hash: None,
+            lsp_catalog_hash: None,
           })
         _ => Err("native host cannot load this snapshot format")
       }
@@ -532,6 +545,10 @@ fn NativeStore::save(
   }
   match state.external_mcp_catalog_hash {
     Some(value) => fields["external_mcp_catalog_hash"] = Json::string(value)
+    None => ()
+  }
+  match state.lsp_catalog_hash {
+    Some(value) => fields["lsp_catalog_hash"] = Json::string(value)
     None => ()
   }
   let value = Json::object(fields)

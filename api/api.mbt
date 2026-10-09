@@ -156,6 +156,7 @@ fn session_summaries(value : Json) -> Json {
 fn create_api(
   external_mcp_tools : Array[Json],
   skill_tool : Json?,
+  lsp_tool : Json?,
 ) -> HarnessApi raise InitError {
   let owner = checked(@core.App::new())
   checked(owner.start())
@@ -174,6 +175,14 @@ fn create_api(
   match skill_tool {
     Some(tool) =>
       match plugins.mount("tools.skills", ["agent-loop"], [tool]) {
+        Ok(_) => ()
+        Err(error) => raise InitError(error)
+      }
+    None => ()
+  }
+  match lsp_tool {
+    Some(tool) =>
+      match plugins.mount("tools.lsp", ["agent-loop"], [tool]) {
         Ok(_) => ()
         Err(error) => raise InitError(error)
       }
@@ -312,8 +321,9 @@ fn create_api(
 pub fn HarnessApi::new(
   external_mcp_tools? : Array[Json] = [],
   skill_tool? : Json? = None,
+  lsp_tool? : Json? = None,
 ) -> Result[HarnessApi, String] {
-  Ok(create_api(external_mcp_tools, skill_tool)) catch {
+  Ok(create_api(external_mcp_tools, skill_tool, lsp_tool)) catch {
     InitError(error) => Err(error)
   }
 }

@@ -181,6 +181,144 @@ moon run native --target native --release -- \
   --workspace /absolute/path/to/project
 ```
 
+## Native LSP navigation
+
+`run`, `web`, `mcp`, `acp`, and `desktop` accept `--lsp-config PATH`. This
+explicitly enables the `lsp` tool and starts configured local language servers
+over Content-Length framed JSON-RPC on stdio. Without this option, the tool is
+not registered. The top-level `servers` object maps stable server IDs to
+server settings:
+
+```json
+{
+  "servers": {
+    "typescript": {
+      "command": "/absolute/path/to/typescript-language-server",
+      "args": ["--stdio"],
+      "env": { "PATH": "PATH" },
+      "extensionToLanguage": {
+        ".ts": "typescript",
+        ".tsx": "typescript"
+      },
+      "toolCallTimeoutMs": 60000
+    }
+  }
+}
+```
+
+Start a foreground session with this file by passing the config path explicitly:
+
+```sh
+dsh run 'Find the definition of the selected symbol.' \
+  --lsp-config /absolute/path/to/lsp.json \
+  --data-dir /absolute/path/to/dsh-data \
+  --workspace /absolute/path/to/project
+```
+
+The config accepts 1–8 named servers and 128 extension mappings total. Each
+server needs a nonempty `extensionToLanguage` map; each extension can route to
+only one server. The map keys are file suffixes such as `.ts`; values are LSP
+language IDs. `args`, `env`, `initializationOptions`, `configuration`,
+`settingsRevision`, and `toolCallTimeoutMs` are optional. Unknown fields are
+rejected. A config file is limited to 1 MiB; a server accepts at most 128
+arguments (4,096 characters each, 32 KiB combined) and 64 environment mappings.
+Settings JSON is limited to 24 levels, 65,536 nodes, and 1 MiB of string
+content. The default routed-call timeout is 60 seconds; `toolCallTimeoutMs`
+accepts 100–300,000 milliseconds.
+
+`command` and `args` are launched directly as argv, without a shell. The
+runtime starts one server process lazily for each configured server ID,
+serializes its requests, and uses the selected workspace as its working
+directory. The server receives a small fixed environment (`PATH`, `LANG`, and
+`LC_ALL`) plus only explicit `env` mappings; it does not inherit other host
+variables. Each mapping uses a child variable name as its key and the name of a
+host environment variable as its value. Config files store the host variable
+name, and the runtime looks up its value when the server starts. The host
+variable must be set at that point. Server stderr is discarded.
+
+`initializationOptions` and `configuration` are passed to the LSP server and
+may contain sensitive settings. Their values are not persisted or included in
+the catalog fingerprint. If either field is non-null, set `settingsRevision`
+to a stable, nonsecret identifier, and change it whenever either settings
+payload changes. The runtime cannot compare mapped environment values, so set
+and change the revision when a change to those external values affects server
+behavior. The native store binds LSP tool history to the configured
+catalog, including server IDs, commands, arguments, environment-variable
+names, extension routes, timeout, settings revision, and the native worker
+resource-limit policy. Server IDs and
+mapping keys are canonicalized before the catalog fingerprint is calculated.
+Reopen a store with the matching config; a store without an earlier LSP
+catalog can adopt its first config only if it has no historical `lsp` calls.
+Pass `--lsp-config PATH` to every command that opens a store with a bound LSP
+catalog, including tool approval/denial, import, pruning, fork, and auth/model
+management actions, as well as `run`, service, and desktop startup.
+The optional fingerprint is a small field in the existing native snapshot.
+LSP calls and results use the existing session history capacity; LSP does not
+increase that limit. Use dsh 0.1.7 or later for stores that contain LSP calls.
+
+Each `lsp` call accepts an operation (`goToDefinition`, `findReferences`,
+`goToImplementation`, or `hover`), a workspace-relative `file_path`, and
+one-based `line` and `character` positions measured in UTF-16 code units. A
+reference query includes the declaration. Before starting a worker, the host
+checks the selected file against the workspace SafeRoot, rejects symlinks and
+protected runtime-store files, reads a regular UTF-8 source file, and validates
+the requested position. Source files are limited to 4 MiB. The server must
+negotiate UTF-16 positions, support transient document open/close, and advertise
+the requested operation. For each query the host reads the current source,
+sends `textDocument/didOpen`, the operation request, and `textDocument/didClose`;
+it does not keep an editor buffer or send `didChange` updates.
+
+Definition, reference, and implementation results are normalized to bounded
+workspace-relative file locations. Locations outside the workspace, non-local
+URIs, and paths that cannot be resolved as safe workspace files are omitted.
+These operations return at most 100 locations and 16,000 characters; hover
+returns bounded text with the same character limit. Incoming server JSON-RPC
+message bodies are limited to 4 MiB, headers to 64 KiB, JSON nesting to 32
+levels, and queued messages to 64. Incoming server requests/notifications
+while awaiting a response are limited to 64. `toolCallTimeoutMs` covers the
+routed call after CLI config checks and
+initial workspace path/extension routing: waiting for that server's serialized
+slot, SafeRoot source reread and position validation, lazy startup and
+initialize, `didOpen` / request / `didClose`, and result projection. Worker
+startup also has a separate 10-second cap. On Linux, each worker has an 8 GiB
+virtual address-space cap (not an RSS limit); Darwin does not currently enforce
+a hard worker memory cap. The worker CPU-time limit is 3,600 seconds. Graceful
+shutdown has a two-second budget per worker, including waiting for its
+serialized slot, the LSP `shutdown` request, the `exit` notification write, and
+process exit. If that phase fails or expires, the host escalates process-group
+termination, allowing up to 500 milliseconds after `TERM` and one second after
+`KILL` before closing pipes. Shutting down a pool with multiple servers can
+take longer than one worker's graceful budget.
+
+The `lsp` tool is classified as a write effect because a configured server is
+trusted host code, so each call needs approval by default. Foreground `dsh run`
+can auto-approve it only when `lsp` is explicitly listed in
+`--approve-tools`, for example `--approve-tools lsp`. Cancellation, timeout,
+malformed protocol data, or disconnect poisons and stops the server process
+group. The failed call is never retried or replayed. A later independent,
+approved call can evict the poisoned worker and start a fresh one. Injected
+environment values, settings payloads, raw JSON-RPC error bodies, and server
+stderr are not logged or directly persisted. Returned LSP content is saved as
+a tool result and shown to the model, so configure only servers you trust.
+
+The workspace path checks constrain which source files the host reads; they do
+not sandbox a configured server's host authority. The worker is trusted local
+code and runs without an operating-system sandbox. Use only server commands
+you trust.
+
+The keyless fake-server tests exercise protocol and failure behaviors. On
+2026-10-10, the optional local macOS host check succeeded against its installed
+`/usr/bin/clangd`, resolving a C definition. This is narrow single-server
+evidence, not cross-language, Linux/V8, or live-provider acceptance. The
+example above documents the config shape; this is a bounded navigation subset
+of the pinned upstream `packages/lsp`, `packages/lsp/lsp-stdio`, and
+`packages/lsp/tool-lsp`, not complete LSP or Cordis compatibility. It does not
+support remote servers, dynamic providers, hot reload, `didChange`, diagnostics
+UI, or workspace edits. Upstream connection pooling and its retry-once
+behavior are not implemented; a failed request has no transparent retry. The
+keyless fake-server tests use Python 3, which is a test-only prerequisite and
+not a product runtime dependency.
+
 ## ACP stdio agent
 
 `dsh acp` exposes the native runtime as an ACP v1 agent over newline-delimited

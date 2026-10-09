@@ -1,5 +1,21 @@
 # 検証記録
 
+## Bounded native LSP navigation increment
+
+2026-10-10、macOS arm64、Node.js `26.8.2`、MoonBit compiler / core
+`0.10.14+7d59c7ec9`、moon / moonrun `0.1.20260920`、Playwright `1.64.0` で検証しました。feature commit `f120666` の
+実装に対する local `npm test`、no-Node verifier、mutation gate は PASS しました。provider fixture は keyless / loopback です。
+
+| gate | 結果 |
+| --- | --- |
+| `npm test` | PASS / exit 0。MoonBit format / checks は自作 warning 0、pinned hotpath diagnostics のみ。portable suite は Wasm、Wasm GC、JS、native 各 target で 144 / 144 PASS。native runtime は 124 / 124、browser/app fixture は 15 / 15、web は 7 / 7 PASS。ACP stdio install smoke と native-host Chromium smoke も PASS。 |
+| `DSH_NATIVE_WORKER_BIN=... moon test --target native runtime/lsp_wbtest.mbt` | 17 / 17 PASS。fake stdio server で four operations、UTF-16 / URI boundary、framing、refresh、approval と durable reopen/no-replay、timeout / cancellation / disconnect、process-group cleanup、bounded shutdown を検証。 `/usr/bin/clangd` がある macOS host では keyless C definition smoke も PASS。 |
+| Node/npm を PATH から外した `moon run scripts/native-verify.mbtx --target native .` | PASS / exit 0。native check（自作 warning 0、pinned hotpath diagnostics のみ）、276 / 276 tests、CLI help、browser / service-worker build と bundle comparison、source install、approval / tool / context / durable reload demo。 |
+| `npm run mutation` | PASS。37 mutants: 29 killed、0 survived、0 timed out、8 unviable。Viable score 100%（public 28 / 28、private 1 / 1）。 |
+| `moon info api plugins` / `git diff --check` | PASS。Generated API / plugin interfaces are current; no whitespace errors. |
+
+The first GitHub portable-and-native CI run for `f120666` passed build/check and portable suites, then reported 123 / 124 native runtime tests: the cancellation case failed only because `kill(-PGID, 0)` still reported the group present. The CI log captured no PID states, so this does not establish whether the remaining entry was a zombie or a live descendant. The same run's Ubuntu 24.04 no-Node job passed all 276 native tests. The fixture now requires a TERM-ignoring descendant to signal readiness, waits for cleanup to finish, releases it, and asserts it cannot write an escape marker; it also checks the worker leader is reaped. The focused LSP suite passes 17 / 17 locally after that fixture change. The PR CI rerun is the cross-platform confirmation. Runtime integration and fake-server coverage were exercised locally on macOS; clangd provides one real C-server smoke only. These results do not claim acceptance across other languages, Linux / V8 servers, or live providers. Gate stdout was not saved to separate log files; the command results and counts above are the recorded evidence.
+
 ## Native MoonBit product runtime and Node-host retirement
 
 2026-10-08、macOS arm64、Node.js `26.8.2`、MoonBit runner / compiler / core

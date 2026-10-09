@@ -6,6 +6,8 @@ pub fn builtin_tools() -> Array[Json]
 
 pub fn defaults() -> Result[Registry, String]
 
+pub fn lsp_tool() -> Json
+
 pub fn skill_tool(Array[(String, String)]) -> Json
 
 // Errors
