@@ -293,6 +293,30 @@ fn desktop_settings_model_rect(
 }
 
 ///|
+fn desktop_settings_model_focus_at(
+  auth : Json,
+  settings_scroll : Int,
+  width : Double,
+  height : Double,
+  position : @primitives.Point,
+) -> Int? {
+  let model_count = desktop_auth_model_count(auth)
+  let first = desktop_settings_clamp_scroll(
+    settings_scroll, model_count, height,
+  )
+  for visible_index in 0..<desktop_settings_visible_model_rows(height) {
+    let model_index = first + visible_index
+    if model_index < model_count &&
+      desktop_settings_model_rect(visible_index, width, height).contains(
+        position,
+      ) {
+      return Some(model_index + 4)
+    }
+  }
+  None
+}
+
+///|
 fn desktop_add_focus_outline(
   items : Array[@scene.SceneItem],
   id : UInt64,

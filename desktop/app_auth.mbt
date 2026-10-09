@@ -85,14 +85,57 @@ fn desktop_auth_clamp_settings_controls(
   state : DesktopState,
   auth : Json,
 ) -> Unit {
-  state.settings_focus = state.settings_focus
-    .max(0)
-    .min(desktop_auth_focus_count(auth) - 1)
-  state.settings_scroll = desktop_settings_clamp_scroll(
+  let (focus, scroll) = desktop_auth_bounded_settings_controls(
+    auth,
+    state.settings_focus,
     state.settings_scroll,
-    desktop_auth_model_count(auth),
     state.height,
   )
+  state.settings_focus = focus
+  state.settings_scroll = scroll
+}
+
+///|
+fn desktop_auth_bounded_settings_controls(
+  auth : Json,
+  settings_focus : Int,
+  settings_scroll : Int,
+  height : Double,
+) -> (Int, Int) {
+  (
+    settings_focus.max(0).min(desktop_auth_focus_count(auth) - 1),
+    desktop_settings_clamp_scroll(
+      settings_scroll,
+      desktop_auth_model_count(auth),
+      height,
+    ),
+  )
+}
+
+///|
+fn desktop_auth_settings_pointer_target(
+  auth : Json,
+  settings_focus : Int,
+  settings_scroll : Int,
+  width : Double,
+  height : Double,
+  position : @primitives.Point,
+) -> (Int, Int, Int?) {
+  let (bounded_focus, bounded_scroll) = desktop_auth_bounded_settings_controls(
+    auth, settings_focus, settings_scroll, height,
+  )
+  let model_focus = desktop_settings_model_focus_at(
+    auth, bounded_scroll, width, height, position,
+  )
+  (model_focus.unwrap_or(bounded_focus), bounded_scroll, model_focus)
+}
+
+///|
+fn desktop_auth_reveal_settings_focus(
+  state : DesktopState,
+  auth : Json,
+) -> Unit {
+  desktop_auth_clamp_settings_controls(state, auth)
   desktop_auth_scroll_for_focus(state, auth, state.settings_focus)
 }
 
@@ -101,7 +144,7 @@ async fn desktop_auth_finish_action(state : DesktopState) -> Unit {
   desktop_refresh(state)
   state.auth_busy = false
   let auth = desktop_auth_status(state.snapshot)
-  desktop_auth_clamp_settings_controls(state, auth)
+  desktop_auth_reveal_settings_focus(state, auth)
   state.dirty = true
 }
 
@@ -261,7 +304,10 @@ async fn desktop_auth_handle_settings_key(
       desktop_auth_scroll_for_focus(state, auth, state.settings_focus)
       state.dirty = true
     }
-    @primitives.Enter | @primitives.Space => desktop_auth_activate_focus(state)
+    @primitives.Enter | @primitives.Space => {
+      desktop_auth_reveal_settings_focus(state, auth)
+      desktop_auth_activate_focus(state)
+    }
     @primitives.ArrowDown => {
       state.settings_focus = desktop_auth_next_focus(
         auth,
@@ -290,9 +336,18 @@ async fn desktop_auth_handle_settings_click(
   position : @primitives.Point,
 ) -> Unit {
   let auth = desktop_auth_status(state.snapshot)
-  desktop_auth_clamp_settings_controls(state, auth)
   let width = state.width
   let height = state.height
+  let (focus, scroll, model_focus) = desktop_auth_settings_pointer_target(
+    auth,
+    state.settings_focus,
+    state.settings_scroll,
+    width,
+    height,
+    position,
+  )
+  state.settings_focus = focus
+  state.settings_scroll = scroll
   if desktop_settings_button_rect("settings-close", width, height).contains(
       position,
     ) {
@@ -323,14 +378,10 @@ async fn desktop_auth_handle_settings_click(
       desktop_auth_start_sign_out(state)
       return
     }
-    for visible_index in 0..<desktop_settings_visible_model_rows(height) {
-      let model_index = state.settings_scroll + visible_index
-      if model_index < desktop_auth_model_count(auth) &&
-        desktop_settings_model_rect(visible_index, width, height).contains(
-          position,
-        ) {
-        state.settings_focus = model_index + 4
-        let model = desktop_auth_model_slug(auth, model_index)
+    match model_focus {
+      Some(model_focus) => {
+        state.settings_focus = model_focus
+        let model = desktop_auth_model_slug(auth, model_focus - 4)
         if model != desktop_json_string(auth, "selected_model") {
           desktop_auth_start_select_model(state, model)
         } else {
@@ -338,6 +389,7 @@ async fn desktop_auth_handle_settings_click(
         }
         return
       }
+      None => ()
     }
   } else if desktop_settings_button_rect("auth-sign-in", width, height).contains(
       position,
