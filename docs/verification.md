@@ -3,8 +3,8 @@
 ## Bounded native LSP navigation increment
 
 2026-10-10、macOS arm64、Node.js `26.8.2`、MoonBit compiler / core
-`0.10.14+7d59c7ec9`、moon / moonrun `0.1.20260920`、Playwright `1.64.0` で検証しました。依存 install 済みの最終差分で
-`npm test` と no-Node verifier が PASS しました。provider fixture は keyless / loopback です。
+`0.10.14+7d59c7ec9`、moon / moonrun `0.1.20260920`、Playwright `1.64.0` で検証しました。feature commit `f120666` の
+実装に対する local `npm test`、no-Node verifier、mutation gate は PASS しました。provider fixture は keyless / loopback です。
 
 | gate | 結果 |
 | --- | --- |
@@ -14,7 +14,7 @@
 | `npm run mutation` | PASS。37 mutants: 29 killed、0 survived、0 timed out、8 unviable。Viable score 100%（public 28 / 28、private 1 / 1）。 |
 | `moon info api plugins` / `git diff --check` | PASS。Generated API / plugin interfaces are current; no whitespace errors. |
 
-The LSP server contract follows the pinned upstream four-operation subset. Runtime integration and fake-server coverage were exercised locally on macOS; clangd provides one real C-server smoke only. These results do not claim acceptance across other languages, Linux / V8 servers, or live providers. Gate stdout was not saved to separate log files; the command results and counts above are the recorded evidence.
+The first GitHub portable-and-native CI run for `f120666` passed build/check and portable suites, then reported 123 / 124 native runtime tests: the cancellation case failed only because `kill(-PGID, 0)` still reported the group present. The CI log captured no PID states, so this does not establish whether the remaining entry was a zombie or a live descendant. The same run's Ubuntu 24.04 no-Node job passed all 276 native tests. The fixture now requires a TERM-ignoring descendant to signal readiness, waits for cleanup to finish, releases it, and asserts it cannot write an escape marker; it also checks the worker leader is reaped. The focused LSP suite passes 17 / 17 locally after that fixture change. The PR CI rerun is the cross-platform confirmation. Runtime integration and fake-server coverage were exercised locally on macOS; clangd provides one real C-server smoke only. These results do not claim acceptance across other languages, Linux / V8 servers, or live providers. Gate stdout was not saved to separate log files; the command results and counts above are the recorded evidence.
 
 ## Native MoonBit product runtime and Node-host retirement
 

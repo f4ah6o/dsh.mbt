@@ -29,6 +29,9 @@ fn native_lsp_test_python_server_script(
   target_uri : String,
   behavior? : String = "normal",
   child_pid_path? : String = "",
+  child_ready_path? : String = "",
+  child_release_path? : String = "",
+  child_escape_path? : String = "",
   transcript_path? : String = "",
 ) -> String {
   let location : Json = {
@@ -71,14 +74,18 @@ fn native_lsp_test_python_server_script(
   } else if behavior == "timeout-once" {
     "        import os, subprocess\n" +
     "        if open(COUNTER_PATH).read().count(\"x\") == 1:\n" +
-    "            child = subprocess.Popen([\"/bin/sleep\", \"30\"])\n" +
+    native_lsp_test_spawn_held_child(
+      child_ready_path, child_release_path, child_escape_path,
+    ) +
     "            with open(CHILD_PID_PATH, \"w\") as child_file: child_file.write(str(os.getpid()))\n" +
     "            sys.exit(0)\n" +
     "        send({\"jsonrpc\": \"2.0\", \"id\": request_id, \"result\": LOCATION})"
   } else if behavior == "cancel-once" {
     "        import os, subprocess, time\n" +
     "        if open(COUNTER_PATH).read().count(\"x\") == 1:\n" +
-    "            subprocess.Popen([\"/bin/sleep\", \"30\"])\n" +
+    native_lsp_test_spawn_held_child(
+      child_ready_path, child_release_path, child_escape_path,
+    ) +
     "            with open(CHILD_PID_PATH, \"w\") as child_file: child_file.write(str(os.getpid()))\n" +
     "            while True: time.sleep(1)\n" +
     "        send({\"jsonrpc\": \"2.0\", \"id\": request_id, \"result\": LOCATION})"
@@ -108,6 +115,9 @@ fn native_lsp_test_python_server_script(
     "import json, os, sys",
     "COUNTER_PATH = " + Json::string(counter_path).stringify(),
     "CHILD_PID_PATH = " + Json::string(child_pid_path).stringify(),
+    "CHILD_READY_PATH = " + Json::string(child_ready_path).stringify(),
+    "CHILD_RELEASE_PATH = " + Json::string(child_release_path).stringify(),
+    "CHILD_ESCAPE_PATH = " + Json::string(child_escape_path).stringify(),
     "TRANSCRIPT_PATH = " + Json::string(transcript_path).stringify(),
     "CAPABILITIES = json.loads(" +
     Json::string(capabilities.stringify()).stringify() +
@@ -147,8 +157,10 @@ fn native_lsp_test_python_server_script(
     "    if method == \"initialize\":",
     "        with open(COUNTER_PATH, \"a\") as counter: counter.write(\"x\")",
     "        if BEHAVIOR == \"init-hang\" or (BEHAVIOR == \"init-hang-once\" and open(COUNTER_PATH).read().count(\"x\") == 1):",
-    "            import subprocess, time",
-    "            subprocess.Popen([\"/bin/sleep\", \"30\"])",
+    "            import subprocess, time, sys",
+    native_lsp_test_spawn_held_child(
+      child_ready_path, child_release_path, child_escape_path,
+    ),
     "            with open(CHILD_PID_PATH, \"w\") as child_file: child_file.write(str(os.getpid()))",
     "            while True: time.sleep(1)",
     "        send({\"jsonrpc\": \"2.0\", \"id\": 91, \"method\": \"workspace/configuration\", \"params\": {\"items\": [{\"section\": \"fixture\"}]}})",
@@ -176,6 +188,52 @@ fn native_lsp_test_python_server_script(
     "        sys.exit(42)",
   ].join("\n") +
   "\n"
+}
+
+///|
+fn native_lsp_test_spawn_held_child(
+  ready_path : String,
+  release_path : String,
+  escape_path : String,
+) -> String {
+  let child_code = "import os, signal, time\n" +
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n" +
+    "with open(" +
+    Json::string(ready_path).stringify() +
+    ", 'w') as f: f.write('ready')\n" +
+    "while not os.path.exists(" +
+    Json::string(release_path).stringify() +
+    "): time.sleep(0.01)\n" +
+    "with open(" +
+    Json::string(escape_path).stringify() +
+    ", 'w') as f: f.write('escaped')"
+  "            child = subprocess.Popen([sys.executable, \"-c\", " +
+  Json::string(child_code).stringify() +
+  "])\n"
+}
+
+///|
+async fn native_lsp_test_wait_for_file(path : String) -> Bool {
+  let mut polls = 0
+  while !@fs.exists(path) && polls < 400 {
+    @async.sleep(5)
+    polls += 1
+  }
+  @fs.exists(path)
+}
+
+///|
+async fn native_lsp_test_release_child(
+  release_path : String,
+  escape_path : String,
+) -> Bool {
+  @fs.write_file(release_path, @utf8.encode("release"))
+  let mut polls = 0
+  while !@fs.exists(escape_path) && polls < 200 {
+    @async.sleep(5)
+    polls += 1
+  }
+  !@fs.exists(escape_path)
 }
 
 ///|
@@ -794,7 +852,7 @@ async test "native LSP dispatches all four upstream operations with fresh source
 }
 
 ///|
-async test "native LSP query timeout reaps descendants and only a later call starts a fresh server" {
+async test "native LSP query timeout terminates descendants and only a later call starts a fresh server" {
   let fixture = @fs.tmpdir(prefix="dsh-native-lsp-timeout")
   @async.with_task_group() <| group => {
     group.add_defer(() => @fs.rmdir(fixture, recursive=true))
@@ -804,6 +862,9 @@ async test "native LSP query timeout reaps descendants and only a later call sta
     @fs.write_file(workspace + "/target.ts", "target")
     let counter = fixture + "/started"
     let group_pid_file = fixture + "/group.pid"
+    let child_ready_path = fixture + "/child.ready"
+    let child_release_path = fixture + "/child.release"
+    let child_escape_path = fixture + "/child.escaped"
     let script_path = fixture + "/server.py"
     @fs.write_file(
       script_path,
@@ -812,11 +873,14 @@ async test "native LSP query timeout reaps descendants and only a later call sta
         native_lsp_file_uri(workspace + "/target.ts"),
         behavior="timeout-once",
         child_pid_path=group_pid_file,
+        child_ready_path~,
+        child_release_path~,
+        child_escape_path~,
       ),
     )
     let config : Json = {
       "servers": {
-        "fixture": native_lsp_test_server_config(script_path, timeout_ms=1000),
+        "fixture": native_lsp_test_server_config(script_path, timeout_ms=2000),
       },
     }
     let config_path = fixture + "/lsp.json"
@@ -835,15 +899,24 @@ async test "native LSP query timeout reaps descendants and only a later call sta
     group.add_defer(() => tools.root.close())
     group.add_defer(() => @async.protect_from_cancel(() => pool.close()))
 
-    let failed = pool.execute(
-      tools,
-      native_lsp_test_tool_request("goToDefinition", "source.ts", 1, 1),
+    let request = native_lsp_test_tool_request(
+      "goToDefinition", "source.ts", 1, 1,
     )
+    let call = group.spawn(
+      async fn() { pool.execute(tools, request) },
+      no_wait=true,
+      allow_failure=true,
+    )
+    assert_true(native_lsp_test_wait_for_file(child_ready_path))
+    let failed = call.wait()
     assert_eq(object_field(failed, "ok"), Some(Json::boolean(false)))
     assert_true(@fs.exists(group_pid_file))
     assert_eq(@fs.read_file(counter).text(), "x")
     let pid = service_parse_int(@fs.read_file(group_pid_file).text()).unwrap()
-    assert_false(os_process_group_alive(pid))
+    assert_false(os_process_alive(pid))
+    assert_true(
+      native_lsp_test_release_child(child_release_path, child_escape_path),
+    )
 
     let independent = pool.execute(
       tools,
@@ -1017,6 +1090,9 @@ async test "native LSP query cancellation terminates the process group without r
     @fs.write_file(workspace + "/target.ts", "target")
     let counter = fixture + "/started"
     let group_pid_file = fixture + "/group.pid"
+    let child_ready_path = fixture + "/child.ready"
+    let child_release_path = fixture + "/child.release"
+    let child_escape_path = fixture + "/child.escaped"
     let script_path = fixture + "/server.py"
     @fs.write_file(
       script_path,
@@ -1025,6 +1101,9 @@ async test "native LSP query cancellation terminates the process group without r
         native_lsp_file_uri(workspace + "/target.ts"),
         behavior="cancel-once",
         child_pid_path=group_pid_file,
+        child_ready_path~,
+        child_release_path~,
+        child_escape_path~,
       ),
     )
     let config_path = fixture + "/lsp.json"
@@ -1050,11 +1129,8 @@ async test "native LSP query cancellation terminates the process group without r
       no_wait=true,
       allow_failure=true,
     )
-    let mut polls = 0
-    while !@fs.exists(group_pid_file) && polls < 200 {
-      @async.sleep(5)
-      polls += 1
-    }
+    assert_true(native_lsp_test_wait_for_file(group_pid_file))
+    assert_true(native_lsp_test_wait_for_file(child_ready_path))
     assert_true(@fs.exists(group_pid_file))
     assert_eq(@fs.read_file(counter).text(), "x")
     let pid = service_parse_int(@fs.read_file(group_pid_file).text()).unwrap()
@@ -1062,7 +1138,10 @@ async test "native LSP query cancellation terminates the process group without r
     ignore(call.wait()) catch {
       _ => ()
     }
-    assert_false(os_process_group_alive(pid))
+    assert_false(os_process_alive(pid))
+    assert_true(
+      native_lsp_test_release_child(child_release_path, child_escape_path),
+    )
     assert_eq(@fs.read_file(counter).text(), "x")
 
     let independent = pool.execute(tools, request)
@@ -1083,6 +1162,9 @@ async test "native LSP initialize cancellation kills the pending worker and rele
     @fs.write_file(workspace + "/target.ts", "target")
     let counter = fixture + "/started"
     let group_pid_file = fixture + "/group.pid"
+    let child_ready_path = fixture + "/child.ready"
+    let child_release_path = fixture + "/child.release"
+    let child_escape_path = fixture + "/child.escaped"
     let script_path = fixture + "/server.py"
     @fs.write_file(
       script_path,
@@ -1091,6 +1173,9 @@ async test "native LSP initialize cancellation kills the pending worker and rele
         native_lsp_file_uri(workspace + "/target.ts"),
         behavior="init-hang-once",
         child_pid_path=group_pid_file,
+        child_ready_path~,
+        child_release_path~,
+        child_escape_path~,
       ),
     )
     let config_path = fixture + "/lsp.json"
@@ -1116,11 +1201,8 @@ async test "native LSP initialize cancellation kills the pending worker and rele
       no_wait=true,
       allow_failure=true,
     )
-    let mut polls = 0
-    while !@fs.exists(group_pid_file) && polls < 200 {
-      @async.sleep(5)
-      polls += 1
-    }
+    assert_true(native_lsp_test_wait_for_file(group_pid_file))
+    assert_true(native_lsp_test_wait_for_file(child_ready_path))
     assert_true(@fs.exists(group_pid_file))
     assert_eq(@fs.read_file(counter).text(), "x")
     let pid = service_parse_int(@fs.read_file(group_pid_file).text()).unwrap()
@@ -1128,7 +1210,10 @@ async test "native LSP initialize cancellation kills the pending worker and rele
     ignore(call.wait()) catch {
       _ => ()
     }
-    assert_false(os_process_group_alive(pid))
+    assert_false(os_process_alive(pid))
+    assert_true(
+      native_lsp_test_release_child(child_release_path, child_escape_path),
+    )
     assert_eq(@fs.read_file(counter).text(), "x")
 
     let independent = pool.execute(tools, request)
