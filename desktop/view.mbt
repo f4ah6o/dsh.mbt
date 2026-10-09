@@ -411,6 +411,32 @@ fn desktop_blocks(session : Json, width : Double) -> Array[DesktopBlock] {
   let blocks : Array[DesktopBlock] = []
   let text_width = width - 320.0
   let columns = if text_width < 30.0 { 2 } else { (text_width / 14.0).to_int() }
+  match desktop_json_field(session, "todos") {
+    Some(Json::Array(todos)) => {
+      let lines : Array[String] = []
+      if todos.is_empty() {
+        lines.push("タスクはありません。")
+      }
+      for todo in todos {
+        let marker = match desktop_json_string(todo, "status") {
+          "in_progress" => "[~] "
+          "completed" => "[x] "
+          _ => "[ ] "
+        }
+        lines.append(
+          @ui.wrap_text(
+            desktop_renderable_text(
+              marker + desktop_json_string(todo, "content"),
+              600,
+            ),
+            columns,
+          ),
+        )
+      }
+      blocks.push({ label: "タスク", role: "todo", lines, })
+    }
+    _ => ()
+  }
   for message in desktop_json_array(session, "messages") {
     let role = desktop_json_string(message, "role")
     if role == "system" || role == "developer" {

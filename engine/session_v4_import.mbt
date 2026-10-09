@@ -135,7 +135,7 @@ fn Engine::import_upstream_v4(
   if self.sessions.get(id) is Some(_) {
     raise Invalid("Session already exists: \{id}")
   }
-  if session.json().stringify().length() > SESSION_CAPACITY {
+  if session_capacity_length(session.json()) > SESSION_CAPACITY {
     raise Invalid(
       "Imported Session v4 exceeds the 262144-character session capacity",
     )

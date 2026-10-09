@@ -174,6 +174,16 @@ workspace path boundary は OS sandbox ではありません。2026-10-10 に lo
 fake-server tests でより広い protocol / failure paths を検証しました。これは単一 server の local smoke
 であり、cross-language、Linux/V8、live-provider acceptance は確認していません。本 issue は open のままです。
 
+Native session TODO の部分対応（2026-10-10）: provider catalog に内部
+`todo_write` tool を追加し、per-session visible checklist の全置換、trim / unique / status / single-active
+validation、bounded list、`todo/write` event と model call / completion / result の厳密な restore correlation を実装しました。
+read/write barrier の順序を保ち、TODO 自体は host effect、approval、PreToolUse / PostToolUse hook を起動しません。
+browser transcript、shared GPUI scene、native desktop transcript、session API / protocol projection に表示します。
+new turn で clear し、completed checklist は次の turn まで保持し、validated fork は履歴と projection を継承します。
+legacy 0.1.7 store と以前の `Unknown tool: todo_write` result は読め、imported v4 は inert のままです。
+これは native v1 runtime の bounded subset であり、upstream TODO package の完全な lifecycle / UX parity は確認していません。
+keyless engine、provider/API、runtime persistence、browser / desktop presentation tests を追加しました。本 issue は open のままです。
+
 受入条件:
 
 - plugin mount / teardown 中の依存、保有リソース、tool 呼出しを一貫して扱う。

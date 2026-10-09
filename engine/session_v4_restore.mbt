@@ -1,6 +1,6 @@
 ///|
 fn restore_imported_session(value : Json) -> Session raise EngineError {
-  if value.stringify().length() > SESSION_CAPACITY {
+  if session_capacity_length(value) > SESSION_CAPACITY {
     raise Invalid("Snapshot session exceeds the 262144-character capacity")
   }
   for key, _ in fields(value) {
@@ -13,11 +13,17 @@ fn restore_imported_session(value : Json) -> Session raise EngineError {
       key != "step" &&
       key != "events" &&
       key != "messages" &&
+      key != "todos" &&
       key != "source_format" &&
       key != "pending_tool_calls" &&
       key != "pending_inbox" {
       raise Invalid("Unexpected imported Session v4 snapshot field: {key}")
     }
+  }
+  match fields(value).get("todos") {
+    None | Some(Json::Null) => ()
+    Some(_) =>
+      raise Invalid("Imported Session v4 snapshots cannot contain native todos")
   }
   let id = identifier(required_string(value, "id", max=128), "session id")
   let title = required_string(value, "title", max=512)

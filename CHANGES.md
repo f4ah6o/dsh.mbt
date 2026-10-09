@@ -16,6 +16,26 @@
 
 ### Migration
 
+## 0.1.8 - 2026-10-10
+
+### Added
+
+- Add the native `todo_write` session tool and visible per-session task list to provider requests, the session API, browser, and desktop transcripts. The bounded whole-list update is durably correlated with its model call and result, clears when a new turn starts, and does not create a host effect or approval. See the [native runtime guide](docs/native-runtime.md#native-session-todo-tool) and [remaining port work](issues/open/0001-upstream-parity.md).
+
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
+- Native runtime accepts existing 0.1.7 stores, including sessions near the capacity limit, and preserves their historical `Unknown tool: todo_write` result without replaying the call. Histories containing native `todo/write` events require dsh 0.1.8 or later; keep a pre-upgrade data-directory backup if you need to downgrade.
+
 ## 0.1.7 - 2026-10-10
 
 ### Added

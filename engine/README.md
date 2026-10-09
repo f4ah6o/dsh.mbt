@@ -46,7 +46,10 @@ restore replays the delta events without reissuing effects. Older
 
 Each tool descriptor has `name`, `description`, an object `input_schema`, and
 `effect: "read" | "write" | "shell"`. Read effects start automatically. Every
-write or shell call requires its own affirmative approval. Denial, unknown tools,
+write or shell call requires its own affirmative approval. The reserved
+`effect: "session"` is accepted only for the canonical built-in `todo_write`
+tool; the engine applies it internally at the tool barrier without dispatching
+a host tool effect or running host Pre/PostTool hooks. Denial, unknown tools,
 invalid JSON arguments, and input schema failures produce paired tool errors,
 then allow the next model step to decide how to recover.
 
@@ -109,14 +112,18 @@ sessions, 128 tools, 16 calls per model step, 1–64 steps per turn (default 16)
 32,768 events per session.
 
 Each canonical session view, including its events and derived messages, is
-limited to **262,144 serialized UTF-16 code units**. Mutations execute against a
-candidate copy and commit only when both the current view and its possible
-interrupted closure fit. An oversized send or approval leaves the original
-session unchanged. An oversized model/tool completion closes the original step
-as `failed` with reason `session_capacity`, emits no candidate effects, and keeps
-its previously admitted history reloadable. Start a new session when this limit
-is reached. This deliberate initial-port bound also keeps all 32 session views
-within the application's snapshot and API transport limits.
+limited to **262,144 serialized UTF-16 code units**. The fixed optional
+`todos: null` metadata field is excluded from this admission count so snapshots
+created before the field existed remain restorable; non-null todo arrays count
+in full, and the field remains present in current API and storage JSON.
+Mutations execute against a candidate copy and commit only when both the
+current view and its possible interrupted closure fit. An oversized send or
+approval leaves the original session unchanged. An oversized model/tool
+completion closes the original step as `failed` with reason `session_capacity`,
+emits no candidate effects, and keeps its previously admitted history
+reloadable. Start a new session when this limit is reached. This deliberate
+initial-port bound also keeps all 32 session views within the application's
+snapshot and API transport limits.
 
 `session_import` is a separate, explicit path for a bounded Session v4 event
 subset. It retains the v4 header and raw source lines inside the v1 snapshot,

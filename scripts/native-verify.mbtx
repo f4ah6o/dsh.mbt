@@ -5,6 +5,7 @@ import {
   "moonbitlang/async@0.22.4/process",
   "moonbitlang/async@0.22.4/stdio",
   "moonbitlang/async@0.22.4/fs",
+  "moonbitlang/core/env",
   "moonbitlang/core/json",
 }
 
@@ -80,8 +81,8 @@ fn normalize_diagnostic_path(path : String) -> String {
 ///|
 async fn check_native_packages() -> Unit {
   let packages = [
-    "engine", "provider", "auth", "protocol", "client", "plugins", "api", "ui", "native", "runtime", "cmd/dsh",
-    "desktop", "verification/retry_math",
+    "engine", "provider", "auth", "protocol", "client", "plugins", "api", "ui", "native",
+    "runtime", "cmd/dsh", "desktop", "verification/retry_math",
   ]
   let args = ["check"] + packages + ["--target", "native", "--json", "--frozen"]
   println("[native verify] moon " + args.join(" "))
@@ -115,14 +116,15 @@ async fn check_native_packages() -> Unit {
   }
   for diagnostic in diagnostics {
     let level = json_text(json_field(diagnostic, "level"))
-    let path = normalize_diagnostic_path(json_text(json_field(diagnostic, "path")))
+    let path = normalize_diagnostic_path(
+      json_text(json_field(diagnostic, "path")),
+    )
     let message = json_text(json_field(diagnostic, "message"))
     if level == "error" {
       errors += 1
       println("[error] " + path + " " + message)
     } else if level == "warning" {
-      if path.has_prefix("vendor/hotpath/") ||
-        path.contains("/vendor/hotpath/") {
+      if path.has_prefix("vendor/hotpath/") || path.contains("/vendor/hotpath/") {
         pinned_warnings += 1
       } else {
         own_warnings += 1
@@ -151,15 +153,15 @@ async fn run_native_demo() -> Unit {
   let root = @fs.tmpdir(prefix="dsh-native-verify")
   let data_dir = root + "/data"
   let workspace = root + "/workspace"
-  try @fs.mkdir(data_dir, permission=0o700) catch {
+  @fs.mkdir(data_dir, permission=0o700) catch {
     _ => fail("cannot create native demo data directory")
   }
-  try @fs.mkdir(workspace, permission=0o700) catch {
+  @fs.mkdir(workspace, permission=0o700) catch {
     _ => fail("cannot create native demo workspace")
   }
   let args = [
-    "run", "native", "--target", "native", "--release", "--frozen", "--",
-    "--demo", "--data-dir", data_dir, "--workspace", workspace,
+    "run", "native", "--target", "native", "--release", "--frozen", "--", "--demo",
+    "--data-dir", data_dir, "--workspace", workspace,
   ]
   println("[native verify] moon " + args.join(" "))
   let (status, stdout, stderr) = @process.collect_output("moon", args)
@@ -170,7 +172,9 @@ async fn run_native_demo() -> Unit {
     println(output)
     fail("native checkpoint, tool approval, and persisted reload demo failed")
   }
-  println("Native runtime checkpoint, approval, tool, context, and reload demo passed.")
+  println(
+    "Native runtime checkpoint, approval, tool, context, and reload demo passed.",
+  )
 }
 
 ///|
@@ -201,7 +205,9 @@ async fn assert_asset_matches(source : String, destination : String) -> Unit {
   }
   let compared = @process.run("cmp", ["-s", source, destination])
   if compared != 0 {
-    fail("checked-in asset differs from its pinned package source: " + destination)
+    fail(
+      "checked-in asset differs from its pinned package source: " + destination,
+    )
   }
 }
 
@@ -209,73 +215,87 @@ async fn assert_asset_matches(source : String, destination : String) -> Unit {
 async fn main {
   run_moon([
     "fmt", "--check", "engine", "provider", "auth", "protocol", "client", "plugins",
-    "api", "ui", "native", "runtime", "cmd/dsh", "browser", "browser/sw", "desktop", "verification/retry_math",
+    "api", "ui", "native", "runtime", "cmd/dsh", "browser", "browser/sw", "desktop",
+    "verification/retry_math",
   ])
   check_native_packages()
-  let worker_root = @fs.tmpdir(prefix="dsh-native-worker-build")
+  let worker_root = match @env.get_env_var("DSH_NATIVE_VERIFY_TARGET_DIR") {
+    Some(path) if !path.is_empty() => {
+      @fs.mkdir(path, permission=0o700, recursive=true, allow_exist=true) catch {
+        _ => fail("cannot create DSH_NATIVE_VERIFY_TARGET_DIR")
+      }
+      path
+    }
+    _ => @fs.tmpdir(prefix="dsh-native-worker-build")
+  }
   let worker_target_dir = worker_root + "/target"
   run_moon([
-    "build", "native", "--target", "native", "--release", "--frozen",
-    "--target-dir", worker_target_dir,
+    "build", "native", "--target", "native", "--release", "--frozen", "--target-dir",
+    worker_target_dir,
   ])
   let worker_binary = worker_target_dir +
     "/native/release/build/f4ah6o/dsh/native/native.exe"
   if !@fs.exists(worker_binary) {
     fail("native worker executable was not produced at its expected build path")
   }
-  run_moon([
-    "test", "engine", "provider", "auth", "protocol", "client", "plugins", "api",
-    "ui", "runtime", "native", "desktop", "verification/retry_math", "--target", "native", "--frozen",
-    "--target-dir", worker_root + "/test",
-  ], extra_env={ "DSH_NATIVE_WORKER_BIN": worker_binary })
+  run_moon(
+    [
+      "test",
+      "engine",
+      "provider",
+      "auth",
+      "protocol",
+      "client",
+      "plugins",
+      "api",
+      "ui",
+      "runtime",
+      "native",
+      "desktop",
+      "verification/retry_math",
+      "--target",
+      "native",
+      "--frozen",
+      "--target-dir",
+      worker_root + "/test",
+    ],
+    extra_env={ "DSH_NATIVE_WORKER_BIN": worker_binary },
+  )
   run_moon([
     "run", "native", "--target", "native", "--release", "--frozen", "--", "--help",
   ])
   run_moon(["build", "browser", "--target", "js", "--release", "--frozen"])
   run_moon(["build", "browser/sw", "--target", "js", "--release", "--frozen"])
   if !@fs.exists("web/moonbit") {
-    try @fs.mkdir("web/moonbit", permission=0o755, recursive=true) catch {
+    @fs.mkdir("web/moonbit", permission=0o755, recursive=true) catch {
       _ => fail("cannot create web/moonbit for the generated browser module")
     }
   }
   copy_and_compare_asset(
-    "_build/js/release/build/f4ah6o/dsh/browser/browser.js",
-    "web/moonbit/browser.js",
+    "_build/js/release/build/f4ah6o/dsh/browser/browser.js", "web/moonbit/browser.js",
   )
   copy_and_compare_asset(
-    "_build/js/release/build/f4ah6o/dsh/browser/sw/sw.js",
-    "web/sw.js",
+    "_build/js/release/build/f4ah6o/dsh/browser/sw/sw.js", "web/sw.js",
   )
   assert_asset_matches(
-    ".mooncakes/f4ah6o/yami_kumo/styles/kumo-standalone.css",
-    "web/kumo-standalone.css",
+    ".mooncakes/f4ah6o/yami_kumo/styles/kumo-standalone.css", "web/kumo-standalone.css",
   )
   assert_asset_matches(
-    ".mooncakes/f4ah6o/yami_kumo/styles/yami-kumo-components.css",
-    "web/yami-kumo-components.css",
+    ".mooncakes/f4ah6o/yami_kumo/styles/yami-kumo-components.css", "web/yami-kumo-components.css",
   )
   assert_asset_matches(
-    ".mooncakes/f4ah6o/yami_kumo/LICENSE",
-    "licenses/yami-kumo-LICENSE",
+    ".mooncakes/f4ah6o/yami_kumo/LICENSE", "licenses/yami-kumo-LICENSE",
   )
   assert_asset_matches(
-    ".mooncakes/f4ah6o/yami_kumo/licenses/cloudflare-kumo-LICENSE",
-    "licenses/yami-kumo-cloudflare-kumo-LICENSE",
+    ".mooncakes/f4ah6o/yami_kumo/licenses/cloudflare-kumo-LICENSE", "licenses/yami-kumo-cloudflare-kumo-LICENSE",
   )
-  for path in [
-    "_build/js/release/build/f4ah6o/dsh/browser/browser.js",
-    "_build/js/release/build/f4ah6o/dsh/browser/sw/sw.js",
-    "web/moonbit/browser.js",
-    "web/sw.js",
-    "web/kumo-standalone.css",
-    "web/yami-kumo-components.css",
-    "web/yami-kumo-shell.css",
-    "licenses/yami-kumo-LICENSE",
-    "licenses/yami-kumo-cloudflare-kumo-LICENSE",
-    "web/index.html",
-    "web/manifest.webmanifest",
-    "web/icon.svg",
-  ] {
+  for
+    path in [
+      "_build/js/release/build/f4ah6o/dsh/browser/browser.js", "_build/js/release/build/f4ah6o/dsh/browser/sw/sw.js",
+      "web/moonbit/browser.js", "web/sw.js", "web/kumo-standalone.css", "web/yami-kumo-components.css",
+      "web/yami-kumo-shell.css", "licenses/yami-kumo-LICENSE", "licenses/yami-kumo-cloudflare-kumo-LICENSE",
+      "web/index.html", "web/manifest.webmanifest", "web/icon.svg",
+    ] {
     if !@fs.exists(path) {
       fail("no-Node web asset build did not produce " + path)
     }

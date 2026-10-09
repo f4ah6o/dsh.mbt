@@ -166,6 +166,7 @@ fn Engine::fork_session(
   }
   child.turn_id = source.turn_id
   child.step = source.step
+  child.todos = source.todos.map(items => items.map(detached))
   child.append(
     "session/forked",
     object([

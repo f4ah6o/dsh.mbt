@@ -81,8 +81,14 @@ pub fn Registry::mount(
         "effect": String(effect),
         ..
       } => {
-        if effect != "read" && effect != "write" && effect != "shell" {
+        if effect != "read" &&
+          effect != "write" &&
+          effect != "shell" &&
+          effect != "session" {
           return Err("invalid tool effect: " + effect)
+        }
+        if effect == "session" && name != "todo_write" {
+          return Err("the session effect is reserved for todo_write")
         }
         name
       }
@@ -208,6 +214,33 @@ pub fn builtin_tools() -> Array[Json] {
       "input_schema": builtin_schema({ "pattern": text, "path": path }, [
         "pattern",
       ]),
+    },
+    {
+      "name": "todo_write",
+      "description": "Replace the complete visible task list for this conversation. Skip trivial one-step work. Keep exactly one unfinished task in_progress and mark tasks completed as soon as they are done.",
+      "effect": "session",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "todos": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "content": { "type": "string" },
+                "status": {
+                  "type": "string",
+                  "enum": ["pending", "in_progress", "completed"],
+                },
+              },
+              "required": ["content", "status"],
+              "additionalProperties": false,
+            },
+          },
+        },
+        "required": ["todos"],
+        "additionalProperties": false,
+      },
     },
     {
       "name": "bash",

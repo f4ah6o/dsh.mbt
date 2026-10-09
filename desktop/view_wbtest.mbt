@@ -38,3 +38,21 @@ test "native scene preserves the host viewport and bounds oversized text runs" {
     }
   }
 }
+
+///|
+test "native desktop transcript renders the session todo list" {
+  let session : Json = {
+    "todos": [
+      { "content": "Implement feature", "status": "in_progress" },
+      { "content": "Verify", "status": "completed" },
+    ],
+    "messages": [{ "role": "assistant", "content": "Working" }],
+  }
+  let blocks = desktop_blocks(session, 1200.0)
+  assert_eq(blocks[0].label, "タスク")
+  assert_eq(blocks[0].lines, ["[~] Implement feature", "[x] Verify"])
+  assert_eq(blocks[1].label, "アシスタント")
+  let empty = desktop_blocks({ "todos": [], "messages": [] }, 1200.0)
+  assert_eq(empty[0].label, "タスク")
+  assert_eq(empty[0].lines, ["タスクはありません。"])
+}

@@ -27,6 +27,7 @@ priv enum EffectClass {
   Read
   Write
   Shell
+  Session
 } derive(Eq)
 
 ///|
@@ -118,6 +119,8 @@ priv struct Session {
   mut active_effect : String?
   mut active_kind : EffectKind?
   mut open_step : Bool
+  /// Latest validated whole-list todo/write snapshot; cleared at turn/start.
+  mut todos : Array[Json]?
   mut retry_count : Int
   mut retry_max_retries : Int?
   mut retry_initial_delay_ms : Int?
@@ -178,6 +181,7 @@ fn effect_text(effect : EffectClass) -> String {
     Read => "read"
     Write => "write"
     Shell => "shell"
+    Session => "session"
   }
 }
 
@@ -214,6 +218,7 @@ fn fresh_session(
     active_effect: None,
     active_kind: None,
     open_step: false,
+    todos: None,
     retry_count: 0,
     retry_max_retries: None,
     retry_initial_delay_ms: None,

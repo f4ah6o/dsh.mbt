@@ -249,6 +249,12 @@ fn parse_tool(value : Json) -> Tool raise EngineError {
     "read" => Read
     "write" => Write
     "shell" => Shell
+    "session" if name == "todo_write" &&
+      input_schema == todo_write_input_schema() => Session
+    "session" =>
+      raise Invalid(
+        "Only the canonical todo_write tool may use the session effect",
+      )
     _ => raise Invalid("Unknown tool effect class")
   }
   { name, description, input_schema, effect, }

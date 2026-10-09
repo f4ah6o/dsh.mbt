@@ -196,36 +196,64 @@ async function assertReadableSessionOption(page, selector) {
 }
 
 async function waitForActiveShellWorker(page) {
-  await page.waitForFunction(
-    async () => {
-      const registration = await navigator.serviceWorker.getRegistration("/");
-      return Boolean(registration?.active && navigator.serviceWorker.controller);
-    },
-    null,
-    { timeout: 30_000 },
-  );
-  const assets = await page.evaluate(async () => {
-    const names = (await caches.keys()).filter((name) =>
-      name.startsWith("dsh-shell-generation-"),
-    );
-    const requests = [];
-    for (const name of names) {
-      const cache = await caches.open(name);
-      for (const request of await cache.keys()) {
-        requests.push(new URL(request.url).pathname);
-      }
-    }
-    return requests;
-  });
-  for (const asset of [
+  const requiredAssets = [
     "/index.html",
     "/kumo-standalone.css",
     "/yami-kumo-components.css",
     "/yami-kumo-shell.css",
     "/moonbit/browser.js",
-  ]) {
-    assert.ok(assets.includes(asset), `the active shell generation contains ${asset}`);
+  ];
+  const inspectShellCache = async () => page.evaluate(async () => {
+    const registration = await navigator.serviceWorker.getRegistration("/");
+    const names = (await caches.keys()).filter((name) =>
+      name.startsWith("dsh-shell-generation-"),
+    );
+    const requests = new Set();
+    for (const name of names) {
+      const cache = await caches.open(name);
+      for (const request of await cache.keys()) {
+        requests.add(new URL(request.url).pathname);
+      }
+    }
+    return {
+      active: Boolean(registration?.active),
+      controlled: Boolean(navigator.serviceWorker.controller),
+      generations: names,
+      assets: [...requests].sort(),
+    };
+  });
+  try {
+    await page.waitForFunction(
+      async (required) => {
+        const registration = await navigator.serviceWorker.getRegistration("/");
+        if (!registration?.active || !navigator.serviceWorker.controller) return false;
+        const names = (await caches.keys()).filter((name) =>
+          name.startsWith("dsh-shell-generation-"),
+        );
+        const cached = new Set();
+        for (const name of names) {
+          const cache = await caches.open(name);
+          for (const request of await cache.keys()) {
+            cached.add(new URL(request.url).pathname);
+          }
+        }
+        return required.every((asset) => cached.has(asset));
+      },
+      requiredAssets,
+      { timeout: 30_000, polling: 100 },
+    );
+  } catch (error) {
+    const state = await inspectShellCache().catch(() => ({ pageUnavailable: true }));
+    throw new Error(
+      `Timed out waiting for the active service worker shell assets: ${JSON.stringify(state)}`,
+      { cause: error },
+    );
   }
+  const cacheState = await inspectShellCache();
+  for (const asset of requiredAssets) {
+    assert.ok(cacheState.assets.includes(asset), `the active shell generation contains ${asset}`);
+  }
+  assert.ok(cacheState.active && cacheState.controlled, "the page is controlled by an active shell worker");
 }
 
 async function testNativeDemo(browserInstance) {

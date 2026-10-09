@@ -1,5 +1,25 @@
 # 検証記録
 
+## Native session TODO tool increment
+
+2026-10-10、macOS arm64、Node.js `26.8.2`、MoonBit compiler / core
+`0.10.14+7d59c7ec9`、moon / moonrun `0.1.20260920`、Playwright `1.64.0` で、0.1.8 の最終差分を検証しました。
+Provider fixtures は keyless / loopback です。実アカウントや live provider の受け入れ結果ではありません。
+
+| gate | 結果 |
+| --- | --- |
+| `npm test` | PASS / exit 0。portable suite は Wasm、Wasm GC、JS、native 各 157 / 157、browser / app は 16 / 16、native runtime は 125 / 125、web は 7 / 7 PASS。自作 warning 0、pinned hotpath diagnostics のみ。ACP stdio、source-install と real Chromium smoke も PASS。 |
+| Node/npm を PATH から外した `moon run scripts/native-verify.mbtx --target native .` | PASS / exit 0。native 291 / 291、CLI help / source-install、embedded browser assets の比較、checkpoint / approval / tool / context / durable reload demo。`DSH_NATIVE_VERIFY_TARGET_DIR` に専用の外部ボリューム directory を指定しました。 |
+| `npm run mutation` | PASS。46 mutants: 38 killed、8 unviable、0 survived、0 timed out。Viable score 100%。最終 plugin source / tests / interfaces と記録した input hashes は一致。 |
+| 独立レビューと境界値 probes | 3-pass review は approve。focused 118 / 118、64 / 65 items、512 / 513 と 8192 / 8193 UTF-16 units、ECMAScript whitespace、mixed read / TODO / approved-write ordering、forged / incomplete replay、fork / cancel / reopen を確認。 |
+| 旧版・provider・UI の独立実行 | 公開済み 0.1.7 binary の通常 store と `Unknown tool: todo_write` store を新 binary で reopen し、履歴と workspace を保持。262143-unit の旧 snapshot は新しい null projection を付けた保存後も同一内容で再度 reopen、effect 0 件。local SSE provider の二回の TODO 更新を保存し、再起動した browser の accessible transcript で completed list を確認。 |
+| package / generated files / changelog | Source archive に TODO と embedded UI source を含み、build cache / dependencies / secret files の混入なし。embedded asset parity、format / syntax、changelog structure / dates / duplicates、`git diff --check` は PASS。 |
+
+最初の Chromium run は、active/controller を検出した直後に空の staging cache を調べて失敗しました。
+同じ cache が後から全アセットを保持することを独立に確認し、試験を固定 sleep なしの bounded readiness wait に変更後、full gate は PASS しました。
+Node-absent verifier の最初の二回は POSIX の temporary directory が `TMPDIR` を無視して `/tmp` を使い、コンパイル中に ENOSPC で失敗しました。
+worker / test cache の明示的な directory 指定を追加し、同じ全検証を空き容量のあるボリュームで完走しました。Production Service Worker と runtime の一時 directory 方針は変更していません。
+
 ## Bounded native LSP navigation increment
 
 2026-10-10、macOS arm64、Node.js `26.8.2`、MoonBit compiler / core

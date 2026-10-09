@@ -288,6 +288,7 @@ pub(all) enum EngineEventKind {
   ToolCompleted
   ToolResult
   ToolResultPruned
+  TodoWrite
   UpstreamHeader
   UpstreamEvent
   Other(String)
@@ -321,6 +322,7 @@ pub fn EngineEventKind::from_wire(value : String) -> EngineEventKind {
     "tool/completed" => ToolCompleted
     "tool/result" => ToolResult
     "tool/result/pruned" => ToolResultPruned
+    "todo/write" => TodoWrite
     "upstream/header" => UpstreamHeader
     "upstream/event" => UpstreamEvent
     other => Other(other)
@@ -352,6 +354,7 @@ pub fn EngineEventKind::wire(self : EngineEventKind) -> String {
     ToolCompleted => "tool/completed"
     ToolResult => "tool/result"
     ToolResultPruned => "tool/result/pruned"
+    TodoWrite => "todo/write"
     UpstreamHeader => "upstream/header"
     UpstreamEvent => "upstream/event"
     Other(value) => value
