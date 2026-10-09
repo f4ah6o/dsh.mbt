@@ -10,6 +10,7 @@ async fn desktop_run(config : DesktopConfig) -> Result[Unit, String] {
       model=config.model,
       base_url=config.base_url,
       max_retries=config.max_retries,
+      mcp_config_path=config.mcp_config_path,
     ) {
     Ok(value) => value
     Err(error) => return Err("dsh runtime could not start: " + error)

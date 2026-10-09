@@ -153,13 +153,20 @@ fn session_summaries(value : Json) -> Json {
 }
 
 ///|
-fn create_api() -> HarnessApi raise InitError {
+fn create_api(external_mcp_tools : Array[Json]) -> HarnessApi raise InitError {
   let owner = checked(@core.App::new())
   checked(owner.start())
   let registry = checked(@capability.Registry::new_owned(owner))
   let plugins = match @plugins.defaults() {
     Ok(plugins) => plugins
     Err(error) => raise InitError(error)
+  }
+  if external_mcp_tools.length() > 0 {
+    match
+      plugins.mount("tools.external-mcp", ["agent-loop"], external_mcp_tools) {
+      Ok(_) => ()
+      Err(error) => raise InitError(error)
+    }
   }
   let engine = @engine.Engine::new(plugins.tools())
   let profiler = @hotpath.Profiler::new()
@@ -291,8 +298,10 @@ fn create_api() -> HarnessApi raise InitError {
 }
 
 ///|
-pub fn HarnessApi::new() -> Result[HarnessApi, String] {
-  Ok(create_api()) catch {
+pub fn HarnessApi::new(
+  external_mcp_tools? : Array[Json] = [],
+) -> Result[HarnessApi, String] {
+  Ok(create_api(external_mcp_tools)) catch {
     InitError(error) => Err(error)
   }
 }

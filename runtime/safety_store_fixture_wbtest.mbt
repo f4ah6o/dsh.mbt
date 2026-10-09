@@ -55,6 +55,7 @@ async test "native store persists one private versioned envelope and locks write
       epoch: "fixture-epoch",
       revision: 1,
       auth_revision: 0,
+      external_mcp_catalog_hash: None,
     }
     assert_true(store.save(state) is Ok(_))
     let (envelope_text, envelope_version) = match
@@ -118,6 +119,7 @@ async test "native store persists one private versioned envelope and locks write
       epoch: "fixture-epoch",
       revision: 2,
       auth_revision: 0,
+      external_mcp_catalog_hash: None,
     }
     assert_true(reopened.save(changed) is Err(_))
     assert_eq(

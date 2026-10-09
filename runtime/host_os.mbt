@@ -67,6 +67,9 @@ extern "C" fn c_timestamp(buffer : FixedArray[Byte], capacity : Int) -> Int = "d
 extern "C" fn c_process_alive(pid : Int) -> Int = "dsh_os_process_alive"
 
 ///|
+extern "C" fn c_process_group_alive(pgid : Int) -> Int = "dsh_os_process_group_alive"
+
+///|
 extern "C" fn c_hard_worker_memory_supported() -> Int = "dsh_os_hard_worker_memory_supported"
 
 ///|
@@ -414,6 +417,11 @@ pub fn os_hostname() -> Result[String, String] {
 ///|
 pub fn os_process_alive(pid : Int) -> Bool {
   c_process_alive(pid) != 0
+}
+
+///|
+pub fn os_process_group_alive(pgid : Int) -> Bool {
+  c_process_group_alive(pgid) != 0
 }
 
 ///|

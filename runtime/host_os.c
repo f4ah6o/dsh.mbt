@@ -624,6 +624,12 @@ int dsh_os_process_alive(int pid) {
   return errno != ESRCH;
 }
 
+int dsh_os_process_group_alive(int pgid) {
+  if (pgid <= 0) return 1;
+  if (kill(-(pid_t)pgid, 0) == 0 || errno == EPERM) return 1;
+  return errno != ESRCH;
+}
+
 int dsh_os_hard_worker_memory_supported(void) {
 #if defined(__linux__) && defined(RLIMIT_AS)
   return 1;
@@ -664,6 +670,9 @@ static int dsh_parse_number_field(char **cursor, char *limit,
  */
 int dsh_exec_worker(const uint8_t *payload, int length) {
   if (!payload || length < 8 || payload[length - 1] != 0) return EINVAL;
+  /* Isolate before validating paths or applying limits so cancellation can
+   * always target a fresh session rather than the caller's process group. */
+  if (setsid() < 0) return errno;
   char *storage = (char *)malloc((size_t)length + 1);
   if (!storage) return ENOMEM;
   memcpy(storage, payload, (size_t)length);
@@ -807,12 +816,6 @@ int dsh_exec_worker(const uint8_t *payload, int length) {
     free(storage);
     return saved;
   }
-  if (setsid() < 0) {
-    int saved = errno;
-    free(argv);
-    free(storage);
-    return saved;
-  }
   if (dsh_fs_root_matches(workspace_fd, workspace_path) != 1) {
     close(workspace_fd);
     free(argv);
@@ -849,6 +852,7 @@ int dsh_os_executable_path(uint8_t *buffer, int capacity) { (void)buffer; (void)
 int dsh_os_hostname(uint8_t *buffer, int capacity) { (void)buffer; (void)capacity; return -ENOTSUP; }
 int dsh_os_timestamp(uint8_t *buffer, int capacity) { (void)buffer; (void)capacity; return -ENOTSUP; }
 int dsh_os_process_alive(int pid) { (void)pid; return 1; }
+int dsh_os_process_group_alive(int pgid) { (void)pgid; return 1; }
 int dsh_os_hard_worker_memory_supported(void) { return 0; }
 int dsh_kill_process_group(int pid, int signal_number) { (void)pid; (void)signal_number; return ENOTSUP; }
 int dsh_kill_process(int pid, int signal_number) { (void)pid; (void)signal_number; return ENOTSUP; }

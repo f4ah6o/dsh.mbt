@@ -240,7 +240,9 @@ capability の string を JSON decode し、facade が生成した `{ok, result}
 output schema も string として公開しており、構造化 object schema を偽って宣言しません。
 
 CLI carrier は JSON-RPC 1 行につき 1 message の stdio framing です。
-旧版 handshake / Content-Length framing への変換や、upstream MCP client による外部 tool 取込は提供していません。
+旧版 handshake / Content-Length framing への変換は提供していません。外部
+MCP tool は別の native stdio client で、`--mcp-config` を明示したときだけ
+起動します。接続方法と対応範囲は[native runtime guide](native-runtime.md#external-mcp-stdio-tools)を参照してください。
 
 ## gpui とツール群
 

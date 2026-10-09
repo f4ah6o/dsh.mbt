@@ -17,6 +17,7 @@ priv struct NativeState {
   epoch : String
   revision : Int
   auth_revision : Int
+  external_mcp_catalog_hash : String?
 }
 
 ///|
@@ -443,6 +444,7 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
         epoch: "",
         revision: 0,
         auth_revision: 0,
+        external_mcp_catalog_hash: None,
       })
     }
     Ok(Some((text, version))) => {
@@ -464,6 +466,16 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
             Some(Json::Array(values)) => values
             _ => return Err("native snapshot is missing command receipts")
           }
+          let external_mcp_catalog_hash = match
+            object_field(raw, "external_mcp_catalog_hash") {
+            None | Some(Json::Null) => None
+            Some(Json::String(value)) if native_mcp_valid_fingerprint(value) =>
+              Some(value)
+            _ =>
+              return Err(
+                "native snapshot has an invalid external MCP catalog fingerprint",
+              )
+          }
           Ok({
             engine,
             receipts,
@@ -477,6 +489,7 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
             epoch: string_field(raw, "epoch").unwrap_or(""),
             revision: int_field(raw, "revision").unwrap_or(0),
             auth_revision: int_field(raw, "auth_revision").unwrap_or(0),
+            external_mcp_catalog_hash,
           })
         }
         Some("dsh.mbt-session-v1") | Some("deepseek-session-v4") =>
@@ -489,6 +502,7 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
             epoch: "",
             revision: 0,
             auth_revision: 0,
+            external_mcp_catalog_hash: None,
           })
         _ => Err("native host cannot load this snapshot format")
       }
@@ -504,7 +518,7 @@ fn NativeStore::save(
   if self.closed {
     return Err("native persistence is closed")
   }
-  let value = Json::object({
+  let fields : Map[String, Json] = {
     "schema": Json::string(NATIVE_ENVELOPE_SCHEMA),
     "format_version": Json::number(1.0),
     "server_id": Json::string(state.server_id),
@@ -515,7 +529,12 @@ fn NativeStore::save(
     "auth_revision": Json::number(state.auth_revision.to_double()),
     "engine": state.engine,
     "receipts": Json::array(state.receipts),
-  })
+  }
+  match state.external_mcp_catalog_hash {
+    Some(value) => fields["external_mcp_catalog_hash"] = Json::string(value)
+    None => ()
+  }
+  let value = Json::object(fields)
   let raw = value.stringify()
   if @utf8.encode(raw).length() > SNAPSHOT_LIMIT {
     return Err("native snapshot exceeds the 32 MiB persistence limit")

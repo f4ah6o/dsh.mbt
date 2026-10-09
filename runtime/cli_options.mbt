@@ -1,10 +1,11 @@
 ///|
 fn native_cli_is_value_option(argument : String) -> Bool {
   [
-    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir",
-    "--max-retries", "--host", "--session", "--title", "--threshold-chars", "--head-chars",
-    "--tail-chars", "--approve-tools", "--approval-revision", "--run", "--fork",
-    "--import-session", "--prune-session", "--approve-call", "--deny-call", "--select-model",
+    "--workspace", "--data-dir", "--mcp-config", "--mode", "--model", "--base-url",
+    "--port", "--assets-dir", "--max-retries", "--host", "--session", "--title",
+    "--threshold-chars", "--head-chars", "--tail-chars", "--approve-tools", "--approval-revision",
+    "--run", "--fork", "--import-session", "--prune-session", "--approve-call", "--deny-call",
+    "--select-model",
   ].contains(argument)
 }
 
@@ -17,10 +18,11 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
     "web", "run", "import-session", "prune-session", "fork-session", "mcp",
   ]
   let value_options = [
-    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir",
-    "--max-retries", "--host", "--session", "--title", "--threshold-chars", "--head-chars",
-    "--tail-chars", "--approve-tools", "--approval-revision", "--run", "--fork",
-    "--import-session", "--prune-session", "--approve-call", "--deny-call", "--select-model",
+    "--workspace", "--data-dir", "--mcp-config", "--mode", "--model", "--base-url",
+    "--port", "--assets-dir", "--max-retries", "--host", "--session", "--title",
+    "--threshold-chars", "--head-chars", "--tail-chars", "--approve-tools", "--approval-revision",
+    "--run", "--fork", "--import-session", "--prune-session", "--approve-call", "--deny-call",
+    "--select-model",
   ]
   let mut command_index = -1
   let mut scan = 1
@@ -58,9 +60,9 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
   let mut after_separator = false
   let mut index = 2
   let subcommand_value_options = [
-    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir",
-    "--max-retries", "--host", "--session", "--title", "--threshold-chars", "--head-chars",
-    "--tail-chars", "--approve-tools", "--approval-revision",
+    "--workspace", "--data-dir", "--mcp-config", "--mode", "--model", "--base-url",
+    "--port", "--assets-dir", "--max-retries", "--host", "--session", "--title",
+    "--threshold-chars", "--head-chars", "--tail-chars", "--approve-tools", "--approval-revision",
   ]
   while index < reordered.length() {
     let argument = reordered[index]
@@ -244,10 +246,11 @@ fn native_cli_paths(args : Array[String]) -> Result[(String, String), String] {
 /// The subcommand aliases have already been normalized to their long options.
 fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
   let value_options = [
-    "--workspace", "--data-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir",
-    "--max-retries", "--host", "--session", "--title", "--threshold-chars", "--head-chars",
-    "--tail-chars", "--approve-tools", "--run", "--fork", "--import-session", "--prune-session",
-    "--approve-call", "--deny-call", "--approval-revision", "--select-model",
+    "--workspace", "--data-dir", "--mcp-config", "--mode", "--model", "--base-url",
+    "--port", "--assets-dir", "--max-retries", "--host", "--session", "--title",
+    "--threshold-chars", "--head-chars", "--tail-chars", "--approve-tools", "--run",
+    "--fork", "--import-session", "--prune-session", "--approve-call", "--deny-call",
+    "--approval-revision", "--select-model",
   ]
   let boolean_options = [
     "--serve", "--mcp", "--demo", "--allow-shell", "--approve-writes", "--json",
@@ -422,6 +425,23 @@ fn native_cli_retry_limit(args : Array[String]) -> Result[Int, String] {
 }
 
 ///|
+fn native_cli_is_mcp_tool_name(name : String) -> Bool {
+  if !name.has_prefix("mcp__") || name.length() <= 5 || name.length() > 64 {
+    return false
+  }
+  for character in name {
+    if !((character >= 'A' && character <= 'Z') ||
+      (character >= 'a' && character <= 'z') ||
+      (character >= '0' && character <= '9') ||
+      character == '_' ||
+      character == '-') {
+      return false
+    }
+  }
+  true
+}
+
+///|
 fn native_cli_approved_tools(
   args : Array[String],
   allow_shell : Bool,
@@ -438,8 +458,11 @@ fn native_cli_approved_tools(
         if name.is_empty() {
           continue
         }
-        if !["write", "edit", "bash"].contains(name) {
-          return Err("--approve-tools accepts only write, edit, and bash")
+        if !["write", "edit", "bash"].contains(name) &&
+          !native_cli_is_mcp_tool_name(name) {
+          return Err(
+            "--approve-tools accepts write, edit, bash, or exact mcp__ tool names",
+          )
         }
         if !approved.contains(name) {
           approved.push(name)

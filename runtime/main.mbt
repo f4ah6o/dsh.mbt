@@ -80,18 +80,19 @@ fn native_usage() -> String {
   "Usage:\n" +
   "  dsh --help\n" +
   "  dsh --demo --data-dir PATH --workspace PATH\n\n" +
-  "  dsh run PROMPT [--session ID] [--demo] --data-dir PATH --workspace PATH\n" +
+  "  dsh run PROMPT [--session ID] [--mcp-config PATH] [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh import-session PATH [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh prune-session ID [--threshold-chars N --head-chars N --tail-chars N] --data-dir PATH --workspace PATH\n" +
   "  dsh fork-session ID [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh --session ID --approve-call CALL_ID --approval-revision REV [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh --session ID --deny-call CALL_ID --approval-revision REV [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh --auth-status|--sign-in|--models|--sign-out|--select-model MODEL --data-dir PATH --workspace PATH\n\n" +
-  "  dsh web --data-dir PATH --workspace PATH [--port PORT] [--assets-dir PATH] [--allow-shell] [--demo]\n" +
-  "  dsh mcp --data-dir PATH --workspace PATH [--allow-shell] [--demo]\n\n" +
-  "  dsh desktop [--app-path /absolute/path/to/Dsh.app] [desktop options]\n\n" +
+  "  dsh web --data-dir PATH --workspace PATH [--mcp-config PATH] [--port PORT] [--assets-dir PATH] [--allow-shell] [--demo]\n" +
+  "  dsh mcp --data-dir PATH --workspace PATH [--mcp-config PATH] [--allow-shell] [--demo]\n\n" +
+  "  dsh desktop [--app-path /absolute/path/to/Dsh.app] [--mcp-config PATH] [desktop options]\n\n" +
   "Provider options: --mode deepseek|openai|openai-responses --model NAME --base-url URL --max-retries 0..5\n" +
-  "Approval options: --allow-shell, --approve-writes, --approve-tools write,edit,bash\n" +
+  "MCP options: --mcp-config PATH starts trusted external stdio servers; calls require approval by default.\n" +
+  "Approval options: --allow-shell, --approve-writes, --approve-tools write,edit,bash,mcp__SERVER__TOOL\n" +
   "Use --json to print command results as JSON. API keys are read from DSH_API_KEY, DEEPSEEK_API_KEY, or OPENAI_API_KEY.\n\n" +
   "The demo checkpoints a session, gates a write call on approval, runs the\n" +
   "workspace tool, feeds its result into the next model context, and verifies\n" +
@@ -542,6 +543,7 @@ pub async fn run_cli() -> Unit {
         model_override=native_option(args, "--model").unwrap_or(""),
         base_url_override=native_option(args, "--base-url").unwrap_or(""),
         max_retries~,
+        mcp_config_path=native_option(args, "--mcp-config"),
       ) {
       Err(error) => abort("native runtime could not start: " + error)
       Ok(runtime) => runtime
@@ -584,6 +586,7 @@ pub async fn run_cli() -> Unit {
         model_override=native_option(args, "--model").unwrap_or(""),
         base_url_override=native_option(args, "--base-url").unwrap_or(""),
         max_retries~,
+        mcp_config_path=native_option(args, "--mcp-config"),
       ) {
       Err(error) => abort("native runtime could not start: " + error)
       Ok(runtime) => runtime
@@ -631,6 +634,7 @@ pub async fn run_cli() -> Unit {
         model_override=native_option(args, "--model").unwrap_or(""),
         base_url_override=native_option(args, "--base-url").unwrap_or(""),
         max_retries~,
+        mcp_config_path=native_option(args, "--mcp-config"),
       ) {
       Err(error) => abort("native runtime could not start: " + error)
       Ok(runtime) => runtime
@@ -661,7 +665,9 @@ pub async fn run_cli() -> Unit {
     Ok(value) => value
     Err(error) => abort(error)
   }
-  match NativeRuntime::open(data_dir, workspace, false, false) {
+  let mcp_config_path = native_option(args, "--mcp-config")
+  match
+    NativeRuntime::open(data_dir, workspace, false, false, mcp_config_path~) {
     Err(error) => abort("native runtime could not start: " + error)
     Ok(runtime) =>
       match runtime.run_demo() {
@@ -674,7 +680,13 @@ pub async fn run_cli() -> Unit {
             Err(error) => abort("native runtime shutdown failed: " + error)
             Ok(_) => ()
           }
-          match verify_native_demo_reload(data_dir, workspace, demo_id) {
+          match
+            verify_native_demo_reload(
+              data_dir,
+              workspace,
+              demo_id,
+              mcp_config_path~,
+            ) {
             Err(error) => abort("native runtime reload check failed: " + error)
             Ok(_) =>
               println(
