@@ -163,6 +163,38 @@ fn Engine::dispatch_tool(
 }
 
 ///|
+/// Apply the harness-owned todo/write operation at the exclusive tool barrier.
+/// It never becomes a host effect, filesystem operation, or parallel read.
+fn execute_session_tool(
+  session : Session,
+  call : ToolCall,
+  arguments : Json,
+) -> Unit {
+  if call.name != "todo_write" {
+    session.stage_session_tool_result(
+      call,
+      "Unsupported session tool: " + call.name,
+      true,
+    )
+    session.commit_ready_tool_results()
+    return
+  }
+  match checked_todo_write(arguments) {
+    Ok(items) => {
+      session.record_todo_write(call.id, items)
+      session.stage_session_tool_result(call, todo_write_summary(items), false)
+    }
+    Err(error) =>
+      session.stage_session_tool_result(
+        call,
+        "Invalid todo list: " + error,
+        true,
+      )
+  }
+  session.commit_ready_tool_results()
+}
+
+///|
 fn Engine::stage_host_tool_result(
   self : Engine,
   session : Session,
@@ -420,6 +452,10 @@ fn Engine::advance_tools(self : Engine, session : Session) -> Unit {
         }
         match arguments {
           None => ()
+          Some(arguments) if tool.effect == Session => {
+            session.parallel_group = false
+            execute_session_tool(session, call, arguments)
+          }
           Some(arguments) if tool.effect == Read => {
             session.parallel_group = true
             self.dispatch_tool(session, call, arguments)

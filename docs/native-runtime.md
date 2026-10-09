@@ -181,6 +181,34 @@ moon run native --target native --release -- \
   --workspace /absolute/path/to/project
 ```
 
+## Native session todo tool
+
+Every native provider mode exposes `todo_write`. It replaces the session's
+complete visible task list using `{"todos":[{"content":"...","status":"pending"}]}`.
+Content is trimmed, must be non-empty and unique, and statuses are `pending`,
+`in_progress`, or `completed`. The native port allows at most 64 items, 512
+UTF-16 code units per item, 8,192 code units in total, and one `in_progress` item.
+The tool result reports counts for each status.
+
+The list is session state recorded by a durable `todo/write` event linked to
+the model call and its successful tool result. It is a whole-list replacement;
+the latest write in a turn is shown. The projection starts as `null`, clears
+when the next turn begins, and remains visible after the assistant finishes.
+Forks carry the validated history and current list. Browser and native desktop
+transcripts render the same checklist, and the session API exposes it as
+`todos`.
+
+This is an internal session update with no workspace, filesystem, or network
+capability and no approval prompt. The engine completes it at the exclusive
+tool barrier: earlier parallel reads settle first, and following writes still
+wait for approval. It does not create a host tool effect, so PreToolUse and
+PostToolUse command hooks do not run for `todo_write`. Imported Session v4
+histories remain inert and do not acquire a native todo projection. Stores
+from 0.1.7 that recorded `Unknown tool: todo_write` remain readable; opening
+them does not retry the old call. Histories containing native `todo/write`
+events require dsh 0.1.8 or later. Keep a pre-upgrade data-directory backup if
+you need to downgrade.
+
 ## Native LSP navigation
 
 `run`, `web`, `mcp`, `acp`, and `desktop` accept `--lsp-config PATH`. This

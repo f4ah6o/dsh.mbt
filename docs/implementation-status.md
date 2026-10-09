@@ -1,6 +1,6 @@
 # Issue #9 / #11 implementation and acceptance status
 
-Updated: 2026-10-08. This records current ownership plus the dated implementation increments below. “Fixture pass” means deterministic local tests passed; it does not imply live provider, tailnet, or physical-device acceptance. The proposals remain open for the external gates below.
+Updated: 2026-10-10. This records current ownership plus the dated implementation increments below. “Fixture pass” means deterministic local tests passed; it does not imply live provider, tailnet, or physical-device acceptance. The proposals remain open for the external gates below.
 
 ## Issue #9: Sign in with ChatGPT
 
@@ -20,8 +20,25 @@ The optional live sequence is in [native runtime guide](native-runtime.md#option
 | M3 native vertical path | Implemented on the tested macOS host: native CLI/service and GPUI desktop app, workspace tools, provider/auth, checkpoint and receipt lifecycle, scheduler pool, cancellation, reload, and supervised SIGINT/SIGTERM shutdown. The desktop app uses the same runtime for session selection, prompt editing, transcript, tool approval, cancellation, and persistence; an AppKit NSEvent offline demo exercises the approved write and reload path. |
 | M4 tailnet service/remote | Local synthetic HTTP service and owner/origin/receipt checks pass. Actual Tailscale Serve, remote device, and network outage acceptance are unrun. |
 | M5 PWA | Shell generation refresh, offline fallback, body/cache deadline, and rollback are implemented and fixture-tested. Physical iPhone acceptance is unrun. |
-| M6 Node-independent build/test | Current local no-Node verification passes with Node/npm absent: native format/check/build, 208/208 tests, CLI help, browser/service-worker asset checks, and checkpoint/approval/tool/context/reload demo. The standalone `.mbtx` wrapper resolves its separate imports; its internal repository checks/builds remain frozen. [Earlier Actions run](https://github.com/f4ah6o/dsh.mbt/actions/runs/37589966829) tested the initial M6 implementation at `8dc1ea7744ae7902938afe4b3071fabff0340b51`, before the Node-host retirement. |
+| M6 Node-independent build/test | Current local no-Node verification passes with Node/npm absent: native format/check/build, 291/291 tests, CLI help, browser/service-worker asset checks, and checkpoint/approval/tool/context/reload demo. The standalone `.mbtx` wrapper resolves its separate imports; its internal repository checks/builds remain frozen. [Earlier Actions run](https://github.com/f4ah6o/dsh.mbt/actions/runs/37589966829) tested the initial M6 implementation at `8dc1ea7744ae7902938afe4b3071fabff0340b51`, before the Node-host retirement. |
 | M7 iOS native | Formal gpui iOS host is not implemented. The current iOS work is a SwiftUI + generated MoonC shared-client embedding spike; its Simulator build/install/launch was reported successful. Physical-device lifecycle, memory, callback, accessibility, and tailnet tests remain unrun. |
+
+## 2026-10-10 native session TODO increment
+
+The built-in `todo_write` provider tool replaces a bounded per-session checklist
+at the exclusive tool barrier. A `todo/write` event is durably correlated with
+the owning model call and successful tool result; restore validates the exact
+arguments, snapshot, completion, and result pairing. Invalid lists leave the
+current projection unchanged. The list clears at the next turn start, remains
+visible after turn completion, and is copied into validated native forks.
+
+The session API and native remote projection expose `todos`; the browser
+accessible transcript, portable GPUI scene, and native desktop transcript show
+task statuses. The tool has no host I/O effect, approval, or PreToolUse /
+PostToolUse hook dispatch. It is inert in imported Session v4 histories. A
+focused provider/runtime roundtrip, restore/cancel/reopen, legacy 0.1.7 unknown
+tool history, descriptor validation, and UI tests pass; full upstream TODO
+package parity remains outside this increment.
 
 ## A01–A18 acceptance map
 

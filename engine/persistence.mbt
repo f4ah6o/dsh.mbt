@@ -156,6 +156,14 @@ fn replay_tool(tools : Array[Tool], name : String) -> Tool? {
 }
 
 ///|
+fn replay_is_session_tool(tools : Array[Tool], call : ToolCall) -> Bool {
+  match replay_tool(tools, call.name) {
+    Some(tool) => tool.effect == Session
+    None => false
+  }
+}
+
+///|
 fn replay_arguments_are_valid(tool : Tool, call : ToolCall) -> Bool {
   if call.kind != FunctionCall {
     return false
@@ -178,7 +186,7 @@ fn restore_session(
   if json_field(value, "source_format") == Some("deepseek-session-v4".to_json()) {
     return restore_imported_session(value)
   }
-  if value.stringify().length() > SESSION_CAPACITY {
+  if session_capacity_length(value) > SESSION_CAPACITY {
     raise Invalid("Snapshot session exceeds the 262144-character capacity")
   }
   let id = identifier(required_string(value, "id", max=128), "session id")
@@ -206,6 +214,7 @@ fn restore_session(
   let mut open_turn = false
   let mut admitted_user = false
   let mut assistant_recorded = false
+  let mut pending_todo_call : String? = None
   for index, raw in events {
     let seq = int_value(required_field(raw, "seq"), "event seq", 0, 32768)
     if seq != index {
@@ -239,6 +248,7 @@ fn restore_session(
       session.turn_id = turn_id
       session.step = 0
       session.status = Running
+      session.todos = None
       open_turn = true
       admitted_user = false
       assistant_recorded = false
@@ -303,6 +313,9 @@ fn restore_session(
               Some(tool) => tool
               None =>
                 raise Invalid("Unknown tool cannot have a dispatched effect")
+            }
+            if tool.effect == Session {
+              raise Invalid("Session tools cannot have a host effect request")
             }
             if !replay_arguments_are_valid(tool, call) {
               raise Invalid(
@@ -598,6 +611,43 @@ fn restore_session(
           call.stage = Called
           session.schedule_cursor += 1
         }
+        "todo/write" => {
+          if !session.open_step ||
+            !assistant_recorded ||
+            pending_todo_call is Some(_) {
+            raise Invalid("Todo write is outside its live tool call")
+          }
+          let data_fields = fields(data)
+          if data_fields.length() != 2 ||
+            data_fields.get("call_id") is None ||
+            data_fields.get("todos") is None {
+            raise Invalid("Todo write event has an invalid shape")
+          }
+          let call = result_call(session)
+          let call_id = required_string(data, "call_id", max=128)
+          if call.id != call_id ||
+            call.kind != FunctionCall ||
+            call.name != "todo_write" ||
+            call.stage != Called {
+            raise Invalid(
+              "Todo write does not match the pending todo_write call",
+            )
+          }
+          let tool = match replay_tool(tools, call.name) {
+            Some(tool) if tool.effect == Session => tool
+            _ => raise Invalid("Todo write tool is not in the session catalog")
+          }
+          let arguments = parse_arguments(call.arguments)
+          validate_arguments(tool.input_schema, arguments)
+          let items = normalize_todo_write(arguments)
+          if required_field(data, "todos") != Json::array(items.map(detached)) {
+            raise Invalid(
+              "Todo write differs from its normalized tool arguments",
+            )
+          }
+          session.todos = Some(items.map(detached))
+          pending_todo_call = Some(call.id)
+        }
         "tool/approval/requested" => {
           let call_id = required_string(data, "call_id", max=128)
           let call = match session.call_by_id(call_id) {
@@ -620,8 +670,12 @@ fn restore_session(
             Some(tool) => tool
             None => raise Invalid("Unknown tool cannot require approval")
           }
-          if tool.effect == Read || !replay_arguments_are_valid(tool, call) {
-            raise Invalid("Read or invalid call cannot request approval")
+          if tool.effect == Read ||
+            tool.effect == Session ||
+            !replay_arguments_are_valid(tool, call) {
+            raise Invalid(
+              "Read, session, or invalid call cannot request approval",
+            )
           }
           let arguments = required_field(data, "arguments")
           if arguments != parse_arguments(call.arguments) {
@@ -644,6 +698,9 @@ fn restore_session(
           }
           if call.stage != Waiting || session.approval is None {
             raise Invalid("Approval decision without a request")
+          }
+          if replay_is_session_tool(tools, call) {
+            raise Invalid("Session tool cannot be approved")
           }
           expect_call_id(data, "call_id", call)
           call.stage = if bool_value(
@@ -671,6 +728,9 @@ fn restore_session(
           )
           match source {
             "effect" => {
+              if replay_is_session_tool(tools, call) {
+                raise Invalid("Session tool cannot complete from a host effect")
+              }
               let effect_id = required_string(data, "effect_id", max=128)
               if (call.stage != Dispatched && call.stage != OutcomeKnown) ||
                 call.effect_id != Some(effect_id) ||
@@ -683,6 +743,9 @@ fn restore_session(
               call.effect_id = None
             }
             "effect-known" => {
+              if replay_is_session_tool(tools, call) {
+                raise Invalid("Session tool cannot have a host-known outcome")
+              }
               let effect_id = required_string(data, "effect_id", max=128)
               if call.stage != Dispatched ||
                 call.effect_id != Some(effect_id) ||
@@ -693,11 +756,17 @@ fn restore_session(
               }
             }
             "interrupted" => {
+              let is_session_tool = replay_is_session_tool(tools, call)
               if !is_error {
                 raise Invalid("Interrupted tool result must be an error")
               }
               match fields(data).get("effect_id") {
                 Some(raw_effect_id) => {
+                  if is_session_tool {
+                    raise Invalid(
+                      "Session tool cannot be interrupted as a host effect",
+                    )
+                  }
                   let effect_id = string_value(
                     raw_effect_id,
                     "effect_id",
@@ -714,7 +783,13 @@ fn restore_session(
                   call.effect_id = None
                 }
                 None =>
-                  if call.stage != Called &&
+                  if is_session_tool {
+                    if call.stage != Called {
+                      raise Invalid(
+                        "Unstarted session-tool interruption has no live call",
+                      )
+                    }
+                  } else if call.stage != Called &&
                     call.stage != Waiting &&
                     call.stage != Approved {
                     raise Invalid("Unstarted interruption has no live call")
@@ -729,12 +804,66 @@ fn restore_session(
                 None => true
                 Some(tool) => !replay_arguments_are_valid(tool, call)
               }
+              let legacy_unknown_todo = call.name == "todo_write" &&
+                content == "Unknown tool: todo_write" &&
+                call.stage == Called &&
+                is_error
               if call.stage == Denied {
                 if !is_error {
                   raise Invalid("Denied tool result must be an error")
                 }
-              } else if call.stage != Called || !local_failure || !is_error {
+              } else if call.stage != Called ||
+                (!local_failure && !legacy_unknown_todo) ||
+                !is_error {
                 raise Invalid("Local tool completion without a local failure")
+              }
+            }
+            "session" => {
+              let completion_fields = fields(data)
+              if completion_fields.length() != 4 ||
+                completion_fields.get("source") is None ||
+                completion_fields.get("call_id") is None ||
+                completion_fields.get("content") is None ||
+                completion_fields.get("is_error") is None {
+                raise Invalid("Session tool completion has an invalid shape")
+              }
+              let call_index = session.call_index(call.id).unwrap_or(-1)
+              let tool = match replay_tool(tools, call.name) {
+                Some(tool) if tool.effect == Session => tool
+                _ =>
+                  raise Invalid(
+                    "Session completion references a non-session tool",
+                  )
+              }
+              if call.name != "todo_write" ||
+                call.kind != FunctionCall ||
+                call.stage != Called ||
+                call_index != session.cursor ||
+                session.active_tool_effect_count() > 0 {
+                raise Invalid(
+                  "Session completion is outside the todo tool barrier",
+                )
+              }
+              let arguments = parse_arguments(call.arguments)
+              validate_arguments(tool.input_schema, arguments)
+              match checked_todo_write(arguments) {
+                Ok(items) =>
+                  if pending_todo_call != Some(call.id) ||
+                    session.todos != Some(items) ||
+                    is_error ||
+                    content != todo_write_summary(items) {
+                    raise Invalid(
+                      "Todo success is missing its exact write/result",
+                    )
+                  }
+                Err(error) =>
+                  if pending_todo_call is Some(_) ||
+                    !is_error ||
+                    content != "Invalid todo list: " + error {
+                    raise Invalid(
+                      "Todo failure differs from its validated arguments",
+                    )
+                  }
               }
             }
             _ => raise Invalid("Unknown tool completion source")
@@ -761,6 +890,26 @@ fn restore_session(
             required_field(data, "is_error"),
             "is_error",
           )
+          let is_session_todo = call.kind == FunctionCall &&
+            call.name == "todo_write" &&
+            (match replay_tool(tools, call.name) {
+              Some(tool) => tool.effect == Session
+              None => false
+            })
+          if is_session_todo && call.stage != Completed {
+            raise Invalid("Todo result lacks a successful internal completion")
+          }
+          if pending_todo_call is Some(pending_id) &&
+            (pending_id != call.id || !is_session_todo || is_error) {
+            raise Invalid(
+              "Todo write is not paired with its successful tool result",
+            )
+          }
+          if is_session_todo && !is_error && pending_todo_call != Some(call.id) {
+            raise Invalid(
+              "Successful todo result has no matching todo/write event",
+            )
+          }
           if call.stage == Completed {
             if call.completed_content != Some(content) ||
               call.completed_error != Some(is_error) {
@@ -806,6 +955,9 @@ fn restore_session(
             raise Invalid("Tool result without a completed call")
           }
           call.stage = Settled
+          if pending_todo_call == Some(call.id) {
+            pending_todo_call = None
+          }
           session.cursor += 1
           session.active_effect = None
           session.active_kind = None
@@ -878,6 +1030,9 @@ fn restore_session(
       data,
     })
   }
+  if pending_todo_call is Some(_) {
+    raise Invalid("Snapshot ends before the todo write tool result")
+  }
   if status_text(session.status) != expected_status ||
     session.turn_id != expected_turn ||
     session.step != expected_step {
@@ -885,6 +1040,14 @@ fn restore_session(
   }
   if required_field(value, "messages") != Json::array(session.messages()) {
     raise Invalid("Snapshot messages disagree with the event log")
+  }
+  let actual_todos = fields(session.json()).get("todos").unwrap_or(Json::null())
+  match fields(value).get("todos") {
+    Some(expected) if expected != actual_todos =>
+      raise Invalid("Snapshot todo projection disagrees with its event log")
+    None if session.events.any(event => event.kind == EngineEventKind::TodoWrite) =>
+      raise Invalid("Snapshot with todo writes is missing its todo projection")
+    _ => ()
   }
   match fields(value).get("stream_revision") {
     Some(revision) if revision != integer(session.stream_revision()) =>

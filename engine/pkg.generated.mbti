@@ -97,6 +97,7 @@ pub(all) enum EngineEventKind {
   ToolCompleted
   ToolResult
   ToolResultPruned
+  TodoWrite
   UpstreamHeader
   UpstreamEvent
   Other(String)

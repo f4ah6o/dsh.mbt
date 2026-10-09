@@ -22,9 +22,55 @@ test "duplicate tools reject the whole plugin and returned descriptors are copie
   assert_false(registry.contains("duplicate"))
   let returned = registry.tools()
   returned.clear()
-  assert_eq(registry.tools().length(), 6)
+  assert_eq(registry.tools().length(), 7)
   assert_eq(registry.unmount("tools"), Ok(()))
   assert_eq(registry.tools().length(), 0)
+}
+
+///|
+test "todo_write is the sole canonical native session tool" {
+  let todos = @plugins.builtin_tools().filter(tool => {
+    match tool {
+      { "name": String("todo_write"), .. } => true
+      _ => false
+    }
+  })
+  assert_eq(todos.length(), 1)
+  match todos[0] {
+    {
+      "effect": String("session"),
+      "input_schema": {
+        "additionalProperties": False,
+        "properties": {
+          "todos": {
+            "items": {
+              "additionalProperties": False,
+              "properties": {
+                "content": { "type": String("string"), .. },
+                "status": {
+                  "enum": Array(
+                    [
+                      String("pending"),
+                      String("in_progress"),
+                      String("completed"),
+                    ]
+                  ),
+                  ..
+                },
+                ..
+              },
+              ..
+            },
+            ..
+          },
+          ..
+        },
+        ..
+      },
+      ..
+    } => ()
+    _ => fail("todo_write must use the canonical bounded session schema")
+  }
 }
 
 ///|
@@ -62,6 +108,20 @@ test "unknown tool effects fail atomically and schemas reject extra properties" 
       _ => fail("built-in tools must explicitly forbid unknown properties")
     }
   }
+}
+
+///|
+test "plugins cannot register arbitrary session-class tools" {
+  let registry = @plugins.Registry::new()
+  let arbitrary : Json = {
+    "name": "arbitrary_session_action",
+    "description": "This must not gain access to the internal session dispatcher.",
+    "input_schema": { "type": "object", "properties": {}, "required": [] },
+    "effect": "session",
+  }
+  assert_true(registry.mount("arbitrary-session", [], [arbitrary]) is Err(_))
+  assert_false(registry.contains("arbitrary-session"))
+  assert_eq(registry.tools().length(), 0)
 }
 
 ///|

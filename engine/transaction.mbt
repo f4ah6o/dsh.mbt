@@ -5,6 +5,26 @@
 const SESSION_CAPACITY : Int = 262144
 
 ///|
+/// `todos: null` is fixed presentation metadata introduced after v1 snapshots
+/// were already allowed up to SESSION_CAPACITY. Exclude only that optional
+/// 13-unit serialized field from admission accounting; actual todo arrays count
+/// in full and public/storage serialization is unchanged.
+fn session_capacity_length(value : Json) -> Int {
+  match value {
+    Json::Object(items) =>
+      match items.get("todos") {
+        Some(Json::Null) => {
+          let measured = items.copy()
+          ignore(measured.remove("todos"))
+          Json::object(measured).stringify().length()
+        }
+        _ => value.stringify().length()
+      }
+    _ => value.stringify().length()
+  }
+}
+
+///|
 /// Maximum text/reasoning carried by one durable provider flush event.
 const STREAM_DELTA_CAPACITY : Int = 4096
 
@@ -58,6 +78,7 @@ fn Session::copy_state(self : Session) -> Session {
     active_effect: self.active_effect,
     active_kind: self.active_kind,
     open_step: self.open_step,
+    todos: self.todos.map(items => items.map(detached)),
     retry_count: self.retry_count,
     retry_max_retries: self.retry_max_retries,
     retry_initial_delay_ms: self.retry_initial_delay_ms,
@@ -112,7 +133,7 @@ fn Engine::adopt(self : Engine, candidate : Engine) -> Unit {
 /// provider/tool error itself goes through this admission transaction.
 fn Engine::within_capacity(self : Engine) -> Bool {
   for _, session in self.sessions {
-    if session.json().stringify().length() > SESSION_CAPACITY {
+    if session_capacity_length(session.json()) > SESSION_CAPACITY {
       return false
     }
   }
@@ -135,7 +156,7 @@ fn Engine::within_capacity(self : Engine) -> Bool {
     }
   }
   for _, session in starting.sessions {
-    if session.json().stringify().length() > SESSION_CAPACITY {
+    if session_capacity_length(session.json()) > SESSION_CAPACITY {
       return false
     }
   }
@@ -159,7 +180,7 @@ fn Engine::within_capacity(self : Engine) -> Bool {
         "interrupted",
         "Interrupted before durable completion; effect outcome is unknown",
       )
-      if session.json().stringify().length() > SESSION_CAPACITY {
+      if session_capacity_length(session.json()) > SESSION_CAPACITY {
         return false
       }
     }

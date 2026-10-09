@@ -118,6 +118,21 @@ test "accessible transcript preserves literal content, pruning labels, and provi
 }
 
 ///|
+test "visible task list follows selected session data and stale polls cannot erase it" {
+  let selected = parse_fixture(
+    "{\"id\":\"todo-ui\",\"turn_id\":2,\"events\":[1,2,3,4],\"todos\":[{\"content\":\"Implement feature\",\"status\":\"in_progress\"},{\"content\":\"Verify\",\"status\":\"pending\"}],\"messages\":[{\"role\":\"assistant\",\"content\":\"Working\"}]}",
+  )
+  let rows = @browser.display_messages(selected)
+  assert_eq(rows[0].label, "タスク")
+  assert_eq(rows[0].text, "[~] Implement feature\n[ ] Verify")
+  assert_eq(rows[1].label, "アシスタント")
+  let stale = parse_fixture(
+    "{\"id\":\"todo-ui\",\"turn_id\":2,\"events\":[1,2,3],\"todos\":[],\"messages\":[]}",
+  )
+  assert_false(@browser.accepts_snapshot(stale, Some(selected)))
+}
+
+///|
 test "session lists validate shape and filter malformed rows" {
   let sessions = @browser.session_list(
     parse_fixture("{\"sessions\":[{\"id\":\"s1\"},null,{}, {\"id\":3}] }"),

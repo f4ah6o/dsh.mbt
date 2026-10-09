@@ -158,6 +158,76 @@ test "session fork is exposed as a validated GUI capability and returns lineage"
 }
 
 ///|
+test "provider todo_write roundtrip updates the session projection without a host effect" {
+  let api = @api.HarnessApi::new().unwrap()
+  api.invoke("session_create", { "id": "todo-provider" }).unwrap() |> ignore
+  api
+  .invoke("session_send", {
+    "session_id": "todo-provider",
+    "prompt": "Plan and implement a small feature",
+  })
+  .unwrap()
+  |> ignore
+  let first_effects = api.take_effects()
+  assert_eq(first_effects.length(), 1)
+  let provider_id = match get(first_effects[0], "id") {
+    String(value) => value
+    _ => fail("expected provider effect id")
+  }
+  let tools = match get(get(first_effects[0], "request"), "tools") {
+    Array(values) => values
+    _ => fail("expected provider tool catalog")
+  }
+  let mut todo_tool : Json? = None
+  for tool in tools {
+    if get(tool, "name") == "todo_write" {
+      todo_tool = Some(tool)
+    }
+  }
+  match todo_tool {
+    Some(tool) => assert_eq(get(tool, "effect"), "session")
+    _ => fail("provider request must expose native todo_write")
+  }
+  let updated = api
+    .complete(provider_id, {
+      "ok": true,
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "todo-api-call",
+          "name": "todo_write",
+          "arguments": "{\"todos\":[{\"content\":\"Implement feature\",\"status\":\"in_progress\"},{\"content\":\"Verify\",\"status\":\"pending\"}]}",
+        },
+      ],
+      "finish_reason": "tool_calls",
+    })
+    .unwrap()
+  assert_eq(get(updated, "todos"), [
+    { "content": "Implement feature", "status": "in_progress" },
+    { "content": "Verify", "status": "pending" },
+  ])
+  let follow_up = api.take_effects()
+  assert_eq(follow_up.length(), 1)
+  assert_eq(get(follow_up[0], "kind"), "llm")
+  let done = api
+    .complete(
+      match get(follow_up[0], "id") {
+        String(value) => value
+        _ => fail("expected follow-up provider effect id")
+      },
+      {
+        "ok": true,
+        "content": "Both tasks are complete.",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      },
+    )
+    .unwrap()
+  assert_eq(get(done, "todos"), get(updated, "todos"))
+  api.close()
+}
+
+///|
 test "capability send emits work and cancellation rejects its late settlement" {
   let api = @api.HarnessApi::new().unwrap()
   api.invoke("session_create", { "id": "cancel" }).unwrap() |> ignore

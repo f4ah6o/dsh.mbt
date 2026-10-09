@@ -78,6 +78,7 @@ fn Engine::apply_command_impl(
         session.schedule_cursor = 0
         session.parallel_group = false
         session.active_tool_effects.clear()
+        session.todos = None
         session.append("turn/start", object([]))
         session.append(
           "user/message",
@@ -516,6 +517,13 @@ fn Session::json(self : Session) -> Json {
     ("step", integer(self.step)),
     ("events", Json::array(self.events.map(Event::json))),
     ("messages", Json::array(self.messages())),
+    (
+      "todos",
+      match self.todos {
+        Some(items) => Json::array(items.map(detached))
+        None => Json::null()
+      },
+    ),
   ])
   if self.imported {
     value.set("source_format", Json::string("deepseek-session-v4"))

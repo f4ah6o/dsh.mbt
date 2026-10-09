@@ -145,6 +145,7 @@ test "Session v4 import is inert, read-only, atomic, and restorable" {
   )
   assert_eq(get_status(imported), "completed")
   assert_eq(required_string(imported, "source_format"), "deepseek-session-v4")
+  assert_eq(required_field(imported, "todos"), Json::null())
   let messages = array_value(
     required_field(imported, "messages"),
     "messages",
@@ -184,6 +185,22 @@ test "Session v4 import is inert, read-only, atomic, and restorable" {
   assert_true(engine.take_effects().is_empty())
 
   let before = engine.snapshot()
+  let forged_todo_projection = checked_copy(before)
+  let forged_todo_sessions = array_value(
+    required_field(forged_todo_projection, "sessions"),
+    "sessions",
+    8,
+  )
+  fields(forged_todo_sessions[0]).set(
+    "todos",
+    Json::array([
+      { "content": "Forged native projection", "status": "completed" },
+    ]),
+  )
+  let rejects_todos = Engine::new([])
+  let empty_todo_engine = rejects_todos.snapshot()
+  assert_true(rejects_todos.restore(forged_todo_projection) is Err(_))
+  assert_eq(rejects_todos.snapshot(), empty_todo_engine)
   assert_true(
     engine.invoke(
       "session_send",

@@ -496,8 +496,8 @@ fn native_remote_cursor(
 ///|
 fn native_safe_session(value : Json) -> Json {
   let allowed = [
-    "id", "title", "status", "turn_id", "step", "messages", "stream_revision", "pending_approval",
-    "source_format", "parent_session_id",
+    "id", "title", "status", "turn_id", "step", "messages", "todos", "stream_revision",
+    "pending_approval", "source_format", "parent_session_id",
   ]
   let result : Map[String, Json] = Map([])
   match value {

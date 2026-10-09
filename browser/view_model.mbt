@@ -252,6 +252,24 @@ fn pruned_call(session : Json, call_id : String) -> Bool {
 ///|
 pub fn display_messages(session : Json) -> Array[DisplayMessage] {
   let rows : Array[DisplayMessage] = []
+  match field(session, "todos") {
+    Some(Json::Array(todos)) => {
+      let lines : Array[String] = []
+      if todos.is_empty() {
+        lines.push("タスクはありません。")
+      }
+      for todo in todos {
+        let marker = match string_member(todo, "status") {
+          "in_progress" => "[~] "
+          "completed" => "[x] "
+          _ => "[ ] "
+        }
+        lines.push(marker + string_member(todo, "content"))
+      }
+      rows.push({ label: "タスク", text: lines.join("\n"), })
+    }
+    _ => ()
+  }
   for message in array_member(session, "messages") {
     let role = string_member(message, "role")
     if role == "system" || role == "developer" {

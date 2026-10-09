@@ -181,6 +181,25 @@ fn transcript_blocks(snapshot : Json, width : Double) -> Array[Block] {
   // wide host-font glyph off the end of a run.
   let columns = if text_width < 15.0 { 1 } else { (text_width / 15.0).to_int() }
   let blocks : Array[Block] = []
+  match json_field(snapshot, "todos") {
+    Some(Json::Array(todos)) => {
+      let lines : Array[String] = []
+      if todos.is_empty() {
+        lines.push("タスクはありません。")
+      }
+      for todo in todos {
+        let content = string_member(todo, "content")
+        let marker = match string_member(todo, "status") {
+          "in_progress" => "[~] "
+          "completed" => "[x] "
+          _ => "[ ] "
+        }
+        lines.append(wrap_text(marker + content, columns))
+      }
+      blocks.push({ label: "タスク", role: "todo", lines, })
+    }
+    _ => ()
+  }
   for message in array_member(snapshot, "messages") {
     let role = string_member(message, "role")
     if role == "system" || role == "developer" {

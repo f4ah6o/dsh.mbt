@@ -76,6 +76,23 @@ test "reasoning tool requests and tool results are rendered but system prompts a
 }
 
 ///|
+test "native transcript shows the durable todo projection before messages" {
+  let snapshot = parse(
+    "{\"todos\":[{\"content\":\"Implement feature\",\"status\":\"in_progress\"},{\"content\":\"Verify\",\"status\":\"completed\"}],\"messages\":[{\"role\":\"assistant\",\"content\":\"Working\"}]}",
+  )
+  let text = scene_text(@ui.render(snapshot, 800, 1200))
+  assert_eq(text[0], "タスク")
+  assert_true(text.contains("[~] Implement feature"))
+  assert_true(text.contains("[x] Verify"))
+  assert_true(text.contains("Working"))
+  let empty = scene_text(
+    @ui.render(parse("{\"todos\":[],\"messages\":[]}"), 800, 600),
+  )
+  assert_eq(empty[0], "タスク")
+  assert_true(empty.contains("タスクはありません。"))
+}
+
+///|
 test "provisional transcript blocks announce writing and partial status" {
   let snapshot = parse(
     "{\"messages\":[{\"role\":\"assistant\",\"reasoning\":\"thinking\",\"content\":\"draft\",\"provisional\":true,\"stream_status\":\"partial\"}]}",
