@@ -2108,9 +2108,7 @@ async fn[X] NativeRuntime::mcp_handle(
     self.api.mcp_handle(prompt_dispatch_line).unwrap_or("")
   }
   let effects = self.api.take_typed_effects()
-  let checkpoint = @async.protect_from_cancel(async fn() {
-    self.checkpoint_locked()
-  })
+  let checkpoint = self.checkpoint_locked()
   let accepted_revision = self.state.revision
   match checkpoint {
     Err(error) => {
