@@ -168,6 +168,17 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 - 是正 / 完了条件: 本来の capability / transport / engine admission を、副作用なしで hook 前に preview する。不正 field / JSON-RPC / metadata / notification / capacity fixture の hook counter が増えず、turn / provider も作成されないことを検証する。
 - 修正 / 検証: 修正中。最終 commit と結果を後続コミットで追記する。
 
+#### DEBT-014: event-specific な拒否理由の優先順位が異なる
+
+- 起点・種類・優先度・状態: `PORT / bug, compatibility`、優先度低（独立レビューの minor）、`observed`。
+- upstream baseline / path: [`5badb150` の hook-protocol/codec.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/codec.ts)。matching hookSpecificOutput の permissionDecisionReason は permissionDecision の有無・有効性と独立に top-level reason を上書きする。原典の不具合ではない。
+- port baseline / path: [`3176fa4` の runtime/hooks_codec.mbt](https://github.com/f4ah6o/dsh.mbt/blob/3176fa453e0b1ca4db66f23a695eafbbd1dc19a7/runtime/hooks_codec.mbt)、native_hook_prompt_result_decision。
+- 観測事実 / 影響: 独立レビューの静的照合。legacy block と matching permissionDecisionReason があり、permissionDecision がない / 無効な場合、port は top-level reason を残す。拒否判断は維持されるが native caller に返す理由が decoder の優先順位と異なる。upstream bridge 自体が同じ理由を user に表示するという主張ではない。
+- 是正 / 完了条件: event-specific reason を独立に適用し、permissionDecision なし / 無効 / allow / deny / ask と legacy decision の組合せを fixture で検証する。
+- 修正 / 検証: 修正中。最終 commit と実行結果を後続コミットで追記する。
+
+DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f1f3a949a0ceda62bef4f1b68f437f015) で production code / regression source を修正し、[`3176fa4`](https://github.com/f4ah6o/dsh.mbt/commit/3176fa453e0b1ca4db66f23a695eafbbd1dc19a7) で settled context の restore fixture を是正した。独立した 3 パス source review は重大な残存指摘なし。固定 head の実行検証は ENOSPC のため完了しておらず、hosted CI の確認後に各項目の close 判定を追記する。
+
 ### 後続追記テンプレート
 
 #### DEBT-NNN: 短い見出し
@@ -209,6 +220,8 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 - 2026-10-10: UserPromptSubmit 移植で維持した Json event、文字列エラー、境界ごとの手書き validation、空の transcript_path を固定 source で追記。原典の未反映 hook control を DEBT-008 に登録。
 
 - 2026-10-10: UserPromptSubmit 独立レビューの動作不具合を DEBT-009–013 に登録。復元の再現結果と静的経路照合を区別し、公開前の是正対象として追跡する。
+
+- 2026-10-10: 3 パス source review の再確認と DEBT-009–013 の修正 snapshot を追記。追加の理由優先順位差分を DEBT-014 として公開前の修正対象に登録。
 
 ## 注記
 
