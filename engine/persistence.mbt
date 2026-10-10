@@ -1210,14 +1210,7 @@ fn validate_hook_prompt_context(
       block_fields.get("type") != Some(Json::string("text")) {
       raise Invalid("Hook prompt context must contain only text blocks")
     }
-    let text = required_string(
-      match block_fields.get("text") {
-        Some(value) => value
-        None => raise Invalid("Hook prompt context text is missing")
-      },
-      "hook prompt context",
-      max=4096,
-    )
+    let text = required_string(block, "text", max=4096)
     if text.is_empty() {
       raise Invalid("Hook prompt context must not contain empty text")
     }

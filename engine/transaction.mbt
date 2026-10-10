@@ -204,6 +204,31 @@ pub fn Engine::invoke(
 }
 
 ///|
+/// Validate and apply a command to an isolated candidate without adopting its
+/// state or exposing effects. Native carriers use this to reject a prompt
+/// before running a configured UserPromptSubmit command.
+pub fn Engine::preview(
+  self : Engine,
+  command : EngineCommand,
+) -> Result[Json, String] {
+  match command.validate() {
+    Err(error) => Err(error)
+    Ok(_) => {
+      let candidate = self.copy_state()
+      match candidate.apply_command_impl(command) {
+        Err(error) => Err(error)
+        Ok(result) =>
+          if candidate.within_capacity() {
+            Ok(result)
+          } else {
+            Err(CAPACITY_ERROR)
+          }
+      }
+    }
+  }
+}
+
+///|
 /// Apply one validated typed command atomically. String operation names and
 /// JSON inputs enter through invoke at the compatibility boundary only.
 pub fn Engine::apply(
