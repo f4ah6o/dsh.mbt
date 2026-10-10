@@ -1913,6 +1913,7 @@ async fn NativeRuntime::run_tool_effect(
   self : NativeRuntime,
   effect : @engine.EngineEffect,
   control? : NativeJobControl? = None,
+  subagent_timeout_ms? : Int = NATIVE_SUBAGENT_MAX_RUN_MS,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
   if effect.kind() != @engine.EffectType::Tool {
     return Err("effect is not a tool")
@@ -1947,7 +1948,7 @@ async fn NativeRuntime::run_tool_effect(
   let tool_result = if self.external_mcp.has_tool(name) {
     self.external_mcp.execute(effect.request())
   } else if name == "subagent" {
-    self.run_subagent_tool(effect, control~)
+    self.run_subagent_tool(effect, control~, run_timeout_ms=subagent_timeout_ms)
   } else if name == "lsp" && self.lsp.descriptor is Some(_) {
     self.lsp.execute(self.tools, effect.request())
   } else if name == "skill" && self.skills.enabled {

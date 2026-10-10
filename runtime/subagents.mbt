@@ -94,6 +94,27 @@ fn native_subagent_child_tool_count(session : Json) -> Int {
 }
 
 ///|
+fn native_subagent_terminal_turn(session : Json) -> (String?, String?) {
+  let turn_id = int_field(session, "turn_id").unwrap_or(-1)
+  let events = match object_field(session, "events") {
+    Some(Json::Array(values)) => values
+    _ => return (None, None)
+  }
+  let mut reason : String? = None
+  let mut error : String? = None
+  for event in events {
+    if string_field(event, "type") != Some("turn/end") ||
+      int_field(event, "turn_id") != Some(turn_id) {
+      continue
+    }
+    let data = object_field(event, "data").unwrap_or(Json::null())
+    reason = string_field(data, "reason")
+    error = string_field(data, "error")
+  }
+  (reason, error)
+}
+
+///|
 fn native_subagent_bound_text(value : String, maximum : Int) -> String {
   if native_provider_utf16_units(value) <= maximum {
     return value
@@ -497,6 +518,7 @@ async fn NativeRuntime::run_subagent_tool(
   self : NativeRuntime,
   effect : @engine.EngineEffect,
   control? : NativeJobControl? = None,
+  run_timeout_ms? : Int = NATIVE_SUBAGENT_MAX_RUN_MS,
 ) -> Json {
   let request = effect.request()
   let parent_session_id = effect.session_id().as_string()
@@ -583,7 +605,11 @@ async fn NativeRuntime::run_subagent_tool(
     Ok(value) => value
     Err(error) => return tool_error("cannot start child turn: " + error)
   }
-  let outcome = @async.with_timeout_opt(NATIVE_SUBAGENT_MAX_RUN_MS, async fn() {
+  let timeout_ms = Int::max(
+    1,
+    Int::min(run_timeout_ms, NATIVE_SUBAGENT_MAX_RUN_MS),
+  )
+  let outcome = @async.with_timeout_opt(timeout_ms, async fn() {
     self.drive_subagent(child, child_id, binding)
   })
   let (session, terminal_status, failure_reason) = match outcome {
@@ -603,22 +629,28 @@ async fn NativeRuntime::run_subagent_tool(
         .invoke("session_get", { "session_id": child_id })
         .map(value => value)
         .unwrap_or(Json::null())
-      (value, "timed_out", Some("child run exceeded 90000 ms"))
+      (
+        value,
+        "timed_out",
+        Some("child run exceeded " + timeout_ms.to_string() + " ms"),
+      )
     }
   }
   if control is Some(value) && value.cancelled.val {
     return tool_error("subagent was cancelled with its parent turn")
   }
+  let (terminal_reason, terminal_error) = native_subagent_terminal_turn(session)
   let failure_reason = if terminal_status == "completed" {
     None
   } else if failure_reason is Some(_) {
     failure_reason
+  } else if terminal_reason == Some("max_steps") {
+    Some("child reached the 3-step limit before completing")
+  } else if terminal_status == "failed" && terminal_error is Some(error) {
+    Some(error)
   } else if native_subagent_child_tool_count(session) >
     NATIVE_SUBAGENT_MAX_CHILD_TOOL_CALLS {
     Some("child exceeded the 8-tool-call limit")
-  } else if int_field(session, "step").unwrap_or(0) >=
-    NATIVE_SUBAGENT_MAX_CHILD_STEPS {
-    Some("child reached the 3-step limit before completing")
   } else {
     Some("child ended with status " + terminal_status)
   }

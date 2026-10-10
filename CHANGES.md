@@ -26,6 +26,7 @@
 
 ### Fixed
 
+- Preserve the child provider terminal error in a failed subagent result instead of misreporting a final-step provider failure as the step limit.
 - Capture browser session-row text and geometry from one DOM snapshot in the smoke test, avoiding a detach/rerender race while retaining the readable-row thresholds.
 
 ### Deprecated

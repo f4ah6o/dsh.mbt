@@ -1187,3 +1187,347 @@ async test "native subagent inherits the configured read hook policy" {
     )
   }
 }
+
+///|
+test "native subagent serialization overflow falls back to bounded valid JSON" {
+  let messages : Array[Json] = []
+  for _ in 0..<16 {
+    messages.push({ "role": "assistant", "content": "\\\"".repeat(1024) })
+  }
+  let session : Json = { "step": 3, "messages": Json::array(messages) }
+  let envelope = native_subagent_transcript_result(
+    "subagent-serialization-overflow",
+    "parent-session",
+    "parent-effect",
+    "parent-call",
+    "Overflow fixture",
+    session,
+    "failed",
+    Some("fixture terminal error"),
+  )
+  let serialized = envelope.stringify()
+  assert_true(
+    native_provider_utf16_units(serialized) <=
+    NATIVE_SUBAGENT_MAX_TRANSCRIPT_UNITS,
+  )
+  let parsed = @json.parse(serialized)
+  assert_eq(string_field(parsed, "schema"), Some("dsh-subagent-result-v1"))
+  assert_true(native_json_true(object_field(parsed, "transcript_truncated")))
+  assert_true(native_subagent_result_messages(parsed).is_empty())
+  assert_eq(
+    string_field(parsed, "failure_reason"),
+    Some("fixture terminal error"),
+  )
+}
+
+///|
+async test "native subagent provider failure on the final step preserves its terminal error" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-subagent-provider-failure")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    @fs.write_file(workspace + "/target.txt", "child data")
+    let address = @socket.Addr::parse("127.0.0.1:0")
+    let server = @http.Server::Server(address, reuse_addr=false)
+    group.add_defer(() => server.close())
+    let bodies = Ref([])
+    let auth_ok = Ref(true)
+    let serving = group.spawn(no_wait=true, async fn() {
+      native_fixture_provider_server(
+        server,
+        [
+          native_subagent_http_response(
+            native_fixture_openai_calls_stream([
+              ("child-failure-read-1", "read", { "file_path": "target.txt" }),
+            ]),
+          ),
+          native_subagent_http_response(
+            native_fixture_openai_calls_stream([
+              ("child-failure-read-2", "read", { "file_path": "target.txt" }),
+            ]),
+          ),
+          { code: 401, reason: "Unauthorized", body: "", retry_after: None, },
+        ],
+        bodies,
+        auth_ok,
+        None,
+      )
+    })
+    let runtime = match
+      NativeRuntime::open(
+        fixture + "/data",
+        workspace,
+        false,
+        false,
+        mode_override="openai",
+        model_override="fixture-model",
+        base_url_override="http://127.0.0.1:" + server.addr.port().to_string(),
+        max_retries=0,
+        enable_subagents=true,
+      ) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let effect = native_subagent_parent_tool_effect(
+      runtime, "native-subagent-provider-failure", "parent-provider-failure-call",
+      "Exercise child provider error fidelity.",
+    )
+    let (_, follow_up) = runtime.run_tool_effect(effect).unwrap()
+    assert_eq(follow_up.length(), 1)
+    serving.wait()
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 3)
+    let session = runtime
+      .invoke("session_get", {
+        "session_id": "native-subagent-provider-failure",
+      })
+      .unwrap().0
+    let envelope = native_subagent_result_for_call(
+      session, "parent-provider-failure-call",
+    )
+    assert_eq(string_field(envelope, "status"), Some("failed"))
+    assert_eq(int_field(envelope, "steps"), Some(3))
+    assert_eq(
+      string_field(envelope, "failure_reason"),
+      Some("provider endpoint returned HTTP 401"),
+    )
+    assert_true(
+      !string_field(envelope, "failure_reason")
+      .unwrap_or("")
+      .contains("3-step limit"),
+    )
+    let (completed, trailing) = runtime
+      .complete(follow_up[0].id(), {
+        "ok": true,
+        "content": "Parent received the provider failure.",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing.is_empty())
+    assert_eq(string_field(completed, "status"), Some("completed"))
+  }
+}
+
+///|
+async test "native subagent enforces the eight child tool-call budget before dispatch" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-subagent-tool-budget")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    @fs.write_file(workspace + "/target.txt", "must not be read")
+    let calls : Array[(String, String, Json)] = []
+    for index in 0..<9 {
+      calls.push(
+        (
+          "child-budget-read-" + index.to_string(),
+          "read",
+          { "file_path": "target.txt" },
+        ),
+      )
+    }
+    let address = @socket.Addr::parse("127.0.0.1:0")
+    let server = @http.Server::Server(address, reuse_addr=false)
+    group.add_defer(() => server.close())
+    let bodies = Ref([])
+    let auth_ok = Ref(true)
+    let serving = group.spawn(no_wait=true, async fn() {
+      native_fixture_provider_server(
+        server,
+        [
+          native_subagent_http_response(
+            native_fixture_openai_calls_stream(calls),
+          ),
+        ],
+        bodies,
+        auth_ok,
+        None,
+      )
+    })
+    let runtime = match
+      NativeRuntime::open(
+        fixture + "/data",
+        workspace,
+        false,
+        false,
+        mode_override="openai",
+        model_override="fixture-model",
+        base_url_override="http://127.0.0.1:" + server.addr.port().to_string(),
+        max_retries=0,
+        enable_subagents=true,
+      ) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let effect = native_subagent_parent_tool_effect(
+      runtime, "native-subagent-tool-budget", "parent-tool-budget-call", "Exercise the child tool-call budget.",
+    )
+    let (_, follow_up) = runtime.run_tool_effect(effect).unwrap()
+    assert_eq(follow_up.length(), 1)
+    serving.wait()
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 1)
+    let session = runtime
+      .invoke("session_get", { "session_id": "native-subagent-tool-budget" })
+      .unwrap().0
+    let envelope = native_subagent_result_for_call(
+      session, "parent-tool-budget-call",
+    )
+    assert_eq(string_field(envelope, "status"), Some("cancelled"))
+    assert_eq(int_field(envelope, "steps"), Some(1))
+    assert_eq(int_field(envelope, "tool_call_count"), Some(9))
+    assert_eq(
+      string_field(envelope, "failure_reason"),
+      Some("child exceeded the 8-tool-call limit"),
+    )
+    assert_true(
+      !native_subagent_result_messages(envelope).any(message => {
+        string_field(message, "role") == Some("tool") &&
+        string_field(message, "content")
+        .unwrap_or("")
+        .contains("must not be read")
+      }),
+    )
+    let (completed, trailing) = runtime
+      .complete(follow_up[0].id(), {
+        "ok": true,
+        "content": "Parent received the child budget result.",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing.is_empty())
+    assert_eq(string_field(completed, "status"), Some("completed"))
+  }
+}
+
+///|
+async test "native subagent timeout cancels a child waiting on its provider" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-subagent-timeout")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let address = @socket.Addr::parse("127.0.0.1:0")
+    let server = @http.Server::Server(address, reuse_addr=false)
+    group.add_defer(() => server.close())
+    let release = @async.Semaphore::Semaphore(1, initial_value=0)
+    let release_sent = Ref(false)
+    group.add_defer(() => {
+      if !release_sent.val {
+        release_sent.val = true
+        release.release()
+      }
+    })
+    let bodies = Ref([])
+    let auth_ok = Ref(true)
+    let serving = group.spawn(no_wait=true, async fn() {
+      native_fixture_provider_server(
+        server,
+        [
+          native_subagent_http_response(
+            native_fixture_openai_text_stream(
+              "The child response will remain behind the fixture gate.",
+            ),
+          ),
+        ],
+        bodies,
+        auth_ok,
+        Some(release),
+      )
+    })
+    let runtime = match
+      NativeRuntime::open(
+        fixture + "/data",
+        workspace,
+        false,
+        false,
+        mode_override="openai",
+        model_override="fixture-model",
+        base_url_override="http://127.0.0.1:" + server.addr.port().to_string(),
+        max_retries=0,
+        enable_subagents=true,
+      ) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let effect = native_subagent_parent_tool_effect(
+      runtime, "native-subagent-timeout", "parent-timeout-call", "Exercise the child deadline.",
+    )
+    let job = group.spawn(
+      async fn() { runtime.run_tool_effect(effect, subagent_timeout_ms=500) },
+      no_wait=true,
+      allow_failure=true,
+    )
+    let mut request_started = false
+    for _ in 0..<400 {
+      if bodies.val.length() == 1 {
+        request_started = true
+        break
+      }
+      @async.sleep(5)
+    }
+    assert_true(request_started)
+    let (_, follow_up) = match job.wait() {
+      Ok(value) => value
+      Err(_) => fail("bounded subagent timeout did not settle the parent tool")
+    }
+    assert_eq(follow_up.length(), 1)
+    let session = runtime
+      .invoke("session_get", { "session_id": "native-subagent-timeout" })
+      .unwrap().0
+    let envelope = native_subagent_result_for_call(
+      session, "parent-timeout-call",
+    )
+    assert_eq(string_field(envelope, "status"), Some("timed_out"))
+    assert_eq(
+      string_field(envelope, "failure_reason"),
+      Some("child run exceeded 500 ms"),
+    )
+    assert_eq(int_field(envelope, "steps"), Some(1))
+    release_sent.val = true
+    release.release()
+    serving.wait()
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 1)
+    let (completed, trailing) = runtime
+      .complete(follow_up[0].id(), {
+        "ok": true,
+        "content": "Parent received the timeout result.",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing.is_empty())
+    assert_eq(string_field(completed, "status"), Some("completed"))
+  }
+}
