@@ -269,6 +269,53 @@ test "UserPromptSubmit ignores matchers and follows the prompt decision codec" {
   assert_true(denied.action is NativeHookAction::Deny("event block"))
   assert_true(denied.additional_contexts.is_empty())
 
+  let event_reason_overrides_top_level = native_hook_prompt_result_decision({
+    exit_code: 0,
+    stdout: "{\"decision\":\"block\",\"reason\":\"old reason\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"permissionDecisionReason\":\"new reason\"}}",
+    stderr: "",
+    truncated: false,
+  }).unwrap()
+  assert_true(
+    event_reason_overrides_top_level.action
+    is NativeHookAction::Deny("new reason"),
+  )
+
+  let empty_event_reason_overrides_top_level = native_hook_prompt_result_decision({
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"reason\":\"old reason\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"permissionDecisionReason\":\"\"}}",
+      stderr: "",
+      truncated: false,
+    },
+  ).unwrap()
+  assert_true(
+    empty_event_reason_overrides_top_level.action
+    is NativeHookAction::Deny("blocked by hook"),
+  )
+
+  let empty_deny_reason_does_not_reuse_top_level = native_hook_prompt_result_decision({
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"reason\":\"old reason\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"\"}}",
+      stderr: "",
+      truncated: false,
+    },
+  ).unwrap()
+  assert_true(
+    empty_deny_reason_does_not_reuse_top_level.action
+    is NativeHookAction::Deny("denied by hook"),
+  )
+
+  let wrong_type_event_reason_retains_top_level = native_hook_prompt_result_decision({
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"reason\":\"old reason\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"permissionDecisionReason\":false}}",
+      stderr: "",
+      truncated: false,
+    },
+  ).unwrap()
+  assert_true(
+    wrong_type_event_reason_retains_top_level.action
+    is NativeHookAction::Deny("old reason"),
+  )
+
   let mismatch = native_hook_prompt_result_decision({
     exit_code: 0,
     stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"additionalContext\":\"ignored\"}}",
@@ -1597,14 +1644,10 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
 
     let bad_jsonrpc_fields = native_hook_test_fields(
       @json.parse(
-        native_fixture_mcp_line(
-          "prompt-hook-bad-jsonrpc",
-          "session_send",
-          {
-            "session_id": session_id.to_json(),
-            "prompt": "bad jsonrpc must not run hooks".to_json(),
-          },
-        ),
+        native_fixture_mcp_line("prompt-hook-bad-jsonrpc", "session_send", {
+          "session_id": session_id.to_json(),
+          "prompt": "bad jsonrpc must not run hooks".to_json(),
+        }),
       ),
     )
     bad_jsonrpc_fields["jsonrpc"] = Json::string("1.0")
@@ -1636,9 +1679,7 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
     let missing_metadata = runtime
       .mcp_handle(Json::object(missing_metadata_fields).stringify(), group)
       .unwrap()
-    assert_true(
-      object_field(@json.parse(missing_metadata), "error") is Some(_),
-    )
+    assert_true(object_field(@json.parse(missing_metadata), "error") is Some(_))
 
     let duplicate_id = native_fixture_mcp_line(
       "prompt-hook-duplicate-id",
@@ -1771,8 +1812,105 @@ async test "MCP session_cancel interrupts a running UserPromptSubmit command" {
       .unwrap()
     assert_eq(string_field(session, "status"), Some("cancelled"))
     assert_eq(int_field(session, "turn_id"), Some(0))
+    @fs.write_file(workspace + "/hook-release", @utf8.encode("release"))
     @async.sleep(100)
     assert_false(@fs.exists(workspace + "/hook-child-alive"))
+  }
+}
+
+///|
+async test "direct session_cancel interrupts a running UserPromptSubmit command" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-prompt-hook-direct-cancel")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => {
+        ignore(
+          @fs.write_file(workspace + "/hook-release", @utf8.encode("release")),
+        )
+      })
+    })
+    let hooks_path = fixture + "/hooks.json"
+    let command = "payload=$(cat); case \"$payload\" in *direct-cancel*) printf x >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\"; printf started > \"${CLAUDE_PROJECT_DIR}/hook-started\"; (trap '' TERM; while [ ! -f \"${CLAUDE_PROJECT_DIR}/hook-release\" ]; do /bin/sleep 0.01; done; printf escaped > \"${CLAUDE_PROJECT_DIR}/hook-child-alive\") & wait ;; *) printf y >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\" ;; esac; printf '{}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(native_hook_test_config("UserPromptSubmit", "*", command)),
+    )
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "prompt-hook-direct-cancel-session"
+    ignore(
+      runtime
+      .invoke("session_create", {
+        "id": session_id.to_json(),
+        "title": "Prompt hook direct cancellation",
+      })
+      .unwrap(),
+    )
+    let send_task = group.spawn(
+      async fn() {
+        runtime.invoke("session_send", {
+          "session_id": session_id.to_json(),
+          "prompt": "direct-cancel while prompt hook waits".to_json(),
+        })
+      },
+      no_wait=true,
+      allow_failure=true,
+    )
+    let mut hook_started = false
+    for _ in 0..<600 {
+      if @fs.exists(workspace + "/hook-started") {
+        hook_started = true
+        break
+      }
+      @async.sleep(5)
+    }
+    assert_true(hook_started)
+
+    let (_, cancel_effects) = match
+      @async.with_timeout_opt(500, async fn() {
+        runtime.invoke("session_cancel", { "session_id": session_id.to_json() })
+      }) {
+      Some(Ok(value)) => value
+      Some(Err(error)) => fail(error)
+      None =>
+        fail("direct session_cancel waited for the UserPromptSubmit command")
+    }
+    assert_true(cancel_effects.is_empty())
+    let send_result = match
+      @async.with_timeout_opt(3000, async fn() { send_task.wait() }) {
+      Some(value) => value
+      None => fail("cancelled direct session_send did not return")
+    }
+    assert_true(send_result is Err(_))
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+    let (session, _) = runtime
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(string_field(session, "status"), Some("cancelled"))
+    assert_eq(int_field(session, "turn_id"), Some(0))
+    @fs.write_file(workspace + "/hook-release", @utf8.encode("release"))
+    @async.sleep(100)
+    assert_false(@fs.exists(workspace + "/hook-child-alive"))
+
+    let (_, follow_up_effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id.to_json(),
+        "prompt": "fresh direct send after cancellation".to_json(),
+      })
+      .unwrap()
+    assert_eq(follow_up_effects.length(), 1)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "xy")
   }
 }
 

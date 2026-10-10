@@ -1579,7 +1579,10 @@ fn NativeRuntime::finish_remote_prompt_after_hook_locked(
   acp_activity_session_id : String,
   fingerprint : String,
   prepared_input : Json,
-) -> Result[(Json, Array[@engine.EngineEffect], Bool, NativeJobControl?), String] {
+) -> Result[
+  (Json, Array[@engine.EngineEffect], Bool, NativeJobControl?),
+  String,
+] {
   if self.stopped || self.closed {
     self.scheduler.finish(control)
     return Err("native runtime is stopped")
@@ -1902,8 +1905,7 @@ async fn[X] NativeRuntime::mcp_handle(
   } else {
     None
   }
-  let prompt_request = if tool_name == "session_send" &&
-    prompt_hooks_enabled {
+  let prompt_request = if tool_name == "session_send" && prompt_hooks_enabled {
     Some(native_mcp_prompt_request(line))
   } else {
     None
@@ -1926,9 +1928,11 @@ async fn[X] NativeRuntime::mcp_handle(
   match prompt_request {
     Some(None) => {
       self.gate.release()
-      return Ok(original_prompt_preflight.unwrap_or(
-        native_mcp_error_response(line, "invalid session_send arguments"),
-      ))
+      return Ok(
+        original_prompt_preflight.unwrap_or(
+          native_mcp_error_response(line, "invalid session_send arguments"),
+        ),
+      )
     }
     Some(Some(raw_input)) => {
       let clean_input = native_hook_prompt_input(raw_input, [])
@@ -1956,7 +1960,9 @@ async fn[X] NativeRuntime::mcp_handle(
                     line,
                     native_hook_prompt_input(prepared, []),
                   )
-                  let preflight = self.api.preview_mcp_handle(prompt_dispatch_line)
+                  let preflight = self.api.preview_mcp_handle(
+                    prompt_dispatch_line,
+                  )
                   match preflight {
                     Some(response) if native_mcp_response_succeeded(response) =>
                       ()

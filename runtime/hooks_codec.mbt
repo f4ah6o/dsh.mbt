@@ -318,22 +318,29 @@ fn native_hook_prompt_result_decision(
         _ => ""
       }
       let permission_reason = match specific.get("permissionDecisionReason") {
-        Some(Json::String(value)) => native_hook_limit_reason(value)
-        _ => ""
+        Some(Json::String(value)) => Some(native_hook_limit_reason(value))
+        _ => None
       }
-      match permission {
-        "deny" =>
+      match (permission_reason, action) {
+        (Some(value), NativeHookAction::Deny(_)) =>
           action = NativeHookAction::Deny(
-            if permission_reason.is_empty() {
-              if reason.is_empty() {
-                "denied by hook"
-              } else {
-                reason
-              }
+            if value.is_empty() {
+              "blocked by hook"
             } else {
-              permission_reason
+              value
             },
           )
+        _ => ()
+      }
+      match permission {
+        "deny" => {
+          let deny_reason = match permission_reason {
+            Some(value) if !value.is_empty() => value
+            Some(_) => "denied by hook"
+            None => if reason.is_empty() { "denied by hook" } else { reason }
+          }
+          action = NativeHookAction::Deny(deny_reason)
+        }
         // UserPromptSubmit maps only a deny to rejection. Claude Code's
         // ask/allow values do not create a new approval gate here.
         "allow" | "ask" => action = NativeHookAction::Continue
