@@ -129,6 +129,45 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 - 完了条件・回帰テスト: control 単独と競合する hook の結果、拒否前後の履歴、provider 不実行、停止中の cancel、durable reopen / no replay を固定 fixture で検証する。未対応を維持する場合は公開契約と理由を記録して `wontfix` とする。
 - 修正 PR / close 判定: 未着手。今回維持した原典の制約として登録する。
 
+### UserPromptSubmit 独立レビューで見つかった動作不具合
+
+以下はいずれも `PORT / bug, correctness`、優先度高。原典のバグではなく、公開前に修正する。固定した不具合 snapshot は [`b6f07c6d`](https://github.com/f4ah6o/dsh.mbt/tree/b6f07c6d580179ac508c3a4463b4426f3f3b98b4)。upstream の出典は各項目とも N/A。
+
+#### DEBT-009: prompt context の復元 decoder が誤った値を読む
+
+- 状態 / 根拠: `reproduced`。[engine/persistence.mbt:1213](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/engine/persistence.mbt#L1213) が、text block の Json::String を object + key 用の `required_string` に渡す。
+- 再現 / 影響: 独立レビューの `moon test engine --target native --frozen --target-dir /tmp/dsh-user-prompt-review-20261010 --filter '*UserPromptSubmit*'` は 0 / 1 FAIL、EngineError.Invalid。受理した prompt context を含む保存データの復元が失敗する。
+- 是正 / 完了条件: 元 block の `text` を bounded string として読む。grouped context の snapshot restore、native close / reopen、no-hook replay を検証する。
+- 修正 / 検証: 修正中。初回の native check で見つかった追加テストの 4 件の型エラーも公開前に是正する。最終 commit と結果を後続コミットで追記する。
+
+#### DEBT-010: pre-admission hook の予約が cancel fence に届かない
+
+- 状態 / 根拠: `observed`。[runtime/runtime.mbt:645](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/runtime.mbt#L645) の direct と同ファイルの MCP path は revision + 1 で予約するが hook 前に checkpoint しない。[scheduler.mbt:200](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/scheduler.mbt#L200) は厳密な `< cancel_revision` を使う。
+- 確認 / 影響: 独立レビューの静的経路追跡。直後の cancel が予約と同じ revision となり、実行中の hook を中断できない。remote receipt path は先に checkpoint しており、この原因は共有しない。初回報告時点では実行 probe は未実施。
+- 是正 / 完了条件: hook 前に予約リビジョンを checkpoint し、後続 command 用の既存 fence を弱めない。direct / MCP / remote の中断、turn / provider 未作成、子プロセス cleanup、次の送信を検証する。
+- 修正 / 検証: 修正中。最終 commit と結果を後続コミットで追記する。
+
+#### DEBT-011: owner task の cancel 後に hook 実行枠が残る
+
+- 状態 / 根拠: `observed`。[runtime/runtime.mbt](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/runtime.mbt) の direct / remote / MCP は `handle_cancellation` 後、保護されていない gate acquire を使う。pinned async は catch 後も cancellation を pending に保つ。
+- 確認 / 影響: 独立レビューの静的経路追跡。再度の cancel で scheduler.finish に届かず、同じ session の後続送信が busy になり続ける経路がある。初回報告時点では実行 probe は未実施。
+- 是正 / 完了条件: gate ownership、予約、reacquire / receipt / finish / release を cancellation-safe にする。owner cancel 後の process cleanup、未 admission、fresh command の受理、remote reservation の状態を検証する。
+- 修正 / 検証: 修正中。最終 commit と結果を後続コミットで追記する。
+
+#### DEBT-012: 内部 context が外部 API schema に拒否される
+
+- 状態 / 根拠: `observed`。[api/api.mbt:71](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/api/api.mbt#L71) の session_send schema は session_id / prompt のみ。runtime が注入する additional_contexts は unknown field として拒否される。
+- 確認 / 影響: 独立レビューの静的 schema / handler 経路照合。context を返す hook の送信を admit できない。初回報告時点では runtime fixture の実行は未実施。
+- 是正 / 完了条件: 外部 schema を維持し、信頼済み hook context だけを内部 dispatch へ渡す。direct / remote / MCP の grouped context と forged-context stripping を検証する。
+- 修正 / 検証: 修正中。最終 commit と結果を後続コミットで追記する。
+
+#### DEBT-013: 不正な送信でも hook が先に外部作用を起こす
+
+- 状態 / 根拠: `observed`。[runtime/runtime.mbt](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/runtime.mbt) の preflight は EngineCommand decode を使い、closed capability schema、完全な MCP envelope / metadata、serialized state capacity を検証しない。
+- 確認 / 影響: 独立レビューの静的経路追跡。unknown input field は hook 実行後に API が拒否する。MCP notification や不正 envelope でも intercept が通常 router の拒否 / 無応答判定より前に hook を始める。少ない event 数でも serialized capacity による拒否がある。初回報告時点では実行 probe は未実施。
+- 是正 / 完了条件: 本来の capability / transport / engine admission を、副作用なしで hook 前に preview する。不正 field / JSON-RPC / metadata / notification / capacity fixture の hook counter が増えず、turn / provider も作成されないことを検証する。
+- 修正 / 検証: 修正中。最終 commit と結果を後続コミットで追記する。
+
 ### 後続追記テンプレート
 
 #### DEBT-NNN: 短い見出し
@@ -168,6 +207,8 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 - 2026-10-10: `2c792853` の修正と独立 probe の成功を記録し、DEBT-007 を `fixed` に更新。
 
 - 2026-10-10: UserPromptSubmit 移植で維持した Json event、文字列エラー、境界ごとの手書き validation、空の transcript_path を固定 source で追記。原典の未反映 hook control を DEBT-008 に登録。
+
+- 2026-10-10: UserPromptSubmit 独立レビューの動作不具合を DEBT-009–013 に登録。復元の再現結果と静的経路照合を区別し、公開前の是正対象として追跡する。
 
 ## 注記
 
