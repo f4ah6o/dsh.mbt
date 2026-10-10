@@ -135,73 +135,81 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 
 #### DEBT-009: prompt context の復元 decoder が誤った値を読む
 
-- 状態 / 根拠: `observed`。[engine/persistence.mbt:1213](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/engine/persistence.mbt#L1213) が、text block の Json::String を object + key 用の `required_string` に渡す。
+- 状態 / 根拠: `fixed`（初回は static `observed`）。[engine/persistence.mbt:1213](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/engine/persistence.mbt#L1213) が、text block の Json::String を object + key 用の `required_string` に渡す。
 - 確認 / 影響: 復元 decoder の誤った引数は独立レビューの静的照合で確認。受理した prompt context を含む保存データを正しく復元できない経路がある。同レビューの `moon test engine --target native --frozen --target-dir /tmp/dsh-user-prompt-review-20261010 --filter '*UserPromptSubmit*'` は 0 / 1 FAIL、EngineError.Invalid だったが、当時の fixture は復元より前に表示用 content を誤って配列として読むため、この結果を decoder 単独の再現根拠にはできない（DEBT-015）。
 - 是正 / 完了条件: 元 block の `text` を bounded string として読む。grouped context の snapshot restore、native close / reopen、no-hook replay を検証する。
-- 修正 / 検証: 修正中。初回の native check で見つかった追加テストの 4 件の型エラーも公開前に是正する。最終 commit と結果を後続コミットで追記する。
+- 修正 / 検証: `f7e9856` で decoder を修正し、`3176fa4` / `76d1893` で snapshot / 表示 projection の fixture を是正。初回の native check で見つかった追加テストの 4 件の型エラーも是正済み。 [最終 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573) の固定 head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で native-without-node 329 / 329、portable 各 163 / 163、native runtime 156 / 156 PASS。local behavioral run は ENOSPC で完走していない。修正先は [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)。
 
 #### DEBT-010: pre-admission hook の予約が cancel fence に届かない
 
-- 状態 / 根拠: `observed`。[runtime/runtime.mbt:645](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/runtime.mbt#L645) の direct と同ファイルの MCP path は revision + 1 で予約するが hook 前に checkpoint しない。[scheduler.mbt:200](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/scheduler.mbt#L200) は厳密な `< cancel_revision` を使う。
+- 状態 / 根拠: `fixed`（初回は static `observed`）。[runtime/runtime.mbt:645](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/runtime.mbt#L645) の direct と同ファイルの MCP path は revision + 1 で予約するが hook 前に checkpoint しない。[scheduler.mbt:200](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/scheduler.mbt#L200) は厳密な `< cancel_revision` を使う。
 - 確認 / 影響: 独立レビューの静的経路追跡。直後の cancel が予約と同じ revision となり、実行中の hook を中断できない。remote receipt path は先に checkpoint しており、この原因は共有しない。初回報告時点では実行 probe は未実施。
 - 是正 / 完了条件: hook 前に予約リビジョンを checkpoint し、後続 command 用の既存 fence を弱めない。direct / MCP / remote の中断、turn / provider 未作成、子プロセス cleanup、次の送信を検証する。
-- 修正 / 検証: 修正中。最終 commit と結果を後続コミットで追記する。
+- 修正 / 検証: `f7e9856` で direct / MCP の予約 checkpoint を修正。explicit cancellation の理由分類と remote regression は [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) を参照。 [最終 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573) の固定 head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で native-without-node 329 / 329、portable 各 163 / 163、native runtime 156 / 156 PASS。local behavioral run は ENOSPC で完走していない。修正先は [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)。
 
 #### DEBT-011: owner task の cancel 後に hook 実行枠が残る
 
-- 状態 / 根拠: `observed`。[runtime/runtime.mbt](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/runtime.mbt) の direct / remote / MCP は `handle_cancellation` 後、保護されていない gate acquire を使う。pinned async は catch 後も cancellation を pending に保つ。
+- 状態 / 根拠: `fixed`（初回は static `observed`）。[runtime/runtime.mbt](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/runtime.mbt) の direct / remote / MCP は `handle_cancellation` 後、保護されていない gate acquire を使う。pinned async は catch 後も cancellation を pending に保つ。
 - 確認 / 影響: 独立レビューの静的経路追跡。再度の cancel で scheduler.finish に届かず、同じ session の後続送信が busy になり続ける経路がある。初回報告時点では実行 probe は未実施。
 - 是正 / 完了条件: gate ownership、予約、reacquire / receipt / finish / release を cancellation-safe にする。owner cancel 後の process cleanup、未 admission、fresh command の受理、remote reservation の状態を検証する。
-- 修正 / 検証: 修正中。最終 commit と結果を後続コミットで追記する。
+- 修正 / 検証: `f7e9856` で cancellation-safe な cleanup を修正。owner cancellation の receipt / no-replay / process cleanup / fresh send を確認。 [最終 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573) の固定 head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で native-without-node 329 / 329、portable 各 163 / 163、native runtime 156 / 156 PASS。local behavioral run は ENOSPC で完走していない。修正先は [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)。
 
 #### DEBT-012: 内部 context が外部 API schema に拒否される
 
-- 状態 / 根拠: `observed`。[api/api.mbt:71](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/api/api.mbt#L71) の session_send schema は session_id / prompt のみ。runtime が注入する additional_contexts は unknown field として拒否される。
+- 状態 / 根拠: `fixed`（初回は static `observed`）。[api/api.mbt:71](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/api/api.mbt#L71) の session_send schema は session_id / prompt のみ。runtime が注入する additional_contexts は unknown field として拒否される。
 - 確認 / 影響: 独立レビューの静的 schema / handler 経路照合。context を返す hook の送信を admit できない。初回報告時点では runtime fixture の実行は未実施。
 - 是正 / 完了条件: 外部 schema を維持し、信頼済み hook context だけを内部 dispatch へ渡す。direct / remote / MCP の grouped context と forged-context stripping を検証する。
-- 修正 / 検証: 修正中。最終 commit と結果を後続コミットで追記する。
+- 修正 / 検証: `f7e9856` で scoped trusted context dispatch を実装。外部の closed schema を維持し、direct / remote / MCP の grouped context と caller context stripping を確認。 [最終 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573) の固定 head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で native-without-node 329 / 329、portable 各 163 / 163、native runtime 156 / 156 PASS。local behavioral run は ENOSPC で完走していない。修正先は [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)。
 
 #### DEBT-013: 不正な送信でも hook が先に外部作用を起こす
 
-- 状態 / 根拠: `observed`。[runtime/runtime.mbt](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/runtime.mbt) の preflight は EngineCommand decode を使い、closed capability schema、完全な MCP envelope / metadata、serialized state capacity を検証しない。
+- 状態 / 根拠: `fixed`（初回は static `observed`）。[runtime/runtime.mbt](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/runtime.mbt) の preflight は EngineCommand decode を使い、closed capability schema、完全な MCP envelope / metadata、serialized state capacity を検証しない。
 - 確認 / 影響: 独立レビューの静的経路追跡。unknown input field は hook 実行後に API が拒否する。MCP notification や不正 envelope でも intercept が通常 router の拒否 / 無応答判定より前に hook を始める。少ない event 数でも serialized capacity による拒否がある。初回報告時点では実行 probe は未実施。
 - 是正 / 完了条件: 本来の capability / transport / engine admission を、副作用なしで hook 前に preview する。不正 field / JSON-RPC / metadata / notification / capacity fixture の hook counter が増えず、turn / provider も作成されないことを検証する。
-- 修正 / 検証: 修正中。最終 commit と結果を後続コミットで追記する。
+- 修正 / 検証: `f7e9856` 以降の Engine preview / original MCP envelope preflight / sanitized trusted dispatch で修正。不正入力・notification の hook 不実行は runtime fixture で確認。capacity の admission 拒否は preview の source 照合と既存 engine capacity tests が根拠で、capacity + hook counter の runtime fixture は未追加。 [最終 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573) の固定 head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で native-without-node 329 / 329、portable 各 163 / 163、native runtime 156 / 156 PASS。local behavioral run は ENOSPC で完走していない。修正先は [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)。
 
 #### DEBT-014: event-specific な拒否理由の優先順位が異なる
 
-- 起点・種類・優先度・状態: `PORT / bug, compatibility`、優先度低（独立レビューの minor）、`observed`。
+- 起点・種類・優先度・状態: `PORT / bug, compatibility`、優先度低（独立レビューの minor）、`fixed`（初回は `observed`）。
 - upstream baseline / path: [`5badb150` の hook-protocol/codec.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/codec.ts)。matching hookSpecificOutput の permissionDecisionReason は permissionDecision の有無・有効性と独立に top-level reason を上書きする。原典の不具合ではない。
 - port baseline / path: [`3176fa4` の runtime/hooks_codec.mbt](https://github.com/f4ah6o/dsh.mbt/blob/3176fa453e0b1ca4db66f23a695eafbbd1dc19a7/runtime/hooks_codec.mbt)、native_hook_prompt_result_decision。
 - 観測事実 / 影響: 独立レビューの静的照合。legacy block と matching permissionDecisionReason があり、permissionDecision がない / 無効な場合、port は top-level reason を残す。拒否判断は維持されるが native caller に返す理由が decoder の優先順位と異なる。upstream bridge 自体が同じ理由を user に表示するという主張ではない。
 - 是正 / 完了条件: event-specific reason を独立に適用し、permissionDecision なし / 無効 / allow / deny / ask と legacy decision の組合せを fixture で検証する。
-- 修正 / 検証: 修正中。最終 commit と実行結果を後続コミットで追記する。
+- 修正 / 検証: `2d067c2` で event-specific reason の優先順位を修正。permissionDecision なし / deny、空 / 不正型 reason、event mismatch の codec fixture を確認。無効な permissionDecision / allow / ask と legacy decision の組合せは source 照合であり、専用の実行 fixture は未追加。 [最終 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573) の固定 head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で native-without-node 329 / 329、portable 各 163 / 163、native runtime 156 / 156 PASS。local behavioral run は ENOSPC で完走していない。修正先は [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)。
 
-DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f1f3a949a0ceda62bef4f1b68f437f015) で production code / regression source を修正し、[`3176fa4`](https://github.com/f4ah6o/dsh.mbt/commit/3176fa453e0b1ca4db66f23a695eafbbd1dc19a7) で settled context の restore fixture を是正した。独立した 3 パス source review は重大な残存指摘なし。固定 head の実行検証は ENOSPC のため完了しておらず、hosted CI の確認後に各項目の close 判定を追記する。
+DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f1f3a949a0ceda62bef4f1b68f437f015) で production code / regression source を修正し、[`3176fa4`](https://github.com/f4ah6o/dsh.mbt/commit/3176fa453e0b1ca4db66f23a695eafbbd1dc19a7) で settled context の restore fixture を是正した。最終 [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) の独立 `gpt-6.1-sol / xhigh` 3 パス / 7 categories source review は approve、残存指摘なし。[最終 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573) は成功し、DEBT-009–017 の修正と回帰確認を記録した。
 
 #### DEBT-015: 表示用 hook transcript と内部 text block の fixture が混同される
 
-- 起点・種類・優先度・状態: `PORT / bug, testing`、優先度高（CI を停止）、`reproduced`。production の不具合ではない。upstream 出典は N/A。
+- 起点・種類・優先度・状態: `PORT / bug, testing`、優先度高（CI を停止）、`fixed`（初回は `reproduced`）。production の不具合ではない。upstream 出典は N/A。
 - port baseline / path: [`39c0f73` の engine/engine_wbtest.mbt](https://github.com/f4ah6o/dsh.mbt/blob/39c0f732a9e7ca5711e08eb414c4d2efd8f6d099/engine/engine_wbtest.mbt#L341) と [runtime/hooks_wbtest.mbt](https://github.com/f4ah6o/dsh.mbt/blob/39c0f732a9e7ca5711e08eb414c4d2efd8f6d099/runtime/hooks_wbtest.mbt#L1513)。
 - 再現 / 影響: [初回 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38042285182) は portable 各 target 162 / 163、native-without-node は `hook test expected array MCP hook content` の panic で失敗。session.messages / MCP structuredContent は hook context を newline-joined string + display_label に投影するが、fixture は配列として読む。raw durable user/message event と provider request は text block 配列を維持する。MCP 応答は provider の background dispatch より前に serialize されるため、provider timing race を示す失敗ではない。
 - 是正 / 完了条件: 表示用 string / source / 順序と、raw event / provider 側の一つに grouped した text block / 順序を両方検証し、表示と保存・送信の契約を混同しない。
-- 修正 / 検証: [`76d1893`](https://github.com/f4ah6o/dsh.mbt/commit/76d18938ce173f28f797e073411f77c039d8bec8) で両 fixture を修正。production は変更せず、native check / format PASS、独立 source review approve。local behavioral test は ENOSPC で未実行。[修正 head の CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38042930510) を待って close 判定を追記する。
+- 修正 / 検証: `76d1893` で表示用 string と grouped event / provider block の両方を検証する fixture に修正。production は変更しない。 [最終 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573) の固定 head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で native-without-node 329 / 329、portable 各 163 / 163、native runtime 156 / 156 PASS。local behavioral run は ENOSPC で完走していない。修正先は [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)。
 
 #### DEBT-016: キャンセル fixture が session_id も slow branch として判定する
 
-- 起点・種類・優先度・状態: `PORT / bug, testing`、優先度高（CI を停止）、`reproduced`。production の不具合ではない。upstream 出典は N/A。
+- 起点・種類・優先度・状態: `PORT / bug, testing`、優先度高（CI を停止）、`fixed`（初回は `reproduced`）。production の不具合ではない。upstream 出典は N/A。
 - port baseline / path: [`76d1893` の runtime/hooks_wbtest.mbt](https://github.com/f4ah6o/dsh.mbt/blob/76d18938ce173f28f797e073411f77c039d8bec8/runtime/hooks_wbtest.mbt#L1887)、direct session_cancel と remote owner cancellation の shell command。
 - 再現 / 影響: [修正後 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38042930510) の native-without-node は 325 / 328。2 件は follow-up の counter が期待 `xy` に対して `xx`。shell case は stdin JSON 全体を短い `direct-cancel` / `remote-owner` で判定するが、同じ文字列が session_id にも存在するため、新しい prompt でも x branch に入る。独立レビューの shell-only probe でも確認。scheduler 枠が残る不具合を示す結果ではない。
 - 是正 / 完了条件: 最初の prompt にだけ含まれる固有文字列で判定し、キャンセル後の fresh send の受理・一回の hook 実行・provider effect・`xy` の検証を保持する。
-- 修正 / 検証: 修正中。immutable commit と hosted CI の実行結果を後続追記する。
+- 修正 / 検証: [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で最初の prompt に固有な文字列へ fixture を修正。fresh send の受理、provider effect、counter `xy` と process cleanup を確認。 [最終 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573) の固定 head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で native-without-node 329 / 329、portable 各 163 / 163、native runtime 156 / 156 PASS。local behavioral run は ENOSPC で完走していない。修正先は [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)。
 
 #### DEBT-017: explicit cancellation が一般的な hook failure として返る
 
-- 起点・種類・優先度・状態: `PORT / bug, correctness`、優先度低（独立レビューの minor）、`reproduced`。upstream 出典は N/A。
+- 起点・種類・優先度・状態: `PORT / bug, correctness`、優先度低（独立レビューの minor）、`fixed`（初回は `reproduced`）。upstream 出典は N/A。
 - port baseline / path: [`76d1893` の runtime/runtime.mbt](https://github.com/f4ah6o/dsh.mbt/blob/76d18938ce173f28f797e073411f77c039d8bec8/runtime/runtime.mbt#L2073)、MCP hook settlement。同ファイルの remote receipt settlement helper も同じ順序。
 - 再現 / 影響: [同 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38042930510) の MCP session_cancel fixture は `cancelled before admission` の理由判定で失敗。独立レビューの静的な cancellation 経路追跡では `Some(Err("hook process was cancelled"))` が control.cancelled の確認より先に一般 hook error として処理される。CI log 自体は理由 assertion の失敗を記録するが、実際の error string は出力していない。hook は中断され、turn / provider は未 admission だが、caller に返す理由が explicit cancellation を表さない。remote の同じ分岐は独立レビューの静的照合で確認し、同 transport の実行再現とは区別する。
 - 是正 / 完了条件: owner / control cancellation を hook result より先に判定し、MCP と remote durable receipt の理由を揃える。未 admission、process cleanup、receipt replay、次の送信を回帰検証する。
-- 修正 / 検証: 修正中。immutable commit と hosted CI の実行結果を後続追記する。
+- 修正 / 検証: [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で MCP / remote settlement の cancellation を hook result より先に判定。remote explicit session_cancel の rejected receipt / replay / 未 admission / process cleanup / fresh send の regression も追加。 [最終 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573) の固定 head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で native-without-node 329 / 329、portable 各 163 / 163、native runtime 156 / 156 PASS。local behavioral run は ENOSPC で完走していない。修正先は [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)。
+
+### UserPromptSubmit increment の最終確認
+
+- 修正先: [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)、version 0.1.13、固定 source head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/tree/982f2b6f4b5fd364ebf0500a032bb210b753db9a)。実装は `gpt-6-luna / max`、独立レビューは `gpt-6.1-sol / xhigh`。
+- [CI run 38043639573](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573): native-without-node 329 / 329、portable Wasm / Wasm GC / JS / native 各 163 / 163、browser/app 17 / 17、native runtime 156 / 156、web 7 / 7 PASS。ACP stdio、checkout 外の CLI source install / embedded assets、strict-CSP real Chromium smoke、checkpoint / approval / tool / context / durable reload demo も PASS。
+- [配布物検証 run 38043639550](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639550): macOS arm64 / Linux x86_64 / Linux arm64 の build / package smoke と macOS app extraction validation が PASS。PR 上の publish job は skipped。
+- Local format / native typecheck / diff check / browser asset generation は PASS、project-owned warnings 0。local behavioral test は ENOSPC で完走できず、hosted results と区別する。
+- DEBT-007 と今回の DEBT-009–017 は修正済み。非不具合の DEBT-001–006 / 008 は維持する改善候補として残す。この docs-only PR と full upstream parity issue は open を維持し、後続 increment の記録を積む。
 
 ### 後続追記テンプレート
 
@@ -250,6 +258,8 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 - 2026-10-10: 初回 CI の fixture shape mismatch を DEBT-015 に登録し、DEBT-009 の 0 / 1 run が decoder 単独の再現ではないことを訂正。両 fixture の修正と fixed-head source review を固定参照。
 
 - 2026-10-10: 二回目の CI で判明した fixture の prompt 判定誤りを DEBT-016、explicit cancellation の理由分類を DEBT-017 として登録。実装とテストの不具合を区別し、公開前に修正する。
+
+- 2026-10-10: 最終 source head `982f2b6` の 3 パス独立レビューと全 hosted gates の成功を記録。DEBT-009–017 を fixed に更新し、初回の再現・静的観測・証拠訂正の履歴は保持。
 
 ## 注記
 
