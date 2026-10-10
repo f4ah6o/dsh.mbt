@@ -96,21 +96,36 @@ async fn native_subagent_provider_server_gated_index(
   auth_ok : Ref[Bool],
   gate_index : Int,
   release : @async.Semaphore,
+  ignored_connections? : Ref[Int]? = None,
+  ignored_connection_errors? : Ref[Array[String]]? = None,
+  response_errors? : Ref[Array[String]]? = None,
 ) -> Unit {
-  for index in 0..<responses.length() {
-    try {
-      let (connection, _) = server.accept()
-      defer connection.close()
-      let gate = if index == gate_index { Some(release) } else { None }
-      native_fixture_handle_provider_request(
-        connection,
-        bodies,
-        auth_ok,
-        responses[index],
-        gate,
-      )
-    } catch {
-      _ => ()
+  let mut index = 0
+  let mut ignored = 0
+  while index < responses.length() {
+    let (connection, _) = server.accept()
+    let gate = if index == gate_index { Some(release) } else { None }
+    let handled = native_fixture_handle_provider_request(
+      connection,
+      bodies,
+      auth_ok,
+      responses[index],
+      gate,
+      ignored_connections,
+      ignored_connection_errors,
+      response_errors,
+    )
+    if handled {
+      index += 1
+    } else {
+      ignored += 1
+      if ignored > NATIVE_FIXTURE_MAX_EMPTY_PROVIDER_CONNECTIONS {
+        raise NativeFixtureProviderFailure(
+          "provider fixture ignored more than " +
+          NATIVE_FIXTURE_MAX_EMPTY_PROVIDER_CONNECTIONS.to_string() +
+          " empty TCP connections",
+        )
+      }
     }
   }
 }
@@ -355,6 +370,8 @@ async test "native subagent reuses SafeRoot protections and reports its child st
     group.add_defer(() => server.close())
     let bodies = Ref([])
     let auth_ok = Ref(true)
+    let ignored_connections = Ref(0)
+    let ignored_connection_errors = Ref([])
     let serving = group.spawn(no_wait=true, async fn() {
       native_fixture_provider_server(
         server,
@@ -386,8 +403,23 @@ async test "native subagent reuses SafeRoot protections and reports its child st
         bodies,
         auth_ok,
         None,
+        ignored_connections=Some(ignored_connections),
+        ignored_connection_errors=Some(ignored_connection_errors),
       )
     })
+    let speculative = @socket.Tcp::connect(server.addr)
+    speculative.close()
+    let mut empty_connection_observed = false
+    for _ in 0..<200 {
+      if ignored_connections.val == 1 {
+        empty_connection_observed = true
+        break
+      }
+      @async.sleep(5)
+    }
+    assert_true(empty_connection_observed)
+    assert_eq(ignored_connection_errors.val.length(), 1)
+    assert_eq(ignored_connection_errors.val[0], "ReaderClosed")
     let runtime = match
       NativeRuntime::open(
         private_data,
@@ -716,6 +748,7 @@ async test "native parent cancellation reaches a blocked child provider and rest
     })
     let bodies = Ref([])
     let auth_ok = Ref(true)
+    let response_errors = Ref([])
     let serving = group.spawn(no_wait=true, async fn() {
       native_subagent_provider_server_gated_index(
         server,
@@ -739,6 +772,7 @@ async test "native parent cancellation reaches a blocked child provider and rest
         auth_ok,
         1,
         release,
+        response_errors=Some(response_errors),
       )
     })
     let base_url = "http://127.0.0.1:" + server.addr.port().to_string()
@@ -844,6 +878,7 @@ async test "native parent cancellation reaches a blocked child provider and rest
     serving.wait()
     assert_true(auth_ok.val)
     assert_eq(bodies.val.length(), 2)
+    assert_true(response_errors.val.all(error => !error.is_empty()))
     let cancelled = runtime
       .invoke("session_get", { "session_id": session_id })
       .unwrap().0
@@ -1447,6 +1482,7 @@ async test "native subagent timeout cancels a child waiting on its provider" {
     })
     let bodies = Ref([])
     let auth_ok = Ref(true)
+    let response_errors = Ref([])
     let serving = group.spawn(no_wait=true, async fn() {
       native_fixture_provider_server(
         server,
@@ -1460,6 +1496,7 @@ async test "native subagent timeout cancels a child waiting on its provider" {
         bodies,
         auth_ok,
         Some(release),
+        response_errors=Some(response_errors),
       )
     })
     let runtime = match
@@ -1519,6 +1556,7 @@ async test "native subagent timeout cancels a child waiting on its provider" {
     serving.wait()
     assert_true(auth_ok.val)
     assert_eq(bodies.val.length(), 1)
+    assert_true(response_errors.val.all(error => !error.is_empty()))
     let (completed, trailing) = runtime
       .complete(follow_up[0].id(), {
         "ok": true,
