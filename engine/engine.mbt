@@ -783,6 +783,7 @@ fn Engine::terminate(
       session.commit_completed_tool_result(call)
     }
   }
+  session.commit_post_tool_contexts()
   session.calls.clear()
   session.cursor = 0
   session.schedule_cursor = 0
