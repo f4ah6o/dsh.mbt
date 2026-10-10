@@ -12,6 +12,7 @@ priv struct DesktopConfig {
   hooks_config_path : String?
   lsp_config_path : String?
   enable_skills : Bool
+  enable_subagents : Bool
   skill_dirs : Array[String]
   smoke : Bool
   offline_e2e : Bool
@@ -198,7 +199,8 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
     "--skill-dir", "--mode", "--model", "--base-url", "--max-retries", "--frame-output",
   ]
   let flags = [
-    "--demo", "--allow-shell", "--enable-skills", "--smoke", "--offline-e2e", "--visual-smoke",
+    "--demo", "--allow-shell", "--enable-skills", "--enable-subagents", "--smoke",
+    "--offline-e2e", "--visual-smoke",
   ]
   let mut index = 0
   while index < args.length() {
@@ -243,6 +245,7 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
     hooks_config_path: desktop_argument_value(args, "--hooks-config"),
     lsp_config_path: desktop_argument_value(args, "--lsp-config"),
     enable_skills: desktop_argument_flag(args, "--enable-skills"),
+    enable_subagents: desktop_argument_flag(args, "--enable-subagents"),
     skill_dirs: desktop_argument_values(args, "--skill-dir"),
     smoke: desktop_argument_flag(args, "--smoke"),
     offline_e2e,
@@ -252,7 +255,7 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
 
 ///|
 fn desktop_usage() -> String {
-  "Usage: dsh-desktop [--workspace PATH] [--data-dir PATH] [--mcp-config PATH] [--hooks-config PATH] [--lsp-config PATH] [--enable-skills] [--skill-dir PATH] [--mode MODE] [--model NAME] [--base-url URL] [--max-retries 0..5] [--allow-shell] [--demo]\n" +
+  "Usage: dsh-desktop [--workspace PATH] [--data-dir PATH] [--mcp-config PATH] [--hooks-config PATH] [--lsp-config PATH] [--enable-skills] [--enable-subagents] [--skill-dir PATH] [--mode MODE] [--model NAME] [--base-url URL] [--max-retries 0..5] [--allow-shell] [--demo]\n" +
   "       dsh-desktop --smoke [--workspace PATH] [--data-dir PATH]\n" +
   "       dsh-desktop --offline-e2e --workspace PATH --data-dir PATH [--frame-output FILE]\n\n" +
   "A native macOS conversation window backed by dsh's local runtime. Send a prompt, review tool calls, and approve or deny them in the transcript. Use Command-V to paste and Up/Down or PageUp/PageDown to scroll history. Japanese input through system IME composition is not supported by the current GPUI text host; paste works."

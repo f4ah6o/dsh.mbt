@@ -16,6 +16,30 @@
 
 ### Migration
 
+## 0.1.9 - 2026-10-10
+
+### Added
+
+- Add opt-in native foreground subagents with a real bounded child model/tool loop, parent-child correlation, read-only workspace tools, parent cancellation propagation, and restore without replay. See the [native runtime guide](docs/native-runtime.md#foreground-subagents) and [remaining port work](issues/open/0001-upstream-parity.md).
+
+### Changed
+
+### Fixed
+
+- Capture browser session-row text and geometry from one DOM snapshot in the smoke test, avoiding a detach/rerender race while retaining the readable-row thresholds.
+
+### Deprecated
+
+### Removed
+
+### Security
+
+- Child agents receive only `read`, `glob`, and `grep` tools, with the parent's SafeRoot and protected-store checks. Explicitly configured command hooks remain trusted host code and may have side effects during child reads.
+
+### Migration
+
+- Stores containing native subagent calls require dsh 0.1.9 or later and `--enable-subagents` when reopening so the historical tool schema remains registered. Interrupted child work is not resumed or replayed.
+
 ## 0.1.8 - 2026-10-10
 
 ### Added

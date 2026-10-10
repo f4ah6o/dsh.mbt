@@ -22,7 +22,7 @@ pub fn HarnessApi::gui_binding(Self, String) -> @capability.GuiBinding[Json, Jso
 pub fn HarnessApi::invoke(Self, String, Json, origin? : @capability.InvocationOrigin) -> Result[Json, String]
 pub fn HarnessApi::manifest(Self) -> String
 pub fn HarnessApi::mcp_handle(Self, String) -> String?
-pub fn HarnessApi::new(external_mcp_tools? : Array[Json], skill_tool? : Json?, lsp_tool? : Json?) -> Result[Self, String]
+pub fn HarnessApi::new(external_mcp_tools? : Array[Json], skill_tool? : Json?, lsp_tool? : Json?, subagent_tool? : Json?) -> Result[Self, String]
 pub fn HarnessApi::project_effect_stream(Self, @engine.EffectId, String, String) -> Result[Json, String]
 pub fn HarnessApi::project_stream(Self, String, String, String) -> Result[Json, String]
 pub fn HarnessApi::record_effect_outcome(Self, @engine.EffectId, Json) -> Result[Json, String]

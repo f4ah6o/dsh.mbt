@@ -10,6 +10,8 @@ pub fn lsp_tool() -> Json
 
 pub fn skill_tool(Array[(String, String)]) -> Json
 
+pub fn subagent_tool() -> Json
+
 // Errors
 
 // Types and methods

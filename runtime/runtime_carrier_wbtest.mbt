@@ -27,6 +27,41 @@ fn native_fixture_openai_tool_stream(
 }
 
 ///|
+fn native_fixture_openai_calls_stream(
+  calls : Array[(String, String, Json)],
+) -> String {
+  let tool_calls : Array[Json] = []
+  for index, (call_id, name, arguments) in calls {
+    tool_calls.push({
+      "index": Json::number(index.to_double()),
+      "id": Json::string(call_id),
+      "type": Json::string("function"),
+      "function": Json::object({
+        "name": Json::string(name),
+        "arguments": Json::string(arguments.stringify()),
+      }),
+    })
+  }
+  let chunk = Json::object({
+    "choices": Json::array([
+      Json::object({
+        "index": Json::number(0.0),
+        "delta": Json::object({
+          "role": Json::string("assistant"),
+          "tool_calls": Json::array(tool_calls),
+        }),
+        "finish_reason": Json::null(),
+      }),
+    ]),
+  })
+  "data: " +
+  chunk.stringify() +
+  "\r\n\r\n" +
+  "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\r\n\r\n" +
+  "data: [DONE]\r\n\r\n"
+}
+
+///|
 fn native_fixture_openai_text_stream(content : String) -> String {
   let escaped = content.to_json().stringify()
   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\{escaped}},\"finish_reason\":null}]}\r\n\r\n" +

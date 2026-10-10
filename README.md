@@ -2,7 +2,7 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) の MoonBit 移植です。session、event log、agent / tool loop、承認、provider protocol、HTTP/MCP service、CLI、browser UI の product logic は MoonBit で動きます。native executable が唯一の product runtime です。Node.js は build/check/test tooling にだけ使い、browser JavaScript と service worker は MoonBit compiler の生成物です。
 
-**現在は最初の動作する移植版です。** browser / CLI と macOS native desktop app から会話し、workspace tool、session ごとの可視 task list、opt-in の外部 MCP stdio tool、workspace skill、限定的な opt-in command hook、設定した local language server による code navigation を実行して履歴を保存できます。Native executable は限定的な ACP stdio agent としても動作します。Session v4 は明示的な read-only import に限って対応し、Cordis / npm plugin 互換、subagent、live compaction などは未実装です。対応範囲と差分は[移植状況](docs/port-status.md)、native MCP server、ACP、workspace skill、hook、LSP、task list の設定・制約は[native runtime guide](docs/native-runtime.md)、今回の native / SIWC / iOS 実装は[実装状況](docs/implementation-status.md)を参照してください。
+**現在は最初の動作する移植版です。** browser / CLI と macOS native desktop app から会話し、workspace tool、session ごとの可視 task list、opt-in の外部 MCP stdio tool、workspace skill、限定的な opt-in command hook、設定した local language server による code navigation を実行して履歴を保存できます。Native executable は限定的な ACP stdio agent としても動作します。`--enable-subagents` では bounded な foreground read-only child agent も使えます。Session v4 は明示的な read-only import に限って対応し、Cordis / npm plugin 互換、background / resumable subagent、live compaction などは未実装です。対応範囲と差分は[移植状況](docs/port-status.md)、native MCP server、ACP、workspace skill、hook、LSP、subagent、task list の設定・制約は[native runtime guide](docs/native-runtime.md)、今回の native / SIWC / iOS 実装は[実装状況](docs/implementation-status.md)を参照してください。
 
 ## Build and run
 
@@ -80,14 +80,14 @@ moon run native --target native --release -- --help
 
 `run` は完了した会話を出力し、`--json` は session JSON を返します。`--data-dir` を省略すると workspace の `.dsh.mbt` を使います。同じ data directory を複数 runtime で同時に開けません。CLI の write / edit / bash は承認が必要です。対話端末では Allow を尋ね、非対話では turn を cancel して失敗します。`--approve-writes` と `--approve-tools write,edit` は明示した startup approval policy です。bash の自動承認には `--allow-shell --approve-tools bash` の両方が必要です。外部 MCP server は `run`、`web`、`mcp`、`desktop` に `--mcp-config PATH` を渡して opt-in します。外部 MCP tool call は既定で毎回承認を求めます。`dsh run` では `--approve-tools mcp__SERVER__TOOL` に exact tool name を明示した場合だけ、自動承認できます。Command hooks は同じ subcommand 群で `--hooks-config PATH` を渡して有効にします。対応するのは PreToolUse / PostToolUse の bounded subset です。hook command は明示設定時に信頼して実行する host shell code で、engine の承認を迂回しません。
 
-`import-session` は bounded な upstream Session v4 JSONL を検証し、read-only history として保存します。記録された tool、permission、preset は実行や有効化に使いません。`fork-session` は settled な未 import session から idle child を作り、provider / tool / approval / retry を再生しません。native CLI は gpui MCP protocol を `mcp` subcommand から newline-delimited stdio で公開します。Workspace skill は `--enable-skills` で opt-in し、既定の `.dsh/skills` / `.agents/skills` と最大 8 個の workspace-relative `--skill-dir PATH` を読みます。`--skill-dir` は `run`、`web`、`mcp`、`desktop` で指定でき、各 runtime を再度開く際にも `--enable-skills` を維持してください。skill tool call を含む store はこの tool が無効だと restore できません。
+`import-session` は bounded な upstream Session v4 JSONL を検証し、read-only history として保存します。記録された tool、permission、preset は実行や有効化に使いません。`fork-session` は settled な未 import session から idle child を作り、provider / tool / approval / retry を再生しません。native CLI は gpui MCP protocol を `mcp` subcommand から newline-delimited stdio で公開します。Workspace skill は `--enable-skills` で opt-in し、既定の `.dsh/skills` / `.agents/skills` と最大 8 個の workspace-relative `--skill-dir PATH` を読みます。`--skill-dir` は `run`、`web`、`mcp`、`desktop` で指定でき、各 runtime を再度開く際にも `--enable-skills` を維持してください。skill tool call を含む store はこの tool が無効だと restore できません。また、`run`、`web`、`mcp`、`acp`、`desktop` では `--enable-subagents` を指定して foreground subagent tool を opt-in できます。subagent call を含む store は再度開く際にも同じ flag が必要です。
 
 ### `dsh` としてインストール
 
 Mooncakes registry から `dsh` command package を install できます。次の例では `dsh` を Moon の既定の `bin` directory に配置します。
 
 ```sh
-moon install f4ah6o/dsh/cmd/dsh@0.1.8
+moon install f4ah6o/dsh/cmd/dsh@0.1.9
 export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 dsh --help
 ```

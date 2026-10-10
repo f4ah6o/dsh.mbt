@@ -13,6 +13,7 @@ priv struct NativeRuntime {
   external_mcp : NativeMcpPool
   lsp : NativeLspPool
   scheduler : NativeScheduler
+  subagent_semaphore : @async.Semaphore
   gate : @async.Mutex
   mut state : NativeState
   mut stopped : Bool
@@ -124,6 +125,7 @@ async fn NativeRuntime::open(
   skill_dirs? : Array[String] = [],
   hooks_config_path? : String? = None,
   lsp_config_path? : String? = None,
+  enable_subagents? : Bool = false,
 ) -> Result[NativeRuntime, String] {
   let provider_config = match
     native_provider_config(
@@ -276,6 +278,11 @@ async fn NativeRuntime::open(
         None
       },
       lsp_tool=lsp.descriptor,
+      subagent_tool=if enable_subagents {
+        Some(@plugins.subagent_tool())
+      } else {
+        None
+      },
     ) {
     Ok(api) => api
     Err(error) => {
@@ -355,6 +362,7 @@ async fn NativeRuntime::open(
     external_mcp,
     lsp,
     gate: @async.Mutex::Mutex(),
+    subagent_semaphore: @async.Semaphore::Semaphore(1, initial_value=1),
     state: {
       engine: api.snapshot(),
       receipts: recovered_receipts,
@@ -1938,6 +1946,8 @@ async fn NativeRuntime::run_tool_effect(
   }
   let tool_result = if self.external_mcp.has_tool(name) {
     self.external_mcp.execute(effect.request())
+  } else if name == "subagent" {
+    self.run_subagent_tool(effect, control~)
   } else if name == "lsp" && self.lsp.descriptor is Some(_) {
     self.lsp.execute(self.tools, effect.request())
   } else if name == "skill" && self.skills.enabled {
@@ -2013,8 +2023,82 @@ fn native_demo_tool_response() -> Json {
 }
 
 ///|
+fn native_demo_request_has_tool(request : Json, name : String) -> Bool {
+  match object_field(request, "tools") {
+    Some(Json::Array(tools)) =>
+      tools.any(tool => string_field(tool, "name") == Some(name))
+    _ => false
+  }
+}
+
+///|
+fn native_demo_request_has_tool_result(request : Json) -> Bool {
+  match object_field(request, "messages") {
+    Some(Json::Array(messages)) =>
+      messages.any(message => string_field(message, "role") == Some("tool"))
+    _ => false
+  }
+}
+
+///|
+fn native_demo_function_call_response(
+  call_id : String,
+  name : String,
+  arguments : Json,
+) -> Json {
+  {
+    "ok": true,
+    "content": "",
+    "reasoning": "",
+    "tool_calls": [
+      {
+        "id": call_id.to_json(),
+        "name": name.to_json(),
+        "arguments": arguments.stringify().to_json(),
+      },
+    ],
+    "finish_reason": "tool_calls",
+    "usage": { "input_tokens": 1, "output_tokens": 1, "total_tokens": 2 },
+  }
+}
+
+///|
+fn native_demo_subagent_provider_response(request : Json) -> Json {
+  if native_demo_request_has_tool(request, "subagent") {
+    if request.stringify().contains("dsh-subagent-result-v1") {
+      return native_demo_response(
+        "Offline demo finished after a read-only foreground subagent.",
+      )
+    }
+    return native_demo_function_call_response(
+      "demo-subagent-call",
+      "subagent",
+      {
+        "description": "Inspect workspace",
+        "prompt": "Read README.md if it exists and report what the first line says. If it is unavailable, report that clearly.",
+      },
+    )
+  }
+  if native_demo_request_has_tool(request, "read") {
+    if native_demo_request_has_tool_result(request) {
+      return native_demo_response(
+        "The delegated read completed. The child returns its concise result to the parent.",
+      )
+    }
+    return native_demo_function_call_response("demo-child-read-call", "read", {
+      "file_path": "README.md",
+      "offset": 1,
+      "limit": 1,
+    })
+  }
+  native_demo_response("Offline subagent returned without workspace tools.")
+}
+
+///|
 fn native_demo_provider_response(request : Json) -> Json {
-  if request.stringify().contains("durable native tool result") {
+  if native_demo_request_has_tool(request, "subagent") {
+    native_demo_subagent_provider_response(request)
+  } else if request.stringify().contains("durable native tool result") {
     native_demo_response(
       "Offline demo finished after the approved workspace write.",
     )

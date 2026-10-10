@@ -23,6 +23,7 @@ pub async fn NativeDesktop::open(
   lsp_config_path? : String? = None,
   enable_skills? : Bool = false,
   skill_dirs? : Array[String] = [],
+  enable_subagents? : Bool = false,
 ) -> Result[NativeDesktop, String] {
   // A packaged Dsh.app carries the CLI as a private helper because native
   // tool effects re-enter the executable with --internal-worker.
@@ -60,6 +61,7 @@ pub async fn NativeDesktop::open(
       lsp_config_path~,
       enable_skills~,
       skill_dirs~,
+      enable_subagents~,
     ) {
     Err(error) => Err(error)
     Ok(runtime) => Ok({ runtime, })

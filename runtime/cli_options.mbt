@@ -256,8 +256,9 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
     "--approve-call", "--deny-call", "--approval-revision", "--select-model",
   ]
   let boolean_options = [
-    "--serve", "--mcp", "--acp", "--demo", "--enable-skills", "--allow-shell", "--approve-writes",
-    "--json", "--help", "-h", "--auth-status", "--sign-in", "--sign-out", "--models",
+    "--serve", "--mcp", "--acp", "--demo", "--enable-skills", "--enable-subagents",
+    "--allow-shell", "--approve-writes", "--json", "--help", "-h", "--auth-status",
+    "--sign-in", "--sign-out", "--models",
   ]
   let positionals : Array[String] = []
   let mut after_separator = false

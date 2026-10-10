@@ -171,24 +171,23 @@ async function assertHeaderFitsViewport(page) {
 }
 
 async function assertReadableSessionOption(page, selector) {
-  await page.waitForFunction((target) => {
+  const labelHandle = await page.waitForFunction((target) => {
     const button = document.querySelector(target);
     const title = button?.querySelector(".session-option-title");
     const status = button?.querySelector(".session-option-state");
-    return (button?.getBoundingClientRect().height || 0) >= 50 &&
-      (title?.getBoundingClientRect().height || 0) >= 12 &&
-      (status?.getBoundingClientRect().height || 0) >= 9;
-  }, selector, { timeout: 10_000 });
-  const label = await page.locator(selector).evaluate((button) => {
-    const title = button.querySelector(".session-option-title");
-    const status = button.querySelector(".session-option-state");
-    return {
+    const label = {
       title: title?.textContent || "",
       titleHeight: title?.getBoundingClientRect().height || 0,
       statusHeight: status?.getBoundingClientRect().height || 0,
-      buttonHeight: button.getBoundingClientRect().height,
+      buttonHeight: button?.getBoundingClientRect().height || 0,
     };
-  });
+    return label.title.trim().length > 0 && label.titleHeight >= 12 &&
+      label.statusHeight >= 9 && label.buttonHeight >= 50
+      ? label
+      : false;
+  }, selector, { timeout: 10_000 });
+  const label = await labelHandle.jsonValue();
+  await labelHandle.dispose();
   assert.match(label.title, /.+/, "the session title is present");
   assert.ok(label.titleHeight >= 12, `the session title has readable line height: ${JSON.stringify(label)}`);
   assert.ok(label.statusHeight >= 9, `the session status has readable line height: ${JSON.stringify(label)}`);
