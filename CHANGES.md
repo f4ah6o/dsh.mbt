@@ -28,6 +28,7 @@
 
 - Preserve the child provider terminal error in a failed subagent result instead of misreporting a final-step provider failure as the step limit.
 - Capture browser session-row text and geometry from one DOM snapshot in the smoke test, avoiding a detach/rerender race while retaining the readable-row thresholds.
+- Wait for service-worker shell assets by polling awaited CacheStorage snapshots; Playwright does not await promises returned by a waitForFunction predicate.
 
 ### Deprecated
 

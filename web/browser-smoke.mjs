@@ -204,6 +204,7 @@ async function waitForActiveShellWorker(page) {
   ];
   const inspectShellCache = async () => page.evaluate(async () => {
     const registration = await navigator.serviceWorker.getRegistration("/");
+    const registrations = await navigator.serviceWorker.getRegistrations();
     const names = (await caches.keys()).filter((name) =>
       name.startsWith("dsh-shell-generation-"),
     );
@@ -215,44 +216,44 @@ async function waitForActiveShellWorker(page) {
       }
     }
     return {
+      url: location.href,
+      readyState: document.readyState,
+      serviceWorkerAvailable: Boolean(navigator.serviceWorker),
       active: Boolean(registration?.active),
       controlled: Boolean(navigator.serviceWorker.controller),
+      registrations: registrations.map((value) => ({
+        scope: value.scope,
+        active: value.active?.state || null,
+        installing: value.installing?.state || null,
+        waiting: value.waiting?.state || null,
+      })),
       generations: names,
       assets: [...requests].sort(),
     };
   });
-  try {
-    await page.waitForFunction(
-      async (required) => {
-        const registration = await navigator.serviceWorker.getRegistration("/");
-        if (!registration?.active || !navigator.serviceWorker.controller) return false;
-        const names = (await caches.keys()).filter((name) =>
-          name.startsWith("dsh-shell-generation-"),
-        );
-        const cached = new Set();
-        for (const name of names) {
-          const cache = await caches.open(name);
-          for (const request of await cache.keys()) {
-            cached.add(new URL(request.url).pathname);
-          }
-        }
-        return required.every((asset) => cached.has(asset));
-      },
-      requiredAssets,
-      { timeout: 30_000, polling: 100 },
-    );
-  } catch (error) {
-    const state = await inspectShellCache().catch(() => ({ pageUnavailable: true }));
-    throw new Error(
-      `Timed out waiting for the active service worker shell assets: ${JSON.stringify(state)}`,
-      { cause: error },
-    );
+  const deadline = Date.now() + 30_000;
+  let cacheSnapshot;
+  while (true) {
+    try {
+      cacheSnapshot = await inspectShellCache();
+    } catch {
+      cacheSnapshot = { active: false, controlled: false, generations: [], assets: [], pageUnavailable: true };
+    }
+    if (cacheSnapshot.active && cacheSnapshot.controlled &&
+      requiredAssets.every((asset) => cacheSnapshot.assets.includes(asset))) {
+      break;
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `Timed out waiting for the active service worker shell assets: ${JSON.stringify({ ...cacheSnapshot, browserErrors: failures })}`,
+      );
+    }
+    await page.waitForTimeout(100);
   }
-  const cacheState = await inspectShellCache();
   for (const asset of requiredAssets) {
-    assert.ok(cacheState.assets.includes(asset), `the active shell generation contains ${asset}`);
+    assert.ok(cacheSnapshot.assets.includes(asset), `the active shell generation contains ${asset}`);
   }
-  assert.ok(cacheState.active && cacheState.controlled, "the page is controlled by an active shell worker");
+  assert.ok(cacheSnapshot.active && cacheSnapshot.controlled, "the page is controlled by an active shell worker");
 }
 
 async function testNativeDemo(browserInstance) {
