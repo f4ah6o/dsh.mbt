@@ -4,6 +4,8 @@
 
 ### Added
 
+- Add opt-in native `UserPromptSubmit` command hooks for `run`, `web`, `mcp`, `acp`, and `desktop`. Valid prompts run through the hook once before turn admission; a hook can reject the prompt or add bounded source-tagged context before the first provider request. Receipt replay does not rerun the hook. See the [native runtime guide](docs/native-runtime.md#native-command-hooks) and [remaining port work](issues/open/0001-upstream-parity.md).
+
 ### Changed
 
 ### Fixed
@@ -15,6 +17,8 @@
 ### Security
 
 ### Migration
+
+- Stores containing the new `UserPromptSubmit` context events require dsh 0.1.13 or later. Do not rewrite them with dsh 0.1.12 or older; existing PostToolUse context stores remain readable with dsh 0.1.12 and later.
 
 ## 0.1.12 - 2026-10-10
 

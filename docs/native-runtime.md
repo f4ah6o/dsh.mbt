@@ -531,7 +531,7 @@ cancellation; they do not claim a live provider-account smoke test.
 
 ## Native command hooks
 
-`run`, `web`, `mcp`, and `desktop` accept `--hooks-config PATH`. This is an
+`run`, `web`, `mcp`, `acp`, and `desktop` accept `--hooks-config PATH`. This is an
 explicit opt-in to running trusted shell commands as the host user. The same
 option works when launching the desktop app with `dsh desktop`; use an absolute
 config path there because LaunchServices may choose a different process launch
@@ -541,7 +541,8 @@ commands themselves run with the selected workspace as their working
 directory.
 
 The config may contain a top-level `hooks` object, or put these events at the
-root. Only command-based `PreToolUse` and `PostToolUse` groups are supported:
+root. Only command-based `PreToolUse`, `PostToolUse`, and `UserPromptSubmit`
+groups are supported:
 
 ```json
 {
@@ -563,6 +564,11 @@ root. Only command-based `PreToolUse` and `PostToolUse` groups are supported:
         "matcher": "mcp__docs-server__lookup",
         "hooks": [{ "command": "/absolute/path/to/audit-hook" }]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [{ "command": "/absolute/path/to/check-prompt" }]
+      }
     ]
   }
 }
@@ -579,13 +585,54 @@ receives one JSON object on stdin, limited to 64 KiB. Stdout and stderr are
 captured independently up to 16 KiB each; overflow is treated as an unsupported
 result.
 
-The payload includes `session_id`, an empty `transcript_path`, the canonical
-workspace `cwd`, `hook_event_name`, `tool_name`, `tool_input`, and
-`tool_use_id`; PostToolUse also includes the string `tool_response`. Pass data
-through stdin rather than interpolating tool input into command text. The child
-gets only `PATH`, `LANG`, `LC_ALL`, and `CLAUDE_PROJECT_DIR`; it does not inherit
-provider credentials or the rest of the host environment. Quote workspace
-paths in shell commands as `"${CLAUDE_PROJECT_DIR}"`.
+`UserPromptSubmit` has no matcher subject in the pinned Claude Code bridge, so
+any `matcher` field on one of its groups is ignored. It runs once for each
+valid nonempty user `session_send`, before the engine admits the turn and
+creates its first provider request; it does not run for provider follow-up
+steps. The hook receives exactly `session_id`, an empty `transcript_path`, the
+canonical workspace `cwd`, `hook_event_name`, and the submitted `prompt` on
+stdin. Invalid, busy, imported, oversized, or capacity-exhausted sends are
+rejected before a hook command starts. Do not pass caller-supplied
+`additional_contexts`; the runtime discards them and accepts context only from
+the configured hook.
+
+Exit status 2, top-level `decision: "block"`, or matching
+`hookSpecificOutput.permissionDecision: "deny"` rejects the prompt before any
+turn or provider effect is created. The stderr text or structured reason is
+returned as the rejection reason. Exit codes other than 0 or 2, plain stdout,
+malformed JSON, non-object JSON, and event-specific output whose
+`hookEventName` is missing or names another event are ignored, matching the
+pinned hook protocol. `permissionDecision: "allow"` and `"ask"` do not add an
+approval step for a user prompt. Remote command callers receive a durable
+rejected receipt for a denial; MCP callers receive a JSON-RPC error. A
+`session_cancel` can interrupt a running hook, and the native process runner
+cleans up its process group before the request settles.
+
+Each nonempty `additionalContext` string from a successful matching hook is
+limited to 4,096 UTF-16 code units; up to 32 values and 16,384 code units in
+total are accepted for one prompt. Empty strings are skipped and whitespace
+is retained. The contexts follow the original user message in one
+source-tagged `user/message` with one text block per hook, preserving upstream
+hook order before the first provider request. A denied prompt contributes no
+context. Once the remote receipt settles, replay returns that receipt without
+running the hook or provider again. An interrupted, unsettled remote hook
+reservation is restored as uncertain and is not replayed. Stores with these
+prompt-context events require dsh 0.1.13 or later; do not rewrite them with
+dsh 0.1.12 or older.
+
+The pinned Claude Code bridge also leaves several prompt controls unapplied:
+`continue: false` is marked TODO and does not stop the agent loop,
+`stopReason` has no run-level effect, and `updatedInput` / `systemMessage` are
+logged but ignored. This native path likewise does not apply those fields.
+
+PreToolUse and PostToolUse payloads include `session_id`, an empty
+`transcript_path`, the canonical workspace `cwd`, `hook_event_name`,
+`tool_name`, `tool_input`, and `tool_use_id`; PostToolUse also includes the
+string `tool_response`. Pass data through stdin rather than interpolating tool
+input into command text. The child gets only `PATH`, `LANG`, `LC_ALL`, and
+`CLAUDE_PROJECT_DIR`; it does not inherit provider credentials or the rest of
+the host environment. Quote workspace paths in shell commands as
+`"${CLAUDE_PROJECT_DIR}"`.
 
 PreToolUse runs after the engine has recorded the call and received any
 required explicit approval. A hook's `allow` result never approves a tool or
@@ -623,17 +670,19 @@ provider history retain the structured blocks. ACP currently omits these
 synthetic messages from its user/assistant text updates because its bridge has
 no source-aware context update.
 
-The parser rejects unknown config fields, unsupported events, malformed JSON,
-unknown result fields, and truncated output. A wrong-type
-`additionalContext` is rejected as a strict native error, whereas upstream
-ignores it; native session capacity and provider-shape checks also remain
-stricter. Only live PreToolUse and PostToolUse command hooks run. Restore,
-Session v4 import, receipt replay, and retries do not rerun hooks. Arbitrary
-async/prompt hooks, `${CLAUDE_PLUGIN_ROOT}` substitution, and dedicated durable
-`hook/*` diagnostic events are not implemented. A matching PostToolUse hook
-adds a durable `effect-known` result event before running the hook. Native
-session capacity limits still apply to the additional context metadata and
-messages.
+The config parser rejects unknown fields, unsupported events, and malformed
+groups. PreToolUse and PostToolUse also use strict structured-result validation;
+for those events a wrong-type `additionalContext` is rejected, whereas
+upstream ignores it. UserPromptSubmit follows the upstream lenient output
+decoder described above. Truncated output and native context-limit overflow
+reject the request instead of being silently truncated. Native session
+capacity and provider-shape checks remain stricter. Restore, Session v4 import,
+receipt replay, and retries do not rerun hooks. Arbitrary async hooks and
+prompt-hook types other than command-based UserPromptSubmit,
+`${CLAUDE_PLUGIN_ROOT}` substitution, and dedicated durable `hook/*` diagnostic
+events are not implemented. A matching PostToolUse hook adds a durable
+`effect-known` result event before running the hook. Native session capacity
+limits still apply to the additional context metadata and messages.
 
 Stores that contain `effect-known` events from this opt-in path require dsh
 0.1.5 or later: dsh 0.1.4 and earlier readers reject this event source. dsh
@@ -642,10 +691,11 @@ checkpointed even when the hook later denies it, so restore can settle the
 known tool outcome without repeating host work.
 
 Stores containing PostToolUse `additional_contexts` completion metadata or
-structured `hooks-claude-code` user messages require dsh 0.1.12 or later. Do
-not rewrite such a store with dsh 0.1.11 or older. dsh 0.1.12 continues to read
-context-free dsh 0.1.11 native stores; the engine replay tests cover the legacy
-completion shape without `additional_contexts`.
+structured `hooks-claude-code` user messages from PostToolUse require dsh
+0.1.12 or later. UserPromptSubmit context messages require dsh 0.1.13 or later.
+Do not rewrite either kind of store with an older reader. dsh 0.1.12 continues
+to read context-free dsh 0.1.11 native stores; the engine replay tests cover
+the legacy completion shape without `additional_contexts`.
 
 `--approve-call` and `--deny-call` act on a session that is already waiting for approval, for example one started from the browser or MCP carrier. Pass its current `approval_revision` and `pending_approval.call_id`; stale or mismatched decisions are rejected:
 
