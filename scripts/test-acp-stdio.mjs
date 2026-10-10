@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, realpath, rm, symlink, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-const binary = process.argv[2];
-assert.ok(binary, 'pass the built native dsh executable as argv[2]');
+const binaryArgument = process.argv[2];
+assert.ok(binaryArgument, 'pass the built native dsh executable as argv[2]');
+const binary = path.resolve(binaryArgument);
 
 const root = await mkdtemp(path.join(tmpdir(), 'dsh-acp-stdio-'));
 
@@ -17,10 +18,15 @@ function launch(name, options = {}) {
     const args = ['acp'];
     if (options.provider !== true) args.push('--demo');
     if (options.provider === true) {
-      args.push('--mode', 'openai', '--model', 'fixture-model', '--max-retries', '0');
+      args.push(
+        '--mode', options.mode ?? 'openai',
+        '--model', options.model ?? 'fixture-model',
+        '--max-retries', String(options.maxRetries ?? 0),
+      );
       if (options.baseURL) args.push('--base-url', options.baseURL);
     }
     args.push('--data-dir', data, '--workspace', workspace);
+    if (options.extraArgs) args.push(...options.extraArgs);
     const env = { ...process.env, ...(options.env ?? {}), DSH_NATIVE_WORKER_BIN: binary };
     if (options.provider === true) {
       for (const key of ['DSH_MODE', 'DSH_MODEL', 'DSH_BASE_URL']) delete env[key];
@@ -39,6 +45,8 @@ function launch(name, options = {}) {
     let buffer = '';
     let stderr = '';
     let exit = null;
+    let resolveExit;
+    const exited = new Promise(resolve => { resolveExit = resolve; });
 
     function settleWaiters() {
       for (const waiter of [...waiters]) {
@@ -74,6 +82,7 @@ function launch(name, options = {}) {
     child.stderr.on('data', chunk => { stderr += chunk; });
     child.on('close', (code, signal) => {
       exit = { code, signal };
+      resolveExit(exit);
       for (const waiter of [...waiters]) {
         clearTimeout(waiter.timer);
         waiters.delete(waiter);
@@ -141,6 +150,10 @@ function launch(name, options = {}) {
       assert.equal(exit?.code, 0, stderr);
     }
 
+    function waitForExit() {
+      return exit === null ? exited : Promise.resolve(exit);
+    }
+
     return {
       child,
       messages,
@@ -149,6 +162,7 @@ function launch(name, options = {}) {
       sendNotification,
       sendResponse,
       closeAndCheck,
+      waitForExit,
       workspace,
       stderr: () => stderr,
     };
@@ -156,6 +170,16 @@ function launch(name, options = {}) {
 }
 
 try {
+  const invalidArgsAgent = await launch('invalid-args', {
+    extraArgs: ['--unknown-acp-option'],
+  });
+  invalidArgsAgent.child.stdin.end();
+  const invalidArgsExit = await invalidArgsAgent.waitForExit();
+  assert.equal(invalidArgsExit.code, 1);
+  assert.equal(invalidArgsExit.signal, null);
+  assert.deepEqual(invalidArgsAgent.messages, []);
+  assert.match(invalidArgsAgent.stderr(), /native ACP arguments are invalid/);
+
   const agent = await launch('main');
   const beforeInitialize = agent.sendRequest('session/new', {
     cwd: agent.workspace,
@@ -352,7 +376,7 @@ try {
   const listedResult = (await listed.response).result;
   assert.equal(listedResult.sessions.length, 1);
   assert.equal(listedResult.sessions[0].sessionId, resumeSessionId);
-  assert.equal(listedResult.sessions[0].cwd, resumedAgent.workspace);
+  assert.equal(listedResult.sessions[0].cwd, await realpath(resumedAgent.workspace));
   assert.equal(typeof listedResult.sessions[0].updatedAt, 'string');
   assert.equal(listedResult.sessions[0].updatedAt.length, 20);
   const beforeResumeUpdates = resumedAgent.messages.filter(entry => entry.value.method === 'session/update'
@@ -362,7 +386,7 @@ try {
     cwd: resumedAgent.workspace,
     mcpServers: [],
   });
-  assert.deepEqual((await resume.response).result, {});
+  assert.equal((await resume.response).result.configOptions[0].id, 'model');
   const duplicateResume = resumedAgent.sendRequest('session/resume', {
     sessionId: resumeSessionId,
     cwd: resumedAgent.workspace,
@@ -392,7 +416,7 @@ try {
     cwd: resumedAgent.workspace,
     mcpServers: [],
   });
-  assert.deepEqual((await resumeAfterClose.response).result, {});
+  assert.equal((await resumeAfterClose.response).result.configOptions[0].id, 'model');
   const updateCountAfterCloseResume = resumedAgent.messages.filter(entry => entry.value.method === 'session/update'
     && entry.value.params?.sessionId === resumeSessionId).length;
   await new Promise(resolve => setTimeout(resolve, 25));
@@ -631,6 +655,204 @@ try {
     await new Promise(resolve => provider.close(resolve));
   }
 
+  let firstAlternateRequestResolve;
+  const firstAlternateRequest = new Promise(resolve => {
+    firstAlternateRequestResolve = resolve;
+  });
+  let releaseFirstAlternateResolve;
+  const holdFirstAlternate = new Promise(resolve => {
+    releaseFirstAlternateResolve = resolve;
+  });
+  const configuredRequests = [];
+  let heldAlternateAttempt = false;
+  const configuredProvider = createServer(async (request, response) => {
+    const chunks = [];
+    for await (const chunk of request) chunks.push(chunk);
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    configuredRequests.push(body);
+    assert.equal(request.headers.authorization, 'Bearer acp-fixture-key');
+    const latestMessage = JSON.stringify(body.messages?.at(-1)?.content ?? '');
+    if (latestMessage.includes('hold this configured model turn')) {
+      if (!heldAlternateAttempt) {
+        heldAlternateAttempt = true;
+        firstAlternateRequestResolve();
+        await holdFirstAlternate;
+        response.writeHead(503, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ error: { message: 'retry the configured model turn' } }));
+        return;
+      }
+    }
+    const delta = JSON.stringify({
+      choices: [{ index: 0, delta: { role: 'assistant', content: 'configured response' }, finish_reason: null }],
+    });
+    const finish = JSON.stringify({ choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+    response.writeHead(200, { 'content-type': 'text/event-stream' });
+    response.end(`data: ${delta}\r\n\r\ndata: ${finish}\r\n\r\ndata: [DONE]\r\n\r\n`);
+  });
+  await new Promise((resolve, reject) => {
+    configuredProvider.once('error', reject);
+    configuredProvider.listen(0, '127.0.0.1', resolve);
+  });
+  const configuredData = path.join(root, 'configured-model-data');
+  const configuredWorkspace = path.join(root, 'configured-model-workspace');
+  const alternateValue = JSON.stringify(['openai', 'alternate-model']);
+  const defaultValue = JSON.stringify(['openai', 'fixture-model']);
+  try {
+    const baseURL = `http://127.0.0.1:${configuredProvider.address().port}`;
+    const configuredAgent = await launch('configured-model', {
+      dataDir: configuredData,
+      workspaceDir: configuredWorkspace,
+      provider: true,
+      baseURL,
+      maxRetries: 1,
+      env: {
+        DSH_API_KEY: 'acp-fixture-key',
+        DSH_ACP_MODELS: JSON.stringify(['fixture-model', 'alternate-model']),
+      },
+    });
+    const configuredInitialize = configuredAgent.sendRequest('initialize', { protocolVersion: 1 });
+    await configuredInitialize.response;
+    const createConfiguredSession = async () => {
+      const request = configuredAgent.sendRequest('session/new', {
+        cwd: configuredAgent.workspace,
+        mcpServers: [],
+      });
+      return (await request.response).result;
+    };
+    const configuredA = await createConfiguredSession();
+    const configuredB = await createConfiguredSession();
+    const configuredAId = configuredA.sessionId;
+    const configuredBId = configuredB.sessionId;
+    const initialModelOption = configuredA.configOptions.find(option => option.id === 'model');
+    assert.equal(initialModelOption.currentValue, defaultValue);
+    assert.deepEqual(
+      initialModelOption.options[0].options.map(option => option.name),
+      ['fixture-model', 'alternate-model'],
+    );
+    const configureA = configuredAgent.sendRequest('session/set_config_option', {
+      sessionId: configuredAId,
+      configId: 'model',
+      value: alternateValue,
+    });
+    assert.equal((await configureA.response).result.configOptions[0].currentValue, alternateValue);
+    const configUpdateIndex = configuredAgent.messages.findIndex(entry =>
+      entry.value.method === 'session/update'
+        && entry.value.params?.sessionId === configuredAId
+        && entry.value.params?.update?.sessionUpdate === 'config_option_update');
+    const configResponseIndex = configuredAgent.messages.findIndex(entry => entry.value.id === configureA.id);
+    assert.ok(configUpdateIndex >= 0 && configUpdateIndex < configResponseIndex);
+    const unknownConfig = configuredAgent.sendRequest('session/set_config_option', {
+      sessionId: configuredAId,
+      configId: 'reasoning',
+      value: 'high',
+    });
+    assert.equal((await unknownConfig.response).error.code, -32602);
+    const unavailableModel = configuredAgent.sendRequest('session/set_config_option', {
+      sessionId: configuredAId,
+      configId: 'model',
+      value: JSON.stringify(['openai', 'not-advertised']),
+    });
+    assert.equal((await unavailableModel.response).error.code, -32602);
+
+    const pinnedPrompt = configuredAgent.sendRequest('session/prompt', {
+      sessionId: configuredAId,
+      prompt: [{ type: 'text', text: 'hold this configured model turn' }],
+    });
+    await firstAlternateRequest;
+    const busyConfiguration = configuredAgent.sendRequest('session/set_config_option', {
+      sessionId: configuredAId,
+      configId: 'model',
+      value: defaultValue,
+    });
+    assert.equal((await busyConfiguration.response).error.code, -32602);
+    const parallelPrompt = configuredAgent.sendRequest('session/prompt', {
+      sessionId: configuredBId,
+      prompt: [{ type: 'text', text: 'keep the other session on its default model' }],
+    });
+    assert.equal((await parallelPrompt.response).result.stopReason, 'end_turn');
+    releaseFirstAlternateResolve();
+    assert.equal((await pinnedPrompt.response).result.stopReason, 'end_turn');
+    const configuredCloseA = configuredAgent.sendRequest('session/close', { sessionId: configuredAId });
+    const configuredCloseB = configuredAgent.sendRequest('session/close', { sessionId: configuredBId });
+    assert.deepEqual((await configuredCloseA.response).result, {});
+    assert.deepEqual((await configuredCloseB.response).result, {});
+    await configuredAgent.closeAndCheck();
+
+    const narrowedAgent = await launch('configured-model-narrowed', {
+      dataDir: configuredData,
+      workspaceDir: configuredWorkspace,
+      provider: true,
+      baseURL,
+      env: { DSH_API_KEY: 'acp-fixture-key', DSH_ACP_MODELS: '[]' },
+    });
+    const narrowedInitialize = narrowedAgent.sendRequest('initialize', { protocolVersion: 1 });
+    await narrowedInitialize.response;
+    const updatesBeforeRefusal = narrowedAgent.messages.filter(entry => entry.value.method === 'session/update'
+      && entry.value.params?.sessionId === configuredAId).length;
+    const unavailableResume = narrowedAgent.sendRequest('session/resume', {
+      sessionId: configuredAId,
+      cwd: narrowedAgent.workspace,
+      mcpServers: [],
+    });
+    assert.equal((await unavailableResume.response).error.code, -32602);
+    const listAfterRefusal = narrowedAgent.sendRequest('session/list', {});
+    assert.ok((await listAfterRefusal.response).result.sessions.some(session => session.sessionId === configuredAId));
+    assert.equal(narrowedAgent.messages.filter(entry => entry.value.method === 'session/update'
+      && entry.value.params?.sessionId === configuredAId).length, updatesBeforeRefusal);
+    await narrowedAgent.closeAndCheck();
+
+    const restoredAgent = await launch('configured-model-restored', {
+      dataDir: configuredData,
+      workspaceDir: configuredWorkspace,
+      provider: true,
+      baseURL,
+      env: {
+        DSH_API_KEY: 'acp-fixture-key',
+        DSH_ACP_MODELS: JSON.stringify(['alternate-model']),
+      },
+    });
+    const restoredInitialize = restoredAgent.sendRequest('initialize', { protocolVersion: 1 });
+    await restoredInitialize.response;
+    const updatesBeforeResume = restoredAgent.messages.filter(entry => entry.value.method === 'session/update'
+      && entry.value.params?.sessionId === configuredAId).length;
+    const restoredResume = restoredAgent.sendRequest('session/resume', {
+      sessionId: configuredAId,
+      cwd: restoredAgent.workspace,
+      mcpServers: [],
+    });
+    assert.equal((await restoredResume.response).result.configOptions[0].currentValue, alternateValue);
+    assert.equal(restoredAgent.messages.filter(entry => entry.value.method === 'session/update'
+      && entry.value.params?.sessionId === configuredAId).length, updatesBeforeResume);
+    const reopenedPrompt = restoredAgent.sendRequest('session/prompt', {
+      sessionId: configuredAId,
+      prompt: [{ type: 'text', text: 'continue with the stored model selection' }],
+    });
+    assert.equal((await reopenedPrompt.response).result.stopReason, 'end_turn');
+    assert.equal(configuredRequests.filter(body => body.model === 'alternate-model').length, 3);
+    assert.equal(configuredRequests.filter(body => body.model === 'fixture-model').length, 1);
+    const pinnedBodies = configuredRequests.filter(body => JSON.stringify(
+      body.messages?.at(-1)?.content ?? '',
+    ).includes('hold this configured model turn'));
+    assert.equal(pinnedBodies.length, 2);
+    assert.equal(pinnedBodies[0].model, 'alternate-model');
+    assert.deepEqual(pinnedBodies[0], pinnedBodies[1]);
+    const configuredCloseRestored = restoredAgent.sendRequest('session/close', { sessionId: configuredAId });
+    assert.deepEqual((await configuredCloseRestored.response).result, {});
+    await restoredAgent.closeAndCheck();
+
+    const malformedModelsAgent = await launch('malformed-model-catalog', {
+      provider: true,
+      env: { DSH_ACP_MODELS: '["unterminated"' },
+    });
+    const malformedModelsInitialize = malformedModelsAgent.sendRequest('initialize', { protocolVersion: 1 });
+    assert.equal((await malformedModelsInitialize.response).error.code, -32603);
+    await malformedModelsAgent.closeAndCheck();
+  } finally {
+    releaseFirstAlternateResolve();
+    configuredProvider.closeAllConnections();
+    await new Promise(resolve => configuredProvider.close(resolve));
+  }
+
   let pendingProviderRequests = 0;
   const pendingProviderWaiters = [];
   function waitForPendingProviderRequest(count) {
@@ -725,7 +947,49 @@ try {
     await new Promise(resolve => pendingProvider.close(resolve));
   }
 
-console.log('ACP native stdio integration passed: negotiation, persistent list pagination/filtering, restart/resume with saved-context continuation and no replay, close/resume lifecycle, text/resource links, approvals, cancellation/EOF, session isolation, bounded framing, cursor validation, and EOF drain.');
+  const failedDataDir = path.join(root, 'checkpoint-failure-data');
+  const failedAgent = await launch('checkpoint-failure', {
+    dataDir: failedDataDir,
+    provider: true,
+    clearProviderKeys: true,
+    env: { DSH_ACP_MODELS: JSON.stringify(['alternate-model']) },
+  });
+  const failedInitialize = failedAgent.sendRequest('initialize', { protocolVersion: 1 });
+  await failedInitialize.response;
+  const failedSessionRequest = failedAgent.sendRequest('session/new', {
+    cwd: failedAgent.workspace,
+    mcpServers: [],
+  });
+  const failedSessionId = (await failedSessionRequest.response).result.sessionId;
+  const snapshotPath = path.join(failedDataDir, 'sessions.json');
+  const snapshotBeforeConflict = await readFile(snapshotPath, 'utf8');
+  await writeFile(snapshotPath, snapshotBeforeConflict + '\n');
+  const failedConfig = failedAgent.sendRequest('session/set_config_option', {
+    sessionId: failedSessionId,
+    configId: 'model',
+    value: JSON.stringify(['openai', 'alternate-model']),
+  });
+  assert.equal((await failedConfig.response).error.code, -32603);
+  assert.equal(failedAgent.messages.filter(entry => entry.value.method === 'session/update'
+    && entry.value.params?.sessionId === failedSessionId
+    && entry.value.params?.update?.sessionUpdate === 'config_option_update').length, 0);
+  const failedPrompt = failedAgent.sendRequest('session/prompt', {
+    sessionId: failedSessionId,
+    prompt: [{ type: 'text', text: 'runtime remains fenced after checkpoint conflict' }],
+  });
+  assert.equal((await failedPrompt.response).error.code, -32603);
+  const persistedAfterConflict = JSON.parse(await readFile(snapshotPath, 'utf8'));
+  assert.equal(
+    persistedAfterConflict.acp_sessions.find(session => session.session_id === failedSessionId)?.model,
+    'fixture-model',
+  );
+  failedAgent.child.stdin.end();
+  const failedExit = await failedAgent.waitForExit();
+  assert.equal(failedExit.code, 1);
+  assert.equal(failedExit.signal, null);
+  assert.match(failedAgent.stderr(), /native runtime shutdown failed/);
+
+console.log('ACP native stdio integration passed: negotiation, persistent list/resume, per-session model configuration and update ordering, simultaneous routes, busy-change refusal, retries, catalog refusal/recovery, saved-context continuation and no replay, approvals, cancellation/EOF, and framing bounds.');
 } finally {
   await rm(root, { recursive: true, force: true });
 }

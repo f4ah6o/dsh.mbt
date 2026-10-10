@@ -4,7 +4,7 @@ Status: open
 Model: gpt-6-luna
 Created: 2026-10-05
 Updated: 2026-10-10
-Branch: feat/20261010-deepseek-harness-acp-resume
+Branch: feat/20261010-deepseek-harness-acp-model-config
 upstream baseline は `5badb15009ae1756c3afe0ae0cef1faafc290ccc`。
 
 ## 概要
@@ -51,7 +51,9 @@ Bounded native subset と upstream package の名称が近いため、互換範�
 
 ## 変更履歴
 
-- 2026-10-10: ACP v1 persistent list / resume slice を追加し、workspace provenance、pagination、restart continuation、no-replay と残る load / multi-workspace 差分を記録。
+- 2026-10-10: pinned upstream ACP model control を参照し、persistent per-session `model` option、bounded `DSH_ACP_MODELS` catalog、busy-turn refusal、retry / subagent inheritance、route / catalog reopen fencing を追加。upstream の `session/load` 非実装も確認し、load はこの差分に含めない。本 issue は open のまま。
+- 2026-10-10: Native ACP fatal-path defect: `runtime/main.mbt` used `abort` after ACP argument/startup/carrier/shutdown failures, and the native panic diagnostic could be written to stdout, corrupting JSON-RPC framing. Fixed with bounded stderr diagnostics and nonzero exit; checkpoint conflict stdio regression verifies an RPC error, no config update/effect, later request fencing, and JSON-only stdout through EOF. This is a native carrier issue, not an upstream parity defect.
+- 2026-10-10: ACP v1 persistent list / resume slice を追加し、workspace provenance、pagination、restart continuation、no-replay と multi-workspace / MCP 差分を記録。
 - 2026-10-10: bounded foreground subagent slice とその recovery / hook limits を section 3 に追加。upstream subagent lifecycle parity は未完了。
 
 ## 注記
@@ -189,7 +191,7 @@ hook command は設定した利用者の trusted shell code として動き、ch
 全 upstream lifecycle / event coverage は未実装のため、本 issue は open のままです。
 
 ACP の部分対応（2026-10-10）: pinned upstream `packages/acp` の automation-agent 方向を参照し、native `dsh acp` stdio
-service を追加しました。ACP v1 の initialize / authenticate、session new / list / resume / prompt / cancel / close、ordered
+service を追加しました。ACP v1 の initialize / authenticate、session new / list / resume / set_config_option / prompt / cancel / close、ordered
 text / resource-link prompt subset、generic committed update、engine の per-call approval を接続します。allow-once / reject-once は
 pending native call ID、prompt generation、durable approval revision に結び、unknown / stale / cancelled response は許可しません。
 cancel / close / EOF は durable native cancellation 後に active task を drain し、reopen は中断した provider / tool effect を再送しません。
@@ -203,11 +205,24 @@ native runtime / CLI からの ACP 外 activity を global last-activity とし�
 filter / stale cursor、process restart、context continuation / no-replay、legacy / imported / forked / active / unknown / foreign workspace
 rejection、resume / prompt / close fencing を確認します。
 
+Pinned upstream の[`model-control.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/acp/acp/src/model-control.ts)、
+[`session.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/acp/acp/src/session.ts)、
+[`index.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/acp/acp/src/index.ts)
+にある standard `model` option と session response / update を参照して、per-session model selection を追加しました。native では startup
+provider / auth route を固定し、API-key route は初期 model と `DSH_ACP_MODELS` の strict JSON string array、ChatGPT route は account-visible
+catalog から選択します。環境 catalog は 16 KiB / 32 names / 256 characters per name までです。設定変更は session が idle / settled の時だけ
+受け付け、active turn 中は拒否するため、複数 step / retry と foreground child は admitted model を保持します。model と非 secret route fingerprint は
+provider protocol / auth mode / demo flag / provider-normalized API origin + path prefix を束ねて session metadata に保存しますが、raw URL、credential、ChatGPT account identity は保存しません。`/v1` suffix と trailing slash の等価 URL は同じ fingerprint になります。reopen 時の fingerprint 不一致または許可 catalog から消えた選択は、history / activity を変更せず拒否します。resume 後の turn は現在 host が管理する API key / ChatGPT account を使い、admitted turn 内の既存 account / generation fence は維持します。旧 0.1.10
+ACP records without a model inherit the current startup model. Native tests / stdio fake-provider integration verify two simultaneous sessions route
+independently, a busy mutation is rejected, retries and children retain the selected model, update notification precedes its response, changed base URLs
+are refused, and a refused selection remains recoverable after the catalog is restored. Route tests cover omitted / explicit defaults, `/v1`, trailing slash, and a distinct endpoint.
+
 これは ACP 全体の互換ではありません。接続あたり initialize は一度、session は起動時の単一 canonical workspace に限り、additional
 directory と client MCP mounts は拒否します。prompt block は text と resource_link のみで、resource を fetch せず、image / audio /
-embedded context、`session/load`、persistent grant、raw stream delta は提供しません。JSON line は 1 MiB、nesting は 24、prompt は
-16,384 characters、block は 64 個までです。authMethods は空です。実 provider credential を使う ACP smoke test は未実行です。本 issue は
-open のままです。
+embedded context、persistent grant、raw stream delta、provider switching / reasoning controls は提供しません。Pinned baseline の ACP
+README も `session/load` を unsupported surface として明記しているため、load はこの実装の parity gap ではありません。JSON line は
+1 MiB、nesting は 24、prompt は 16,384 characters、block は 64 個までです。authMethods は空です。実 provider credential を使う ACP
+smoke test は未実行です。本 issue は open のままです。
 
 LSP navigation の部分対応（2026-10-10）: pinned upstream
 [`packages/lsp`](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/lsp)、

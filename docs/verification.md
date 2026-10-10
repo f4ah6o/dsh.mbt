@@ -1,5 +1,47 @@
 # 検証記録
 
+## ACP per-session model configuration increment (0.1.11)
+
+2026-10-10、macOS arm64、Node.js `24.21.0`、MoonBit compiler / core
+`0.10.14+7d59c7ec9`、moon / moonrun `0.1.20260920`、Playwright `1.64.0` で
+検証しました。`npm test` は exit 0。provider tests are keyless loopback fixtures;
+no live account or secret value was used.
+
+| gate | result |
+| --- | --- |
+| `TMPDIR=/Volumes/DevSSD/dsh-native-tests/acp-model-config-tmp npm test` | PASS / exit 0. Build and all-target checks passed with zero project warnings (only pinned `vendor/hotpath` diagnostics). Portable tests: Wasm, Wasm GC, JS, and native each 157 / 157; app fixtures 16 / 16; native runtime 144 / 144; web 7 / 7; PATH install / CLI smoke and real Chromium native-host smoke passed. Native tests also cover subagent model inheritance and refusal of a changed API endpoint on resume. |
+| `moon test runtime --target native --filter '*ACP*' --frozen --target-dir _build/acp-model-config-focused` | 13 / 13 PASS. Includes per-session route selection, resume fencing, legacy metadata adoption, escaped advertised-value roundtrip, and unchanged history on refusal. |
+| `node --check scripts/test-acp-stdio.mjs`, release worker `scripts/test-acp-stdio.mjs` | PASS. Exercises option advertisement/update ordering, simultaneous sessions, per-turn pinning / retries, catalog refusal/recovery, restart/no replay, plus invalid ACP arguments and checkpoint-version conflict. The injected conflict returns JSON-RPC errors without a config notification or persisted model change; later prompts fail closed, stdout remains JSON-RPC through EOF, stderr gets a fixed diagnostic, and the process exits nonzero. |
+| `moon info runtime --target native --frozen --target-dir _build/acp-model-config-info`; `moon info --frozen --target all api plugins` | PASS. Runtime is native-only; native interface was emitted under the external target directory. API/plugin interfaces are current. |
+| `git diff --check` | PASS. |
+
+## Native no-Node cancellation fixture follow-up
+
+2026-10-10 の PR #43 Ubuntu 24.04 no-Node job は native tests 310 件中 309 件が
+pass し、MCP cancellation test の cleanup 直後の
+`os_process_group_alive(pid)` assertion だけが失敗しました。CI log は process-group
+probe が alive を返したことだけを記録し、PID の process state を採取していません。
+この evidence から zombie や surviving descendant のどちらかを原因と断定できません。
+Native MCP close 実装は変更せず、test fixture を ready / release handshake に更新し、
+TERM を無視する descendant が cleanup 後に release されても escape marker を書けないことと、
+worker leader の終了を確認します。one-dispatch counter と retry refusal も維持します。
+
+2026-10-10 macOS arm64 local results:
+
+| gate | result |
+| --- | --- |
+| `DSH_NATIVE_WORKER_BIN=... moon test runtime/external_mcp_wbtest.mbt --target native --frozen --target-dir _build/acp-mcp-cancel-test` | PASS, 11 / 11. |
+| Same native test with filter `*external MCP cancellation closes the server and prevents a second dispatch*`, repeated five times | PASS, 1 / 1 on every run. |
+| `moon fmt`; `git diff --check` | PASS. |
+
+The updated fixture is verified locally on macOS; the PR's Linux no-Node rerun is the
+cross-platform confirmation.
+
+The ACP checkpoint regression documents a native carrier defect, not an upstream
+DeepSeek Harness issue: fatal ACP paths previously used native `abort`, whose
+diagnostic could corrupt the JSON-RPC stdout stream. Fatal argument, startup,
+carrier, and shutdown paths now use a fixed stderr diagnostic and nonzero exit.
+
 ## Persistent ACP session list / resume increment (0.1.10)
 
 2026-10-10、macOS arm64、Node.js `24.21.0`、MoonBit compiler / core

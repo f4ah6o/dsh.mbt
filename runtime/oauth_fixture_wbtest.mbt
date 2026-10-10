@@ -439,6 +439,25 @@ async test "rotated refresh survives failed save and stale sign-in rollback" {
       Ok(value) => value
       Err(error) => fail(error)
     }
+    let original_models = auth.models
+    let original_model = auth.selected_model
+    let original_generation = auth.generation
+    auth.models = [
+      { "slug": "fixture-model", "display_name": "Fixture" },
+      { "slug": "alternate-fixture-model", "display_name": "Alternate" },
+    ]
+    let alternate_selection = match
+      auth.provider_selection_for_model("alternate-fixture-model") {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    assert_eq(alternate_selection.model(), "alternate-fixture-model")
+    assert_eq(auth.selected_model, original_model)
+    assert_eq(auth.generation, original_generation)
+    assert_true(auth.provider_selection_for_model("not-visible") is Err(_))
+    auth.models = original_models
+    let selected_again = auth.provider_selection().unwrap()
+    assert_eq(selected_again.model(), selection.model())
 
     let refresh_forms : Array[String] = []
     let failed_save = auth.refresh_locked_with(

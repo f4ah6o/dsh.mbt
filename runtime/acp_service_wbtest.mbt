@@ -63,6 +63,474 @@ fn native_acp_test_updates(
 }
 
 ///|
+test "ACP model allowlist is bounded strict JSON and rejects duplicates" {
+  assert_eq(native_acp_parse_model_allowlist(None), Ok([]))
+  assert_eq(
+    native_acp_parse_model_allowlist(Some("[\"model-a\",\"model-b\"]")),
+    Ok(["model-a", "model-b"]),
+  )
+  assert_true(
+    native_acp_parse_model_allowlist(Some("model-a,model-b")) is Err(_),
+  )
+  let byte_boundary = StringBuilder()
+  for _ in 0..<(NATIVE_ACP_MODEL_ENV_BYTE_LIMIT - 2) {
+    byte_boundary.write_char(' ')
+  }
+  byte_boundary.write_string("[]")
+  assert_eq(
+    native_acp_parse_model_allowlist(Some(byte_boundary.to_string())),
+    Ok([]),
+  )
+  byte_boundary.write_char(' ')
+  assert_true(
+    native_acp_parse_model_allowlist(Some(byte_boundary.to_string())) is Err(_),
+  )
+  assert_true(
+    native_acp_parse_model_allowlist(Some("{\"model\":\"x\"}")) is Err(_),
+  )
+  assert_true(
+    native_acp_parse_model_allowlist(Some("[\"same\",\"same\"]")) is Err(_),
+  )
+  assert_true(native_acp_parse_model_allowlist(Some("[\"model\",2]")) is Err(_))
+  let long_name = StringBuilder()
+  for _ in 0..<257 {
+    long_name.write_char('x')
+  }
+  assert_true(
+    native_acp_parse_model_allowlist(
+      Some(Json::array([Json::string(long_name.to_string())]).stringify()),
+    )
+    is Err(_),
+  )
+  let too_many : Array[Json] = []
+  for _ in 0..<(NATIVE_ACP_MODEL_LIMIT + 1) {
+    too_many.push(Json::string("model"))
+  }
+  assert_true(
+    native_acp_parse_model_allowlist(Some(Json::array(too_many).stringify()))
+    is Err(_),
+  )
+}
+
+///|
+test "ACP route fingerprint uses the provider-normalized API root" {
+  let omitted = native_acp_route_fingerprint(
+    NativeProtocol::OpenAIChatCompletions,
+    "api-key",
+    "https://api.openai.com",
+    false,
+  )
+  let variants = [
+    "https://api.openai.com", "https://api.openai.com/", "https://api.openai.com/v1",
+    "https://api.openai.com/v1/",
+  ]
+  for base_url in variants {
+    assert_eq(
+      native_acp_route_fingerprint(
+        NativeProtocol::OpenAIChatCompletions,
+        "api-key",
+        base_url,
+        false,
+      ),
+      omitted,
+    )
+  }
+  assert_true(
+    native_acp_route_fingerprint(
+      NativeProtocol::OpenAIChatCompletions,
+      "api-key",
+      "https://api.openai.com/custom/v1",
+      false,
+    ) !=
+    omitted,
+  )
+}
+
+///|
+async test "ACP accepts the longest escaped advertised model selector" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-acp-model-selector")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let runtime = match
+      NativeRuntime::open(
+        fixture + "/data",
+        workspace,
+        false,
+        false,
+        mode_override="openai",
+        model_override="base-model",
+      ) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let raw_model = StringBuilder()
+    raw_model.write_string("[\"")
+    for _ in 0..<(NATIVE_ACP_MODEL_NAME_LIMIT - 1) {
+      raw_model.write_string("\\u0001")
+    }
+    raw_model.write_string("x\"]")
+    let model = native_acp_parse_model_allowlist(Some(raw_model.to_string())).unwrap()[0]
+    let selector = native_acp_model_value(
+      NativeProtocol::OpenAIChatCompletions,
+      model,
+    )
+    assert_true(selector.length() > 1024)
+    let output : Ref[Array[String]] = Ref([])
+    let service = NativeAcpService::new_with_model_config(
+      runtime,
+      fn(line) {
+        output.val.push(line)
+        Ok(())
+      },
+      Ok([model]),
+    )
+    assert_true(service.initialize({ "protocolVersion": 1 }) is Ok(_))
+    let created = service.new_session({
+      "cwd": runtime.tools.workspace,
+      "mcpServers": [],
+    })
+    let created_result = created.unwrap()
+    let session_id = string_field(created_result, "sessionId").unwrap()
+    let config_options = match object_field(created_result, "configOptions") {
+      Some(Json::Array(values)) => values
+      _ => fail("ACP session omitted model config options")
+    }
+    let provider_group = object_field(config_options[0], "options").unwrap_or(
+      Json::null(),
+    )
+    let choices = match provider_group {
+      Json::Array(groups) =>
+        match object_field(groups[0], "options") {
+          Some(Json::Array(values)) => values
+          _ => fail("model provider group omitted its choices")
+        }
+      _ => fail("model config omitted its provider group")
+    }
+    assert_true(
+      choices.any(choice => string_field(choice, "value") == Some(selector)),
+    )
+    let changed = service.set_config_option({
+      "sessionId": session_id,
+      "configId": "model",
+      "value": selector,
+    })
+    let changed_options = match
+      object_field(changed.unwrap(), "configOptions") {
+      Some(Json::Array(values)) => values
+      _ => fail("model change omitted its resulting options")
+    }
+    assert_eq(string_field(changed_options[0], "currentValue"), Some(selector))
+    assert_true(service.close_session({ "sessionId": session_id }) is Ok(_))
+    assert_true(runtime.close() is Ok(_))
+  }
+}
+
+///|
+async test "ACP model option persists per session and refuses removed or reinterpreted selections" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-acp-model-config")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    let data_dir = fixture + "/data"
+    @fs.mkdir(workspace)
+    let open_runtime = async fn(mode : String, base_url : String) {
+      match
+        NativeRuntime::open(
+          data_dir,
+          workspace,
+          false,
+          false,
+          mode_override=mode,
+          model_override="base-model",
+          base_url_override=base_url,
+        ) {
+        Ok(value) => value
+        Err(error) => fail(error)
+      }
+    }
+    let runtime = open_runtime("openai", "")
+    let startup_route = runtime.acp_route_id().unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let output : Ref[Array[String]] = Ref([])
+    let service = NativeAcpService::new_with_model_config(
+      runtime,
+      fn(line) {
+        output.val.push(line)
+        Ok(())
+      },
+      Ok(["alternate-model"]),
+    )
+    assert_true(service.initialize({ "protocolVersion": 1 }) is Ok(_))
+    let created = service.new_session({ "cwd": workspace, "mcpServers": [] })
+    let created_result = created.unwrap()
+    let session_id = string_field(created_result, "sessionId").unwrap()
+    let legacy_session_id = "legacy-acp-model-selection"
+    let legacy_created = runtime
+      .create_acp_session(
+        legacy_session_id,
+        runtime.tools.workspace,
+        None,
+        startup_route,
+      )
+      .unwrap()
+    assert_eq(string_field(legacy_created, "id"), Some(legacy_session_id))
+    runtime.state.acp_sessions = runtime.state.acp_sessions.map(record => {
+      if record.session_id == legacy_session_id {
+        { ..record, model: None, route: None, }
+      } else {
+        record
+      }
+    })
+    runtime.checkpoint_locked().unwrap()
+    let options = match object_field(created_result, "configOptions") {
+      Some(Json::Array(values)) => values
+      _ => fail("new ACP session omitted model config options")
+    }
+    assert_eq(options.length(), 1)
+    let option = options[0]
+    assert_eq(string_field(option, "id"), Some("model"))
+    assert_eq(string_field(option, "category"), Some("model"))
+    assert_eq(string_field(option, "type"), Some("select"))
+    assert_eq(
+      string_field(option, "currentValue"),
+      Some(
+        native_acp_model_value(
+          NativeProtocol::OpenAIChatCompletions,
+          "base-model",
+        ),
+      ),
+    )
+    let groups = match object_field(option, "options") {
+      Some(Json::Array(values)) => values
+      _ => fail("model choices omitted provider group")
+    }
+    assert_eq(string_field(groups[0], "group"), Some("openai"))
+    let choices = match object_field(groups[0], "options") {
+      Some(Json::Array(values)) => values
+      _ => fail("model provider group omitted its choices")
+    }
+    assert_eq(
+      choices.map(choice => string_field(choice, "name").unwrap_or("")),
+      ["base-model", "alternate-model"],
+    )
+    let changed = service
+      .set_config_option({
+        "sessionId": session_id,
+        "configId": "model",
+        "value": native_acp_model_value(
+          NativeProtocol::OpenAIChatCompletions,
+          "alternate-model",
+        ),
+      })
+      .unwrap()
+    let changed_option = match object_field(changed, "configOptions") {
+      Some(Json::Array(values)) => values[0]
+      _ => fail("model update omitted resulting options")
+    }
+    assert_eq(
+      string_field(changed_option, "currentValue"),
+      Some(
+        native_acp_model_value(
+          NativeProtocol::OpenAIChatCompletions,
+          "alternate-model",
+        ),
+      ),
+    )
+    let config_updates = native_acp_test_updates(output, session_id)
+    assert_eq(config_updates.length(), 1)
+    assert_eq(
+      string_field(config_updates[0], "sessionUpdate"),
+      Some("config_option_update"),
+    )
+    assert_true(
+      service.set_config_option({
+        "sessionId": session_id,
+        "configId": "model",
+        "value": "not-advertised",
+      })
+      is Err(_),
+    )
+    let native_session_id = service.sessions.get(session_id).unwrap().native_session_id
+    let (_, saved_record) = runtime.read_acp_session(native_session_id).unwrap()
+    let saved_record = saved_record.unwrap()
+    assert_eq(saved_record.model, Some("alternate-model"))
+    assert_eq(saved_record.route, Some(startup_route))
+    assert_true(service.close_session({ "sessionId": session_id }) is Ok(_))
+    assert_true(runtime.close() is Ok(_))
+
+    let restored = open_runtime("openai", "")
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(restored.close()))
+    })
+    let restored_output : Ref[Array[String]] = Ref([])
+    let restored_service = NativeAcpService::new_with_model_config(
+      restored,
+      fn(line) {
+        restored_output.val.push(line)
+        Ok(())
+      },
+      Ok(["alternate-model"]),
+    )
+    assert_true(restored_service.initialize({ "protocolVersion": 1 }) is Ok(_))
+    let resume_result = restored_service
+      .resume_session({
+        "sessionId": session_id,
+        "cwd": workspace,
+        "mcpServers": [],
+      })
+      .unwrap()
+    let resumed_options = match object_field(resume_result, "configOptions") {
+      Some(Json::Array(values)) => values
+      _ => fail("resumed ACP session omitted model config options")
+    }
+    assert_eq(
+      string_field(resumed_options[0], "currentValue"),
+      Some(
+        native_acp_model_value(
+          NativeProtocol::OpenAIChatCompletions,
+          "alternate-model",
+        ),
+      ),
+    )
+    assert_true(native_acp_test_updates(restored_output, session_id).is_empty())
+    let legacy_resume = restored_service
+      .resume_session({
+        "sessionId": legacy_session_id,
+        "cwd": workspace,
+        "mcpServers": [],
+      })
+      .unwrap()
+    let legacy_options = match object_field(legacy_resume, "configOptions") {
+      Some(Json::Array(values)) => values
+      _ => fail("legacy ACP resume omitted model config options")
+    }
+    assert_eq(
+      string_field(legacy_options[0], "currentValue"),
+      Some(
+        native_acp_model_value(
+          NativeProtocol::OpenAIChatCompletions,
+          "base-model",
+        ),
+      ),
+    )
+    let (_, adopted_legacy_record) = restored
+      .read_acp_session(legacy_session_id)
+      .unwrap()
+    assert_eq(adopted_legacy_record.unwrap().model, Some("base-model"))
+    assert_eq(adopted_legacy_record.unwrap().route, Some(startup_route))
+    assert_true(
+      native_acp_test_updates(restored_output, legacy_session_id).is_empty(),
+    )
+    assert_true(restored.api.take_typed_effects().is_empty())
+    assert_true(restored.close() is Ok(_))
+
+    let narrowed = open_runtime("openai", "")
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(narrowed.close()))
+    })
+    let narrowed_service = NativeAcpService::new_with_model_config(
+      narrowed,
+      fn(_) { Ok(()) },
+      Ok([]),
+    )
+    assert_true(narrowed_service.initialize({ "protocolVersion": 1 }) is Ok(_))
+    let revision_before_refusal = narrowed.state.revision
+    assert_true(
+      narrowed_service.resume_session({
+        "sessionId": session_id,
+        "cwd": workspace,
+        "mcpServers": [],
+      })
+      is Err(_),
+    )
+    assert_eq(narrowed.state.revision, revision_before_refusal)
+    let (_, refused_record) = narrowed.read_acp_session(session_id).unwrap()
+    assert_eq(refused_record.unwrap().model, Some("alternate-model"))
+    assert_eq(refused_record.unwrap().route, Some(startup_route))
+    assert_true(narrowed.close() is Ok(_))
+
+    let changed_route = open_runtime("openai-responses", "")
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(changed_route.close()))
+    })
+    let changed_route_service = NativeAcpService::new_with_model_config(
+      changed_route,
+      fn(_) { Ok(()) },
+      Ok(["alternate-model"]),
+    )
+    assert_true(
+      changed_route_service.initialize({ "protocolVersion": 1 }) is Ok(_),
+    )
+    let route_revision = changed_route.state.revision
+    assert_true(
+      changed_route_service.resume_session({
+        "sessionId": session_id,
+        "cwd": workspace,
+        "mcpServers": [],
+      })
+      is Err(_),
+    )
+    assert_eq(changed_route.state.revision, route_revision)
+    let (_, route_record) = changed_route.read_acp_session(session_id).unwrap()
+    assert_eq(route_record.unwrap().route, Some(startup_route))
+    assert_true(changed_route.close() is Ok(_))
+
+    let changed_base = open_runtime(
+      "openai", "https://alternate-provider.example/v1",
+    )
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(changed_base.close()))
+    })
+    let changed_base_service = NativeAcpService::new_with_model_config(
+      changed_base,
+      fn(_) { Ok(()) },
+      Ok(["alternate-model"]),
+    )
+    assert_true(
+      changed_base_service.initialize({ "protocolVersion": 1 }) is Ok(_),
+    )
+    let base_revision = changed_base.state.revision
+    assert_true(
+      changed_base_service.resume_session({
+        "sessionId": session_id,
+        "cwd": workspace,
+        "mcpServers": [],
+      })
+      is Err(_),
+    )
+    assert_eq(changed_base.state.revision, base_revision)
+    let (_, base_record) = changed_base.read_acp_session(session_id).unwrap()
+    assert_eq(base_record.unwrap().route, Some(startup_route))
+    assert_true(changed_base.close() is Ok(_))
+
+    let final_runtime = open_runtime("openai", "")
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(final_runtime.close()))
+    })
+    let final_service = NativeAcpService::new_with_model_config(
+      final_runtime,
+      fn(_) { Ok(()) },
+      Ok(["alternate-model"]),
+    )
+    assert_true(final_service.initialize({ "protocolVersion": 1 }) is Ok(_))
+    let final_resume = final_service.resume_session({
+      "sessionId": session_id,
+      "cwd": workspace,
+      "mcpServers": [],
+    })
+    assert_true(final_resume is Ok(_))
+    assert_true(final_runtime.close() is Ok(_))
+  }
+}
+
+///|
 async test "ACP approved native turns preserve approval and isolate close across sessions" {
   let fixture = @fs.tmpdir(prefix="dsh-native-acp-turns")
   @async.with_task_group() <| group => {
@@ -115,6 +583,21 @@ async test "ACP approved native turns preserve approval and isolate close across
         "prompt": [{ "type": "text", "text": "write a file" }],
       })
       .unwrap()
+    let idle_options = runtime
+      .acp_model_options(runtime.acp_default_model(), service.model_allowlist)
+      .unwrap()
+    let idle_option = match idle_options {
+      Json::Array(values) => values[0]
+      _ => fail("demo ACP session omitted its model option")
+    }
+    assert_true(
+      service.set_config_option({
+        "sessionId": session_a,
+        "configId": "model",
+        "value": string_field(idle_option, "currentValue").unwrap(),
+      })
+      is Err(_),
+    )
     let prompt_task_a = group.spawn(async fn() {
       prompt_a.val = Some(service.execute_prompt(prepared_a))
     })
@@ -599,6 +1082,8 @@ test "ACP persisted registry validation rejects duplicate, dangling, imported, a
     session_id: "registered-root",
     cwd,
     updated_at: None,
+    model: None,
+    route: None,
   }
   assert_true(native_acp_validate_registry(snapshot, [record], cwd) is Ok(_))
   assert_true(
@@ -646,4 +1131,46 @@ test "ACP persisted registry validation rejects duplicate, dangling, imported, a
     ),
   )
   assert_true(duplicate_json is Err(_))
+}
+
+///|
+test "ACP registry migrates pre-model records and persists non-secret route identity" {
+  let legacy = native_acp_stored_sessions_from_json(
+    Some(
+      Json::array([
+        {
+          "session_id": "legacy-acp-session",
+          "cwd": "/workspace",
+          "updated_at": Json::null(),
+        },
+      ]),
+    ),
+  )
+  assert_true(legacy is Ok(_))
+  let legacy_record = legacy.unwrap()[0]
+  assert_eq(legacy_record.model, None)
+  assert_eq(legacy_record.route, None)
+  let selected : NativeAcpStoredSession = {
+    ..legacy_record,
+    model: Some("alternate-model"),
+    route: Some("openai:api-key"),
+  }
+  let encoded = native_acp_stored_sessions_json([selected])
+  let restored = native_acp_stored_sessions_from_json(Some(encoded))
+  assert_eq(restored.unwrap()[0].model, Some("alternate-model"))
+  assert_eq(restored.unwrap()[0].route, Some("openai:api-key"))
+  assert_true(
+    native_acp_stored_sessions_from_json(
+      Some(
+        Json::array([
+          {
+            "session_id": "missing-route",
+            "cwd": "/workspace",
+            "model": "alternate-model",
+          },
+        ]),
+      ),
+    )
+    is Err(_),
+  )
 }

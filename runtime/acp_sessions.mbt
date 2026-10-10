@@ -35,6 +35,33 @@ fn native_acp_move_session_to_front(
 }
 
 ///|
+fn native_acp_update_session_model(
+  sessions : Array[NativeAcpStoredSession],
+  session_id : String,
+  model : String?,
+  route : String,
+  updated_at : String?,
+) -> Result[Array[NativeAcpStoredSession], String] {
+  let mut current : NativeAcpStoredSession? = None
+  for session in sessions {
+    if session.session_id == session_id {
+      current = Some(session)
+    }
+  }
+  let record = match current {
+    Some(value) => { ..value, updated_at, model, route: Some(route), }
+    None => return Err("ACP session is not registered for this data directory")
+  }
+  let next : Array[NativeAcpStoredSession] = [record]
+  for session in sessions {
+    if session.session_id != session_id {
+      next.push(session)
+    }
+  }
+  Ok(next)
+}
+
+///|
 fn native_acp_validate_registry(
   snapshot : Json,
   registry : Array[NativeAcpStoredSession],
@@ -86,6 +113,8 @@ async fn NativeRuntime::create_acp_session(
   self : NativeRuntime,
   session_id : String,
   cwd : String,
+  model : String?,
+  route : String,
 ) -> Result[Json, String] {
   self.gate.acquire()
   defer self.gate.release()
@@ -113,12 +142,83 @@ async fn NativeRuntime::create_acp_session(
     session_id,
     cwd,
     updated_at: native_acp_timestamp(),
+    model,
+    route: Some(route),
   }
   self.state.acp_sessions = [record, ..self.state.acp_sessions]
   match self.checkpoint_locked() {
     Ok(_) => Ok(created)
     Err(error) => Err(error)
   }
+}
+
+///|
+/// Read the model pinned to an ACP-owned native session. The ACP registry is
+/// protected by the same gate as checkpoints and config changes.
+async fn NativeRuntime::acp_model_for_session(
+  self : NativeRuntime,
+  session_id : String,
+) -> Result[String?, String] {
+  self.gate.acquire()
+  defer self.gate.release()
+  if self.stopped || self.closed {
+    return Err("native runtime is stopped")
+  }
+  for record in self.state.acp_sessions {
+    if record.session_id == session_id {
+      return Ok(record.model)
+    }
+  }
+  Ok(None)
+}
+
+///|
+/// Persist a non-secret ACP model selection only while the underlying native
+/// session is idle. A prompt admitted by ACP also fences this operation at
+/// the connection layer before the provider effect is created.
+async fn NativeRuntime::set_acp_session_model(
+  self : NativeRuntime,
+  session_id : String,
+  model : String?,
+  route : String,
+) -> Result[Unit, String] {
+  if (
+      model is Some(value) &&
+      (value.is_empty() || value.length() > NATIVE_ACP_MODEL_NAME_LIMIT)
+    ) ||
+    route.is_empty() ||
+    route.length() > 64 {
+    return Err("ACP model name is invalid")
+  }
+  self.gate.acquire()
+  defer self.gate.release()
+  if self.stopped || self.closed {
+    return Err("native runtime is stopped")
+  }
+  let state = match
+    self.api.invoke("session_get", { "session_id": Json::string(session_id) }) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  match string_field(state, "status") {
+    Some("idle") | Some("completed") | Some("failed") | Some("cancelled") => ()
+    Some("running") | Some("awaiting_approval") =>
+      return Err("ACP session is active or busy")
+    _ => return Err("ACP native session has an unsupported state")
+  }
+  let next = match
+    native_acp_update_session_model(
+      self.state.acp_sessions,
+      session_id,
+      model,
+      route,
+      native_acp_timestamp(),
+    ) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  self.state.acp_sessions = next
+  self.checkpoint_locked()
 }
 
 ///|
@@ -428,6 +528,21 @@ async fn NativeAcpService::resume_session(
       native_acp_invalid_params("session belongs to a different workspace"),
     )
   }
+  let current_route = match self.runtime.acp_route_id() {
+    Ok(value) => value
+    Err(error) => return Err(native_acp_internal_error(error))
+  }
+  match record.route {
+    Some(route) if route != current_route => {
+      self.sessions.remove(session_id)
+      return Err(
+        native_acp_invalid_params(
+          "session provider route differs from the current startup configuration",
+        ),
+      )
+    }
+    _ => ()
+  }
   if object_field(state, "source_format") is Some(_) {
     self.sessions.remove(session_id)
     return Err(native_acp_invalid_params("imported sessions cannot be resumed"))
@@ -459,7 +574,25 @@ async fn NativeAcpService::resume_session(
     }
   }
   placeholder.last_event_seq = event_count - 1
-  match self.runtime.record_acp_activity(session_id) {
+  let model = match record.model {
+    Some(value) => Some(value)
+    None => self.runtime.acp_default_model()
+  }
+  let config_options = match
+    self.runtime.acp_model_options(model, self.model_allowlist) {
+    Ok(value) => value
+    Err(error) => {
+      self.sessions.remove(session_id)
+      return Err(native_acp_invalid_params(error))
+    }
+  }
+  let activity = if record.route is None ||
+    (record.model is None && model is Some(_)) {
+    self.runtime.set_acp_session_model(session_id, model, current_route)
+  } else {
+    self.runtime.record_acp_activity(session_id)
+  }
+  match activity {
     Ok(_) => ()
     Err(error) => {
       self.sessions.remove(session_id)
@@ -471,5 +604,5 @@ async fn NativeAcpService::resume_session(
     return Err(native_acp_invalid_params("session resume was interrupted"))
   }
   placeholder.resuming = false
-  Ok(Json::empty_object())
+  Ok({ "configOptions": config_options })
 }

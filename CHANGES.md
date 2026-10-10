@@ -16,6 +16,28 @@
 
 ### Migration
 
+## 0.1.11 - 2026-10-10
+
+### Added
+
+- Add ACP v1 `session/set_config_option` with persistent per-session model selection, a bounded `DSH_ACP_MODELS` catalog, and a fixed provider/auth route. Active turns reject changes; retries and foreground subagents keep the admitted session model. Resume refuses a saved selection when its protocol/auth/normalized API-root fingerprint or permitted catalog no longer matches. Credentials and account identities remain host-managed. See the [native runtime guide](docs/native-runtime.md#acp-stdio-agent), [remaining port work](issues/open/0001-upstream-parity.md), and pinned upstream [`model-control.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/acp/acp/src/model-control.ts) / [`session.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/acp/acp/src/session.ts).
+
+### Changed
+
+### Fixed
+
+- Keep fatal ACP argument, startup, carrier, and shutdown diagnostics on stderr with a nonzero exit. The native runtime's `abort` diagnostic could otherwise corrupt ACP's JSON-RPC stdout stream; checkpoint-failure regression coverage verifies no model update is emitted and later requests remain fenced.
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
+- Native envelopes from dsh 0.1.10 remain readable. Existing ACP records without a saved model adopt the current startup model when resumed; records with saved selections require the same route fingerprint and an available model. Use dsh 0.1.11+ to preserve model and route metadata when rewriting the envelope.
+
 ## 0.1.10 - 2026-10-10
 
 ### Added

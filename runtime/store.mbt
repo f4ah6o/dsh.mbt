@@ -15,6 +15,8 @@ priv struct NativeAcpStoredSession {
   session_id : String
   cwd : String
   updated_at : String?
+  model : String?
+  route : String?
 }
 
 ///|
@@ -201,8 +203,24 @@ fn native_acp_stored_sessions_from_json(
         Some(value)
       _ => return Err("native snapshot has an invalid ACP session timestamp")
     }
+    let model = match object_field(entry, "model") {
+      None | Some(Json::Null) => None
+      Some(Json::String(value)) if !value.is_empty() && value.length() <= 256 =>
+        Some(value)
+      _ => return Err("native snapshot has an invalid ACP session model")
+    }
+    let route = match object_field(entry, "route") {
+      None | Some(Json::Null) => None
+      Some(Json::String(value)) if !value.is_empty() && value.length() <= 64 =>
+        Some(value)
+      _ =>
+        return Err("native snapshot has an invalid ACP session provider route")
+    }
+    if model is Some(_) && route is None {
+      return Err("native snapshot has an ACP model without its provider route")
+    }
     seen.set(session_id, true)
-    result.push({ session_id, cwd, updated_at, })
+    result.push({ session_id, cwd, updated_at, model, route, })
   }
   Ok(result)
 }
@@ -219,6 +237,14 @@ fn native_acp_stored_sessions_json(
       }
       match session.updated_at {
         Some(value) => fields["updated_at"] = Json::string(value)
+        None => ()
+      }
+      match session.model {
+        Some(value) => fields["model"] = Json::string(value)
+        None => ()
+      }
+      match session.route {
+        Some(value) => fields["route"] = Json::string(value)
         None => ()
       }
       Json::object(fields)

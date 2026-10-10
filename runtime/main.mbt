@@ -126,6 +126,19 @@ fn native_usage() -> String {
 }
 
 ///|
+/// `abort` writes its runtime diagnostic to stdout in native builds. ACP owns
+/// stdout as a JSON-RPC stream, so fatal startup/shutdown paths use a bounded
+/// stderr message and terminate with a nonzero status instead.
+extern "C" fn native_process_exit(status : Int) -> Unit = "exit"
+
+///|
+fn native_acp_fatal(message : String) -> Unit {
+  eprintln(message)
+  native_flush_stderr()
+  native_process_exit(1)
+}
+
+///|
 fn native_command_id() -> Result[String, String] {
   let entropy = match random_hex(16) {
     Ok(value) => value
@@ -536,7 +549,12 @@ pub async fn run_cli() -> Unit {
   let args = native_cli_default_web(native_cli_normalize_args(raw_args))
   match native_cli_validate_args(args) {
     Ok(_) => ()
-    Err(error) => abort(error)
+    Err(error) =>
+      if native_flag(args, "--acp") {
+        native_acp_fatal("native ACP arguments are invalid")
+      } else {
+        abort(error)
+      }
   }
   native_configure_service_signal_policy(args)
   if native_flag(args, "--help") || native_flag(args, "-h") {
@@ -648,11 +666,17 @@ pub async fn run_cli() -> Unit {
   if native_flag(args, "--acp") {
     let (data_dir, workspace) = match native_cli_paths(args) {
       Ok(value) => value
-      Err(error) => abort(error)
+      Err(_) => {
+        native_acp_fatal("native ACP paths could not be resolved")
+        return
+      }
     }
     let max_retries = match native_cli_retry_limit(args) {
       Ok(value) => value
-      Err(error) => abort(error)
+      Err(_) => {
+        native_acp_fatal("native ACP retry configuration is invalid")
+        return
+      }
     }
     let runtime = match
       NativeRuntime::open(
@@ -671,17 +695,20 @@ pub async fn run_cli() -> Unit {
         skill_dirs=native_cli_options(args, "--skill-dir"),
         enable_subagents=native_flag(args, "--enable-subagents"),
       ) {
-      Err(error) => abort("native runtime could not start: " + error)
+      Err(_) => {
+        native_acp_fatal("native runtime could not start")
+        return
+      }
       Ok(runtime) => runtime
     }
     match native_acp_stdio(runtime) {
-      Err(error) => {
+      Err(_) => {
         ignore(runtime.close())
-        abort("native ACP carrier failed: " + error)
+        native_acp_fatal("native ACP carrier failed")
       }
       Ok(_) =>
         match runtime.close() {
-          Err(error) => abort("native runtime shutdown failed: " + error)
+          Err(_) => native_acp_fatal("native runtime shutdown failed")
           Ok(_) => ()
         }
     }

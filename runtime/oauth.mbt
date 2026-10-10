@@ -442,6 +442,34 @@ fn NativeAuth::visible_models(self : NativeAuth) -> Array[Json] {
 }
 
 ///|
+/// Return only model slugs from the catalog cached for the current account.
+fn NativeAuth::visible_model_slugs(self : NativeAuth) -> Array[String] {
+  let result : Array[String] = []
+  for row in self.visible_models() {
+    match row {
+      Object(fields) => {
+        let value = native_auth_string(fields.get("slug"))
+        if !value.is_empty() && value.length() <= 256 {
+          result.push(value)
+        }
+      }
+      _ => ()
+    }
+  }
+  result
+}
+
+///|
+/// Return the globally selected model only while it is visible to the current
+/// credential. This is read-only and does not mutate NativeAuth selection.
+fn NativeAuth::visible_selected_model(self : NativeAuth) -> String? {
+  match self.selected_model {
+    Some(model) if self.visible_model_slugs().contains(model) => Some(model)
+    _ => None
+  }
+}
+
+///|
 /// Refresh the account-visible model catalog. The Responses provider only
 /// accepts models returned for this credential and marked `visibility=list`.
 async fn NativeAuth::models(self : NativeAuth) -> Result[Json, String] {
@@ -618,6 +646,24 @@ async fn NativeAuth::select_model_for_profile(
 fn NativeAuth::provider_selection(
   self : NativeAuth,
 ) -> Result[NativeProviderSelection, String] {
+  self.provider_selection_for_model_opt(self.selected_model)
+}
+
+///|
+/// Capture one account-scoped model selection without changing the user's
+/// global selection. ACP sessions use this to route independently.
+fn NativeAuth::provider_selection_for_model(
+  self : NativeAuth,
+  model : String,
+) -> Result[NativeProviderSelection, String] {
+  self.provider_selection_for_model_opt(Some(model))
+}
+
+///|
+fn NativeAuth::provider_selection_for_model_opt(
+  self : NativeAuth,
+  requested_model : String?,
+) -> Result[NativeProviderSelection, String] {
   if self.closed {
     return Err("AUTH_REQUIRED: authentication manager is closed")
   }
@@ -630,20 +676,13 @@ fn NativeAuth::provider_selection(
       "AUTH_DIRECT_SCOPE_REQUIRED: direct ChatGPT inference is not enabled",
     )
   }
-  let model = match self.selected_model {
+  let model = match requested_model {
     Some(value) => value
     None => return Err("MODEL_REQUIRED: choose an account-visible model first")
   }
   if self.model_identity != Some(credential.identity_for_native()) ||
-    !self
-    .visible_models()
-    .any(row => {
-      match row {
-        Object(fields) => native_auth_string(fields.get("slug")) == model
-        _ => false
-      }
-    }) {
-    return Err("MODEL_REQUIRED: selected model is not in the account catalog")
+    !self.visible_model_slugs().contains(model) {
+    return Err("MODEL_REQUIRED: model is not in the account catalog")
   }
   Ok({
     generation: self.generation,

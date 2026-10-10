@@ -292,9 +292,14 @@ fn native_subagent_transcript_result(
 }
 
 ///|
-fn NativeRuntime::subagent_provider_binding(
+async fn NativeRuntime::subagent_provider_binding(
   self : NativeRuntime,
+  parent_session_id : String,
 ) -> Result[NativeSubagentProviderBinding, String] {
+  let acp_model = match self.acp_model_for_session(parent_session_id) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
   let selection = if self.provider_config.demo_provider {
     match
       NativeProviderSelection::api_key(
@@ -307,7 +312,11 @@ fn NativeRuntime::subagent_provider_binding(
       Err(error) => return Err(error)
     }
   } else if self.provider_config.auth_mode == NativeAuthMode::ChatGPT {
-    match self.auth.provider_selection() {
+    let selected = match acp_model {
+      Some(model) => self.auth.provider_selection_for_model(model)
+      None => self.auth.provider_selection()
+    }
+    match selected {
       Ok(value) => value
       Err(error) => return Err(error)
     }
@@ -315,7 +324,7 @@ fn NativeRuntime::subagent_provider_binding(
     match
       NativeProviderSelection::api_key(
         self.provider_config.protocol,
-        self.provider_config.model,
+        acp_model.unwrap_or(self.provider_config.model),
         self.provider_config.base_url,
         self.provider_config.generation,
       ) {
@@ -578,7 +587,7 @@ async fn NativeRuntime::run_subagent_tool(
     Ok(value) => "subagent-" + value
     Err(error) => return tool_error("cannot create child identity: " + error)
   }
-  let binding = match self.subagent_provider_binding() {
+  let binding = match self.subagent_provider_binding(parent_session_id) {
     Ok(value) => value
     Err(error) => return tool_error(error)
   }

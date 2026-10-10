@@ -1,5 +1,5 @@
 ///|
-const NATIVE_ACP_AGENT_VERSION : String = "0.1.10"
+const NATIVE_ACP_AGENT_VERSION : String = "0.1.11"
 
 ///|
 priv struct NativeAcpRpcError {
@@ -81,6 +81,8 @@ priv struct NativeAcpService {
   write_gate : @async.Mutex
   sessions : Map[String, NativeAcpSession]
   pending_permissions : Map[String, NativeAcpPendingPermission]
+  model_allowlist : Array[String]
+  model_config_error : String?
   mut next_request_id : Int
   mut initialized : Bool
   mut closed : Bool
@@ -106,6 +108,23 @@ fn NativeAcpService::new(
   runtime : NativeRuntime,
   sink : async (String) -> Result[Unit, String],
 ) -> NativeAcpService {
+  NativeAcpService::new_with_model_config(
+    runtime,
+    sink,
+    native_acp_parse_model_allowlist(@env.get_env_var("DSH_ACP_MODELS")),
+  )
+}
+
+///|
+fn NativeAcpService::new_with_model_config(
+  runtime : NativeRuntime,
+  sink : async (String) -> Result[Unit, String],
+  model_config : Result[Array[String], String],
+) -> NativeAcpService {
+  let (model_allowlist, model_config_error) = match model_config {
+    Ok(value) => (value, None)
+    Err(error) => ([], Some(error))
+  }
   {
     runtime,
     workspace: runtime.tools.workspace,
@@ -113,6 +132,8 @@ fn NativeAcpService::new(
     write_gate: @async.Mutex::Mutex(),
     sessions: Map([]),
     pending_permissions: Map([]),
+    model_allowlist,
+    model_config_error,
     next_request_id: 1,
     initialized: false,
     closed: false,
@@ -205,6 +226,7 @@ async fn NativeAcpService::handle_request(
     "session/list" => self.list_sessions(params)
     "session/resume" => self.resume_session(params)
     "session/close" => self.close_session(params)
+    "session/set_config_option" => self.set_config_option(params)
     "session/prompt" => self.prompt(params)
     "session/cancel" => {
       match self.require_initialized() {
@@ -245,6 +267,10 @@ fn NativeAcpService::initialize(
         native_acp_invalid_params("protocolVersion must be an integer"),
       )
   }
+  match self.model_config_error {
+    Some(error) => return Err(native_acp_internal_error(error))
+    None => ()
+  }
   self.initialized = true
   Ok({
     "protocolVersion": NATIVE_ACP_PROTOCOL_VERSION,
@@ -277,13 +303,28 @@ async fn NativeAcpService::new_session(
     Ok(_) => ()
     Err(error) => return Err(native_acp_invalid_params(error))
   }
+  let default_model = self.runtime.acp_default_model()
+  let route = match self.runtime.acp_route_id() {
+    Ok(value) => value
+    Err(error) => return Err(native_acp_internal_error(error))
+  }
+  let config_options = match
+    self.runtime.acp_model_options(default_model, self.model_allowlist) {
+    Ok(value) => value
+    Err(error) => return Err(native_acp_internal_error(error))
+  }
   let random = match random_uuid() {
     Ok(value) => value
     Err(error) => return Err(native_acp_internal_error(error))
   }
   let native_session_id = "acp-" + random
   let created = match
-    self.runtime.create_acp_session(native_session_id, self.workspace) {
+    self.runtime.create_acp_session(
+      native_session_id,
+      self.workspace,
+      default_model,
+      route,
+    ) {
     Ok(value) => value
     Err(error) => return Err(native_acp_internal_error(error))
   }
@@ -311,7 +352,86 @@ async fn NativeAcpService::new_session(
     pending_permission: None,
   }
   self.sessions.set(session_id, session)
-  Ok({ "sessionId": Json::string(session_id) })
+  Ok({ "sessionId": Json::string(session_id), "configOptions": config_options })
+}
+
+///|
+async fn NativeAcpService::set_config_option(
+  self : NativeAcpService,
+  params : Json,
+) -> Result[Json, NativeAcpRpcError] {
+  match self.require_initialized() {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  let session_id = match native_acp_required_session_id(params) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let session = match self.find_session(session_id) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  if session.closing || session.resuming || session.prompt_active {
+    return Err(native_acp_invalid_params("session is active or busy"))
+  }
+  match string_field(params, "configId") {
+    Some(NATIVE_ACP_MODEL_CONFIG_ID) => ()
+    _ => return Err(native_acp_invalid_params("unknown session config option"))
+  }
+  let value = match object_field(params, "value") {
+    Some(Json::String(text)) => Json::string(text)
+    _ => return Err(native_acp_invalid_params("model requires a select value"))
+  }
+  let model = match
+    self.runtime.acp_model_from_value(value, self.model_allowlist) {
+    Ok(value) => value
+    Err(error) => return Err(native_acp_invalid_params(error))
+  }
+  let (state, record) = match self.runtime.read_acp_session(session_id) {
+    Ok(value) => value
+    Err(error) => return Err(native_acp_internal_error(error))
+  }
+  if record is None {
+    return Err(native_acp_invalid_params("session is not registered for ACP"))
+  }
+  let route = match self.runtime.acp_route_id() {
+    Ok(value) => value
+    Err(error) => return Err(native_acp_internal_error(error))
+  }
+  match string_field(state, "status") {
+    Some("idle") | Some("completed") | Some("failed") | Some("cancelled") => ()
+    Some("running") | Some("awaiting_approval") =>
+      return Err(native_acp_invalid_params("session is active or busy"))
+    _ =>
+      return Err(native_acp_invalid_params("session has an unsupported state"))
+  }
+  match self.runtime.set_acp_session_model(session_id, Some(model), route) {
+    Ok(_) => ()
+    Err(error) if error == "ACP session is active or busy" =>
+      return Err(native_acp_invalid_params(error))
+    Err(error) => return Err(native_acp_internal_error(error))
+  }
+  let config_options = match
+    self.runtime.acp_model_options(Some(model), self.model_allowlist) {
+    Ok(value) => value
+    Err(error) => return Err(native_acp_internal_error(error))
+  }
+  match
+    self.write_notification(
+      "session/update",
+      Json::object({
+        "sessionId": Json::string(session_id),
+        "update": Json::object({
+          "sessionUpdate": Json::string("config_option_update"),
+          "configOptions": config_options,
+        }),
+      }),
+    ) {
+    Ok(_) => ()
+    Err(error) => return Err(native_acp_internal_error(error))
+  }
+  Ok({ "configOptions": config_options })
 }
 
 ///|
