@@ -1884,7 +1884,7 @@ async test "direct session_cancel interrupts a running UserPromptSubmit command"
       })
     })
     let hooks_path = fixture + "/hooks.json"
-    let command = "payload=$(cat); case \"$payload\" in *direct-cancel*) printf x >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\"; printf started > \"${CLAUDE_PROJECT_DIR}/hook-started\"; (trap '' TERM; while [ ! -f \"${CLAUDE_PROJECT_DIR}/hook-release\" ]; do /bin/sleep 0.01; done; printf escaped > \"${CLAUDE_PROJECT_DIR}/hook-child-alive\") & wait ;; *) printf y >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\" ;; esac; printf '{}'"
+    let command = "payload=$(cat); case \"$payload\" in *'direct-cancel while prompt hook waits'*) printf x >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\"; printf started > \"${CLAUDE_PROJECT_DIR}/hook-started\"; (trap '' TERM; while [ ! -f \"${CLAUDE_PROJECT_DIR}/hook-release\" ]; do /bin/sleep 0.01; done; printf escaped > \"${CLAUDE_PROJECT_DIR}/hook-child-alive\") & wait ;; *) printf y >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\" ;; esac; printf '{}'"
     @fs.write_file(
       hooks_path,
       @utf8.encode(native_hook_test_config("UserPromptSubmit", "*", command)),
@@ -1973,7 +1973,7 @@ async test "remote UserPromptSubmit owner cancellation settles the receipt witho
     let workspace = fixture + "/workspace"
     @fs.mkdir(workspace)
     let hooks_path = fixture + "/hooks.json"
-    let command = "payload=$(cat); case \"$payload\" in *remote-owner*) printf x >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\"; printf started > \"${CLAUDE_PROJECT_DIR}/hook-started\"; (trap '' TERM; while [ ! -f \"${CLAUDE_PROJECT_DIR}/hook-release\" ]; do /bin/sleep 0.01; done; printf escaped > \"${CLAUDE_PROJECT_DIR}/hook-child-alive\") & wait ;; *) printf y >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\" ;; esac; printf '{}'"
+    let command = "payload=$(cat); case \"$payload\" in *'remote-owner cancellation before admission'*) printf x >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\"; printf started > \"${CLAUDE_PROJECT_DIR}/hook-started\"; (trap '' TERM; while [ ! -f \"${CLAUDE_PROJECT_DIR}/hook-release\" ]; do /bin/sleep 0.01; done; printf escaped > \"${CLAUDE_PROJECT_DIR}/hook-child-alive\") & wait ;; *) printf y >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\" ;; esac; printf '{}'"
     @fs.write_file(
       hooks_path,
       @utf8.encode(native_hook_test_config("UserPromptSubmit", "*", command)),
@@ -2057,6 +2057,140 @@ async test "remote UserPromptSubmit owner cancellation settles the receipt witho
       .invoke("session_send", {
         "session_id": session_id.to_json(),
         "prompt": "fresh send after remote owner cleanup".to_json(),
+      })
+      .unwrap()
+    assert_eq(follow_up_effects.length(), 1)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "xy")
+  }
+}
+
+///|
+async test "remote session_cancel rejects a running UserPromptSubmit prompt" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-prompt-hook-remote-cancel")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => {
+        ignore(
+          @fs.write_file(workspace + "/hook-release", @utf8.encode("release")),
+        )
+      })
+    })
+    let hooks_path = fixture + "/hooks.json"
+    let command = "payload=$(cat); case \"$payload\" in *'remote explicit cancellation before admission'*) printf x >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\"; printf started > \"${CLAUDE_PROJECT_DIR}/hook-started\"; (trap '' TERM; while [ ! -f \"${CLAUDE_PROJECT_DIR}/hook-release\" ]; do /bin/sleep 0.01; done; printf escaped > \"${CLAUDE_PROJECT_DIR}/hook-child-alive\") & wait ;; *) printf y >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\" ;; esac; printf '{}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(native_hook_test_config("UserPromptSubmit", "*", command)),
+    )
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "prompt-hook-remote-explicit-cancel-session"
+    ignore(
+      runtime
+      .invoke("session_create", {
+        "id": session_id.to_json(),
+        "title": "Remote prompt hook cancellation",
+      })
+      .unwrap(),
+    )
+    let identity = runtime.state.identity_key
+    let command_time = native_auth_now().to_int64() * 1000L
+    let command_id = @protocol.uuid_v7_command_id_from_entropy(
+      command_time, "5234567890abcdeffedcba9876543210",
+    ).unwrap()
+    let send = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      session_id,
+      command_id,
+      { "prompt": "remote explicit cancellation before admission".to_json() },
+    )
+    let send_task = group.spawn(
+      async fn() { runtime.accept_remote_command(send, identity).unwrap() },
+      no_wait=true,
+      allow_failure=true,
+    )
+    let mut hook_started = false
+    for _ in 0..<600 {
+      if @fs.exists(workspace + "/hook-started") {
+        hook_started = true
+        break
+      }
+      @async.sleep(5)
+    }
+    assert_true(hook_started)
+
+    let cancel_id = @protocol.uuid_v7_command_id_from_entropy(
+      command_time + 1L,
+      "6234567890abcdeffedcba9876543210",
+    ).unwrap()
+    let cancel = native_runtime_session_operation_command(
+      runtime.state.workspace_id,
+      session_id,
+      cancel_id,
+      "session_cancel",
+      {},
+    )
+    let (cancel_receipt, cancel_effects, cancel_started, _) = runtime
+      .accept_remote_command(cancel, identity)
+      .unwrap()
+    assert_eq(string_field(cancel_receipt, "status"), Some("accepted"))
+    assert_true(cancel_started)
+    assert_true(cancel_effects.is_empty())
+    runtime.run_command_job(
+      cancel_id,
+      identity,
+      int_field(cancel_receipt, "accepted_revision").unwrap(),
+      cancel_effects,
+    )
+
+    let (send_receipt, send_effects, send_started, send_control) = match
+      @async.with_timeout_opt(3000, async fn() { send_task.wait() }) {
+      Some(value) => value
+      None => fail("cancelled remote session_send did not return")
+    }
+    assert_eq(string_field(send_receipt, "status"), Some("rejected"))
+    assert_true(
+      string_field(send_receipt, "error")
+      .unwrap_or("")
+      .contains("cancelled before admission"),
+    )
+    assert_true(send_effects.is_empty())
+    assert_false(send_started)
+    assert_true(send_control is None)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+    @fs.write_file(workspace + "/hook-release", @utf8.encode("release"))
+    @async.sleep(100)
+    assert_false(@fs.exists(workspace + "/hook-child-alive"))
+
+    let replay = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      session_id,
+      command_id,
+      { "prompt": "remote explicit cancellation before admission".to_json() },
+    )
+    let (replayed, replay_effects, replay_started, replay_control) = runtime
+      .accept_remote_command(replay, identity)
+      .unwrap()
+    assert_eq(string_field(replayed, "status"), Some("rejected"))
+    assert_true(replay_effects.is_empty())
+    assert_false(replay_started)
+    assert_true(replay_control is None)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+
+    let (_, follow_up_effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id.to_json(),
+        "prompt": "fresh send after remote explicit cancellation".to_json(),
       })
       .unwrap()
     assert_eq(follow_up_effects.length(), 1)

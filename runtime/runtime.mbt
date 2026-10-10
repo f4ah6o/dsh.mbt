@@ -1593,6 +1593,8 @@ async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
   }
   let outcome = if owner_cancelled {
     Err("session prompt was cancelled before admission")
+  } else if control.cancelled.val {
+    Err("session prompt was cancelled before admission")
   } else {
     match hook_result {
       None => Err("session prompt was cancelled before admission")
@@ -2070,9 +2072,9 @@ async fn[X] NativeRuntime::mcp_handle(
       }
       let outcome = match hook_result {
         None => Err("session prompt was cancelled before admission")
-        Some(Err(error)) => Err("UserPromptSubmit hook could not run: " + error)
-        Some(Ok(_)) if hook_control.cancelled.val =>
+        Some(_) if hook_control.cancelled.val =>
           Err("session prompt was cancelled before admission")
+        Some(Err(error)) => Err("UserPromptSubmit hook could not run: " + error)
         Some(Ok(value)) =>
           match value.action {
             NativeHookAction::Deny(reason) =>
