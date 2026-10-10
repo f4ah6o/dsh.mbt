@@ -93,7 +93,20 @@ fn prepare_impl(
     if role != "tool" && !pending.is_empty() {
       reject("INVALID_REQUEST", "tool calls need immediate matching results")
     }
-    let content = text_field(message, "content")
+    let content_value = field(message, "content")
+    if content_value is Array(_) &&
+      (role != "user" || !has_hooks_context_source(message)) {
+      reject(
+        "INVALID_REQUEST", "content blocks are supported only for hooks-claude-code user messages",
+      )
+    }
+    let content_blocks = text_content_blocks(content_value, "message")
+    let content = match content_value {
+      String(value) => value
+      _ if role == "tool" =>
+        return reject("INVALID_REQUEST", "tool result content must be a string")
+      _ => ""
+    }
     let calls = optional_array(message, "tool_calls")
     if role != "assistant" && !calls.is_empty() {
       reject(
@@ -136,9 +149,7 @@ fn prepare_impl(
     if role == "assistant" && mode == "deepseek" && !reasoning.is_empty() {
       blocks.push({ "type": "thinking", "thinking": reasoning.to_json() })
     }
-    if !content.is_empty() {
-      blocks.push({ "type": "text", "text": content.to_json() })
-    }
+    blocks.append(content_blocks)
     for raw_call in calls {
       let call = object(raw_call, "tool call")
       let id = identity(call, "id")
@@ -170,10 +181,11 @@ fn prepare_impl(
     } else {
       let wire : Map[String, Json] = {
         "role": role.to_json(),
-        "content": if content.is_empty() && !calls.is_empty() {
-          Json::null()
-        } else {
-          content.to_json()
+        "content": match content_value {
+          String(value) if value.is_empty() && !calls.is_empty() => Json::null()
+          String(value) => value.to_json()
+          Array(_) => Json::array(content_blocks)
+          _ => Json::null()
         },
       }
       if !openai_calls.is_empty() {

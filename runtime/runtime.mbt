@@ -1936,7 +1936,7 @@ async fn NativeRuntime::finish_tool_effect(
         return Err("native command was cancelled after tool execution")
     }
   } else {
-    Ok(NativeHookAction::Continue)
+    Ok({ action: NativeHookAction::Continue, additional_contexts: [], })
   }
   if control is Some(value) && value.cancelled.val {
     if !post_hook_matches {
@@ -1946,19 +1946,30 @@ async fn NativeRuntime::finish_tool_effect(
     }
     return Err("native command was cancelled after tool execution")
   }
-  let final_result = match post_action {
+  let (final_result, additional_contexts) = match post_action {
     Err(_) =>
-      tool_error(
-        "PostToolUse hook returned an unsupported result after the tool ran; side effects may already have occurred",
+      (
+        tool_error(
+          "PostToolUse hook returned an unsupported result after the tool ran; side effects may already have occurred",
+        ),
+        [],
       )
-    Ok(NativeHookAction::Deny(reason)) =>
-      tool_error(
-        "PostToolUse hook blocked the result after the tool ran; side effects may already have occurred: " +
-        native_hook_limit_reason(reason),
-      )
-    Ok(NativeHookAction::Continue) => tool_result
+    Ok(outcome) => {
+      let result = match outcome.action {
+        NativeHookAction::Deny(reason) =>
+          tool_error(
+            "PostToolUse hook blocked the result after the tool ran; side effects may already have occurred: " +
+            native_hook_limit_reason(reason),
+          )
+        NativeHookAction::Continue => tool_result
+      }
+      (result, outcome.additional_contexts)
+    }
   }
-  self.complete(effect.id(), final_result)
+  self.complete(
+    effect.id(),
+    native_hook_result_with_contexts(final_result, additional_contexts),
+  )
 }
 
 ///|
@@ -1989,14 +2000,14 @@ async fn NativeRuntime::run_tool_effect(
           "PreToolUse hook returned an unsupported result; tool was not run",
         ),
       )
-    Ok(NativeHookAction::Deny(reason)) =>
+    Ok({ action: NativeHookAction::Deny(reason), .. }) =>
       return self.complete(
         effect.id(),
         tool_error(
           "blocked by PreToolUse hook: " + native_hook_limit_reason(reason),
         ),
       )
-    Ok(NativeHookAction::Continue) => ()
+    Ok({ action: NativeHookAction::Continue, .. }) => ()
   }
   let tool_result = if self.external_mcp.has_tool(name) {
     self.external_mcp.execute(effect.request())

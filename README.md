@@ -87,7 +87,7 @@ moon run native --target native --release -- --help
 Mooncakes registry から `dsh` command package を install できます。次の例では `dsh` を Moon の既定の `bin` directory に配置します。
 
 ```sh
-moon install f4ah6o/dsh/cmd/dsh@0.1.11
+moon install f4ah6o/dsh/cmd/dsh@0.1.12
 export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 dsh --help
 ```
@@ -118,7 +118,7 @@ GitHub Release の `Dsh-macos-arm64.zip` に macOS 13+ / Apple Silicon 向けの
 
 Browser UI は MoonBit module から生成される JavaScript と service worker、Mooncakes の `f4ah6o/yami_kumo@0.1.0` から導入する styles で構成します。これらと HTML、manifest、icon を `dsh` executable に埋め込み、`dsh web` から配信します。React や Node.js host は product runtime に含みません。日本語 UI は会話検索、responsive navigation / details drawer、session details、fork、visible task list、tool output pruning を提供します。ChatGPT の sign-in、model refresh / selection、sign-out は Settings にあります。設定は browser local storage、session は native data directory に保存し、公式 API に履歴をアップロードしません。iOS UI は別の受け入れ範囲です。
 
-Native v1 は versioned data envelope と command receipt を保存します。初回起動時に対応する legacy snapshot / Session v4 input を native envelope に一方向変換します。旧版 Node host はこの envelope を読めないため、upgrade 前に data directory を backup してください。dsh 0.1.11+ は ACP provenance と session ごとの model selection を保存します。旧 native reader が envelope を書き戻すとこの metadata を失うことがあるため、downgrade 前にも backup してください。旧 Node host はこの版では配布しません。migration の境界は[native runtime guide](docs/native-runtime.md#data-directory-compatibility)に記載しています。
+Native v1 は versioned data envelope と command receipt を保存します。初回起動時に対応する legacy snapshot / Session v4 input を native envelope に一方向変換します。旧版 Node host はこの envelope を読めないため、upgrade 前に data directory を backup してください。dsh 0.1.11+ は ACP provenance と session ごとの model selection を保存し、0.1.12+ は PostToolUse hook context も保存します。hook context を含む store は 0.1.12+ で開き、0.1.11 以前では書き戻さないでください。旧 native reader が envelope を書き戻すと追加 metadata を失うことがあるため、downgrade 前にも backup してください。旧 Node host はこの版では配布しません。migration の境界は[native runtime guide](docs/native-runtime.md#data-directory-compatibility)に記載しています。
 
 `prune-session` は imported ではない idle / completed session の長い tool result を、将来の provider context 向けに縮めます。既定値は trigger 8,192、head 4,096、tail 1,024 Unicode code points です。元の output と transcript は保持します。browser の **Trim outputs** と `session_prune_tool_results` API からも実行できます。自動 context compaction、token meter、summary、spill は未実装です。詳しくは[アーキテクチャ](docs/architecture.md)を参照してください。
 

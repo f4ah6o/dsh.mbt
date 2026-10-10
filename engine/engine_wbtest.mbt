@@ -338,6 +338,99 @@ test "read calls overlap while durable results stay in model order" {
 }
 
 ///|
+test "PostToolUse contexts stay structured after every result and reject forged restore" {
+  let (engine, llm) = started_engine()
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([
+          ("context-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("context-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let reads = engine.take_effects()
+  ignore(
+    success(
+      engine.complete(
+        id_of(reads[1]),
+        fixture(
+          "{\"ok\":true,\"content\":\"beta\",\"additional_contexts\":[\"b context\"]}",
+        ),
+      ),
+    ),
+  )
+  ignore(
+    success(
+      engine.complete(
+        id_of(reads[0]),
+        fixture(
+          "{\"ok\":true,\"content\":\"alpha\",\"additional_contexts\":[\"a context\",\"second a context\"]}",
+        ),
+      ),
+    ),
+  )
+  let follow_up = engine.take_effects()[0]
+  let messages = array_value(
+    required_field(required_field(follow_up, "request"), "messages"),
+    "messages",
+    100,
+  )
+  assert_eq(messages.length(), 6)
+  assert_eq(required_string(messages[2], "tool_call_id"), "context-a")
+  assert_eq(required_string(messages[3], "tool_call_id"), "context-b")
+  assert_eq(required_string(messages[4], "role"), "user")
+  assert_eq(
+    array_value(required_field(messages[4], "content"), "content", 8).map(block => {
+      required_string(block, "text")
+    }),
+    ["a context", "second a context"],
+  )
+  assert_eq(
+    required_field(messages[4], "source"),
+    Json::object({ "kind": "hooks-claude-code" }),
+  )
+  assert_eq(
+    array_value(required_field(messages[5], "content"), "content", 8).map(block => {
+      required_string(block, "text")
+    }),
+    ["b context"],
+  )
+
+  ignore(success(engine.complete(id_of(follow_up), stop_response("Done"))))
+  let snapshot = engine.snapshot()
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(snapshot), Ok(()))
+  assert_eq(get_session(restored), get_session(engine))
+
+  let tampered = engine.snapshot()
+  let session = array_value(
+      required_field(tampered, "sessions"),
+      "sessions",
+      32,
+    )[0]
+  let events = array_value(required_field(session, "events"), "events", 100)
+  let mut forged = false
+  for event in events {
+    if required_string(event, "type") == "user/message" &&
+      fields(required_field(event, "data")).get("source") is Some(_) {
+      let content = array_value(
+        required_field(required_field(event, "data"), "content"),
+        "content",
+        8,
+      )
+      fields(content[0]).set("text", Json::string("forged context"))
+      forged = true
+      break
+    }
+  }
+  assert_true(forged)
+  assert_true(Engine::new(test_tools()).restore(tampered) is Err(_))
+}
+
+///|
 test "known host outcome stays behind earlier reads and finalizes before restore" {
   let (engine, llm) = started_engine()
   ignore(
@@ -391,6 +484,13 @@ test "known host outcome stays behind earlier reads and finalizes before restore
       required_string(event, "type") == "tool/completed" &&
       required_string(required_field(event, "data"), "call_id") == "read-b" &&
       required_string(required_field(event, "data"), "source") == "effect"
+    }),
+  )
+  assert_true(
+    pending_events.any(event => {
+      required_string(event, "type") == "tool/completed" &&
+      required_string(required_field(event, "data"), "call_id") == "read-b" &&
+      fields(required_field(event, "data")).get("additional_contexts") is None
     }),
   )
   assert_true(
@@ -469,6 +569,111 @@ test "session cancellation commits a known host outcome and restores it without 
   assert_eq(restored.restore(engine.snapshot()), Ok(()))
   assert_eq(get_session(restored), cancelled)
   assert_eq(restored.take_effects().length(), 0)
+}
+
+///|
+test "termination commits accepted PostToolUse contexts before closing the batch" {
+  let (cancelled_engine, llm) = started_engine()
+  ignore(
+    success(
+      cancelled_engine.complete(
+        id_of(llm),
+        calls_response([
+          ("read-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("read-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let reads = cancelled_engine.take_effects()
+  ignore(
+    success(
+      cancelled_engine.complete(
+        id_of(reads[0]),
+        fixture(
+          "{\"ok\":true,\"content\":\"alpha\",\"additional_contexts\":[\"accepted context\"]}",
+        ),
+      ),
+    ),
+  )
+  let cancelled = success(
+    cancelled_engine.invoke(
+      "session_cancel",
+      fixture("{\"session_id\":\"test\"}"),
+    ),
+  )
+  assert_eq(get_status(cancelled), "cancelled")
+  let cancelled_messages = array_value(
+    required_field(cancelled, "messages"),
+    "messages",
+    100,
+  )
+  assert_eq(cancelled_messages.length(), 5)
+  assert_eq(required_string(cancelled_messages[2], "tool_call_id"), "read-a")
+  assert_eq(required_string(cancelled_messages[3], "tool_call_id"), "read-b")
+  assert_eq(required_field(cancelled_messages[3], "is_error"), boolean(true))
+  assert_eq(required_string(cancelled_messages[4], "role"), "user")
+  assert_eq(
+    required_field(cancelled_messages[4], "source"),
+    Json::object({ "kind": "hooks-claude-code" }),
+  )
+  assert_eq(
+    required_string(cancelled_messages[4], "content"),
+    "accepted context",
+  )
+  let cancelled_restored = Engine::new(test_tools())
+  assert_eq(cancelled_restored.restore(cancelled_engine.snapshot()), Ok(()))
+  let cancelled_reopened = Engine::new(test_tools())
+  assert_eq(cancelled_reopened.restore(cancelled_restored.snapshot()), Ok(()))
+  assert_eq(get_session(cancelled_reopened), cancelled)
+
+  let (interrupted_engine, interrupted_llm) = started_engine()
+  ignore(
+    success(
+      interrupted_engine.complete(
+        id_of(interrupted_llm),
+        calls_response([
+          ("read-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("read-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let interrupted_reads = interrupted_engine.take_effects()
+  ignore(
+    success(
+      interrupted_engine.complete(
+        id_of(interrupted_reads[1]),
+        fixture(
+          "{\"ok\":true,\"content\":\"beta\",\"additional_contexts\":[\"restored context\"]}",
+        ),
+      ),
+    ),
+  )
+  let interrupted_restored = Engine::new(test_tools())
+  assert_eq(interrupted_restored.restore(interrupted_engine.snapshot()), Ok(()))
+  let interrupted = get_session(interrupted_restored)
+  assert_eq(get_status(interrupted), "failed")
+  let interrupted_messages = array_value(
+    required_field(interrupted, "messages"),
+    "messages",
+    100,
+  )
+  assert_eq(interrupted_messages.length(), 5)
+  assert_eq(required_string(interrupted_messages[2], "tool_call_id"), "read-a")
+  assert_eq(required_string(interrupted_messages[3], "tool_call_id"), "read-b")
+  assert_eq(required_field(interrupted_messages[3], "is_error"), boolean(false))
+  assert_eq(required_string(interrupted_messages[4], "role"), "user")
+  assert_eq(
+    required_string(interrupted_messages[4], "content"),
+    "restored context",
+  )
+  let interrupted_reopened = Engine::new(test_tools())
+  assert_eq(
+    interrupted_reopened.restore(interrupted_restored.snapshot()),
+    Ok(()),
+  )
+  assert_eq(get_session(interrupted_reopened), interrupted)
 }
 
 ///|
@@ -1185,7 +1390,13 @@ test "capacity closure keeps an admitted staged read and retires the group" {
     ("ok", boolean(true)),
     ("content", Json::string("x".repeat(65536))),
   ])
-  ignore(success(engine.complete(id_of(effects[1]), large_success)))
+  let read_one_fields = fields(large_success).copy()
+  read_one_fields["additional_contexts"] = Json::array([
+    Json::string("capacity context"),
+  ])
+  ignore(
+    success(engine.complete(id_of(effects[1]), Json::object(read_one_fields))),
+  )
   let closed = success(engine.complete(id_of(effects[2]), large_success))
   assert_eq(get_status(closed), "failed")
   let messages = array_value(
@@ -1193,7 +1404,7 @@ test "capacity closure keeps an admitted staged read and retires the group" {
     "messages",
     100,
   )
-  assert_eq(messages.length(), 5)
+  assert_eq(messages.length(), 6)
   assert_eq(required_string(messages[2], "tool_call_id"), "read-0")
   assert_eq(required_field(messages[2], "is_error"), boolean(true))
   assert_eq(required_string(messages[3], "tool_call_id"), "read-1")
@@ -1201,6 +1412,12 @@ test "capacity closure keeps an admitted staged read and retires the group" {
   assert_eq(required_field(messages[3], "is_error"), boolean(false))
   assert_eq(required_string(messages[4], "tool_call_id"), "read-2")
   assert_eq(required_field(messages[4], "is_error"), boolean(true))
+  assert_eq(required_string(messages[5], "role"), "user")
+  assert_eq(
+    required_field(messages[5], "source"),
+    Json::object({ "kind": "hooks-claude-code" }),
+  )
+  assert_eq(required_string(messages[5], "content"), "capacity context")
   assert_eq(engine.take_effects().length(), 0)
   let restored = Engine::new(test_tools())
   assert_eq(restored.restore(engine.snapshot()), Ok(()))

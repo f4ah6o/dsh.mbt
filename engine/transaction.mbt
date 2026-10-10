@@ -68,6 +68,7 @@ fn Session::copy_state(self : Session) -> Session {
       effect_id: call.effect_id,
       completed_content: call.completed_content,
       completed_error: call.completed_error,
+      completed_contexts: call.completed_contexts.copy(),
     }),
     used_calls: self.used_calls.copy(),
     cursor: self.cursor,

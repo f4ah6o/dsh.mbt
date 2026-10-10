@@ -48,8 +48,9 @@ async fn NativeHooks::run_point(
   call_id : String,
   tool_input : Json,
   tool_response : String?,
-) -> Result[NativeHookAction, String] {
+) -> Result[NativeHookOutcome, String] {
   let blocked_reasons : Array[String] = []
+  let additional_contexts : Array[String] = []
   let mut unsupported_error : String? = None
   for group in groups {
     if !native_hook_matches(group.matcher, tool_name) {
@@ -76,7 +77,7 @@ async fn NativeHooks::run_point(
           // still cancelled and reaped before this path returns.
           continue
       }
-      let action = match native_hook_result_decision(capture, event) {
+      let outcome = match native_hook_result_decision(capture, event) {
         Ok(value) => value
         Err(error) => {
           if unsupported_error is None {
@@ -85,7 +86,26 @@ async fn NativeHooks::run_point(
           continue
         }
       }
-      match action {
+      let mut context_error : String? = None
+      for context in outcome.additional_contexts {
+        match native_hook_add_context(additional_contexts, context) {
+          Ok(_) => ()
+          Err(error) => {
+            context_error = Some(error)
+            break
+          }
+        }
+      }
+      match context_error {
+        Some(error) => {
+          if unsupported_error is None {
+            unsupported_error = Some(error)
+          }
+          continue
+        }
+        None => ()
+      }
+      match outcome.action {
         NativeHookAction::Continue => ()
         NativeHookAction::Deny(reason) => blocked_reasons.push(reason)
       }
@@ -94,8 +114,11 @@ async fn NativeHooks::run_point(
   match unsupported_error {
     Some(error) => Err(error)
     None if !blocked_reasons.is_empty() =>
-      Ok(NativeHookAction::Deny(blocked_reasons.join("\n\n")))
-    None => Ok(NativeHookAction::Continue)
+      Ok({
+        action: NativeHookAction::Deny(blocked_reasons.join("\n\n")),
+        additional_contexts,
+      })
+    None => Ok({ action: NativeHookAction::Continue, additional_contexts, })
   }
 }
 
@@ -105,7 +128,7 @@ async fn NativeHooks::before_tool(
   tools : NativeTools,
   session_id : String,
   request : Json,
-) -> Result[NativeHookAction, String] {
+) -> Result[NativeHookOutcome, String] {
   let tool_name = string_field(request, "name").unwrap_or("")
   let call_id = string_field(request, "call_id").unwrap_or("")
   let tool_input = object_field(request, "arguments").unwrap_or(Json::null())
@@ -128,7 +151,7 @@ async fn NativeHooks::after_tool(
   session_id : String,
   request : Json,
   result : Json,
-) -> Result[NativeHookAction, String] {
+) -> Result[NativeHookOutcome, String] {
   let tool_name = string_field(request, "name").unwrap_or("")
   let call_id = string_field(request, "call_id").unwrap_or("")
   let tool_input = object_field(request, "arguments").unwrap_or(Json::null())

@@ -16,6 +16,26 @@
 
 ### Migration
 
+## 0.1.12 - 2026-10-10
+
+### Added
+
+- Add bounded PostToolUse `additionalContext` support. Hook text blocks become durable, source-tagged context messages after correlated tool results, retain hook order in provider requests, and replay without rerunning hooks. The local transcript labels them `フック補足`. Stores containing this metadata require dsh 0.1.12+; see the [native runtime guide](docs/native-runtime.md#native-command-hooks) and [remaining port work](issues/open/0001-upstream-parity.md).
+
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
+- dsh 0.1.12 reads context-free native stores from dsh 0.1.11. Stores with PostToolUse context metadata require dsh 0.1.12 or later; back up before downgrading and do not rewrite them with an older reader.
+
 ## 0.1.11 - 2026-10-10
 
 ### Added

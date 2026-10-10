@@ -63,6 +63,58 @@ fn native_acp_test_updates(
 }
 
 ///|
+async test "ACP keeps synthetic hook context out of human and assistant text updates" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-acp-hook-context")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let runtime = NativeRuntime::open(fixture + "/data", workspace, false, true).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let output : Ref[Array[String]] = Ref([])
+    let service = NativeAcpService::new(runtime, fn(line) {
+      output.val.push(line)
+      Ok(())
+    })
+    let session : NativeAcpSession = {
+      session_id: "acp-hook-context",
+      native_session_id: "native-hook-context",
+      event_gate: @async.Mutex::Mutex(),
+      last_event_seq: 0,
+      prompt_generation: 0,
+      prompt_active: false,
+      resuming: false,
+      cancelled: false,
+      closing: false,
+      closed: false,
+      cancel_required: false,
+      cancel_sent: false,
+      prompt_done: None,
+      pending_permission: None,
+    }
+    let state : Json = {
+      "events": [
+        {
+          "seq": 1,
+          "type": "user/message",
+          "data": {
+            "role": "user",
+            "content": [{ "type": "text", "text": "private hook context" }],
+            "source": { "kind": "hooks-claude-code" },
+          },
+        },
+      ],
+    }
+    service.emit_committed_events(session, state).unwrap()
+    assert_eq(session.last_event_seq, 1)
+    assert_true(output.val.is_empty())
+    assert_false(output.val.any(line => line.contains("private hook context")))
+  }
+}
+
+///|
 test "ACP model allowlist is bounded strict JSON and rejects duplicates" {
   assert_eq(native_acp_parse_model_allowlist(None), Ok([]))
   assert_eq(

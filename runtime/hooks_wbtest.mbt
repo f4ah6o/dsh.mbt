@@ -24,6 +24,64 @@ fn native_hook_test_tools(workspace : String) -> NativeTools {
 }
 
 ///|
+fn native_hook_test_fields(value : Json) -> Map[String, Json] {
+  match value {
+    Json::Object(fields) => fields
+    _ => abort("hook test expected an object")
+  }
+}
+
+///|
+fn native_hook_test_required_field(value : Json, name : String) -> Json {
+  match native_hook_test_fields(value).get(name) {
+    Some(field) => field
+    None => abort("hook test expected field " + name)
+  }
+}
+
+///|
+fn native_hook_test_array(value : Json, name : String) -> Array[Json] {
+  match value {
+    Json::Array(items) => items
+    _ => abort("hook test expected array " + name)
+  }
+}
+
+///|
+fn native_hook_test_required_string(value : Json, name : String) -> String {
+  match native_hook_test_required_field(value, name) {
+    Json::String(text) => text
+    _ => abort("hook test expected string " + name)
+  }
+}
+
+///|
+fn native_hook_context_messages(session : Json) -> Array[Json] {
+  match object_field(session, "messages") {
+    Some(Json::Array(messages)) =>
+      messages.filter(message => {
+        string_field(message, "display_label") == Some("フック補足")
+      })
+    _ => []
+  }
+}
+
+///|
+fn native_hook_has_context_event(session : Json) -> Bool {
+  match object_field(session, "events") {
+    Some(Json::Array(events)) =>
+      events.any(event => {
+        string_field(event, "type") == Some("user/message") &&
+        native_hook_test_fields(native_hook_test_required_field(event, "data")).get(
+          "source",
+        )
+        is Some(_)
+      })
+    _ => false
+  }
+}
+
+///|
 fn native_hook_shell_quote(value : String) -> String {
   let output = StringBuilder()
   output.write_char('\'')
@@ -161,7 +219,15 @@ test "native hook result codec preserves supported Claude exit and decision sema
     },
     "PreToolUse",
   )
-  assert_true(exit_two is Ok(NativeHookAction::Deny("policy says no")))
+  assert_true(
+    exit_two
+    is Ok(
+      {
+        action: NativeHookAction::Deny("policy says no"),
+        additional_contexts: [],
+      }
+    ),
+  )
   let denied = native_hook_result_decision(
     {
       exit_code: 0,
@@ -171,7 +237,12 @@ test "native hook result codec preserves supported Claude exit and decision sema
     },
     "PreToolUse",
   )
-  assert_true(denied is Ok(NativeHookAction::Deny("blocked")))
+  assert_true(
+    denied
+    is Ok(
+      { action: NativeHookAction::Deny("blocked"), additional_contexts: [], }
+    ),
+  )
   let allow_overrides_legacy_block = native_hook_result_decision(
     {
       exit_code: 0,
@@ -181,7 +252,10 @@ test "native hook result codec preserves supported Claude exit and decision sema
     },
     "PreToolUse",
   )
-  assert_true(allow_overrides_legacy_block is Ok(NativeHookAction::Continue))
+  assert_true(
+    allow_overrides_legacy_block
+    is Ok({ action: NativeHookAction::Continue, additional_contexts: [], }),
+  )
   let mismatched_event = native_hook_result_decision(
     {
       exit_code: 0,
@@ -191,7 +265,10 @@ test "native hook result codec preserves supported Claude exit and decision sema
     },
     "PreToolUse",
   )
-  assert_true(mismatched_event is Ok(NativeHookAction::Continue))
+  assert_true(
+    mismatched_event
+    is Ok({ action: NativeHookAction::Continue, additional_contexts: [], }),
+  )
   let nonblocking_exit = native_hook_result_decision(
     {
       exit_code: 7,
@@ -201,7 +278,109 @@ test "native hook result codec preserves supported Claude exit and decision sema
     },
     "PreToolUse",
   )
-  assert_true(nonblocking_exit is Ok(NativeHookAction::Continue))
+  assert_true(
+    nonblocking_exit
+    is Ok({ action: NativeHookAction::Continue, additional_contexts: [], }),
+  )
+  let exit_two_ignores_context = native_hook_result_decision(
+    {
+      exit_code: 2,
+      stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"ignored\"}}",
+      stderr: "denied",
+      truncated: false,
+    },
+    "PostToolUse",
+  )
+  assert_true(
+    exit_two_ignores_context
+    is Ok(
+      { action: NativeHookAction::Deny("denied"), additional_contexts: [], }
+    ),
+  )
+  let deny_with_context = native_hook_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"blocked\",\"additionalContext\":\"\u0020\u0020\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PostToolUse",
+  )
+  assert_true(
+    deny_with_context
+    is Ok(
+      {
+        action: NativeHookAction::Deny("blocked"),
+        additional_contexts: ["  "],
+      }
+    ),
+  )
+  let empty_context = native_hook_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PostToolUse",
+  )
+  assert_true(
+    empty_context
+    is Ok({ action: NativeHookAction::Continue, additional_contexts: [], }),
+  )
+  let mismatched_context_event = native_hook_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"ignored\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PostToolUse",
+  )
+  assert_true(
+    mismatched_context_event
+    is Ok({ action: NativeHookAction::Continue, additional_contexts: [], }),
+  )
+  assert_true(
+    native_hook_result_decision(
+      {
+        exit_code: 0,
+        stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":42}}",
+        stderr: "",
+        truncated: false,
+      },
+      "PostToolUse",
+    )
+    is Err(_),
+  )
+  assert_true(
+    native_hook_result_decision(
+      {
+        exit_code: 0,
+        stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"not supported\"}}",
+        stderr: "",
+        truncated: false,
+      },
+      "PreToolUse",
+    )
+    is Err(_),
+  )
+  let unicode_context = "😀".repeat(2048)
+  assert_eq(unicode_context.length(), 4096)
+  assert_true(native_hook_add_context([], unicode_context) is Ok(_))
+  assert_true(native_hook_add_context([], unicode_context + "😀") is Err(_))
+  let bounded_contexts : Array[String] = []
+  for _ in 0..<4 {
+    assert_true(
+      native_hook_add_context(bounded_contexts, "a".repeat(4096)) is Ok(_),
+    )
+  }
+  assert_true(native_hook_add_context(bounded_contexts, "b") is Err(_))
+  let counted_contexts : Array[String] = []
+  for _ in 0..<NATIVE_HOOK_CONTEXT_COUNT_LIMIT {
+    assert_true(native_hook_add_context(counted_contexts, "x") is Ok(_))
+  }
+  assert_true(native_hook_add_context(counted_contexts, "y") is Err(_))
   assert_true(
     native_hook_result_decision(
       { exit_code: 0, stdout: "{not-json}", stderr: "", truncated: false, },
@@ -240,6 +419,78 @@ test "native hook result codec preserves supported Claude exit and decision sema
     )
     is Err(_),
   )
+}
+
+///|
+async test "PostToolUse aggregates matching contexts in order with blocking feedback" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-hooks-context-order")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let commands = [
+      "cat >/dev/null; printf 1 >> hook-order; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"first context\"}}'",
+      "cat >/dev/null; printf 2 >> hook-order; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"ignored exit-two context\"}}'; printf 'second denial' >&2; exit 2",
+      "cat >/dev/null; printf 3 >> hook-order; printf '%s' '{\"decision\":\"block\",\"reason\":\"third denial\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"tail context\"}}'",
+    ]
+    let hooks = commands.map(command => {
+      Json::object({
+        "type": Json::string("command"),
+        "command": Json::string(command),
+      })
+    })
+    let config = Json::object({
+      "PostToolUse": Json::array([
+        Json::object({
+          "matcher": Json::string("read"),
+          "hooks": Json::array(hooks),
+        }),
+      ]),
+    })
+    @fs.write_file(hooks_path, @utf8.encode(config.stringify()))
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let request : Json = {
+      "name": "read",
+      "call_id": "read-order",
+      "arguments": { "file_path": "target.txt" },
+    }
+    let result : Json = { "content": "read result", "is_error": false }
+    let outcome = runtime.hooks
+      .after_tool(runtime.tools, "hook-context-order", request, result)
+      .unwrap()
+    assert_true(
+      outcome.action is NativeHookAction::Deny("second denial\n\nthird denial"),
+    )
+    assert_eq(outcome.additional_contexts, ["first context", "tail context"])
+    assert_eq(@fs.read_file(workspace + "/hook-order").text(), "123")
+
+    let unmatched_request : Json = {
+      "name": "write",
+      "call_id": "write-unmatched",
+      "arguments": { "file_path": "target.txt" },
+    }
+    let unmatched = runtime.hooks
+      .after_tool(
+        runtime.tools,
+        "hook-context-order",
+        unmatched_request,
+        result,
+      )
+      .unwrap()
+    assert_true(unmatched.action is NativeHookAction::Continue)
+    assert_true(unmatched.additional_contexts.is_empty())
+    assert_eq(@fs.read_file(workspace + "/hook-order").text(), "123")
+  }
 }
 
 ///|
@@ -468,7 +719,7 @@ async test "native PreToolUse and PostToolUse receive bounded payloads after app
     @fs.mkdir(workspace)
     let hooks_path = fixture + "/hooks.json"
     let pre_command = "cat > hook-pre.json; printf '%s' \"${CLAUDE_PROJECT_DIR}\" > hook-project-dir.txt; if [ \"${NATIVE_HOOK_TEST_SECRET-}\" = hook-test-secret ]; then printf leaked > hook-secret-env.txt; else printf scrubbed > hook-secret-env.txt; fi; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\"}}'"
-    let post_command = "cat > hook-post.json; printf x >> hook-post-count.txt"
+    let post_command = "cat > hook-post.json; printf x >> hook-post-count.txt; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"native hook context\"}}'"
     let pre_group = Json::object({
       "matcher": Json::string("write"),
       "hooks": Json::array([
@@ -559,6 +810,53 @@ async test "native PreToolUse and PostToolUse receive bounded payloads after app
       .invoke("session_get", { "session_id": session_id.to_json() })
       .unwrap()
     assert_true(native_hook_has_successful_write_result(after_write))
+    let display_messages = native_hook_test_array(
+      native_hook_test_required_field(after_write, "messages"),
+      "messages",
+    )
+    assert_true(
+      display_messages.any(message => {
+        string_field(message, "display_label") == Some("フック補足") &&
+        string_field(message, "content") == Some("native hook context") &&
+        native_hook_test_required_field(message, "source") ==
+        Json::object({ "kind": Json::string("hooks-claude-code") })
+      }),
+    )
+    let provider_request = next_effects[0].request()
+    let provider_messages = native_hook_test_array(
+      native_hook_test_required_field(provider_request, "messages"),
+      "provider messages",
+    )
+    assert_true(
+      provider_messages.any(message => {
+        native_hook_test_required_field(message, "role") == Json::string("user") &&
+        native_hook_test_required_field(message, "content")
+        is Json::Array(blocks) &&
+        blocks.any(block => {
+          string_field(block, "text") == Some("native hook context")
+        }) &&
+        native_hook_test_fields(message).get("source") ==
+        Some(Json::object({ "kind": Json::string("hooks-claude-code") }))
+      }),
+    )
+    let user_context_events = native_hook_test_array(
+      native_hook_test_required_field(after_write, "events"),
+      "events",
+    ).filter(event => {
+      string_field(event, "type") == Some("user/message") &&
+      native_hook_test_fields(native_hook_test_required_field(event, "data")).get(
+        "source",
+      )
+      is Some(_)
+    })
+    assert_eq(user_context_events.length(), 1)
+    let raw_context = native_hook_test_required_field(
+      user_context_events[0],
+      "data",
+    )
+    assert_true(
+      native_hook_test_required_field(raw_context, "content") is Json::Array(_),
+    )
     assert_eq(next_effects.length(), 1)
     let (_, final_effects) = runtime
       .complete(next_effects[0].id(), native_demo_response("Finished"))
@@ -580,7 +878,236 @@ async test "native PreToolUse and PostToolUse receive bounded payloads after app
       .invoke("session_get", { "session_id": session_id.to_json() })
       .unwrap()
     assert_true(native_hook_has_successful_write_result(restored))
+    assert_true(
+      native_hook_test_array(
+        native_hook_test_required_field(restored, "messages"),
+        "messages",
+      ).any(message => {
+        string_field(message, "display_label") == Some("フック補足") &&
+        string_field(message, "content") == Some("native hook context")
+      }),
+    )
+    assert_eq(
+      native_hook_test_array(
+        native_hook_test_required_field(restored, "events"),
+        "events",
+      )
+      .filter(event => {
+        string_field(event, "type") == Some("user/message") &&
+        native_hook_test_fields(native_hook_test_required_field(event, "data")).get(
+          "source",
+        )
+        is Some(_)
+      })
+      .length(),
+      1,
+    )
     assert_eq(@fs.read_file(workspace + "/hook-post-count.txt").text(), "x")
+  }
+}
+
+///|
+async test "PostToolUse contexts reach a real follow-up request and survive receipt replay" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-hooks-context-http")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    @fs.write_file(workspace + "/a.txt", @utf8.encode("alpha"))
+    @fs.write_file(workspace + "/b.txt", @utf8.encode("beta"))
+    let hooks_path = fixture + "/hooks.json"
+    let hook_one = "cat >/dev/null; printf x >> hook-count.txt; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"hook one\"}}'"
+    let hook_two = "cat >/dev/null; printf x >> hook-count.txt; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"hook two\"}}'"
+    let config = Json::object({
+      "PostToolUse": Json::array([
+        Json::object({
+          "matcher": Json::string("read"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(hook_one) }),
+            Json::object({ "command": Json::string(hook_two) }),
+          ]),
+        }),
+      ]),
+    })
+    @fs.write_file(hooks_path, @utf8.encode(config.stringify()))
+    let address = @socket.Addr::parse("127.0.0.1:0")
+    let server = @http.Server::Server(address, reuse_addr=false)
+    group.add_defer(() => server.close())
+    let bodies : Ref[Array[String]] = Ref([])
+    let auth_ok = Ref(true)
+    let serving = group.spawn(no_wait=true, async fn() {
+      native_fixture_provider_server(
+        server,
+        [
+          {
+            code: 200,
+            reason: "OK",
+            body: native_fixture_openai_calls_stream([
+              ("read-a", "read", { "file_path": "a.txt" }),
+              ("read-b", "read", { "file_path": "b.txt" }),
+            ]),
+            retry_after: None,
+          },
+          {
+            code: 200,
+            reason: "OK",
+            body: native_fixture_openai_text_stream("Read complete."),
+            retry_after: None,
+          },
+        ],
+        bodies,
+        auth_ok,
+        None,
+      )
+    })
+    let base_url = "http://127.0.0.1:" + server.addr.port().to_string()
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      false,
+      mode_override="openai",
+      model_override="fixture-model",
+      base_url_override=base_url,
+      max_retries=0,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "native-hook-context-http"
+    let (_, create_effects) = runtime
+      .invoke("session_create", {
+        "id": session_id.to_json(),
+        "title": "PostToolUse context",
+      })
+      .unwrap()
+    assert_true(create_effects.is_empty())
+    let command_time = native_auth_now().to_int64() * 1000L
+    let command_id = @protocol.uuid_v7_command_id_from_entropy(
+      command_time, "0123456789abcdeffedcba9876543210",
+    ).unwrap()
+    let command = native_runtime_command(
+      runtime.state.workspace_id,
+      session_id,
+      command_id,
+      "Read a.txt and b.txt.",
+    )
+    let identity = runtime.state.identity_key
+    let (accepted, effects, should_start, control) = runtime
+      .accept_remote_command(command, identity)
+      .unwrap()
+    assert_true(should_start)
+    runtime.run_command_job(
+      command_id,
+      identity,
+      int_field(accepted, "accepted_revision").unwrap(),
+      effects,
+      control~,
+    )
+    serving.wait()
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 2)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "xxxx")
+
+    let follow_up = @json.parse(bodies.val[1])
+    let provider_messages = native_hook_test_array(
+      native_hook_test_required_field(follow_up, "messages"),
+      "follow-up messages",
+    )
+    let context_messages = provider_messages.filter(message => {
+      native_hook_test_fields(message).get("role") == Some(Json::string("user")) &&
+      native_hook_test_fields(message).get("content") is Some(Json::Array(_))
+    })
+    assert_eq(context_messages.length(), 2)
+    for context_message in context_messages {
+      assert_eq(
+        native_hook_test_array(
+          native_hook_test_required_field(context_message, "content"),
+          "content",
+        ).map(block => native_hook_test_required_string(block, "text")),
+        ["hook one", "hook two"],
+      )
+    }
+    let last_tool_result_index : Ref[Int] = Ref(-1)
+    let first_context_index : Ref[Int] = Ref(-1)
+    for index, message in provider_messages {
+      if string_field(message, "role") == Some("tool") {
+        last_tool_result_index.val = index
+      }
+      if first_context_index.val < 0 &&
+        native_hook_test_fields(message).get("content") is Some(Json::Array(_)) {
+        first_context_index.val = index
+      }
+    }
+    assert_true(last_tool_result_index.val >= 0)
+    assert_true(first_context_index.val > last_tool_result_index.val)
+
+    let receipt = runtime.find_receipt(command_id, identity).unwrap().unwrap()
+    assert_eq(string_field(receipt, "status"), Some("completed"))
+    let (completed, _) = runtime
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_true(
+      native_hook_test_array(
+        native_hook_test_required_field(completed, "messages"),
+        "messages",
+      ).any(message => {
+        string_field(message, "display_label") == Some("フック補足") &&
+        string_field(message, "content") == Some("hook one\nhook two") &&
+        native_hook_test_fields(message).get("source") ==
+        Some(Json::object({ "kind": Json::string("hooks-claude-code") }))
+      }),
+    )
+    assert_true(runtime.close() is Ok(_))
+    let reopened = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      false,
+      mode_override="openai",
+      model_override="fixture-model",
+      base_url_override=base_url,
+      max_retries=0,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(reopened.close()))
+    })
+    let restored = reopened.find_receipt(command_id, identity).unwrap().unwrap()
+    assert_eq(string_field(restored, "status"), Some("completed"))
+    let replay = native_runtime_command(
+      reopened.state.workspace_id,
+      session_id,
+      command_id,
+      "Read a.txt and b.txt.",
+    )
+    let (replayed, replay_effects, replay_started, _) = reopened
+      .accept_remote_command(replay, identity)
+      .unwrap()
+    assert_eq(string_field(replayed, "status"), Some("completed"))
+    assert_true(replay_effects.is_empty())
+    assert_false(replay_started)
+    let (restored_session, _) = reopened
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_true(
+      native_hook_test_array(
+        native_hook_test_required_field(restored_session, "messages"),
+        "messages",
+      ).any(message => {
+        string_field(message, "display_label") == Some("フック補足") &&
+        string_field(message, "content") == Some("hook one\nhook two")
+      }),
+    )
+    assert_eq(bodies.val.length(), 2)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "xxxx")
   }
 }
 
@@ -1013,7 +1540,7 @@ async test "native session cancellation checkpoints the completed tool result an
     let workspace = fixture + "/workspace"
     @fs.mkdir(workspace)
     let hooks_path = fixture + "/hooks.json"
-    let post_command = "printf x >> hook-post-count.txt; (trap '' TERM; while [ ! -f hook-post-release ]; do /bin/sleep 0.01; done; printf escaped > hook-post-child-alive) & printf started > hook-post-started; wait"
+    let post_command = "printf x >> hook-post-count.txt; (trap '' TERM; while [ ! -f hook-post-release ]; do /bin/sleep 0.01; done; printf escaped > hook-post-child-alive; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"must not be admitted after cancellation\"}}') & printf started > hook-post-started; wait"
     @fs.write_file(
       hooks_path,
       @utf8.encode(
@@ -1152,6 +1679,8 @@ async test "native session cancellation checkpoints the completed tool result an
       .invoke("session_get", { "session_id": session_id.to_json() })
       .unwrap()
     assert_true(native_hook_has_successful_write_result(session))
+    assert_true(native_hook_context_messages(session).is_empty())
+    assert_false(native_hook_has_context_event(session))
     assert_eq(
       object_field(native_safe_session(session), "has_tool_results"),
       Some(Json::boolean(true)),
@@ -1199,6 +1728,8 @@ async test "native session cancellation checkpoints the completed tool result an
       .invoke("session_get", { "session_id": session_id.to_json() })
       .unwrap()
     assert_true(native_hook_has_successful_write_result(restored))
+    assert_true(native_hook_context_messages(restored).is_empty())
+    assert_false(native_hook_has_context_event(restored))
     assert_eq(
       object_field(native_safe_session(restored), "has_tool_results"),
       Some(Json::boolean(true)),

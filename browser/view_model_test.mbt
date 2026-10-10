@@ -118,6 +118,17 @@ test "accessible transcript preserves literal content, pruning labels, and provi
 }
 
 ///|
+test "hook contexts retain a distinct accessible label" {
+  let session = parse_fixture(
+    "{\"messages\":[{\"role\":\"user\",\"content\":\"hook detail\",\"source\":{\"kind\":\"hooks-claude-code\"},\"display_label\":\"フック補足\"}]}",
+  )
+  let rows = @browser.display_messages(session)
+  assert_eq(rows.length(), 1)
+  assert_eq(rows[0].label, "フック補足")
+  assert_eq(rows[0].text, "hook detail")
+}
+
+///|
 test "visible task list follows selected session data and stale polls cannot erase it" {
   let selected = parse_fixture(
     "{\"id\":\"todo-ui\",\"turn_id\":2,\"events\":[1,2,3,4],\"todos\":[{\"content\":\"Implement feature\",\"status\":\"in_progress\"},{\"content\":\"Verify\",\"status\":\"pending\"}],\"messages\":[{\"role\":\"assistant\",\"content\":\"Working\"}]}",

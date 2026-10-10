@@ -298,7 +298,10 @@ pub fn display_messages(session : Json) -> Array[DisplayMessage] {
     let content = string_member(message, "content")
     if content != "" {
       let call_id = string_member(message, "tool_call_id")
-      let label = if provisional && role == "assistant" {
+      let display_label = string_member(message, "display_label")
+      let label = if display_label != "" {
+        display_label
+      } else if provisional && role == "assistant" {
         "アシスタント · " + stream_status
       } else if role == "tool" && pruned_call(session, call_id) {
         "ツール結果 · モデル入力用に短縮"

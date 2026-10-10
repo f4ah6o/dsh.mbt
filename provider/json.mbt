@@ -46,6 +46,51 @@ fn text_field(
 }
 
 ///|
+fn text_content_blocks(
+  value : Json,
+  where_ : String,
+) -> Array[Json] raise ProviderError {
+  match value {
+    String(text) =>
+      if text.is_empty() {
+        []
+      } else {
+        [{ "type": "text".to_json(), "text": text.to_json() }]
+      }
+    Array(raw_blocks) => {
+      if raw_blocks.is_empty() {
+        reject("INVALID_REQUEST", where_ + " content blocks must not be empty")
+      }
+      let blocks : Array[Json] = []
+      for raw_block in raw_blocks {
+        let block = object(raw_block, where_ + " content block")
+        if block.length() != 2 || text_field(block, "type") != "text" {
+          reject(
+            "INVALID_REQUEST",
+            where_ + " supports only text content blocks",
+          )
+        }
+        let text = text_field(block, "text")
+        blocks.push({ "type": "text".to_json(), "text": text.to_json() })
+      }
+      blocks
+    }
+    _ =>
+      reject("INVALID_REQUEST", where_ + " content must be text or text blocks")
+  }
+}
+
+///|
+fn has_hooks_context_source(message : Map[String, Json]) -> Bool {
+  match message.get("source") {
+    Some(Json::Object(source)) =>
+      source.length() == 1 &&
+      source.get("kind") == Some(Json::string("hooks-claude-code"))
+    _ => false
+  }
+}
+
+///|
 fn identity(
   fields : Map[String, Json],
   key : String,

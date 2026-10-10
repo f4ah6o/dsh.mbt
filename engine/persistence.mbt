@@ -215,6 +215,7 @@ fn restore_session(
   let mut admitted_user = false
   let mut assistant_recorded = false
   let mut pending_todo_call : String? = None
+  let pending_post_tool_contexts : Array[(String, Json)] = []
   for index, raw in events {
     let seq = int_value(required_field(raw, "seq"), "event seq", 0, 32768)
     if seq != index {
@@ -230,6 +231,20 @@ fn restore_session(
     let step = int_value(required_field(raw, "step"), "event step", 0, 64)
     let data = required_field(raw, "data")
     ignore(fields(data))
+    let expected_post_tool_context = pending_post_tool_contexts.get(0)
+    if expected_post_tool_context is Some((call_id, expected)) {
+      if kind != "user/message" || data != expected {
+        raise Invalid(
+          "PostToolUse context is missing, reordered, or differs from its completion",
+        )
+      }
+      let call = match session.call_by_id(call_id) {
+        Some(value) => value
+        None => raise Invalid("PostToolUse context references an unknown call")
+      }
+      call.completed_contexts = []
+      ignore(pending_post_tool_contexts.remove(0))
+    }
     if index == 0 {
       if kind != "session/created" || turn_id != 0 || step != 0 {
         raise Invalid("Snapshot must begin with a creation event")
@@ -274,16 +289,35 @@ fn restore_session(
         raise Invalid("Event boundary metadata mismatch")
       }
       match kind {
-        "user/message" => {
-          if !open_turn || session.step != 0 || admitted_user {
-            raise Invalid("User message outside turn admission")
+        "user/message" =>
+          match expected_post_tool_context {
+            Some(_) => {
+              if !open_turn ||
+                !session.open_step ||
+                session.cursor != session.calls.length() ||
+                !assistant_recorded {
+                raise Invalid(
+                  "PostToolUse context outside completed tool results",
+                )
+              }
+              if required_string(data, "role", max=16) != "user" {
+                raise Invalid("Invalid PostToolUse context role")
+              }
+            }
+            None => {
+              if fields(data).get("source") is Some(_) {
+                raise Invalid("Unpaired user message source metadata")
+              }
+              if !open_turn || session.step != 0 || admitted_user {
+                raise Invalid("User message outside turn admission")
+              }
+              if required_string(data, "role", max=16) != "user" ||
+                required_string(data, "content", max=16384).length() == 0 {
+                raise Invalid("Invalid user message")
+              }
+              admitted_user = true
+            }
           }
-          if required_string(data, "role", max=16) != "user" ||
-            required_string(data, "content", max=16384).length() == 0 {
-            raise Invalid("Invalid user message")
-          }
-          admitted_user = true
-        }
         "llm/request" | "tool/request" => {
           if !session.open_step {
             raise Invalid("Effect request outside an open step")
@@ -726,6 +760,47 @@ fn restore_session(
             required_field(data, "is_error"),
             "is_error",
           )
+          let additional_contexts = match
+            fields(data).get("additional_contexts") {
+            None => []
+            Some(value) => {
+              if source != "effect" {
+                raise Invalid(
+                  "Only completed PostToolUse results may contain additional contexts",
+                )
+              }
+              let raw_contexts = array_value(
+                value,
+                "additional_contexts",
+                MAX_POST_TOOL_CONTEXTS,
+              )
+              if raw_contexts.is_empty() {
+                raise Invalid(
+                  "Empty PostToolUse context arrays are not canonical",
+                )
+              }
+              let parsed : Array[String] = []
+              let mut total_length = 0
+              for raw_context in raw_contexts {
+                let context = string_value(
+                  raw_context,
+                  "additional_context",
+                  max=MAX_POST_TOOL_CONTEXT_ITEM_LENGTH,
+                )
+                if context.is_empty() {
+                  raise Invalid("Empty PostToolUse contexts are not canonical")
+                }
+                total_length += context.length()
+                if total_length > MAX_POST_TOOL_CONTEXT_TOTAL_LENGTH {
+                  raise Invalid(
+                    "PostToolUse contexts exceed the aggregate length limit",
+                  )
+                }
+                parsed.push(context)
+              }
+              parsed
+            }
+          }
           match source {
             "effect" => {
               if replay_is_session_tool(tools, call) {
@@ -875,6 +950,7 @@ fn restore_session(
           }
           call.completed_content = Some(content)
           call.completed_error = Some(is_error)
+          call.completed_contexts = additional_contexts
         }
         "tool/result" => {
           let call = result_call(session)
@@ -964,6 +1040,18 @@ fn restore_session(
           session.pending_retry_id = None
           session.approval = None
           session.status = Running
+          if session.cursor == session.calls.length() {
+            for completed_call in session.calls {
+              if !completed_call.completed_contexts.is_empty() {
+                pending_post_tool_contexts.push(
+                  (
+                    completed_call.id,
+                    post_tool_context_message(completed_call.completed_contexts),
+                  ),
+                )
+              }
+            }
+          }
         }
         "tool/result/pruned" => session.validate_tool_result_prune(data)
         "step/end" => {
@@ -1032,6 +1120,9 @@ fn restore_session(
   }
   if pending_todo_call is Some(_) {
     raise Invalid("Snapshot ends before the todo write tool result")
+  }
+  if !pending_post_tool_contexts.is_empty() {
+    raise Invalid("Snapshot ends before all PostToolUse context messages")
   }
   if status_text(session.status) != expected_status ||
     session.turn_id != expected_turn ||

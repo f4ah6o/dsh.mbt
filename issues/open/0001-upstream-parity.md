@@ -4,7 +4,7 @@ Status: open
 Model: gpt-6-luna
 Created: 2026-10-05
 Updated: 2026-10-10
-Branch: feat/20261010-deepseek-harness-acp-model-config
+Branch: feat/20261010-hook-post-context
 upstream baseline は `5badb15009ae1756c3afe0ae0cef1faafc290ccc`。
 
 ## 概要
@@ -51,6 +51,7 @@ Bounded native subset と upstream package の名称が近いため、互換範�
 
 ## 変更履歴
 
+- 2026-10-10: pinned [`hooks-claude-code/index.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts) の PostToolUse `additionalContext` を bounded native path に追加。matching hooks の text block を per-call `user/message` として保存し、[`core/tools/index.ts:1781`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/core/tools/src/index.ts#L1781) / [`agent-loop/tool-calls.ts:147`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/core/agent-loop/src/tool-calls.ts#L147) の consumer ordering に沿って parallel tool results 後、tool-call order で provider へ渡す。empty / whitespace、exit 2、block + context、Unicode / per-item / aggregate limits、no-match、cancel-after-known-outcome、receipt replay / reopen を keyless tests で確認。local transcript は `フック補足` として表示し、ACP text update は source-aware update がないため省略する。wrong-type の strict rejection、native block result shape、ACP omission を差分として記録し、issue は open のまま。
 - 2026-10-10: pinned upstream ACP model control を参照し、persistent per-session `model` option、bounded `DSH_ACP_MODELS` catalog、busy-turn refusal、retry / subagent inheritance、route / catalog reopen fencing を追加。upstream の `session/load` 非実装も確認し、load はこの差分に含めない。本 issue は open のまま。
 - 2026-10-10: Native ACP fatal-path defect: `runtime/main.mbt` used `abort` after ACP argument/startup/carrier/shutdown failures, and the native panic diagnostic could be written to stdout, corrupting JSON-RPC framing. Fixed with bounded stderr diagnostics and nonzero exit; checkpoint conflict stdio regression verifies an RPC error, no config update/effect, later request fencing, and JSON-only stdout through EOF. This is a native carrier issue, not an upstream parity defect.
 - 2026-10-10: ACP v1 persistent list / resume slice を追加し、workspace provenance、pagination、restart continuation、no-replay と multi-workspace / MCP 差分を記録。
@@ -183,8 +184,9 @@ pre-denial、successful post-hook reopen、post-cancel と uncertain receipt rep
 overflow / timeout / explicit cancellation を検証します。
 
 これは upstream 互換全体ではありません。regex / partial wildcard、その他 event、async / prompt hooks、
-`ask` による新しい approval prompt、feedback / `additionalContext`、`${CLAUDE_PLUGIN_ROOT}`、
-hook-specific diagnostic event は未対応です。config / structured result は厳密に検証し、1–120 秒を上限とします。
+`ask` による新しい approval prompt、`additionalContext` 以外の feedback、`${CLAUDE_PLUGIN_ROOT}`、
+hook-specific diagnostic event は未対応です。PostToolUse `additionalContext` は 2026-10-10 に bounded native path へ追加し、
+per-call structured user message として全 correlated tool result 後に保存します。config / structured result は厳密に検証し、1–120 秒を上限とします。
 hook command は設定した利用者の trusted shell code として動き、child environment は small allowlist に限定します。
 新しい `effect-known` event source を含む store は dsh 0.1.5 以降で開いてください。以前の native snapshot は
 0.1.5 で開けます。この additional durable content も既存 session capacity 上限を消費します。

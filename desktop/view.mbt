@@ -459,11 +459,15 @@ fn desktop_blocks(session : Json, width : Double) -> Array[DesktopBlock] {
     )
     if content != "" {
       blocks.push({
-        label: match role {
-          "user" => "あなた"
-          "assistant" => "アシスタント"
-          "tool" => "ツール結果"
-          _ => "メッセージ"
+        label: match desktop_json_string(message, "display_label") {
+          label if label != "" => label
+          _ =>
+            match role {
+              "user" => "あなた"
+              "assistant" => "アシスタント"
+              "tool" => "ツール結果"
+              _ => "メッセージ"
+            }
         },
         role,
         lines: @ui.wrap_text(content, columns),

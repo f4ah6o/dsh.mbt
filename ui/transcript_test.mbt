@@ -103,6 +103,18 @@ test "provisional transcript blocks announce writing and partial status" {
 }
 
 ///|
+test "hook context transcript rows are labeled separately from user input" {
+  let snapshot = parse(
+    "{\"messages\":[{\"role\":\"user\",\"content\":\"first hook\\nsecond hook\",\"source\":{\"kind\":\"hooks-claude-code\"},\"display_label\":\"フック補足\"}]}",
+  )
+  let text = scene_text(@ui.render(snapshot, 500, 800))
+  assert_true(text.contains("フック補足"))
+  assert_true(text.contains("first hook"))
+  assert_true(text.contains("second hook"))
+  assert_false(text.contains("あなた"))
+}
+
+///|
 test "render is deterministic and does not mutate a session snapshot" {
   let snapshot = parse(
     "{\"id\":\"session-1\",\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}",

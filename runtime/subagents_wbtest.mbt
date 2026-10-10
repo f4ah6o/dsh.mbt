@@ -1214,7 +1214,7 @@ async test "native subagent inherits the configured read hook policy" {
         "arguments": { "file_path": "target.txt" },
       })
       .unwrap()
-    assert_true(preflight is NativeHookAction::Deny(_))
+    assert_true(preflight.action is NativeHookAction::Deny(_))
     let effect = native_subagent_parent_tool_effect(
       runtime, "native-subagent-hook", "parent-hook-call", "Use the child to read target.txt.",
     )
