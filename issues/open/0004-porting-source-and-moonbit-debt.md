@@ -1,6 +1,7 @@
 # 0004: 移植元の不備と MoonBit 移植負債を記録し、後続の独立した改修でまとめて整理する
 
 Status: open
+Model: unknown
 Created: 2026-10-10
 Updated: 2026-10-10
 Branch: docs/20261010-porting-debt-register
@@ -8,14 +9,30 @@ Upstream baseline: [DeepSeek Harness 5badb15009ae1756c3afe0ae0cef1faafc290ccc](h
 Port snapshot: [dsh.mbt 82b8a985341105bb0197e3dc8c6b4f9f34b53500](https://github.com/f4ah6o/dsh.mbt/tree/82b8a985341105bb0197e3dc8c6b4f9f34b53500)
 Related: [0001 upstream parity](0001-upstream-parity.md) / [0003 native・MoonBit 設計](0003-moonbit-native-ios-tailnet-roadmap.md) / [移植状況](../../docs/port-status.md)
 
-## 目的
+## 概要
 
 DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同時に修正して作業範囲を広げないための**保留台帳**とする。機能不具合だけでなく、MoonBit の型・エラー・所有権・非同期・モジュール設計・テストのプラクティスから外れた実装も対象にする。
 
-- **0001** は「何を移植するか／どこまで互換か」の追跡。**本台帳**は「移植で持ち込まない、あるいは移植後に改善するべき品質上の課題」の追跡。
+- **0001** は「何を移植するか／どこまで互換か」の追跡。**本台帳**は「移植時に維持した不備・構造と、移植後に改善するべき品質上の課題」の追跡。
 - **0003** は MoonBit 化の設計原則。本台帳は実際の箇所、根拠、改修条件を紐付ける。
 - 移植元の実装上の欠陥と、移植により生じた MoonBit 固有の負債を混同しない。upstream 固有の不備を確証なしに「バグ」と呼ばない。
 - 同じ機能差分でも、未移植なら 0001、実装済みコードの修正課題なら本台帳へ記録する。必要なら相互参照する。
+
+## 背景
+
+原典の構造を保った段階的な移植では、互換性の確認と設計改善を同じ変更に混ぜると、動作差の原因を追跡しにくい。
+
+## 問題
+
+移植中に確認した改善候補をチャットだけに残すと、出典、確度、意図的に維持した理由、後続の回帰条件が失われる。
+
+## 目標
+
+非不具合の不備を維持した事実と、修正した動作不具合の根拠を、固定した原典・移植先の参照とともに蓄積する。
+
+## 対象外
+
+本 PR での production code の変更、横断的リファクタリング、upstream への自動投稿、完全な機能互換の宣言。
 
 ## 対象と分類
 
@@ -36,11 +53,11 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 - **互換性判断**: upstream の振る舞いを維持すべきか、安全性のため意図的に異ならせるか。schema / provider / tool / session への影響も明記する。
 - **後続の是正方針**、完了条件、必要な回帰テスト。検証済み・未実行・未確認を明記する。修正先 PR と残課題を追記できるようにする。
 
-## 運用ルール
+## 提案する方針
 
-1. 移植作業では発見をこの台帳へ**最小限追記するだけ**にし、ついでの大規模リファクタリング、API 改変、スタイル一括修正は行わない。確認に時間を要するものは `hypothesis` として残す。
+1. 移植元の不備や MoonBit のプラクティスに合わない構造も、**動作不具合を除いてそのまま移植する**。発見はこの台帳へ追記し、この PR のブランチへ追加コミットとして積む。ついでの大規模リファクタリング、API 改変、スタイル一括修正は行わない。確認に時間を要するものは `hypothesis` として残す。
 2. 移植作業の変更と後続の品質改善は別 PR とする。移植の受入では parity の評価と負債の記録を分ける。小さな移植スライスが完了した区切りで、同じ原因の負債を束ねて専用 PR で修正する。
-3. **安全・秘密情報漏えい・データ損失・外部作用の無断実行・復旧不能**など放置が危険なものは例外。起票と同時に、移植作業内での是正／機能停止／緊急修正 PR を判断する。記録を理由に必要な修正を延期しない。
+3. 確認できた**動作不具合は移植時に修正する**。安全・秘密情報漏えい・データ損失・外部作用の無断実行・復旧不能を含め、重大度にかかわらず再現と是正の根拠を記録する。原典の不具合と移植固有の不具合を区別し、記録を理由に必要な修正を延期しない。
 4. upstream 自体は read-only として扱う。この台帳に書くことは upstream への issue / PR 提出を意味しない。差異を隠すために fixture や test を書き換えない。
 5. 後続改修では同じ契約を横断して揃える。`typed internal state → explicit wire codec → durable replay` の順に検証し、snapshot migration、old data、cancel、approval、no-replay、並列 tool order を維持する。簡略化のために境界の検証を削らない。
 6. `wontfix` / `fixed` は判断理由と証拠を残して閉じる。開いた項目の消去・単なる日付更新で「解決」としない。参照する baseline が変わった場合は再照合する。
@@ -57,6 +74,18 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 | **DEBT-004** | `MOONBIT, PORT / design, performance, testing` | `observed`・優先度未査定 | [engine/transaction.mbt](https://github.com/f4ah6o/dsh.mbt/blob/82b8a985341105bb0197e3dc8c6b4f9f34b53500/engine/transaction.mbt#L41-L105), [engine/transaction.mbt](https://github.com/f4ah6o/dsh.mbt/blob/82b8a985341105bb0197e3dc8c6b4f9f34b53500/engine/transaction.mbt#L130-L160) | transaction / capacity 判断で `Session::copy_state` による多数フィールドの個別コピーと `Engine::copy_state` がある。状態追加時のコピー漏れ・サイズと時間の増加が懸念。コピー不足や性能劣化の再現は未実行。 | 更新範囲の絞り込みや state の凝集を測定後に検討。mutation の atomicity・restore/fork・負荷 fixture の比較を必須にし、根拠なく deep copy を除去しない。 |
 | **DEBT-005** | `PORT / design, testing` | `observed`・優先度未査定 | [api/api.mbt](https://github.com/f4ah6o/dsh.mbt/blob/82b8a985341105bb0197e3dc8c6b4f9f34b53500/api/api.mbt#L56-L87), [engine/domain.mbt](https://github.com/f4ah6o/dsh.mbt/blob/82b8a985341105bb0197e3dc8c6b4f9f34b53500/engine/domain.mbt) | API の operation schema と `EngineCommand::from_json` で近いフィールド契約を別々に記述する。防御的な重複検証は正常だが、将来の追加時の schema drift は検証候補。現時点の契約不一致は未確認。 | 入力の権威ある定義と境界ごとの責務を決め、contract test で schema/decoder 差分を検出。既存の二重防御を無批判に消さない。 |
 
+### DEBT-006: command hook の transcript_path が空文字のまま
+
+- 起点・種類・優先度・状態: `UPSTREAM, PORT / compatibility, design, docs`、優先度未査定、`observed`。
+- upstream baseline / path: [`5badb150` の hooks-claude-code/src/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts)、`base` の `transcript_path: ''`。原典のコメントも persistence seam が artifact path を提供しない制約と説明する。
+- port baseline / path: [`30da581` の runtime/hooks_runtime.mbt](https://github.com/f4ah6o/dsh.mbt/blob/30da581bc600a87355b20e7583aa7e7f87ae8d29/runtime/hooks_runtime.mbt)、`native_hook_payload` の `("transcript_path", Json::string(""))`。
+- 観測事実 / 確認: 固定した両ソースを読み、hook stdin のフィールドが空文字になることを確認。外部 hook の障害を再現した結果ではない。
+- 不明点・影響: `transcript_path` から履歴を読む既存 hook の互換性には制限がある。そのような hook の実行検証は未実施。実行時の不具合を確認したものではない。
+- 互換性判断: 今回は原典と同じ空文字を維持する。native envelope のパスを、Claude Code transcript 互換ファイルのように渡さない。
+- 後続改修方針: hook 向け transcript artifact を提供する場合は、schema、公開範囲、更新時点、読み取り権限、削除 lifecycle を独立に設計する。
+- 完了条件・回帰テスト: 明示した transcript format を実 hook が読み、保存失敗・cancel・reopen・削除後の参照を検証できること。対応しない判断なら理由とともに `wontfix` を記録する。
+- 修正 PR / close 判定: 未着手。今回の移植で維持する原典側の制約として記録。
+
 ### 後続追記テンプレート
 
 #### DEBT-NNN: 短い見出し
@@ -71,14 +100,27 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 - 完了条件と追加するテスト:
 - 修正 PR / 再検証 / close 判定:
 
-## 本 issue を閉じる条件
+## 受け入れ条件
 
 - 登録した項目すべてを専用の修正 PR・別トラッカーへの移管・理由付き `wontfix` のいずれかに結び、未分類の記録を残さない。
 - 同一種別の横断的な改善は、移植スライスとは独立に改修・回帰テスト・永続データ互換性の検証を行う。
 - `0001` の upstream parity が完了しただけでは本 issue は閉じない。逆に本台帳の整理が終わっても parity 完了とは見なさない。
 
-## この PR の検証
+## テスト計画
 
 - ソースと既存 docs を GitHub 上で閲覧し、上記の箇所を確認。
 - 実装コード、生成物、fixture、テストコードは変更しない。
 - `moon test` / `moon check` / E2E は**未実行**（docs-only PR）。初期候補の動作・性能に関する仮説は PASS と記載しない。
+
+## リスク
+
+構造上の改善候補を未確認の動作不具合と混同すること、後続の整理で wire / replay 互換性を変えること。観測事実と仮説を分け、実装側の検証結果を固定参照する。
+
+## 変更履歴
+
+- 2026-10-10: 非不具合の不備・非慣用的構造を維持して移植し、確認できた動作不具合は修正する方針を明記。既存の台帳項目を保持し、必須 issue フィールドとセクションを補完。
+- 2026-10-10: command hooks の追加移植に合わせ、原典と移植先が維持する空の `transcript_path` を DEBT-006 に登録。
+
+## 注記
+
+- 2026-10-10: 正確な編集モデル識別子を取得できないため、今回の文書編集の `Model` は `unknown` と記録する。機能実装とレビューの指定モデルは各 PR の検証記録に残す。
