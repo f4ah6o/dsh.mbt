@@ -4,6 +4,22 @@
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
+## 0.1.13 - 2026-10-10
+
+### Added
+
 - Add opt-in native `UserPromptSubmit` command hooks for `run`, `web`, `mcp`, `acp`, and `desktop`. Valid prompts run through the hook once before turn admission; a hook can reject the prompt or add bounded source-tagged context before the first provider request. Receipt replay does not rerun the hook. See the [native runtime guide](docs/native-runtime.md#native-command-hooks) and [remaining port work](issues/open/0001-upstream-parity.md).
 
 ### Changed

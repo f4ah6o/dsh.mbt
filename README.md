@@ -87,7 +87,7 @@ moon run native --target native --release -- --help
 Mooncakes registry から `dsh` command package を install できます。次の例では `dsh` を Moon の既定の `bin` directory に配置します。
 
 ```sh
-moon install f4ah6o/dsh/cmd/dsh@0.1.12
+moon install f4ah6o/dsh/cmd/dsh@0.1.13
 export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 dsh --help
 ```
