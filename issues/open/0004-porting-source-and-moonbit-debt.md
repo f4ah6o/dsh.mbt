@@ -98,13 +98,13 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 
 ### DEBT-007: 終了時の受理済み PostToolUse context 保存漏れ
 
-- 起点・種類・優先度・状態: `PORT / bug, correctness`、復元を妨げるため優先度高、`reproduced`。
+- 起点・種類・優先度・状態: `PORT / bug, correctness`、復元を妨げるため優先度高、`fixed`。
 - upstream baseline / path: N/A。移植先の終了処理と replay 契約の不整合であり、原典のバグを確認したものではない。
 - port baseline / path: [`a8b02fea` の engine/engine.mbt](https://github.com/f4ah6o/dsh.mbt/blob/a8b02feaeadcfb475aff575af49a4c062dd671f3/engine/engine.mbt#L758-L786)、`Engine::terminate`。通常経路の `commit_ready_tool_results` と異なり、残りの tool result を保存した後に受理済み context を保存せず calls を clear していた。
 - reproducer / 確認: 独立レビューの native whitebox probe で、並列 read 2 件の先頭を `additional_contexts` 付きで完了してから cancel すると、snapshot restore が `PostToolUse context is missing, reordered, or differs from its completion` を返す。後方の read を context 付きで完了した active snapshot では、最初の restore は成功するが、その結果の snapshot を再度 restore すると同じ拒否になる。両 probe の失敗を確認。
 - 影響・互換性判断: 受理済み context を持つ終了 session が復元不能になり得る。今回の移植候補で発見した動作不具合のため、負債を残す方針の対象にせず公開前に修正する。
 - 是正方針・回帰条件: 終了処理でも全 tool result の後、calls clear / step end より前に受理済み context を保存する。cancel、interrupted restore、capacity closure と繰り返し restore を検証する。post-hook 中の cancel で未受理の context は追加しない。
-- 修正 PR / close 判定: 修正・再レビュー中。固定した修正 commit と回帰結果を追記して `fixed` に更新する。
+- 修正 commit / close 判定: [`2c792853`](https://github.com/f4ah6o/dsh.mbt/commit/2c792853279ff1a5f2b69ab8edc4e3b91bd2eaa9) で終了時の context 保存と回帰テストを追加。実装担当の engine native suite は 79 / 79 PASS。独立レビューで元の 2 probe は 2 / 2 PASS、cancel / interrupted restore、capacity closure、post-hook 中の未受理 context 排除も各 1 / 1 PASS。修正後の 3 パスレビューで新たな指摘はない。動作不具合の修正として閉じ、DEBT-001 / 003 / 004 の設計改善候補は開いたまま維持する。
 
 ### 後続追記テンプレート
 
@@ -142,6 +142,7 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 - 2026-10-10: command hooks の追加移植に合わせ、原典と移植先が維持する空の `transcript_path` を DEBT-006 に登録。
 - 2026-10-10: PostToolUse `additionalContext` の移植で維持した Json payload、文字列エラー、個別 state copy を、DEBT-001 / 003 / 004 の固定 source 根拠として追記。
 - 2026-10-10: 独立レビューで再現した移植固有の終了時 context 保存漏れを DEBT-007 に登録。公開前の是正対象として追跡。
+- 2026-10-10: `2c792853` の修正と独立 probe の成功を記録し、DEBT-007 を `fixed` に更新。
 
 ## 注記
 
