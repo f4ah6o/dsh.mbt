@@ -57,6 +57,17 @@ startup descriptor の静的 policy です。truncated arguments や未登録 to
 既に受理した成功結果を保ちながら実行中・未開始 call を結果不明の error として閉じます。restore は中断時の不明な IO を
 再実行しません。
 
+`--enable-subagents` を指定した native runtime だけが model-facing `subagent` tool を登録します。outer tool effect を
+親 session の tool result として settle する間に、host は独立した child engine を作り、親の transcript を渡さずに同じ provider/model
+route と `read` / `glob` / `grep` catalog で child turn を直接 drive します。child loop は scheduler semaphore を取り直さず、runtime
+ごとの cancellable single-child semaphore を使うため、親 delegation がすべて host scheduler slot を保持した状態でも re-entry deadlock
+しません。prompt、steps、tool calls、elapsed time、transcript と serialized JSON result に個別の上限があり、result には immutable な
+parent session/effect/tool-call identity が含まれます。親 cancellation は queued child と active provider request に届き、settled result のみを
+parent event log に保存します。restore は保存済み tool result を読むだけで child / provider / tool effect を再発行しません。
+child session 自体は永続化・再開されず、result settlement 前に割り込まれた child transcript は失われます。child の file tool は親の
+SafeRoot / protected-store checks と configured command hooks を使います。hook は利用者が明示した trusted host code なので、read-only
+child catalog も OS sandbox にはなりません。
+
 SSE decoder は分割された text / reasoning / tool arguments を逐次解析します。完全に検証された text / reasoning frame
 だけが stream event になり、tool arguments や reasoning signature は projection しません。native runtime は有限の 16 Mi-unit
 queue に Unicode scalar 境界を守った segment として追加し、onDelta callback 自身は state mutation や checkpoint を

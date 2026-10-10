@@ -105,6 +105,59 @@ skill results and their source labels are stored in the session history, and
 cancelled direct invocations keep the already-checkpointed user message.
 Ordinary stores without skill calls can be opened with skills enabled.
 
+## Foreground subagents
+
+Pass `--enable-subagents` to `run`, `web`, `mcp`, `acp`, or `desktop` to expose
+the native `subagent` tool. It starts a fresh child engine for one foreground
+task, waits for it to finish, then returns its bounded JSON result to the
+parent turn. The child uses the same configured provider, model, and auth
+route as the parent, but starts with only the delegated prompt rather than the
+parent transcript. For example, the keyless demo exercises the complete
+parent → child → workspace read → parent path:
+
+```sh
+dsh run 'Inspect the first line of README.md and report it.' \
+  --enable-subagents --demo \
+  --data-dir /absolute/path/to/dsh-demo-data \
+  --workspace /absolute/path/to/project
+```
+
+Each child gets at most three model steps, eight dispatched workspace tool
+calls, and 90 seconds. At most two subagent calls can be made in one parent
+turn, and one child runs at a time in a native runtime. The prompt is limited
+to 4,096 UTF-16 code units and the description to 128. The result is valid
+JSON capped at 16,384 UTF-16 code units; it includes the child ID, parent
+session/effect/tool-call identities, terminal status, bounded failure reason,
+step/tool counts, and up to 16 transcript messages. This limit measures
+UTF-16 code units, not bytes.
+
+The child tool catalog contains only `read`, `glob`, and `grep`; attempts to
+write, run shell commands, call MCP/LSP/skills, or recurse into another
+subagent fail as unknown child tools. Those file tools reuse the parent's
+SafeRoot and protected runtime-store checks. The child inherits configured
+PreToolUse / PostToolUse command hooks. Hook commands are trusted host code
+and can have side effects even when the child requested a read; the restricted
+tool catalog is not an OS sandbox. A child cannot add tools or widen the
+parent's configured tool policy.
+
+The settled JSON result is stored in the parent session's ordinary tool result.
+Reopen a store containing subagent calls with `--enable-subagents`; the engine
+validates historical calls against the startup tool catalog. Restore reads
+the saved result and issues no child provider or workspace requests. Child
+sessions are not separately persisted or resumable: if parent cancellation,
+timeout, or process interruption happens before the result settles, the
+partial child transcript is not retained, and interrupted work is never
+replayed. Keyless demo and local fake-provider tests cover child execution,
+policy limits, cancellation, correlation, and restore; no live provider
+account smoke is claimed.
+
+This is a bounded foreground subset of the pinned upstream
+[`tool-subagent`](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/subagent/tool-subagent)
+and in-process spawn packages. It does not implement background or
+continuable children, child session listing / resume, independent child
+provider selection, configurable tool filters / personas / output schemas,
+or full upstream provider and lifecycle parity.
+
 ## External MCP stdio tools
 
 `run`, `web`, `mcp`, and `desktop` accept `--mcp-config PATH` to start configured

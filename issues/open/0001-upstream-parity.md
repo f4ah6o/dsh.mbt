@@ -1,9 +1,61 @@
 # 0001: DeepSeek Harness の残りの機能を MoonBit へ移植する
 
-状態: open。最初の browser / CLI 実行経路は [移植状況](../../docs/port-status.md) を参照。
+Status: open
 Model: gpt-6-luna
+Created: 2026-10-05
 Updated: 2026-10-10
+Branch: feat/20261010-deepseek-harness-subagent
 upstream baseline は `5badb15009ae1756c3afe0ae0cef1faafc290ccc`。
+
+## 概要
+
+DeepSeek Harness の残る session、provider、extension、UI、host 機能を MoonBit native runtime へ段階的に移植し、upstream baseline との差分を記録します。現在の範囲と確認済み acceptance は[移植状況](../../docs/port-status.md)を参照してください。
+
+## 背景
+
+upstream は複数 TypeScript package と Cordis lifecycle で構成されています。この repository は MoonBit engine / native host に製品実行経路を移し、upstream 互換が確認された細分化 scope だけを bounded subset として提供しています。
+
+## 問題
+
+多くの upstream event と native v1 feature に部分対応がありますが、完全な lifecycle parity、長い会話の compaction、Cordis extension runtime、background jobs、provider/media capabilities、host sandbox は未実装です。partial implementation を全体互換と誤って受け取られないよう、受け入れ範囲と移行条件を明示する必要があります。
+
+## 目標
+
+- upstream baseline の event、provider、tool、extension、host semantics を調査し、native MoonBit implementation と tests に反映する。
+- 各 increment の制限、recovery、security boundary、compatibility requirements を docs と release notes に記録する。
+- broad parity issue を open のまま維持し、完了条件のない範囲を完了扱いしない。
+
+## 対象外
+
+- upstream TypeScript / Cordis plugin ABI を MoonBit implementation と同等扱いにすること。
+- 実 provider credentials を一般 regression tests に使うこと。
+- 部分実装を full upstream parity と表現すること。
+
+## 提案する方針
+
+各 increment は pinned upstream source を参照し、native runtime の policy / persistence / no-replay boundary を定義してから、keyless fixture と user-facing migration notes を追加します。実装済みの bounded subset は本 issue を閉じず、残る upstream lifecycle を別途追跡します。
+
+## 受け入れ条件
+
+- native behaviour と upstream difference が同じ increment の tests / docs / changelog に記録される。
+- cancellation / interruption / restore を含む external-effect boundary が検証される。
+- この umbrella issue は対象の parity work がすべて終わるまで open のままにする。
+
+## テスト計画
+
+Keyless engine / provider / native runtime fixtures を優先し、必要な CLI / browser / ACP / desktop surface を回帰確認します。Live account tests は、認証情報をログに含めず明示的に実施した場合だけ別途記録します。
+
+## リスク
+
+Bounded native subset と upstream package の名称が近いため、互換範囲を過大に解釈される可能性があります。各機能の上限、trusted host code、restore / replay behaviour、unsupported lifecycle を明記して緩和します。
+
+## 変更履歴
+
+- 2026-10-10: bounded foreground subagent slice とその recovery / hook limits を section 3 に追加。upstream subagent lifecycle parity は未完了。
+
+## 注記
+
+- 2026-10-10: This is a broad parity tracker; individual bounded increments do not change its open status.
 
 ## 1. Session v4 と replay
 
@@ -86,7 +138,7 @@ pruning event 自体が保存量を増やすため、262,144 UTF-16 code unit �
 ## 3. 拡張機能と tool 統合
 
 MoonBit の typed service / lifetime を定義して、startup metadata から動的な拡張境界へ進める。
-External MCP client、workspace skills、native command hook、ACP、LSP navigation の bounded subset は実装済み。各上流機能との残差を維持し、追加 hook event、LSP 対応範囲、subagent の相関と終了条件を仕様化する。
+External MCP client、workspace skills、native command hook、ACP、LSP navigation、foreground subagent の bounded subset は実装済み。各 upstream 機能との差分を維持し、追加 hook event と LSP 対応範囲を整理する。
 Cordis / npm plugin をそのまま動かす場合は別の互換 host を設計し、MoonBit-only plugin とは区別する。
 
 部分対応（2026-10-07）: `effect: "read"` に静的分類した連続 tool call は最大 4 件の rolling pool で並列実行し、
@@ -183,6 +235,21 @@ new turn で clear し、completed checklist は次の turn まで保持し、va
 legacy 0.1.7 store と以前の `Unknown tool: todo_write` result は読め、imported v4 は inert のままです。
 これは native v1 runtime の bounded subset であり、upstream TODO package の完全な lifecycle / UX parity は確認していません。
 keyless engine、provider/API、runtime persistence、browser / desktop presentation tests を追加しました。本 issue は open のままです。
+
+Foreground subagent の部分対応（2026-10-10）: pinned upstream
+[`tool-subagent`](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/subagent/tool-subagent)
+と in-process spawn package を参照し、native `run` / `web` / `mcp` / `acp` / `desktop` の
+`--enable-subagents` opt-in tool を追加しました。child は親 transcript を継承せず、同じ configured provider / model route で fresh engine の
+foreground loop を実行し、SafeRoot / protected runtime-store checks を通る `read` / `glob` / `grep` だけを使います。
+result JSON は 16,384 UTF-16 code units、16 transcript messages、3 model steps、8 child tool calls、90 秒に制限し、parent
+session/effect/tool-call と相関させます。parent turn は最大二 child calls、runtime は同時に一 child に制限し、parent cancellation は queued / active
+child work に伝わります。keyless fake-provider tests は child read + second response + parent continuation、limits、recursive/write denial、hook denial、
+provider / queued cancellation、restore no-replay を確認しました。
+
+これは upstream subagent lifecycle の全実装ではありません。child session は独立保存・再開せず、interruption 前に settlement した result だけが
+parent tool result に残ります。background / continuable mode、provider selection、tool filters、persona、structured output schema、provider capability
+negotiation、child-specific UI は含みません。Configured PreToolUse / PostToolUse hooks は child reads にも継承され、trusted host code として副作用を
+起こし得ます。reopen には `--enable-subagents` が必要で、中断した child は replay しません。本 issue は open のままです。
 
 受入条件:
 

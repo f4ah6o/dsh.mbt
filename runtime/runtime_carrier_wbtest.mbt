@@ -7,6 +7,14 @@ priv struct NativeFixtureHttpResponse {
 }
 
 ///|
+priv suberror NativeFixtureProviderFailure {
+  NativeFixtureProviderFailure(String)
+}
+
+///|
+const NATIVE_FIXTURE_MAX_EMPTY_PROVIDER_CONNECTIONS : Int = 32
+
+///|
 let native_fixture_provider_env_gate : @async.Mutex = @async.Mutex::Mutex()
 
 ///|
@@ -22,6 +30,41 @@ fn native_fixture_openai_tool_stream(
     }).stringify(),
   ).stringify()
   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"\{call_id}\",\"type\":\"function\",\"function\":{\"name\":\"write\",\"arguments\":\{arguments}}}]},\"finish_reason\":null}]}\r\n\r\n" +
+  "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\r\n\r\n" +
+  "data: [DONE]\r\n\r\n"
+}
+
+///|
+fn native_fixture_openai_calls_stream(
+  calls : Array[(String, String, Json)],
+) -> String {
+  let tool_calls : Array[Json] = []
+  for index, (call_id, name, arguments) in calls {
+    tool_calls.push({
+      "index": Json::number(index.to_double()),
+      "id": Json::string(call_id),
+      "type": Json::string("function"),
+      "function": Json::object({
+        "name": Json::string(name),
+        "arguments": Json::string(arguments.stringify()),
+      }),
+    })
+  }
+  let chunk = Json::object({
+    "choices": Json::array([
+      Json::object({
+        "index": Json::number(0.0),
+        "delta": Json::object({
+          "role": Json::string("assistant"),
+          "tool_calls": Json::array(tool_calls),
+        }),
+        "finish_reason": Json::null(),
+      }),
+    ]),
+  })
+  "data: " +
+  chunk.stringify() +
+  "\r\n\r\n" +
   "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\r\n\r\n" +
   "data: [DONE]\r\n\r\n"
 }
@@ -74,39 +117,72 @@ async fn native_fixture_handle_provider_request(
   auth_ok : Ref[Bool],
   response : NativeFixtureHttpResponse,
   release : @async.Semaphore?,
-) -> Unit {
-  try {
-    let request = connection.read_request()
-    let body = connection.read_all().text()
-    bodies.val.push(body)
-    auth_ok.val = auth_ok.val &&
-      request.headers.get("authorization") == Some("Bearer native-fixture-key")
-    match release {
-      Some(gate) => gate.acquire()
-      None => ()
+  ignored_connections : Ref[Int]?,
+  ignored_connection_errors : Ref[Array[String]]?,
+  response_errors : Ref[Array[String]]?,
+) -> Bool {
+  defer connection.close()
+  // Happy Eyeballs can complete a speculative TCP connect that is closed
+  // before it sends HTTP. Such a socket must not consume a scripted response.
+  let request = Some(connection.read_request()) catch {
+    error if @async.is_being_cancelled() => raise error
+    error if error.to_string() == "ReaderClosed" => {
+      match ignored_connections {
+        Some(count) => count.val += 1
+        None => ()
+      }
+      match ignored_connection_errors {
+        Some(errors) => errors.val.push(error.to_string())
+        None => ()
+      }
+      None
     }
-    let headers : @http.Headers = {
-      "Content-Type": "text/event-stream",
-      "Connection": "close",
-    }
-    if !response.body.is_empty() {
+    error => raise error
+  }
+  match request {
+    None => false
+    Some(request) => {
+      let body = connection.read_all().text()
+      bodies.val.push(body)
+      auth_ok.val = auth_ok.val &&
+        request.headers.get("authorization") ==
+        Some("Bearer native-fixture-key")
+      match release {
+        Some(gate) => gate.acquire()
+        None => ()
+      }
+      let headers : @http.Headers = {
+        "Content-Type": "text/event-stream",
+        "Connection": "close",
+      }
       headers["Content-Length"] = response.body.length().to_string()
-    } else {
-      headers["Content-Length"] = "0"
+      match response.retry_after {
+        Some(value) => headers["Retry-After"] = value
+        None => ()
+      }
+      let write_result = try {
+        connection.send_response(
+          response.code,
+          response.reason,
+          extra_headers=headers,
+        )
+        connection.write_string(response.body)
+        connection.end_response()
+        None
+      } catch {
+        error if @async.is_being_cancelled() => raise error
+        error => Some(error.to_string())
+      }
+      match write_result {
+        Some(error) =>
+          match response_errors {
+            Some(errors) => errors.val.push(error)
+            None => raise NativeFixtureProviderFailure(error)
+          }
+        None => ()
+      }
+      true
     }
-    match response.retry_after {
-      Some(value) => headers["Retry-After"] = value
-      None => ()
-    }
-    connection.send_response(
-      response.code,
-      response.reason,
-      extra_headers=headers,
-    )
-    connection.write_string(response.body)
-    connection.end_response()
-  } catch {
-    _ => ()
   }
 }
 
@@ -117,21 +193,36 @@ async fn native_fixture_provider_server(
   bodies : Ref[Array[String]],
   auth_ok : Ref[Bool],
   first_release : @async.Semaphore?,
+  ignored_connections? : Ref[Int]? = None,
+  ignored_connection_errors? : Ref[Array[String]]? = None,
+  response_errors? : Ref[Array[String]]? = None,
 ) -> Unit {
-  for index in 0..<responses.length() {
-    try {
-      let (connection, _) = server.accept()
-      defer connection.close()
-      let release = if index == 0 { first_release } else { None }
-      native_fixture_handle_provider_request(
-        connection,
-        bodies,
-        auth_ok,
-        responses[index],
-        release,
-      )
-    } catch {
-      _ => ()
+  let mut index = 0
+  let mut ignored = 0
+  while index < responses.length() {
+    let (connection, _) = server.accept()
+    let release = if index == 0 { first_release } else { None }
+    let handled = native_fixture_handle_provider_request(
+      connection,
+      bodies,
+      auth_ok,
+      responses[index],
+      release,
+      ignored_connections,
+      ignored_connection_errors,
+      response_errors,
+    )
+    if handled {
+      index += 1
+    } else {
+      ignored += 1
+      if ignored > NATIVE_FIXTURE_MAX_EMPTY_PROVIDER_CONNECTIONS {
+        raise NativeFixtureProviderFailure(
+          "provider fixture ignored more than " +
+          NATIVE_FIXTURE_MAX_EMPTY_PROVIDER_CONNECTIONS.to_string() +
+          " empty TCP connections",
+        )
+      }
     }
   }
 }
@@ -142,36 +233,70 @@ async fn native_fixture_mcp_provider_request(
   bodies : Ref[Array[String]],
   auth_ok : Ref[Bool],
   release : @async.Semaphore,
-) -> Bool {
-  try {
-    let request = connection.read_request()
-    let body = connection.read_all().text()
-    bodies.val.push(body)
-    auth_ok.val = auth_ok.val &&
-      request.headers.get("authorization") == Some("Bearer native-fixture-key")
-    let is_follow_up = body.contains("Start a new turn after cancellation.")
-    if !is_follow_up {
-      release.acquire()
+  ignored_connections : Ref[Int]?,
+  ignored_connection_errors : Ref[Array[String]]?,
+  response_errors : Ref[Array[String]]?,
+) -> Bool? {
+  defer connection.close()
+  let request = Some(connection.read_request()) catch {
+    error if @async.is_being_cancelled() => raise error
+    error if error.to_string() == "ReaderClosed" => {
+      match ignored_connections {
+        Some(count) => count.val += 1
+        None => ()
+      }
+      match ignored_connection_errors {
+        Some(errors) => errors.val.push(error.to_string())
+        None => ()
+      }
+      None
     }
-    let response = if is_follow_up {
-      native_fixture_openai_text_stream(
-        "The follow-up provider completed after cancellation.",
-      )
-    } else {
-      native_fixture_openai_tool_stream(
-        "late-write-call", "late-tool.txt", "late tool must not run after cancellation",
-      )
+    error => raise error
+  }
+  match request {
+    None => None
+    Some(request) => {
+      let body = connection.read_all().text()
+      bodies.val.push(body)
+      auth_ok.val = auth_ok.val &&
+        request.headers.get("authorization") ==
+        Some("Bearer native-fixture-key")
+      let is_follow_up = body.contains("Start a new turn after cancellation.")
+      if !is_follow_up {
+        release.acquire()
+      }
+      let response = if is_follow_up {
+        native_fixture_openai_text_stream(
+          "The follow-up provider completed after cancellation.",
+        )
+      } else {
+        native_fixture_openai_tool_stream(
+          "late-write-call", "late-tool.txt", "late tool must not run after cancellation",
+        )
+      }
+      let write_result = try {
+        connection.send_response(200, "OK", extra_headers={
+          "Content-Type": "text/event-stream",
+          "Content-Length": response.length().to_string(),
+          "Connection": "close",
+        })
+        connection.write_string(response)
+        connection.end_response()
+        None
+      } catch {
+        error if @async.is_being_cancelled() => raise error
+        error => Some(error.to_string())
+      }
+      match write_result {
+        Some(error) =>
+          match response_errors {
+            Some(errors) => errors.val.push(error)
+            None => raise NativeFixtureProviderFailure(error)
+          }
+        None => ()
+      }
+      Some(is_follow_up)
     }
-    connection.send_response(200, "OK", extra_headers={
-      "Content-Type": "text/event-stream",
-      "Content-Length": response.length().to_string(),
-      "Connection": "close",
-    })
-    connection.write_string(response)
-    connection.end_response()
-    is_follow_up
-  } catch {
-    _ => false
   }
 }
 
@@ -181,18 +306,38 @@ async fn native_fixture_mcp_provider_server(
   bodies : Ref[Array[String]],
   auth_ok : Ref[Bool],
   release : @async.Semaphore,
+  response_errors? : Ref[Array[String]]? = None,
 ) -> Unit {
-  for _ in 0..<2 {
-    try {
-      let (connection, _) = server.accept()
-      defer connection.close()
-      if native_fixture_mcp_provider_request(
-          connection, bodies, auth_ok, release,
-        ) {
-        break
+  let ignored_connections = Ref(0)
+  let ignored_connection_errors = Ref([])
+  let mut request_count = 0
+  while request_count < 2 {
+    let (connection, _) = server.accept()
+    match
+      native_fixture_mcp_provider_request(
+        connection,
+        bodies,
+        auth_ok,
+        release,
+        Some(ignored_connections),
+        Some(ignored_connection_errors),
+        response_errors,
+      ) {
+      None =>
+        if ignored_connections.val >
+          NATIVE_FIXTURE_MAX_EMPTY_PROVIDER_CONNECTIONS {
+          raise NativeFixtureProviderFailure(
+            "provider fixture ignored more than " +
+            NATIVE_FIXTURE_MAX_EMPTY_PROVIDER_CONNECTIONS.to_string() +
+            " empty TCP connections",
+          )
+        }
+      Some(is_follow_up) => {
+        request_count += 1
+        if is_follow_up {
+          break
+        }
       }
-    } catch {
-      _ => ()
     }
   }
 }
@@ -422,8 +567,15 @@ async test "MCP acknowledges provider work, serves reads and cancel promptly, an
     })
     let bodies = Ref([])
     let auth_ok = Ref(true)
+    let response_errors = Ref([])
     let serving = group.spawn(no_wait=true, async fn() {
-      native_fixture_mcp_provider_server(server, bodies, auth_ok, release)
+      native_fixture_mcp_provider_server(
+        server,
+        bodies,
+        auth_ok,
+        release,
+        response_errors=Some(response_errors),
+      )
     })
     let base_url = "http://127.0.0.1:" + server.addr.port().to_string()
     let runtime = match
@@ -573,6 +725,7 @@ async test "MCP acknowledges provider work, serves reads and cancel promptly, an
     )
     serving.wait()
     assert_true(bodies.val.length() <= 2)
+    assert_true(response_errors.val.all(error => !error.is_empty()))
     assert_true(
       bodies.val.any(body => {
         body.contains("Start a new turn after cancellation.")

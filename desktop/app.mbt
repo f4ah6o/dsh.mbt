@@ -15,6 +15,7 @@ async fn desktop_run(config : DesktopConfig) -> Result[Unit, String] {
       lsp_config_path=config.lsp_config_path,
       enable_skills=config.enable_skills,
       skill_dirs=config.skill_dirs,
+      enable_subagents=config.enable_subagents,
     ) {
     Ok(value) => value
     Err(error) => return Err("dsh runtime could not start: " + error)

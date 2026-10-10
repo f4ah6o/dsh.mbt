@@ -294,6 +294,30 @@ pub fn skill_tool(model_catalog : Array[(String, String)]) -> Json {
 }
 
 ///|
+/// Build the opt-in foreground subagent tool. The runtime enforces these
+/// bounds again before it starts the child engine.
+pub fn subagent_tool() -> Json {
+  {
+    "name": "subagent",
+    "description": "Delegate one focused, read-only task to a fresh child agent. The child uses the same configured model route, can read and search this workspace, and returns a bounded transcript. It cannot write files, run shell commands, call external tools, or delegate again. This call waits for the child to finish.",
+    "effect": "read",
+    "input_schema": builtin_schema(
+      {
+        "description": {
+          "type": "string",
+          "description": "A short label for the delegated task",
+        },
+        "prompt": {
+          "type": "string",
+          "description": "A self-contained task for the child agent",
+        },
+      },
+      ["description", "prompt"],
+    ),
+  }
+}
+
+///|
 /// Build the model-facing LSP navigation tool. Native runtime registration is
 /// opt-in and classifies it as a write effect because configured server
 /// commands are trusted host programs even though the four LSP operations are
