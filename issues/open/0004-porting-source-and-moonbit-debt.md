@@ -187,6 +187,22 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 - 是正 / 完了条件: 表示用 string / source / 順序と、raw event / provider 側の一つに grouped した text block / 順序を両方検証し、表示と保存・送信の契約を混同しない。
 - 修正 / 検証: [`76d1893`](https://github.com/f4ah6o/dsh.mbt/commit/76d18938ce173f28f797e073411f77c039d8bec8) で両 fixture を修正。production は変更せず、native check / format PASS、独立 source review approve。local behavioral test は ENOSPC で未実行。[修正 head の CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38042930510) を待って close 判定を追記する。
 
+#### DEBT-016: キャンセル fixture が session_id も slow branch として判定する
+
+- 起点・種類・優先度・状態: `PORT / bug, testing`、優先度高（CI を停止）、`reproduced`。production の不具合ではない。upstream 出典は N/A。
+- port baseline / path: [`76d1893` の runtime/hooks_wbtest.mbt](https://github.com/f4ah6o/dsh.mbt/blob/76d18938ce173f28f797e073411f77c039d8bec8/runtime/hooks_wbtest.mbt#L1887)、direct session_cancel と remote owner cancellation の shell command。
+- 再現 / 影響: [修正後 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38042930510) の native-without-node は 325 / 328。2 件は follow-up の counter が期待 `xy` に対して `xx`。shell case は stdin JSON 全体を短い `direct-cancel` / `remote-owner` で判定するが、同じ文字列が session_id にも存在するため、新しい prompt でも x branch に入る。独立レビューの shell-only probe でも確認。scheduler 枠が残る不具合を示す結果ではない。
+- 是正 / 完了条件: 最初の prompt にだけ含まれる固有文字列で判定し、キャンセル後の fresh send の受理・一回の hook 実行・provider effect・`xy` の検証を保持する。
+- 修正 / 検証: 修正中。immutable commit と hosted CI の実行結果を後続追記する。
+
+#### DEBT-017: explicit cancellation が一般的な hook failure として返る
+
+- 起点・種類・優先度・状態: `PORT / bug, correctness`、優先度低（独立レビューの minor）、`reproduced`。upstream 出典は N/A。
+- port baseline / path: [`76d1893` の runtime/runtime.mbt](https://github.com/f4ah6o/dsh.mbt/blob/76d18938ce173f28f797e073411f77c039d8bec8/runtime/runtime.mbt#L2073)、MCP hook settlement。同ファイルの remote receipt settlement helper も同じ順序。
+- 再現 / 影響: [同 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38042930510) の MCP session_cancel fixture は `cancelled before admission` の理由判定で失敗。独立レビューの静的な cancellation 経路追跡では `Some(Err("hook process was cancelled"))` が control.cancelled の確認より先に一般 hook error として処理される。CI log 自体は理由 assertion の失敗を記録するが、実際の error string は出力していない。hook は中断され、turn / provider は未 admission だが、caller に返す理由が explicit cancellation を表さない。remote の同じ分岐は独立レビューの静的照合で確認し、同 transport の実行再現とは区別する。
+- 是正 / 完了条件: owner / control cancellation を hook result より先に判定し、MCP と remote durable receipt の理由を揃える。未 admission、process cleanup、receipt replay、次の送信を回帰検証する。
+- 修正 / 検証: 修正中。immutable commit と hosted CI の実行結果を後続追記する。
+
 ### 後続追記テンプレート
 
 #### DEBT-NNN: 短い見出し
@@ -232,6 +248,8 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 - 2026-10-10: 3 パス source review の再確認と DEBT-009–013 の修正 snapshot を追記。追加の理由優先順位差分を DEBT-014 として公開前の修正対象に登録。
 
 - 2026-10-10: 初回 CI の fixture shape mismatch を DEBT-015 に登録し、DEBT-009 の 0 / 1 run が decoder 単独の再現ではないことを訂正。両 fixture の修正と fixed-head source review を固定参照。
+
+- 2026-10-10: 二回目の CI で判明した fixture の prompt 判定誤りを DEBT-016、explicit cancellation の理由分類を DEBT-017 として登録。実装とテストの不具合を区別し、公開前に修正する。
 
 ## 注記
 
