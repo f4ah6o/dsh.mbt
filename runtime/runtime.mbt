@@ -1568,7 +1568,7 @@ async fn NativeRuntime::accept_remote_prompt_command(
 /// Complete the durable receipt after a prompt hook while the runtime gate is
 /// held. The caller protects this phase so cancellation cannot strand the gate
 /// or scheduler reservation.
-fn NativeRuntime::finish_remote_prompt_after_hook_locked(
+async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
   self : NativeRuntime,
   control : NativeJobControl,
   hook_result : Result[NativeHookOutcome, String]?,
