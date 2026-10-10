@@ -1509,12 +1509,63 @@ async test "UserPromptSubmit trusted context reaches direct and MCP session_send
     let mcp_result = native_fixture_mcp_structured(mcp_response)
     let mcp_context_messages = native_hook_context_messages(mcp_result)
     assert_eq(mcp_context_messages.length(), 1)
+    let mcp_messages = native_hook_test_array(
+      native_hook_test_required_field(mcp_result, "messages"),
+      "MCP session messages",
+    )
+    assert_eq(mcp_messages.length(), 2)
+    assert_eq(
+      native_hook_test_required_string(mcp_messages[0], "content"),
+      "MCP context boundary",
+    )
+    assert_eq(
+      native_hook_test_required_string(mcp_messages[1], "content"),
+      "trusted prompt context",
+    )
+    let mcp_events = native_hook_test_array(
+      native_hook_test_required_field(mcp_result, "events"),
+      "MCP session events",
+    )
+    let mut prompt_event_index = -1
+    let mut context_event_index = -1
+    let mut llm_request_index = -1
+    for index, event in mcp_events {
+      match string_field(event, "type") {
+        Some("user/message") => {
+          let data = native_hook_test_required_field(event, "data")
+          if object_field(data, "source") is Some(_) {
+            context_event_index = index
+          } else {
+            prompt_event_index = index
+          }
+        }
+        Some("llm/request") => llm_request_index = index
+        _ => ()
+      }
+    }
+    assert_true(
+      prompt_event_index >= 0 &&
+      prompt_event_index < context_event_index &&
+      context_event_index < llm_request_index,
+    )
+    let context_event = native_hook_test_required_field(
+      mcp_events[context_event_index],
+      "data",
+    )
+    assert_eq(
+      native_hook_test_required_field(context_event, "source"),
+      Json::object({ "kind": "hooks-claude-code".to_json() }),
+    )
     assert_eq(
       native_hook_test_array(
-        native_hook_test_required_field(mcp_context_messages[0], "content"),
-        "MCP hook content",
+        native_hook_test_required_field(context_event, "content"),
+        "MCP event hook content",
       ).map(block => native_hook_test_required_string(block, "text")),
       ["trusted prompt context"],
+    )
+    assert_eq(
+      native_hook_test_required_string(mcp_messages[1], "display_label"),
+      "フック補足",
     )
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "xx")
   }

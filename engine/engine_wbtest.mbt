@@ -368,10 +368,40 @@ test "UserPromptSubmit contexts are one source-tagged message after the prompt" 
     Json::object({ "kind": Json::string("hooks-claude-code") }),
   )
   assert_eq(
-    array_value(required_field(messages[1], "content"), "content", 8).map(block => {
+    required_string(messages[1], "content"),
+    "first hook context\nsecond hook context",
+  )
+  let events = array_value(required_field(session, "events"), "events", 16)
+  let user_message_events = events.filter(event => {
+    required_string(event, "type") == "user/message"
+  })
+  assert_eq(user_message_events.length(), 2)
+  assert_eq(
+    required_string(required_field(user_message_events[0], "data"), "content"),
+    "original prompt",
+  )
+  let context_event = required_field(user_message_events[1], "data")
+  assert_eq(
+    required_field(context_event, "source"),
+    Json::object({ "kind": Json::string("hooks-claude-code") }),
+  )
+  assert_eq(
+    array_value(required_field(context_event, "content"), "content", 8).map(block => {
       required_string(block, "text")
     }),
     ["first hook context", "second hook context"],
+  )
+  let mut last_user_message_index = -1
+  let mut llm_request_index = -1
+  for index, event in events {
+    match required_string(event, "type") {
+      "user/message" => last_user_message_index = index
+      "llm/request" => llm_request_index = index
+      _ => ()
+    }
+  }
+  assert_true(
+    last_user_message_index >= 0 && last_user_message_index < llm_request_index,
   )
   let provider = engine.take_effects()[0]
   let request_messages = array_value(
