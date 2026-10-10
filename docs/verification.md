@@ -1,5 +1,31 @@
 # 検証記録
 
+## PostToolUse additionalContext increment (0.1.12)
+
+2026-10-10、macOS arm64、Node.js `26.8.2`、MoonBit compiler / core
+`0.10.14+7d59c7ec9`、moon / moonrun `0.1.20260920`、Playwright `1.64.0`、Chromium
+1228 で検証しました。provider tests are keyless loopback fixtures; no live account
+or secret value was used. The final feature and termination-fix commits were
+`56d27f1`, `2c79285`; release metadata is `a8b02fe`.
+
+| gate | result |
+| --- | --- |
+| `npm test` | Build, checks, MoonBit suites, and web tests passed, but the overall command exited 1 at `test:integration` because the checkout did not yet have the locked `playwright-core` dependency installed. The passing portions were: all-target checks with 0 project warnings (pinned `vendor/hotpath` diagnostics only); Wasm, Wasm GC, JS, and native each 162 / 162; app JS 17 / 17; native runtime 147 / 147; ACP native stdio; PATH install smoke; and web 7 / 7. The runtime suite's `Tool write requires approval...` line is the expected noninteractive refusal assertion; the suite passed. |
+| `npm ci --cache=/Volumes/DevSSD/dsh-native-tests/hooks-increment-20261010/npm-cache --no-audit --no-fund`; `npm run test:integration` | PASS after installing the single locked development dependency. Native-host Chromium smoke passed CSP, MoonBit UI / transport, Canvas, command receipts, fork / prune / import, offline shell, accessibility, auth races, and compiled service-worker cache. `npm test` was not rerun after installing this dependency; its component gates and integration gate each passed as recorded here. |
+| `moon test engine --target native --frozen --target-dir /Volumes/DevSSD/dsh-native-tests/hooks-increment-20261010/engine-termination-fix` | 79 / 79 PASS after fixing accepted PostToolUse contexts being dropped when termination settled outstanding tool calls. Regression coverage includes cancellation, interrupted snapshot restoration / reopen, and capacity closure. |
+| Node/npm removed from `PATH`: `moon run scripts/native-verify.mbtx --target native .` with `DSH_NATIVE_VERIFY_TARGET_DIR=/Volumes/DevSSD/dsh-native-tests/hooks-increment-20261010/no-node-verify-target` | PASS / exit 0. Native checks had 0 project warnings (pinned `vendor/hotpath` diagnostics only); 319 / 319 native tests passed. CLI help, source install, browser / service-worker build and embedded bundle comparison, and checkpoint / approval / tool / context / reload demo passed. |
+| `git diff --check`; changelog guard dry-run / apply and structure, duplicate, and date validation | PASS. |
+
+The upstream bridge emits each matching hook's context as text blocks in a
+source-tagged user message after the correlated tool results. Native persistence,
+provider request preparation, and browser / desktop transcript projection preserve
+that distinction. ACP currently omits synthetic hook context from its wire
+transcript, and the native parser keeps its established strict rejection for a
+wrong-type `additionalContext`; both are documented compatibility boundaries.
+Stores containing structured hook messages or `additional_contexts` completion
+metadata require the 0.1.12-or-newer reader and must not be rewritten by older
+versions. Context-free 0.1.11 stores remain readable.
+
 ## ACP per-session model configuration increment (0.1.11)
 
 2026-10-10、macOS arm64、Node.js `24.21.0`、MoonBit compiler / core
