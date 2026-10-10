@@ -86,6 +86,26 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 - 完了条件・回帰テスト: 明示した transcript format を実 hook が読み、保存失敗・cancel・reopen・削除後の参照を検証できること。対応しない判断なら理由とともに `wontfix` を記録する。
 - 修正 PR / close 判定: 未着手。今回の移植で維持する原典側の制約として記録。
 
+### 0.1.12 PostToolUse 移植で維持した構造
+
+機能実装の固定 snapshot は [`56d27f12`](https://github.com/f4ah6o/dsh.mbt/tree/56d27f12b576a8779421f44a5e351c76d29d527f)。以下は既存項目の追加根拠であり、新しい動作不具合の報告ではない。
+
+- **DEBT-001**: [`engine/tool_calls.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/56d27f12b576a8779421f44a5e351c76d29d527f/engine/tool_calls.mbt#L238-L266) の completion は、既存の汎用 `Json` event payload に `additional_contexts` を追加する。同ファイルの `post_tool_context_message` も role / source / text block を Json で構築する。原典のメッセージ形と既存の永続 codec を保ち、今回の移植では型付き payload への横断的な置換を行わない。
+- **DEBT-003**: [`runtime/hooks_codec.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/56d27f12b576a8779421f44a5e351c76d29d527f/runtime/hooks_codec.mbt#L98-L103) は成功値を `NativeHookOutcome` として型付けする一方、拒否・decode・上限の失敗は既存方針の `String` を使う。文字列エラーを保持する判断と、成功状態の型付けを区別して記録する。
+- **DEBT-004**: [`engine/transaction.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/56d27f12b576a8779421f44a5e351c76d29d527f/engine/transaction.mbt#L62-L72) は追加した `completed_contexts` も個別にコピーする。既存の atomicity 方針を保った追加であり、コピー不足や性能劣化を確認したものではない。後続の状態整理ではこのフィールドも restore / cancel / transaction 回帰の対象とする。
+
+確認方法は固定 source の静的照合。性能測定と typed payload / error taxonomy への改修は未実施。これらの改善は parity 移植とは独立に扱う。
+
+### DEBT-007: 終了時の受理済み PostToolUse context 保存漏れ
+
+- 起点・種類・優先度・状態: `PORT / bug, correctness`、復元を妨げるため優先度高、`reproduced`。
+- upstream baseline / path: N/A。移植先の終了処理と replay 契約の不整合であり、原典のバグを確認したものではない。
+- port baseline / path: [`a8b02fea` の engine/engine.mbt](https://github.com/f4ah6o/dsh.mbt/blob/a8b02feaeadcfb475aff575af49a4c062dd671f3/engine/engine.mbt#L758-L786)、`Engine::terminate`。通常経路の `commit_ready_tool_results` と異なり、残りの tool result を保存した後に受理済み context を保存せず calls を clear していた。
+- reproducer / 確認: 独立レビューの native whitebox probe で、並列 read 2 件の先頭を `additional_contexts` 付きで完了してから cancel すると、snapshot restore が `PostToolUse context is missing, reordered, or differs from its completion` を返す。後方の read を context 付きで完了した active snapshot では、最初の restore は成功するが、その結果の snapshot を再度 restore すると同じ拒否になる。両 probe の失敗を確認。
+- 影響・互換性判断: 受理済み context を持つ終了 session が復元不能になり得る。今回の移植候補で発見した動作不具合のため、負債を残す方針の対象にせず公開前に修正する。
+- 是正方針・回帰条件: 終了処理でも全 tool result の後、calls clear / step end より前に受理済み context を保存する。cancel、interrupted restore、capacity closure と繰り返し restore を検証する。post-hook 中の cancel で未受理の context は追加しない。
+- 修正 PR / close 判定: 修正・再レビュー中。固定した修正 commit と回帰結果を追記して `fixed` に更新する。
+
 ### 後続追記テンプレート
 
 #### DEBT-NNN: 短い見出し
@@ -120,6 +140,8 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 
 - 2026-10-10: 非不具合の不備・非慣用的構造を維持して移植し、確認できた動作不具合は修正する方針を明記。既存の台帳項目を保持し、必須 issue フィールドとセクションを補完。
 - 2026-10-10: command hooks の追加移植に合わせ、原典と移植先が維持する空の `transcript_path` を DEBT-006 に登録。
+- 2026-10-10: PostToolUse `additionalContext` の移植で維持した Json payload、文字列エラー、個別 state copy を、DEBT-001 / 003 / 004 の固定 source 根拠として追記。
+- 2026-10-10: 独立レビューで再現した移植固有の終了時 context 保存漏れを DEBT-007 に登録。公開前の是正対象として追跡。
 
 ## 注記
 
