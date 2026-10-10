@@ -30,6 +30,7 @@ pub fn Engine::complete_effect(Self, EffectId, Json) -> Result[Json, String]
 pub fn Engine::event_log(Self, SessionId) -> Result[Array[EngineEvent], String]
 pub fn Engine::invoke(Self, String, Json) -> Result[Json, String]
 pub fn Engine::new(Array[Json]) -> Self
+pub fn Engine::preview(Self, EngineCommand) -> Result[Json, String]
 pub fn Engine::project_effect_stream(Self, EffectId, String, String) -> Result[Json, String]
 pub fn Engine::project_stream(Self, String, String, String) -> Result[Json, String]
 pub fn Engine::record_effect_outcome(Self, String, Json) -> Result[Json, String]
@@ -49,6 +50,7 @@ pub(all) enum EngineCommand {
   ImportSession(String)
   GetSession(SessionId)
   SendPrompt(SessionId, String)
+  SendPromptWithContexts(SessionId, String, Array[String])
   CancelSession(SessionId)
   PruneToolResults(SessionId, ToolResultPruneConfig)
   ApproveTool(SessionId, ToolCallId, Bool)

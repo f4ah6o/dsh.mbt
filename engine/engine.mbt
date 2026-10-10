@@ -52,44 +52,9 @@ fn Engine::apply_command_impl(
       GetSession(id) => self.lookup(id.as_string()).json()
       ForkSession(id, child_id, title) =>
         self.fork_session(id.as_string(), child_id, title).json()
-      SendPrompt(id, prompt) => {
-        let session = self.lookup(id.as_string())
-        if session.imported {
-          raise Invalid(
-            "Imported Session v4 histories are read-only and cannot be continued",
-          )
-        }
-        if session.is_busy() {
-          raise Invalid("Session is busy")
-        }
-        if session.turn_id >= 1000000 {
-          raise Invalid("Session turn limit reached")
-        }
-        // Reserve enough event slots for a full worst-case admitted turn,
-        // including denied calls and cancellation closure.
-        if session.events.length() + session.max_steps * 112 + 16 > 32768 {
-          raise Invalid("Session event limit reached; create a new session")
-        }
-        session.turn_id += 1
-        session.step = 0
-        session.status = Running
-        session.calls.clear()
-        session.cursor = 0
-        session.schedule_cursor = 0
-        session.parallel_group = false
-        session.active_tool_effects.clear()
-        session.todos = None
-        session.append("turn/start", object([]))
-        session.append(
-          "user/message",
-          object([
-            ("role", Json::string("user")),
-            ("content", Json::string(prompt)),
-          ]),
-        )
-        self.start_step(session)
-        session.json()
-      }
+      SendPrompt(id, prompt) => self.send_prompt(id, prompt, [])
+      SendPromptWithContexts(id, prompt, additional_contexts) =>
+        self.send_prompt(id, prompt, additional_contexts)
       CancelSession(id) => {
         let session = self.lookup(id.as_string())
         if session.imported {
@@ -148,6 +113,51 @@ fn Engine::apply_command_impl(
   } catch {
     Invalid(message) => Err(message)
   }
+}
+
+///|
+fn Engine::send_prompt(
+  self : Engine,
+  id : SessionId,
+  prompt : String,
+  additional_contexts : Array[String],
+) -> Json raise EngineError {
+  let session = self.lookup(id.as_string())
+  if session.imported {
+    raise Invalid(
+      "Imported Session v4 histories are read-only and cannot be continued",
+    )
+  }
+  if session.is_busy() {
+    raise Invalid("Session is busy")
+  }
+  if session.turn_id >= 1000000 {
+    raise Invalid("Session turn limit reached")
+  }
+  // Reserve enough event slots for a full worst-case admitted turn,
+  // including denied calls and cancellation closure.
+  if session.events.length() + session.max_steps * 112 + 16 > 32768 {
+    raise Invalid("Session event limit reached; create a new session")
+  }
+  session.turn_id += 1
+  session.step = 0
+  session.status = Running
+  session.calls.clear()
+  session.cursor = 0
+  session.schedule_cursor = 0
+  session.parallel_group = false
+  session.active_tool_effects.clear()
+  session.todos = None
+  session.append("turn/start", object([]))
+  session.append(
+    "user/message",
+    object([("role", Json::string("user")), ("content", Json::string(prompt))]),
+  )
+  if !additional_contexts.is_empty() {
+    session.append("user/message", hook_context_message(additional_contexts))
+  }
+  self.start_step(session)
+  session.json()
 }
 
 ///|

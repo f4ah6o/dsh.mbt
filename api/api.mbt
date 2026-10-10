@@ -8,6 +8,8 @@ pub struct HarnessApi {
   priv protocol : @mcp.ProtocolServer
   priv operations : Map[String, @capability.TypedCapability[Json, Json]]
   priv profiler : @hotpath.Profiler
+  priv native_prompt_contexts : Ref[Array[String]]
+  priv preview_session_send : Ref[Bool]
 }
 
 ///|
@@ -199,6 +201,8 @@ fn create_api(
   }
   let engine = @engine.Engine::new(plugins.tools())
   let profiler = @hotpath.Profiler::new()
+  let native_prompt_contexts : Ref[Array[String]] = Ref([])
+  let preview_session_send = Ref(false)
   let operations : Map[String, @capability.TypedCapability[Json, Json]] = Map([])
   for
     (name, title, description, is_read_only) in [
@@ -291,6 +295,46 @@ fn create_api(
           match name {
             "plugin_list" => Ok(plugins.manifest())
             "profile_stats" => Ok(Json::string(profiler.render_text()))
+            "session_send" =>
+              match @engine.EngineCommand::from_json("session_send", input) {
+                Ok(@engine.EngineCommand::SendPrompt(session_id, prompt)) => {
+                  let command = if native_prompt_contexts.val.is_empty() {
+                    @engine.EngineCommand::SendPrompt(session_id, prompt)
+                  } else {
+                    @engine.EngineCommand::SendPromptWithContexts(
+                      session_id,
+                      prompt,
+                      native_prompt_contexts.val,
+                    )
+                  }
+                  if preview_session_send.val {
+                    match engine.preview(command) {
+                      Ok(value) => Ok(value)
+                      Err(error) => Err(domain_error(name, error))
+                    }
+                  } else {
+                    match engine.apply(command) {
+                      Ok(value) => Ok(value)
+                      Err(error) => Err(domain_error(name, error))
+                    }
+                  }
+                }
+                Ok(command) =>
+                  if preview_session_send.val {
+                    match engine.preview(command) {
+                      Ok(value) => Ok(value)
+                      Err(error) => Err(domain_error(name, error))
+                    }
+                  } else {
+                    match engine.apply(command) {
+                      Ok(value) => Ok(value)
+                      Err(error) => Err(domain_error(name, error))
+                    }
+                  }
+                Err(error) => Err(domain_error(name, error))
+              }
+            _ if preview_session_send.val =>
+              Err(domain_error(name, "preview accepts only session_send"))
             _ =>
               match engine.invoke(name, input) {
                 Ok(value) =>
@@ -323,7 +367,16 @@ fn create_api(
     "dsh.mbt",
     "0.1.0",
   )
-  { owner, engine, registry, protocol, operations, profiler, }
+  {
+    owner,
+    engine,
+    registry,
+    protocol,
+    operations,
+    profiler,
+    native_prompt_contexts,
+    preview_session_send,
+  }
 }
 
 ///|
@@ -376,6 +429,76 @@ pub fn HarnessApi::invoke(
           }
       }
   }
+}
+
+///|
+/// Check the ordinary closed session_send schema and engine admission rules
+/// without adopting state or exposing effects. Native runtimes call this before
+/// running a UserPromptSubmit command.
+pub fn HarnessApi::preview_session_send(
+  self : HarnessApi,
+  input : Json,
+) -> Result[Json, String] {
+  let previous_preview = self.preview_session_send.val
+  let previous_contexts = self.native_prompt_contexts.val
+  self.preview_session_send.val = true
+  self.native_prompt_contexts.val = []
+  defer {
+    self.preview_session_send.val = previous_preview
+    self.native_prompt_contexts.val = previous_contexts
+  }
+  self.invoke("session_send", input)
+}
+
+///|
+/// Dispatch a prompt with trusted native hook context while keeping the
+/// external session_send input schema closed.
+pub fn HarnessApi::invoke_session_send_with_prompt_contexts(
+  self : HarnessApi,
+  input : Json,
+  contexts : Array[String],
+) -> Result[Json, String] {
+  let previous = self.native_prompt_contexts.val
+  self.native_prompt_contexts.val = contexts
+  defer {
+    self.native_prompt_contexts.val = previous
+  }
+  self.invoke("session_send", input)
+}
+
+///|
+/// Run MCP protocol validation and session_send engine admission on an isolated
+/// candidate. The returned wire response has the same success/error shape as
+/// ordinary MCP dispatch.
+pub fn HarnessApi::preview_mcp_handle(
+  self : HarnessApi,
+  line : String,
+) -> String? {
+  let previous_preview = self.preview_session_send.val
+  let previous_contexts = self.native_prompt_contexts.val
+  self.preview_session_send.val = true
+  self.native_prompt_contexts.val = []
+  defer {
+    self.preview_session_send.val = previous_preview
+    self.native_prompt_contexts.val = previous_contexts
+  }
+  self.protocol.handle_line(line)
+}
+
+///|
+/// Dispatch an unchanged, validated MCP request while attaching context only
+/// inside the native session_send capability handler.
+pub fn HarnessApi::mcp_handle_with_prompt_contexts(
+  self : HarnessApi,
+  line : String,
+  contexts : Array[String],
+) -> String? {
+  let previous = self.native_prompt_contexts.val
+  self.native_prompt_contexts.val = contexts
+  defer {
+    self.native_prompt_contexts.val = previous
+  }
+  self.protocol.handle_line(line)
 }
 
 ///|

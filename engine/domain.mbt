@@ -103,6 +103,7 @@ pub(all) enum EngineCommand {
   ImportSession(String)
   GetSession(SessionId)
   SendPrompt(SessionId, String)
+  SendPromptWithContexts(SessionId, String, Array[String])
   CancelSession(SessionId)
   PruneToolResults(SessionId, ToolResultPruneConfig)
   ApproveTool(SessionId, ToolCallId, Bool)
@@ -160,7 +161,37 @@ pub fn EngineCommand::from_json(
         if prompt.is_empty() {
           raise Invalid("prompt must not be empty")
         }
-        SendPrompt(session_id, prompt)
+        let additional_contexts : Array[String] = []
+        match fields(input).get("additional_contexts") {
+          None => ()
+          Some(Json::Array(values)) if values.length() <= 32 =>
+            for value in values {
+              match value {
+                Json::String(text) if text.length() > 0 && text.length() <= 4096 =>
+                  additional_contexts.push(text)
+                _ =>
+                  raise Invalid("additional_contexts contains an invalid item")
+              }
+            }
+          Some(_) =>
+            raise Invalid(
+              "additional_contexts must be an array of at most 32 strings",
+            )
+        }
+        let mut total_context_length = 0
+        for context in additional_contexts {
+          total_context_length += context.length()
+        }
+        if total_context_length > 16384 {
+          raise Invalid(
+            "additional_contexts exceeds the aggregate length limit",
+          )
+        }
+        if additional_contexts.is_empty() {
+          SendPrompt(session_id, prompt)
+        } else {
+          SendPromptWithContexts(session_id, prompt, additional_contexts)
+        }
       }
       "session_cancel" => CancelSession(decode_session_id(input))
       "session_prune_tool_results" =>
@@ -238,6 +269,26 @@ fn EngineCommand::validate(self : EngineCommand) -> Result[Unit, String] {
       Err("prompt must not be empty")
     SendPrompt(_, prompt) if prompt.length() > 16384 =>
       Err("prompt exceeds the length limit")
+    SendPromptWithContexts(_, prompt, _) if prompt.is_empty() =>
+      Err("prompt must not be empty")
+    SendPromptWithContexts(_, prompt, _) if prompt.length() > 16384 =>
+      Err("prompt exceeds the length limit")
+    SendPromptWithContexts(_, _, additional_contexts) if additional_contexts.length() >
+      32 => Err("additional_contexts must contain at most 32 items")
+    SendPromptWithContexts(_, _, additional_contexts) => {
+      let mut total_length = 0
+      for context in additional_contexts {
+        if context.is_empty() || context.length() > 4096 {
+          return Err("additional_contexts contains an invalid item")
+        }
+        total_length += context.length()
+      }
+      if total_length > 16384 {
+        Err("additional_contexts exceeds the aggregate length limit")
+      } else {
+        Ok(())
+      }
+    }
     PruneToolResults(_, config) =>
       match
         ToolResultPruneConfig::new(

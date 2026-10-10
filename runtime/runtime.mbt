@@ -453,14 +453,47 @@ async fn NativeRuntime::invoke(
   operation : String,
   input : Json,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
+  if operation == "session_send" && self.hooks.has_user_prompt_submit() {
+    return self.invoke_with_user_prompt_hook(input)
+  }
   self.gate.acquire()
   defer self.gate.release()
   if self.stopped || self.closed {
     return Err("native runtime is stopped")
   }
+  let input = if operation == "session_send" {
+    native_hook_prompt_input(input, [])
+  } else {
+    input
+  }
   let input = match self.prepare_input(operation, input) {
     Ok(value) => value
     Err(error) => return Err(error)
+  }
+  let input = if operation == "session_send" &&
+    self.hooks.has_user_prompt_submit() {
+    match (string_field(input, "prompt"), string_field(input, "session_id")) {
+      (Some(prompt), Some(session_id)) if !prompt.is_empty() => {
+        let outcome = match
+          self.hooks.before_user_prompt(self.tools, session_id, prompt) {
+          Ok(value) => value
+          Err(error) =>
+            return Err("UserPromptSubmit hook could not run: " + error)
+        }
+        match outcome.action {
+          NativeHookAction::Deny(reason) =>
+            return Err(
+              "session prompt rejected by UserPromptSubmit hook: " +
+              native_hook_limit_reason(reason),
+            )
+          NativeHookAction::Continue =>
+            native_hook_prompt_input(input, outcome.additional_contexts)
+        }
+      }
+      _ => input
+    }
+  } else {
+    input
   }
   let result = match self.api.invoke(operation, input) {
     Ok(value) => value
@@ -468,8 +501,237 @@ async fn NativeRuntime::invoke(
   }
   match self.checkpoint_locked() {
     Err(error) => Err(error)
-    Ok(_) => Ok((result, self.api.take_typed_effects()))
+    Ok(_) => {
+      if operation == "session_cancel" {
+        match string_field(input, "session_id") {
+          Some(session_id) =>
+            self.scheduler.cancel_through(session_id, self.state.revision)
+          None => ()
+        }
+      }
+      Ok((result, self.api.take_typed_effects()))
+    }
   }
+}
+
+///|
+/// Validate a user prompt against the engine before invoking a configured
+/// command. This keeps hooks from running for malformed, busy, imported, or
+/// capacity-exhausted sends.
+fn NativeRuntime::validate_user_prompt_locked(
+  self : NativeRuntime,
+  input : Json,
+) -> Result[(String, String), String] {
+  let (session_id, prompt) = match
+    @engine.EngineCommand::from_json("session_send", input) {
+    Ok(@engine.EngineCommand::SendPrompt(session_id, prompt)) =>
+      (session_id.as_string(), prompt)
+    Ok(@engine.EngineCommand::SendPromptWithContexts(session_id, prompt, _)) =>
+      (session_id.as_string(), prompt)
+    Ok(_) => return Err("invalid session_send command")
+    Err(error) => return Err(error)
+  }
+  let session = match
+    self.api.invoke("session_get", { "session_id": session_id.to_json() }) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  if string_field(session, "source_format") == Some("deepseek-session-v4") {
+    return Err(
+      "Imported Session v4 histories are read-only and cannot be continued",
+    )
+  }
+  if ["running", "awaiting_approval"].contains(
+      string_field(session, "status").unwrap_or(""),
+    ) {
+    return Err("Session is busy")
+  }
+  if int_field(session, "turn_id").unwrap_or(0) >= 1000000 {
+    return Err("Session turn limit reached")
+  }
+  let event_count = match object_field(session, "events") {
+    Some(Json::Array(events)) => events.length()
+    _ => return Err("session events are unavailable")
+  }
+  let max_steps = int_field(session, "max_steps").unwrap_or(16)
+  if event_count + max_steps * 112 + 16 > 32768 {
+    return Err("Session event limit reached; create a new session")
+  }
+  Ok((session_id, prompt))
+}
+
+///|
+async fn NativeRuntime::run_user_prompt_hook_controlled(
+  self : NativeRuntime,
+  control : NativeJobControl,
+  session_id : String,
+  prompt : String,
+) -> Result[NativeHookOutcome, String] {
+  let outcome : Ref[Result[NativeHookOutcome, String]?] = Ref(None)
+  let task_result = @async.handle_cancellation(async fn() {
+    try
+      @async.with_task_group() <| workers => {
+        let task = workers.spawn(no_wait=true, allow_failure=true, async fn() {
+          let result = self.hooks.before_user_prompt(
+            self.tools,
+            session_id,
+            prompt,
+          )
+          outcome.val = Some(result)
+          result.map(_ => ())
+        })
+        self.scheduler.attach_task(control, task)
+        task.wait()
+      }
+    catch {
+      @async.WaitedTaskAlreadyCancelled => Err("hook process was cancelled")
+      _ => Err("UserPromptSubmit hook task failed")
+    }
+  })
+  match task_result {
+    None => Err("session prompt was cancelled before admission")
+    Some(Err(error)) => Err(error)
+    Some(Ok(_)) =>
+      match outcome.val {
+        Some(Ok(value)) => Ok(value)
+        Some(Err(error)) => Err(error)
+        None => Err("UserPromptSubmit hook did not return an outcome")
+      }
+  }
+}
+
+///|
+/// The direct local API path has no remote receipt, but it still binds the
+/// external hook process to the scheduler so session_cancel can terminate it.
+async fn NativeRuntime::invoke_with_user_prompt_hook(
+  self : NativeRuntime,
+  raw_input : Json,
+) -> Result[(Json, Array[@engine.EngineEffect]), String] {
+  self.gate.acquire()
+  if self.stopped || self.closed {
+    self.gate.release()
+    return Err("native runtime is stopped")
+  }
+  let input = native_hook_prompt_input(raw_input, [])
+  let (session_id, prompt) = match self.validate_user_prompt_locked(input) {
+    Ok(value) => value
+    Err(error) => {
+      self.gate.release()
+      return Err(error)
+    }
+  }
+  let prepared_input = match self.prepare_input("session_send", input) {
+    Ok(value) => value
+    Err(error) => {
+      self.gate.release()
+      return Err(error)
+    }
+  }
+  match self.api.preview_session_send(prepared_input) {
+    Ok(_) => ()
+    Err(error) => {
+      self.gate.release()
+      return Err(error)
+    }
+  }
+  match @engine.EngineCommand::from_json("session_send", prepared_input) {
+    Ok(_) => ()
+    Err(error) => {
+      self.gate.release()
+      return Err(error)
+    }
+  }
+  let command_id = match native_command_id() {
+    Ok(value) => value
+    Err(error) => {
+      self.gate.release()
+      return Err(error)
+    }
+  }
+  let reservation = @async.protect_from_cancel(async fn() {
+    match
+      self.scheduler.begin(session_id, command_id, self.state.revision + 1) {
+      Err(error) => Err(error)
+      Ok(value) =>
+        match self.checkpoint_locked() {
+          Err(error) => {
+            self.scheduler.finish(value)
+            Err(error)
+          }
+          Ok(_) => Ok(value)
+        }
+    }
+  })
+  if @async.is_being_cancelled() {
+    match reservation {
+      Ok(value) =>
+        @async.protect_from_cancel(async fn() { self.scheduler.finish(value) })
+      Err(_) => ()
+    }
+    self.gate.release()
+    @async.pause()
+  }
+  let control = match reservation {
+    Ok(value) => value
+    Err(error) => {
+      self.gate.release()
+      return Err(error)
+    }
+  }
+  self.gate.release()
+  let hook_result = @async.handle_cancellation(async fn() {
+    self.run_user_prompt_hook_controlled(control, session_id, prompt)
+  })
+  @async.protect_from_cancel(async fn() { self.gate.acquire() })
+  let owner_cancelled_before_admission = @async.is_being_cancelled()
+  let result : Ref[Result[(Json, Array[@engine.EngineEffect]), String]] = Ref(
+    Err("session prompt was cancelled before admission"),
+  )
+  @async.protect_from_cancel(async fn() {
+    defer self.gate.release()
+    if owner_cancelled_before_admission {
+      self.scheduler.finish(control)
+    } else {
+      result.val = if self.stopped || self.closed {
+        Err("native runtime is stopped")
+      } else if control.cancelled.val {
+        Err("session prompt was cancelled before admission")
+      } else {
+        match hook_result {
+          None => Err("session prompt was cancelled before admission")
+          Some(Err(error)) =>
+            Err("UserPromptSubmit hook could not run: " + error)
+          Some(Ok(outcome)) =>
+            match outcome.action {
+              NativeHookAction::Deny(reason) =>
+                Err(
+                  "session prompt rejected by UserPromptSubmit hook: " +
+                  native_hook_limit_reason(reason),
+                )
+              NativeHookAction::Continue =>
+                match
+                  self.api.invoke_session_send_with_prompt_contexts(
+                    prepared_input,
+                    outcome.additional_contexts,
+                  ) {
+                  Err(error) => Err(error)
+                  Ok(value) =>
+                    match self.checkpoint_locked() {
+                      Err(error) => Err(error)
+                      Ok(_) => Ok((value, self.api.take_typed_effects()))
+                    }
+                }
+            }
+        }
+      }
+      self.scheduler.finish(control)
+    }
+  })
+  if owner_cancelled_before_admission {
+    @async.pause()
+  }
+  let result = result.val
+  result
 }
 
 ///|
@@ -896,7 +1158,13 @@ async fn NativeRuntime::accept_remote_command(
     Ok((fingerprint, None)) => fingerprint
   }
   if command.operation != "session_cancel" {
-    match command.session_id {
+    let session_hint = match command.session_id {
+      Some(value) => Some(value)
+      None if command.operation == "session_send" =>
+        string_field(command.input, "session_id")
+      None => None
+    }
+    match session_hint {
       Some(session_id) =>
         match self.scheduler.await_idle(session_id) {
           Ok(_) => ()
@@ -904,6 +1172,11 @@ async fn NativeRuntime::accept_remote_command(
         }
       None => ()
     }
+  }
+  if command.operation == "session_send" && self.hooks.has_user_prompt_submit() {
+    return self.accept_remote_prompt_command(
+      command, identity_key, acp_activity_session_id, fingerprint,
+    )
   }
   self.gate.acquire()
   defer self.gate.release()
@@ -968,6 +1241,11 @@ async fn NativeRuntime::accept_remote_command(
     }
   }
   let input = Json::object(input_fields)
+  let input = if command.operation == "session_send" {
+    native_hook_prompt_input(input, [])
+  } else {
+    input
+  }
   let allowed = [
     "session_create", "session_import", "session_send", "session_cancel", "session_prune_tool_results",
     "session_fork", "tool_approve",
@@ -1080,6 +1358,365 @@ async fn NativeRuntime::accept_remote_command(
       }
       Ok((receipt, effects, status == "accepted", control))
     }
+  }
+}
+
+///|
+/// Admit a remote user prompt in two durable phases. The accepted reservation
+/// fences replay before an external hook runs; the final receipt is written
+/// only after denial or engine admission is known.
+async fn NativeRuntime::accept_remote_prompt_command(
+  self : NativeRuntime,
+  command : @protocol.RemoteCommand,
+  identity_key : String,
+  acp_activity_session_id : String,
+  fingerprint : String,
+) -> Result[
+  (Json, Array[@engine.EngineEffect], Bool, NativeJobControl?),
+  String,
+] {
+  self.gate.acquire()
+  if self.stopped || self.closed {
+    self.gate.release()
+    return Err("native runtime is stopped")
+  }
+  if identity_key != self.state.identity_key {
+    self.gate.release()
+    return Err("caller identity is no longer authorized")
+  }
+  if command.workspace_id != self.state.workspace_id {
+    self.gate.release()
+    return Err("command belongs to another workspace")
+  }
+  if !acp_activity_session_id.is_empty() &&
+    (
+      command.session_id != Some(acp_activity_session_id) ||
+      !self.state.acp_sessions.any(session => {
+        session.session_id == acp_activity_session_id
+      })
+    ) {
+    self.gate.release()
+    return Err("ACP activity does not match a registered session command")
+  }
+  if !@protocol.validate_uuid_v7_command_id_time(
+      command.command_id,
+      native_auth_now().to_int64() * 1000L,
+      604800000L,
+      300000L,
+    ) {
+    self.gate.release()
+    return Err("command ID is outside the allowed retry window")
+  }
+  match
+    self.existing_command_receipt_locked(command, identity_key, fingerprint) {
+    Some(receipt) => {
+      self.gate.release()
+      return Ok((receipt, [], false, None))
+    }
+    None => ()
+  }
+  let retained : Array[Json] = []
+  for previous in self.state.receipts {
+    let previous_id = string_field(previous, "command_id").unwrap_or("")
+    let is_expired = match @protocol.uuid_v7_command_timestamp_ms(previous_id) {
+      Some(timestamp) =>
+        native_auth_now().to_int64() * 1000L - timestamp > 604800000L
+      None => true
+    }
+    if !is_expired {
+      retained.push(previous)
+    }
+  }
+  if retained.length() >= 10000 {
+    self.gate.release()
+    return Err("command receipt store is full")
+  }
+  let raw_input = match command.input {
+    Json::Object(fields) => {
+      let copy = fields.copy()
+      match command.session_id {
+        Some(session_id) => copy["session_id"] = session_id.to_json()
+        None => ()
+      }
+      native_hook_prompt_input(Json::object(copy), [])
+    }
+    _ => Json::null()
+  }
+  let validation = if command.input is Json::Object(_) {
+    match self.validate_user_prompt_locked(raw_input) {
+      Err(error) => Err(error)
+      Ok((session_id, prompt)) =>
+        match self.prepare_input("session_send", raw_input) {
+          Err(error) => Err(error)
+          Ok(prepared) =>
+            match @engine.EngineCommand::from_json("session_send", prepared) {
+              Err(error) => Err(error)
+              Ok(_) =>
+                match self.api.preview_session_send(prepared) {
+                  Ok(_) => Ok((session_id, prompt, prepared))
+                  Err(error) => Err(error)
+                }
+            }
+        }
+    }
+  } else {
+    Err("command input must be an object")
+  }
+  let (session_id, prompt, prepared_input) = match validation {
+    Err(error) => {
+      let receipt = native_receipt(
+        self.state.workspace_id,
+        command.command_id,
+        fingerprint,
+        "rejected",
+        None,
+        None,
+        Some(bounded_tool_text(error)),
+      )
+      retained.push(native_receipt_with_owner(receipt, identity_key))
+      self.state.receipts = retained
+      match self.checkpoint_locked() {
+        Err(persistence_error) => {
+          self.gate.release()
+          return Err(persistence_error)
+        }
+        Ok(_) => {
+          self.gate.release()
+          return Ok((receipt, [], false, None))
+        }
+      }
+    }
+    Ok(value) => value
+  }
+  let command_id = command.command_id
+  let reservation_revision = self.state.revision + 1
+  let reservation = @async.protect_from_cancel(async fn() {
+    match self.scheduler.begin(session_id, command_id, reservation_revision) {
+      Err(error) => Err(error)
+      Ok(control) => {
+        let receipt = native_receipt(
+          self.state.workspace_id,
+          command_id,
+          fingerprint,
+          "accepted",
+          Some(reservation_revision),
+          None,
+          None,
+        )
+        retained.push(native_receipt_with_owner(receipt, identity_key))
+        self.state.receipts = retained
+        match self.checkpoint_locked() {
+          Err(error) => {
+            self.scheduler.finish(control)
+            Err(error)
+          }
+          Ok(_) => Ok(control)
+        }
+      }
+    }
+  })
+  if @async.is_being_cancelled() {
+    match reservation {
+      Ok(control) =>
+        @async.protect_from_cancel(async fn() {
+          ignore(
+            self.finish_remote_prompt_after_hook_locked(
+              control,
+              None,
+              true,
+              session_id,
+              command_id,
+              identity_key,
+              acp_activity_session_id,
+              fingerprint,
+              prepared_input,
+            ),
+          )
+        })
+      Err(_) => ()
+    }
+    self.gate.release()
+    @async.pause()
+  }
+  let control = match reservation {
+    Ok(value) => value
+    Err(error) => {
+      self.gate.release()
+      return Err(error)
+    }
+  }
+  self.gate.release()
+  let hook_result = @async.handle_cancellation(async fn() {
+    self.run_user_prompt_hook_controlled(control, session_id, prompt)
+  })
+  @async.protect_from_cancel(async fn() { self.gate.acquire() })
+  let cancelled_before_admission = @async.is_being_cancelled()
+  let completion = @async.protect_from_cancel(async fn() {
+    defer self.gate.release()
+    self.finish_remote_prompt_after_hook_locked(
+      control, hook_result, cancelled_before_admission, session_id, command_id, identity_key,
+      acp_activity_session_id, fingerprint, prepared_input,
+    )
+  })
+  if cancelled_before_admission {
+    @async.pause()
+  }
+  completion
+}
+
+///|
+/// Complete the durable receipt after a prompt hook while the runtime gate is
+/// held. The caller protects this phase so cancellation cannot strand the gate
+/// or scheduler reservation.
+async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
+  self : NativeRuntime,
+  control : NativeJobControl,
+  hook_result : Result[NativeHookOutcome, String]?,
+  owner_cancelled : Bool,
+  session_id : String,
+  command_id : String,
+  identity_key : String,
+  acp_activity_session_id : String,
+  fingerprint : String,
+  prepared_input : Json,
+) -> Result[
+  (Json, Array[@engine.EngineEffect], Bool, NativeJobControl?),
+  String,
+] {
+  if self.stopped || self.closed {
+    self.scheduler.finish(control)
+    return Err("native runtime is stopped")
+  }
+  if identity_key != self.state.identity_key {
+    self.scheduler.finish(control)
+    return Err("caller identity is no longer authorized")
+  }
+  let outcome = if owner_cancelled {
+    Err("session prompt was cancelled before admission")
+  } else if control.cancelled.val {
+    Err("session prompt was cancelled before admission")
+  } else {
+    match hook_result {
+      None => Err("session prompt was cancelled before admission")
+      Some(Err(error)) => Err("UserPromptSubmit hook could not run: " + error)
+      Some(Ok(_)) if control.cancelled.val =>
+        Err("session prompt was cancelled before admission")
+      Some(Ok(value)) =>
+        match value.action {
+          NativeHookAction::Deny(reason) =>
+            Err(
+              "session prompt rejected by UserPromptSubmit hook: " +
+              native_hook_limit_reason(reason),
+            )
+          NativeHookAction::Continue => Ok(value)
+        }
+    }
+  }
+  match outcome {
+    Err(error) => {
+      let receipt = native_receipt(
+        self.state.workspace_id,
+        command_id,
+        fingerprint,
+        "rejected",
+        None,
+        None,
+        Some(bounded_tool_text(error)),
+      )
+      self.state.receipts = native_replace_receipt(
+        self.state.receipts,
+        command_id,
+        native_receipt_with_owner(receipt, identity_key),
+      )
+      match self.checkpoint_locked() {
+        Err(persistence_error) => {
+          self.scheduler.finish(control)
+          Err(persistence_error)
+        }
+        Ok(_) => {
+          self.scheduler.finish(control)
+          Ok((receipt, [], false, None))
+        }
+      }
+    }
+    Ok(outcome) =>
+      match
+        self.api.invoke_session_send_with_prompt_contexts(
+          prepared_input,
+          outcome.additional_contexts,
+        ) {
+        Err(error) => {
+          let receipt = native_receipt(
+            self.state.workspace_id,
+            command_id,
+            fingerprint,
+            "rejected",
+            None,
+            None,
+            Some(bounded_tool_text(error)),
+          )
+          self.state.receipts = native_replace_receipt(
+            self.state.receipts,
+            command_id,
+            native_receipt_with_owner(receipt, identity_key),
+          )
+          match self.checkpoint_locked() {
+            Err(persistence_error) => {
+              self.scheduler.finish(control)
+              Err(persistence_error)
+            }
+            Ok(_) => {
+              self.scheduler.finish(control)
+              Ok((receipt, [], false, None))
+            }
+          }
+        }
+        Ok(value) => {
+          let effects = self.api.take_typed_effects()
+          if !acp_activity_session_id.is_empty() {
+            match self.record_acp_activity_locked(acp_activity_session_id) {
+              Ok(_) => ()
+              Err(error) => {
+                self.stopped = true
+                self.scheduler.finish(control)
+                return Err(error)
+              }
+            }
+          }
+          let accepted_revision = self.state.revision + 1
+          let receipt = native_receipt(
+            self.state.workspace_id,
+            command_id,
+            fingerprint,
+            "accepted",
+            Some(accepted_revision),
+            Some(value),
+            None,
+          )
+          self.state.receipts = native_replace_receipt(
+            self.state.receipts,
+            command_id,
+            native_receipt_with_owner(receipt, identity_key),
+          )
+          match self.checkpoint_locked() {
+            Err(error) => {
+              self.scheduler.finish(control)
+              Err(error)
+            }
+            Ok(_) => {
+              for effect in effects {
+                if effect.session_id().as_string() != session_id {
+                  self.scheduler.finish(control)
+                  return Err(
+                    "remote effect session does not match its reservation",
+                  )
+                }
+              }
+              Ok((receipt, effects, true, Some(control)))
+            }
+          }
+        }
+      }
   }
 }
 
@@ -1246,6 +1883,107 @@ async fn[X] NativeRuntime::mcp_handle(
     self.gate.release()
     return Err("native runtime is stopped")
   }
+  let prompt_hooks_enabled = tool_name == "session_send" &&
+    self.hooks.has_user_prompt_submit()
+  // Validate the original wire envelope before native preprocessing can
+  // canonicalize it. In particular, ProtocolServer owns duplicate-key,
+  // request-id, JSON-RPC, metadata, and raw-line size checks. A tool-level
+  // schema error may be caused only by the caller-supplied
+  // additional_contexts field; after retaining that original envelope check,
+  // the sanitized preview below decides whether the actual session_send is
+  // admissible.
+  let original_prompt_preflight = if prompt_hooks_enabled {
+    match self.api.preview_mcp_handle(line) {
+      None => {
+        self.gate.release()
+        return Ok("")
+      }
+      Some(response) if native_mcp_response_has_protocol_error(response) => {
+        self.gate.release()
+        return Ok(response)
+      }
+      Some(response) => Some(response)
+    }
+  } else {
+    None
+  }
+  let prompt_request = if tool_name == "session_send" && prompt_hooks_enabled {
+    Some(native_mcp_prompt_request(line))
+  } else {
+    None
+  }
+  let mut prompt_session_id : String? = None
+  let mut prompt_text : String? = None
+  let mut prompt_dispatch_line = if tool_name == "session_send" {
+    match native_mcp_prompt_request(line) {
+      Some(input) =>
+        native_mcp_line_with_prompt_input(
+          line,
+          native_hook_prompt_input(input, []),
+        )
+      None => line
+    }
+  } else {
+    line
+  }
+  let mut prompt_hook_contexts : Array[String] = []
+  match prompt_request {
+    Some(None) => {
+      self.gate.release()
+      return Ok(
+        original_prompt_preflight.unwrap_or(
+          native_mcp_error_response(line, "invalid session_send arguments"),
+        ),
+      )
+    }
+    Some(Some(raw_input)) => {
+      let clean_input = native_hook_prompt_input(raw_input, [])
+      match self.validate_user_prompt_locked(clean_input) {
+        Err(error) => {
+          self.gate.release()
+          return Ok(native_mcp_error_response(line, error))
+        }
+        Ok((session_id, prompt)) =>
+          match self.prepare_input("session_send", clean_input) {
+            Err(error) => {
+              self.gate.release()
+              return Ok(native_mcp_error_response(line, error))
+            }
+            Ok(prepared) =>
+              match @engine.EngineCommand::from_json("session_send", prepared) {
+                Err(error) => {
+                  self.gate.release()
+                  return Ok(native_mcp_error_response(line, error))
+                }
+                Ok(_) => {
+                  prompt_session_id = Some(session_id)
+                  prompt_text = Some(prompt)
+                  prompt_dispatch_line = native_mcp_line_with_prompt_input(
+                    line,
+                    native_hook_prompt_input(prepared, []),
+                  )
+                  let preflight = self.api.preview_mcp_handle(
+                    prompt_dispatch_line,
+                  )
+                  match preflight {
+                    Some(response) if native_mcp_response_succeeded(response) =>
+                      ()
+                    Some(response) => {
+                      self.gate.release()
+                      return Ok(response)
+                    }
+                    None => {
+                      self.gate.release()
+                      return Ok("")
+                    }
+                  }
+                }
+              }
+          }
+      }
+    }
+    None => ()
+  }
   let mut control : NativeJobControl? = None
   if native_session_effect_mutation(tool_name) {
     match session_id {
@@ -1257,8 +1995,42 @@ async fn[X] NativeRuntime::mcp_handle(
             return Err(error)
           }
         }
-        match self.scheduler.begin(id, command_id, self.state.revision + 1) {
+        let mut reservation_checkpoint_failed = false
+        let reservation = @async.protect_from_cancel(async fn() {
+          match self.scheduler.begin(id, command_id, self.state.revision + 1) {
+            Err(error) => Err(error)
+            Ok(value) =>
+              if prompt_session_id is Some(_) {
+                match self.checkpoint_locked() {
+                  Err(error) => {
+                    reservation_checkpoint_failed = true
+                    self.scheduler.finish(value)
+                    Err(error)
+                  }
+                  Ok(_) => Ok(value)
+                }
+              } else {
+                Ok(value)
+              }
+          }
+        })
+        if @async.is_being_cancelled() {
+          match reservation {
+            Ok(value) =>
+              @async.protect_from_cancel(async fn() {
+                self.scheduler.finish(value)
+              })
+            Err(_) => ()
+          }
+          self.gate.release()
+          @async.pause()
+        }
+        match reservation {
           Ok(value) => control = Some(value)
+          Err(error) if reservation_checkpoint_failed => {
+            self.gate.release()
+            return Err(error)
+          }
           Err(_) => {
             self.gate.release()
             return Ok(native_mcp_busy_response(line))
@@ -1268,14 +2040,82 @@ async fn[X] NativeRuntime::mcp_handle(
       None => ()
     }
   }
-  let response = self.api.mcp_handle(line).unwrap_or("")
+  match (prompt_session_id, prompt_text) {
+    (Some(prompt_session), Some(prompt)) => {
+      let hook_control = match control {
+        Some(value) => value
+        None => {
+          self.gate.release()
+          return Ok(native_mcp_busy_response(line))
+        }
+      }
+      self.gate.release()
+      let hook_result = @async.handle_cancellation(async fn() {
+        self.run_user_prompt_hook_controlled(
+          hook_control, prompt_session, prompt,
+        )
+      })
+      @async.protect_from_cancel(async fn() { self.gate.acquire() })
+      if @async.is_being_cancelled() {
+        @async.protect_from_cancel(async fn() {
+          self.scheduler.finish(hook_control)
+        })
+        self.gate.release()
+        @async.pause()
+      }
+      if self.stopped || self.closed {
+        @async.protect_from_cancel(async fn() {
+          self.scheduler.finish(hook_control)
+        })
+        self.gate.release()
+        return Err("native runtime is stopped")
+      }
+      let outcome = match hook_result {
+        None => Err("session prompt was cancelled before admission")
+        Some(_) if hook_control.cancelled.val =>
+          Err("session prompt was cancelled before admission")
+        Some(Err(error)) => Err("UserPromptSubmit hook could not run: " + error)
+        Some(Ok(value)) =>
+          match value.action {
+            NativeHookAction::Deny(reason) =>
+              Err(
+                "session prompt rejected by UserPromptSubmit hook: " +
+                native_hook_limit_reason(reason),
+              )
+            NativeHookAction::Continue => {
+              prompt_hook_contexts = value.additional_contexts
+              Ok(())
+            }
+          }
+      }
+      match outcome {
+        Err(error) => {
+          @async.protect_from_cancel(async fn() {
+            self.scheduler.finish(hook_control)
+          })
+          self.gate.release()
+          return Ok(native_mcp_error_response(line, error))
+        }
+        Ok(_) => ()
+      }
+    }
+    _ => ()
+  }
+  let response = if tool_name == "session_send" &&
+    !prompt_hook_contexts.is_empty() {
+    self.api
+    .mcp_handle_with_prompt_contexts(prompt_dispatch_line, prompt_hook_contexts)
+    .unwrap_or("")
+  } else {
+    self.api.mcp_handle(prompt_dispatch_line).unwrap_or("")
+  }
   let effects = self.api.take_typed_effects()
   let checkpoint = self.checkpoint_locked()
   let accepted_revision = self.state.revision
   match checkpoint {
     Err(error) => {
       if control is Some(value) {
-        self.scheduler.finish(value)
+        @async.protect_from_cancel(async fn() { self.scheduler.finish(value) })
       }
       self.gate.release()
       return Err(error)
@@ -1290,7 +2130,7 @@ async fn[X] NativeRuntime::mcp_handle(
   }
   if !native_mcp_response_succeeded(response) || effects.is_empty() {
     if control is Some(value) {
-      self.scheduler.finish(value)
+      @async.protect_from_cancel(async fn() { self.scheduler.finish(value) })
     }
     control = None
   }
@@ -1365,6 +2205,55 @@ fn native_mcp_call_scope(line : String) -> (String, String?) {
 }
 
 ///|
+fn native_mcp_prompt_request(line : String) -> Json? {
+  let request = @json.parse(line) catch { _ => return None }
+  if string_field(request, "method") != Some("tools/call") {
+    return None
+  }
+  let params = match object_field(request, "params") {
+    Some(Json::Object(fields)) => fields
+    _ => return None
+  }
+  match params.get("arguments") {
+    Some(Json::Object(fields)) => Some(Json::object(fields.copy()))
+    _ => None
+  }
+}
+
+///|
+fn native_mcp_line_with_prompt_input(line : String, input : Json) -> String {
+  let request = @json.parse(line) catch { _ => return line }
+  let request_fields = match request {
+    Json::Object(fields) => fields.copy()
+    _ => return line
+  }
+  let params = match request_fields.get("params") {
+    Some(Json::Object(fields)) => fields.copy()
+    _ => return line
+  }
+  params["arguments"] = input
+  request_fields["params"] = Json::object(params)
+  Json::object(request_fields).stringify()
+}
+
+///|
+fn native_mcp_error_response(line : String, message : String) -> String {
+  let request = @json.parse(line) catch { _ => return "" }
+  let id = match object_field(request, "id") {
+    Some(value) => value
+    None => return ""
+  }
+  Json::object({
+    "jsonrpc": Json::string("2.0"),
+    "id": id,
+    "error": Json::object({
+      "code": Json::number(-32000.0),
+      "message": Json::string(message),
+    }),
+  }).stringify()
+}
+
+///|
 fn native_mcp_busy_response(line : String) -> String {
   let request = @json.parse(line) catch { _ => return "" }
   let id = match object_field(request, "id") {
@@ -1385,6 +2274,12 @@ fn native_mcp_response_succeeded(response : String) -> Bool {
       }
     _ => false
   }
+}
+
+///|
+fn native_mcp_response_has_protocol_error(response : String) -> Bool {
+  let parsed = @json.parse(response) catch { _ => return true }
+  object_field(parsed, "error") is Some(_)
 }
 
 ///|

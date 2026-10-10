@@ -215,6 +215,8 @@ fn restore_session(
   let mut admitted_user = false
   let mut assistant_recorded = false
   let mut pending_todo_call : String? = None
+  let mut prompt_context_count = 0
+  let mut prompt_context_length = 0
   let pending_post_tool_contexts : Array[(String, Json)] = []
   for index, raw in events {
     let seq = int_value(required_field(raw, "seq"), "event seq", 0, 32768)
@@ -267,6 +269,8 @@ fn restore_session(
       open_turn = true
       admitted_user = false
       assistant_recorded = false
+      prompt_context_count = 0
+      prompt_context_length = 0
     } else if kind == "step/start" {
       if !open_turn ||
         !admitted_user ||
@@ -304,19 +308,37 @@ fn restore_session(
                 raise Invalid("Invalid PostToolUse context role")
               }
             }
-            None => {
-              if fields(data).get("source") is Some(_) {
-                raise Invalid("Unpaired user message source metadata")
+            None =>
+              match fields(data).get("source") {
+                None => {
+                  if !open_turn || session.step != 0 || admitted_user {
+                    raise Invalid("User message outside turn admission")
+                  }
+                  if required_string(data, "role", max=16) != "user" ||
+                    required_string(data, "content", max=16384).length() == 0 {
+                    raise Invalid("Invalid user message")
+                  }
+                  admitted_user = true
+                }
+                Some(source) => {
+                  if !open_turn ||
+                    !admitted_user ||
+                    session.step != 0 ||
+                    session.open_step ||
+                    assistant_recorded ||
+                    required_string(data, "role", max=16) != "user" {
+                    raise Invalid("Prompt context outside prompt admission")
+                  }
+                  let (context_count, context_length) = validate_hook_prompt_context(
+                    data, source,
+                  )
+                  prompt_context_count += context_count
+                  prompt_context_length += context_length
+                  if prompt_context_count > 32 || prompt_context_length > 16384 {
+                    raise Invalid("Prompt contexts exceed the configured limit")
+                  }
+                }
               }
-              if !open_turn || session.step != 0 || admitted_user {
-                raise Invalid("User message outside turn admission")
-              }
-              if required_string(data, "role", max=16) != "user" ||
-                required_string(data, "content", max=16384).length() == 0 {
-                raise Invalid("Invalid user message")
-              }
-              admitted_user = true
-            }
           }
         "llm/request" | "tool/request" => {
           if !session.open_step {
@@ -1046,7 +1068,7 @@ fn restore_session(
                 pending_post_tool_contexts.push(
                   (
                     completed_call.id,
-                    post_tool_context_message(completed_call.completed_contexts),
+                    hook_context_message(completed_call.completed_contexts),
                   ),
                 )
               }
@@ -1164,4 +1186,38 @@ fn restore_session(
     raise Invalid("Snapshot leaves no room to settle interrupted work")
   }
   session
+}
+
+///|
+fn validate_hook_prompt_context(
+  data : Json,
+  source : Json,
+) -> (Int, Int) raise EngineError {
+  let source_fields = fields(source)
+  if source_fields.length() != 1 ||
+    source_fields.get("kind") != Some(Json::string("hooks-claude-code")) {
+    raise Invalid("Unsupported prompt context provenance")
+  }
+  let blocks = match required_field(data, "content") {
+    Json::Array(values) if values.length() > 0 && values.length() <= 32 =>
+      values
+    _ => raise Invalid("Hook prompt context must contain one to 32 text blocks")
+  }
+  let mut total_length = 0
+  for block in blocks {
+    let block_fields = fields(block)
+    if block_fields.length() != 2 ||
+      block_fields.get("type") != Some(Json::string("text")) {
+      raise Invalid("Hook prompt context must contain only text blocks")
+    }
+    let text = required_string(block, "text", max=4096)
+    if text.is_empty() {
+      raise Invalid("Hook prompt context must not contain empty text")
+    }
+    total_length += text.length()
+  }
+  if total_length > 16384 {
+    raise Invalid("Hook prompt context exceeds the aggregate length limit")
+  }
+  (blocks.length(), total_length)
 }

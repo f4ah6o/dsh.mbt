@@ -1,5 +1,41 @@
 # 検証記録
 
+## UserPromptSubmit native command-hook increment (0.1.13)
+
+2026-10-10, macOS arm64, local Node.js `24.21.0`, MoonBit compiler / core
+`0.10.14+7d59c7ec9`, moon / moonrun `0.1.20260920`, Playwright `1.64.0`.
+Provider fixtures are keyless; no live provider credentials or secret values were
+used. Local checks and previews identify their source snapshot; hosted verification
+is for PR #46 exact head `982f2b6f4b5fd364ebf0500a032bb210b753db9a`.
+
+| gate | result |
+| --- | --- |
+| `moon fmt`; `moon check --target native --frozen`; `git diff --check` | PASS on final source head `982f2b6f4b5fd364ebf0500a032bb210b753db9a`. Native typecheck had zero errors and four pre-existing pinned `vendor/hotpath` warnings. |
+| Browser and service-worker release builds; `node scripts/build-web-shell.mjs`; `sh scripts/generate-bundled-web.sh` | PASS during candidate work; the exact local build head was not recorded. `runtime/bundled_web.mbt` matched generated assets and remained unchanged. The exact final head's browser build is covered by hosted CI run 38043639573. |
+| Moon package preview and extracted archive inspection | PASS on source snapshot `76d18938ce173f28f797e073411f77c039d8bec8`: 905 entries / 3,019,163 bytes, with no build caches or credential paths. This preview is not a size claim for final head `982f2b6`. |
+| Focused local native hook tests | Not completed: native test compilation hit local-volume `ENOSPC` before the selected behavior test ran. Hosted CI supplies behavioral verification. |
+| [MoonBit native runtime and browser CI run 38043639573](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573), exact head `982f2b6f4b5fd364ebf0500a032bb210b753db9a` | PASS. Portable packages: Wasm, Wasm GC, JS, and native each 163 / 163; app 17 / 17; native runtime 156 / 156; browser modules and service worker 7 / 7. Native-host Chromium smoke passed CSP, MoonBit UI / transport, Canvas, command receipts, fork / prune / import, offline shell, accessibility, auth races, and service-worker cache. ACP native stdio integration passed. |
+| No-Node job in [CI run 38043639573](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573), exact head `982f2b6f4b5fd364ebf0500a032bb210b753db9a` | PASS. Native build and tests 329 / 329; CLI PATH/source install, terminal, MCP, demo, embedded web and `--assets-dir` smoke passed outside the checkout. Checkpoint, approval, tool, context, and reload demo passed. Own warnings 0; three pinned hotpath diagnostics. |
+| [Publish native release assets workflow 38043639550](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639550), exact head `982f2b6f4b5fd364ebf0500a032bb210b753db9a` | PASS. macOS arm64, Linux x86_64, and Linux arm64 packaged assets, CLI / embedded browser smoke, and macOS app extraction validation passed. The PR workflow skipped publication; no release was published. |
+
+Independent `gpt-6.1-sol` xhigh source review approved the final source head.
+The first no-Node CI run, [38042285182](https://github.com/f4ah6o/dsh.mbt/actions/runs/38042285182),
+failed because a positive MCP fixture expected source-tagged hook `content` to stay
+an array in the projected transcript. Transcript projection intentionally flattens
+it to text; the durable event and provider request preserve the grouped structured
+blocks. This was a fixture projection mismatch, not a production defect, and the
+earlier filtered engine result did not isolate a persistence-restore failure. The
+next run, [38042930510](https://github.com/f4ah6o/dsh.mbt/actions/runs/38042930510),
+passed 325 / 328 native tests and exposed cancellation classification plus two test
+shell matchers that also matched their session IDs. The final head prioritizes
+scheduler cancellation, matches only the unique prompt text, and adds explicit
+remote cancellation receipt, replay, process cleanup, and fresh-send coverage.
+
+Stores containing UserPromptSubmit context require a 0.1.13-or-newer reader.
+PostToolUse context stores from 0.1.12 remain supported by 0.1.12-or-newer readers.
+The broader upstream parity issue remains open for the other unimplemented lifecycle
+and compatibility work.
+
 ## PostToolUse additionalContext increment (0.1.12)
 
 2026-10-10、macOS arm64、Node.js `26.8.2`、MoonBit compiler / core

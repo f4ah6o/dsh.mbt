@@ -13,7 +13,7 @@ const MAX_POST_TOOL_CONTEXT_ITEM_LENGTH : Int = 4096
 const MAX_POST_TOOL_CONTEXT_TOTAL_LENGTH : Int = 16384
 
 ///|
-fn post_tool_context_message(contexts : Array[String]) -> Json {
+fn hook_context_message(contexts : Array[String]) -> Json {
   let content : Array[Json] = contexts.map(context => {
     Json::object({ "type": Json::string("text"), "text": Json::string(context) })
   })
@@ -22,6 +22,11 @@ fn post_tool_context_message(contexts : Array[String]) -> Json {
     "content": Json::array(content),
     "source": Json::object({ "kind": Json::string("hooks-claude-code") }),
   })
+}
+
+///|
+fn post_tool_context_message(contexts : Array[String]) -> Json {
+  hook_context_message(contexts)
 }
 
 ///|

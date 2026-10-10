@@ -338,6 +338,104 @@ test "read calls overlap while durable results stay in model order" {
 }
 
 ///|
+test "UserPromptSubmit contexts are one source-tagged message after the prompt" {
+  let engine = Engine::new(test_tools())
+  let session_id = SessionId::new("prompt-context-session").unwrap()
+  ignore(
+    success(
+      engine.invoke("session_create", {
+        "id": Json::string(session_id.as_string()),
+        "title": Json::string("Prompt hook context"),
+      }),
+    ),
+  )
+  let session = success(
+    engine.invoke("session_send", {
+      "session_id": Json::string(session_id.as_string()),
+      "prompt": Json::string("original prompt"),
+      "additional_contexts": Json::array([
+        Json::string("first hook context"),
+        Json::string("second hook context"),
+      ]),
+    }),
+  )
+  let messages = array_value(required_field(session, "messages"), "messages", 8)
+  assert_eq(messages.length(), 2)
+  assert_eq(required_string(messages[0], "content"), "original prompt")
+  assert_eq(required_string(messages[1], "role"), "user")
+  assert_eq(
+    required_field(messages[1], "source"),
+    Json::object({ "kind": Json::string("hooks-claude-code") }),
+  )
+  assert_eq(
+    required_string(messages[1], "content"),
+    "first hook context\nsecond hook context",
+  )
+  let events = array_value(required_field(session, "events"), "events", 16)
+  let user_message_events = events.filter(event => {
+    required_string(event, "type") == "user/message"
+  })
+  assert_eq(user_message_events.length(), 2)
+  assert_eq(
+    required_string(required_field(user_message_events[0], "data"), "content"),
+    "original prompt",
+  )
+  let context_event = required_field(user_message_events[1], "data")
+  assert_eq(
+    required_field(context_event, "source"),
+    Json::object({ "kind": Json::string("hooks-claude-code") }),
+  )
+  assert_eq(
+    array_value(required_field(context_event, "content"), "content", 8).map(block => {
+      required_string(block, "text")
+    }),
+    ["first hook context", "second hook context"],
+  )
+  let mut last_user_message_index = -1
+  let mut llm_request_index = -1
+  for index, event in events {
+    match required_string(event, "type") {
+      "user/message" => last_user_message_index = index
+      "llm/request" => llm_request_index = index
+      _ => ()
+    }
+  }
+  assert_true(
+    last_user_message_index >= 0 && last_user_message_index < llm_request_index,
+  )
+  let provider = engine.take_effects()[0]
+  let request_messages = array_value(
+    required_field(required_field(provider, "request"), "messages"),
+    "provider messages",
+    8,
+  )
+  assert_eq(request_messages.length(), 2)
+  assert_eq(
+    array_value(required_field(request_messages[1], "content"), "content", 8).map(block => {
+        required_string(block, "text")
+      },
+    ),
+    ["first hook context", "second hook context"],
+  )
+  ignore(success(engine.complete(id_of(provider), stop_response("done"))))
+  let settled = success(
+    engine.invoke("session_get", {
+      "session_id": Json::string(session_id.as_string()),
+    }),
+  )
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(
+    success(
+      restored.invoke("session_get", {
+        "session_id": Json::string(session_id.as_string()),
+      }),
+    ),
+    settled,
+  )
+}
+
+///|
 test "PostToolUse contexts stay structured after every result and reject forged restore" {
   let (engine, llm) = started_engine()
   ignore(
@@ -1904,6 +2002,15 @@ test "public typed commands validate direct values before changing state" {
   assert_eq(engine.snapshot(), before)
   assert_true(
     engine.apply(SendPrompt(SessionId::new("valid-id").unwrap(), "")) is Err(_),
+  )
+  assert_eq(engine.snapshot(), before)
+  assert_true(
+    engine.apply(
+      SendPromptWithContexts(SessionId::new("valid-id").unwrap(), "prompt", [
+        "x".repeat(4097),
+      ]),
+    )
+    is Err(_),
   )
   assert_eq(engine.snapshot(), before)
   assert_true(engine.apply(ImportSession("x".repeat(262145))) is Err(_))

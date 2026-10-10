@@ -30,11 +30,53 @@ fn native_hook_payload(
 }
 
 ///|
+fn native_user_prompt_payload(
+  project_dir : String,
+  session_id : String,
+  prompt : String,
+) -> Result[String, String] {
+  let text = Json::object({
+      "session_id": Json::string(session_id),
+      "transcript_path": Json::string(""),
+      "cwd": Json::string(project_dir),
+      "hook_event_name": Json::string("UserPromptSubmit"),
+      "prompt": Json::string(prompt),
+    }).stringify() +
+    "\n"
+  if @utf8.encode(text).length() > NATIVE_HOOK_STDIN_LIMIT {
+    Err("hooks stdin exceeds the 64 KiB limit")
+  } else {
+    Ok(text)
+  }
+}
+
+///|
 fn NativeHooks::has_post_tool_match(
   self : NativeHooks,
   tool_name : String,
 ) -> Bool {
   self.post_tool.any(group => native_hook_matches(group.matcher, tool_name))
+}
+
+///|
+fn NativeHooks::has_user_prompt_submit(self : NativeHooks) -> Bool {
+  !self.user_prompt_submit.is_empty()
+}
+
+///|
+fn native_hook_prompt_input(input : Json, contexts : Array[String]) -> Json {
+  let fields = match input {
+    Json::Object(value) => value.copy()
+    _ => return input
+  }
+  ignore(fields.remove("additional_contexts"))
+  if !contexts.is_empty() {
+    fields.set(
+      "additional_contexts",
+      Json::array(contexts.map(context => Json::string(context))),
+    )
+  }
+  Json::object(fields)
 }
 
 ///|
@@ -57,7 +99,16 @@ async fn NativeHooks::run_point(
       continue
     }
     for hook in group.commands {
-      let payload = match
+      let payload_result = if event == "UserPromptSubmit" {
+        native_user_prompt_payload(
+          self.project_dir,
+          session_id,
+          match tool_input {
+            Json::String(prompt) => prompt
+            _ => ""
+          },
+        )
+      } else {
         native_hook_payload(
           event,
           self.project_dir,
@@ -66,7 +117,9 @@ async fn NativeHooks::run_point(
           call_id,
           tool_input,
           tool_response,
-        ) {
+        )
+      }
+      let payload = match payload_result {
         Ok(value) => value
         Err(error) => return Err(error)
       }
@@ -77,7 +130,12 @@ async fn NativeHooks::run_point(
           // still cancelled and reaped before this path returns.
           continue
       }
-      let outcome = match native_hook_result_decision(capture, event) {
+      let outcome_result = if event == "UserPromptSubmit" {
+        native_hook_prompt_result_decision(capture)
+      } else {
+        native_hook_result_decision(capture, event)
+      }
+      let outcome = match outcome_result {
         Ok(value) => value
         Err(error) => {
           if unsupported_error is None {
@@ -116,10 +174,33 @@ async fn NativeHooks::run_point(
     None if !blocked_reasons.is_empty() =>
       Ok({
         action: NativeHookAction::Deny(blocked_reasons.join("\n\n")),
-        additional_contexts,
+        additional_contexts: if event == "UserPromptSubmit" {
+          []
+        } else {
+          additional_contexts
+        },
       })
     None => Ok({ action: NativeHookAction::Continue, additional_contexts, })
   }
+}
+
+///|
+async fn NativeHooks::before_user_prompt(
+  self : NativeHooks,
+  tools : NativeTools,
+  session_id : String,
+  prompt : String,
+) -> Result[NativeHookOutcome, String] {
+  self.run_point(
+    tools,
+    self.user_prompt_submit,
+    "UserPromptSubmit",
+    session_id,
+    "",
+    "",
+    Json::string(prompt),
+    None,
+  )
 }
 
 ///|
