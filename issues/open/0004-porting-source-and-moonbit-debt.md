@@ -135,8 +135,8 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 
 #### DEBT-009: prompt context の復元 decoder が誤った値を読む
 
-- 状態 / 根拠: `reproduced`。[engine/persistence.mbt:1213](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/engine/persistence.mbt#L1213) が、text block の Json::String を object + key 用の `required_string` に渡す。
-- 再現 / 影響: 独立レビューの `moon test engine --target native --frozen --target-dir /tmp/dsh-user-prompt-review-20261010 --filter '*UserPromptSubmit*'` は 0 / 1 FAIL、EngineError.Invalid。受理した prompt context を含む保存データの復元が失敗する。
+- 状態 / 根拠: `observed`。[engine/persistence.mbt:1213](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/engine/persistence.mbt#L1213) が、text block の Json::String を object + key 用の `required_string` に渡す。
+- 確認 / 影響: 復元 decoder の誤った引数は独立レビューの静的照合で確認。受理した prompt context を含む保存データを正しく復元できない経路がある。同レビューの `moon test engine --target native --frozen --target-dir /tmp/dsh-user-prompt-review-20261010 --filter '*UserPromptSubmit*'` は 0 / 1 FAIL、EngineError.Invalid だったが、当時の fixture は復元より前に表示用 content を誤って配列として読むため、この結果を decoder 単独の再現根拠にはできない（DEBT-015）。
 - 是正 / 完了条件: 元 block の `text` を bounded string として読む。grouped context の snapshot restore、native close / reopen、no-hook replay を検証する。
 - 修正 / 検証: 修正中。初回の native check で見つかった追加テストの 4 件の型エラーも公開前に是正する。最終 commit と結果を後続コミットで追記する。
 
@@ -179,6 +179,14 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 
 DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f1f3a949a0ceda62bef4f1b68f437f015) で production code / regression source を修正し、[`3176fa4`](https://github.com/f4ah6o/dsh.mbt/commit/3176fa453e0b1ca4db66f23a695eafbbd1dc19a7) で settled context の restore fixture を是正した。独立した 3 パス source review は重大な残存指摘なし。固定 head の実行検証は ENOSPC のため完了しておらず、hosted CI の確認後に各項目の close 判定を追記する。
 
+#### DEBT-015: 表示用 hook transcript と内部 text block の fixture が混同される
+
+- 起点・種類・優先度・状態: `PORT / bug, testing`、優先度高（CI を停止）、`reproduced`。production の不具合ではない。upstream 出典は N/A。
+- port baseline / path: [`39c0f73` の engine/engine_wbtest.mbt](https://github.com/f4ah6o/dsh.mbt/blob/39c0f732a9e7ca5711e08eb414c4d2efd8f6d099/engine/engine_wbtest.mbt#L341) と [runtime/hooks_wbtest.mbt](https://github.com/f4ah6o/dsh.mbt/blob/39c0f732a9e7ca5711e08eb414c4d2efd8f6d099/runtime/hooks_wbtest.mbt#L1513)。
+- 再現 / 影響: [初回 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38042285182) は portable 各 target 162 / 163、native-without-node は `hook test expected array MCP hook content` の panic で失敗。session.messages / MCP structuredContent は hook context を newline-joined string + display_label に投影するが、fixture は配列として読む。raw durable user/message event と provider request は text block 配列を維持する。MCP 応答は provider の background dispatch より前に serialize されるため、provider timing race を示す失敗ではない。
+- 是正 / 完了条件: 表示用 string / source / 順序と、raw event / provider 側の一つに grouped した text block / 順序を両方検証し、表示と保存・送信の契約を混同しない。
+- 修正 / 検証: [`76d1893`](https://github.com/f4ah6o/dsh.mbt/commit/76d18938ce173f28f797e073411f77c039d8bec8) で両 fixture を修正。production は変更せず、native check / format PASS、独立 source review approve。local behavioral test は ENOSPC で未実行。[修正 head の CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38042930510) を待って close 判定を追記する。
+
 ### 後続追記テンプレート
 
 #### DEBT-NNN: 短い見出し
@@ -219,9 +227,11 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 
 - 2026-10-10: UserPromptSubmit 移植で維持した Json event、文字列エラー、境界ごとの手書き validation、空の transcript_path を固定 source で追記。原典の未反映 hook control を DEBT-008 に登録。
 
-- 2026-10-10: UserPromptSubmit 独立レビューの動作不具合を DEBT-009–013 に登録。復元の再現結果と静的経路照合を区別し、公開前の是正対象として追跡する。
+- 2026-10-10: UserPromptSubmit 独立レビューの動作不具合を DEBT-009–013 に登録。当初の復元再現という評価は後続の証拠訂正を参照。静的経路照合と実行結果を区別し、公開前の是正対象として追跡する。
 
 - 2026-10-10: 3 パス source review の再確認と DEBT-009–013 の修正 snapshot を追記。追加の理由優先順位差分を DEBT-014 として公開前の修正対象に登録。
+
+- 2026-10-10: 初回 CI の fixture shape mismatch を DEBT-015 に登録し、DEBT-009 の 0 / 1 run が decoder 単独の再現ではないことを訂正。両 fixture の修正と fixed-head source review を固定参照。
 
 ## 注記
 
