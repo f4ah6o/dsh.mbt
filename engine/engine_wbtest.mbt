@@ -387,9 +387,22 @@ test "UserPromptSubmit contexts are one source-tagged message after the prompt" 
     ),
     ["first hook context", "second hook context"],
   )
+  ignore(success(engine.complete(id_of(provider), stop_response("done"))))
+  let settled = success(
+    engine.invoke("session_get", {
+      "session_id": Json::string(session_id.as_string()),
+    }),
+  )
   let restored = Engine::new(test_tools())
   assert_eq(restored.restore(engine.snapshot()), Ok(()))
-  assert_eq(get_session(restored), session)
+  assert_eq(
+    success(
+      restored.invoke("session_get", {
+        "session_id": Json::string(session_id.as_string()),
+      }),
+    ),
+    settled,
+  )
 }
 
 ///|
