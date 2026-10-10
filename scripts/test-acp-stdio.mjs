@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, symlink } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -11,8 +11,8 @@ assert.ok(binary, 'pass the built native dsh executable as argv[2]');
 const root = await mkdtemp(path.join(tmpdir(), 'dsh-acp-stdio-'));
 
 function launch(name, options = {}) {
-  const data = path.join(root, `${name}-data`);
-  const workspace = path.join(root, `${name}-workspace`);
+  const data = options.dataDir ?? path.join(root, `${name}-data`);
+  const workspace = options.workspaceDir ?? path.join(root, `${name}-workspace`);
   return mkdir(workspace, { recursive: true }).then(() => {
     const args = ['acp'];
     if (options.provider !== true) args.push('--demo');
@@ -167,8 +167,8 @@ try {
   const initialized = await initialize.response;
   assert.equal(initialized.result.protocolVersion, 1);
   assert.deepEqual(
-    Object.keys(initialized.result.agentCapabilities.sessionCapabilities),
-    ['close'],
+    Object.keys(initialized.result.agentCapabilities.sessionCapabilities).sort(),
+    ['close', 'list', 'resume'],
   );
   assert.deepEqual(initialized.result.agentCapabilities.promptCapabilities, {
     image: false,
@@ -200,6 +200,24 @@ try {
     mcpServers: [],
   });
   assert.equal((await relativeWorkspace.response).error.code, -32602);
+  const malformedResume = agent.sendRequest('session/resume', {
+    sessionId: '',
+    cwd: agent.workspace,
+    mcpServers: [],
+  });
+  assert.equal((await malformedResume.response).error.code, -32602);
+  const unknownResume = agent.sendRequest('session/resume', {
+    sessionId: 'acp-unknown-session',
+    cwd: agent.workspace,
+    mcpServers: [],
+  });
+  assert.equal((await unknownResume.response).error.code, -32602);
+  const foreignResume = agent.sendRequest('session/resume', {
+    sessionId: 'acp-unknown-session',
+    cwd: path.dirname(agent.workspace),
+    mcpServers: [],
+  });
+  assert.equal((await foreignResume.response).error.code, -32602);
 
   const sessionAResponse = agent.sendRequest('session/new', {
     cwd: agent.workspace,
@@ -239,6 +257,12 @@ try {
     prompt: [{ type: 'text', text: 'the active prompt must retain its slot' }],
   });
   assert.equal((await busyPrompt.response).error.code, -32602);
+  const busyResume = agent.sendRequest('session/resume', {
+    sessionId: sessionA,
+    cwd: agent.workspace,
+    mcpServers: [],
+  });
+  assert.equal((await busyResume.response).error.code, -32602);
 
   agent.sendNotification('session/cancel', { sessionId: sessionA });
   const closeA1 = agent.sendRequest('session/close', { sessionId: sessionA });
@@ -282,6 +306,174 @@ try {
   assert.ok(updatesB.includes('agent_message_chunk'));
   assert.equal(agent.messages.some(entry => JSON.stringify(entry.value).includes('assistant/stream_delta')),
     false);
+
+  // A registered ACP session can be listed and resumed by a new process using
+  // the same data directory. Resuming restores only the native engine state;
+  // the connection starts after the historical event log without old updates.
+  const resumeData = path.join(root, 'resume-data');
+  const resumeWorkspace = path.join(root, 'resume-workspace');
+  const firstResumeAgent = await launch('resume-first', {
+    dataDir: resumeData,
+    workspaceDir: resumeWorkspace,
+  });
+  const firstResumeInit = firstResumeAgent.sendRequest('initialize', { protocolVersion: 1 });
+  await firstResumeInit.response;
+  const createdForResume = firstResumeAgent.sendRequest('session/new', {
+    cwd: firstResumeAgent.workspace,
+    mcpServers: [],
+  });
+  const resumeSessionId = (await createdForResume.response).result.sessionId;
+  const firstPrompt = firstResumeAgent.sendRequest('session/prompt', {
+    sessionId: resumeSessionId,
+    prompt: [{ type: 'text', text: 'write the offline demo file' }],
+  });
+  const firstPermission = await firstResumeAgent.waitFor(value => value.method === 'session/request_permission'
+    && value.params?.sessionId === resumeSessionId);
+  firstResumeAgent.sendResponse(firstPermission.id, {
+    outcome: { outcome: 'selected', optionId: 'allow-once' },
+  });
+  assert.equal((await firstPrompt.response).result.stopReason, 'end_turn');
+  const oldUpdates = firstResumeAgent.messages.filter(entry => entry.value.method === 'session/update'
+    && entry.value.params?.sessionId === resumeSessionId);
+  assert.ok(oldUpdates.some(entry => entry.value.params.update.sessionUpdate === 'tool_call'));
+  const firstClose = firstResumeAgent.sendRequest('session/close', {
+    sessionId: resumeSessionId,
+  });
+  assert.deepEqual((await firstClose.response).result, {});
+  await firstResumeAgent.closeAndCheck();
+
+  const resumedAgent = await launch('resume-second', {
+    dataDir: resumeData,
+    workspaceDir: resumeWorkspace,
+  });
+  const resumedInit = resumedAgent.sendRequest('initialize', { protocolVersion: 1 });
+  await resumedInit.response;
+  const listed = resumedAgent.sendRequest('session/list', {});
+  const listedResult = (await listed.response).result;
+  assert.equal(listedResult.sessions.length, 1);
+  assert.equal(listedResult.sessions[0].sessionId, resumeSessionId);
+  assert.equal(listedResult.sessions[0].cwd, resumedAgent.workspace);
+  assert.equal(typeof listedResult.sessions[0].updatedAt, 'string');
+  assert.equal(listedResult.sessions[0].updatedAt.length, 20);
+  const beforeResumeUpdates = resumedAgent.messages.filter(entry => entry.value.method === 'session/update'
+    && entry.value.params?.sessionId === resumeSessionId).length;
+  const resume = resumedAgent.sendRequest('session/resume', {
+    sessionId: resumeSessionId,
+    cwd: resumedAgent.workspace,
+    mcpServers: [],
+  });
+  assert.deepEqual((await resume.response).result, {});
+  const duplicateResume = resumedAgent.sendRequest('session/resume', {
+    sessionId: resumeSessionId,
+    cwd: resumedAgent.workspace,
+    mcpServers: [],
+  });
+  assert.equal((await duplicateResume.response).error.code, -32602);
+  await new Promise(resolve => setTimeout(resolve, 50));
+  assert.equal(resumedAgent.messages.filter(entry => entry.value.method === 'session/update'
+    && entry.value.params?.sessionId === resumeSessionId).length, beforeResumeUpdates);
+  const continuedPrompt = resumedAgent.sendRequest('session/prompt', {
+    sessionId: resumeSessionId,
+    prompt: [{ type: 'text', text: 'continue from saved context' }],
+  });
+  assert.equal((await continuedPrompt.response).result.stopReason, 'end_turn');
+  const continuedUpdates = resumedAgent.messages.filter(entry => entry.value.method === 'session/update'
+    && entry.value.params?.sessionId === resumeSessionId)
+    .map(entry => entry.value.params.update);
+  assert.equal(continuedUpdates.some(update => update.sessionUpdate === 'tool_call'), false);
+  assert.ok(continuedUpdates.some(update => update.sessionUpdate === 'agent_message_chunk'
+    && JSON.stringify(update).includes('Offline demo finished after the approved workspace write.')));
+  const resumedClose = resumedAgent.sendRequest('session/close', {
+    sessionId: resumeSessionId,
+  });
+  assert.deepEqual((await resumedClose.response).result, {});
+  const resumeAfterClose = resumedAgent.sendRequest('session/resume', {
+    sessionId: resumeSessionId,
+    cwd: resumedAgent.workspace,
+    mcpServers: [],
+  });
+  assert.deepEqual((await resumeAfterClose.response).result, {});
+  const updateCountAfterCloseResume = resumedAgent.messages.filter(entry => entry.value.method === 'session/update'
+    && entry.value.params?.sessionId === resumeSessionId).length;
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(resumedAgent.messages.filter(entry => entry.value.method === 'session/update'
+    && entry.value.params?.sessionId === resumeSessionId).length, updateCountAfterCloseResume);
+  const finalClose = resumedAgent.sendRequest('session/close', {
+    sessionId: resumeSessionId,
+  });
+  assert.deepEqual((await finalClose.response).result, {});
+  await resumedAgent.closeAndCheck();
+  assert.equal(await readFile(path.join(resumedAgent.workspace, 'native-demo.txt'), 'utf8'),
+    'durable native tool result');
+
+  const listAgent = await launch('list-pagination');
+  const listInit = listAgent.sendRequest('initialize', { protocolVersion: 1 });
+  await listInit.response;
+  const createdIds = [];
+  for (let index = 0; index < 18; index += 1) {
+    const created = listAgent.sendRequest('session/new', {
+      cwd: listAgent.workspace,
+      mcpServers: [],
+    });
+    createdIds.push((await created.response).result.sessionId);
+  }
+  const alias = path.join(root, 'list-workspace-alias');
+  await symlink(listAgent.workspace, alias);
+  const firstPage = listAgent.sendRequest('session/list', { cwd: alias });
+  const firstPageResult = (await firstPage.response).result;
+  assert.equal(firstPageResult.sessions.length, 16);
+  assert.equal(firstPageResult.sessions[0].sessionId, createdIds.at(-1));
+  assert.equal(typeof firstPageResult.nextCursor, 'string');
+  const wrongCursorType = listAgent.sendRequest('session/list', { cursor: 123 });
+  assert.equal((await wrongCursorType.response).error.code, -32602);
+  const nullFilters = listAgent.sendRequest('session/list', {
+    cursor: null,
+    cwd: null,
+  });
+  assert.equal((await nullFilters.response).result.sessions.length, 16);
+  const secondPage = listAgent.sendRequest('session/list', {
+    cwd: listAgent.workspace,
+    cursor: firstPageResult.nextCursor,
+  });
+  const secondPageResult = (await secondPage.response).result;
+  assert.equal(secondPageResult.sessions.length, 2);
+  assert.equal(secondPageResult.sessions[0].sessionId, createdIds[1]);
+  assert.equal(secondPageResult.sessions[1].sessionId, createdIds[0]);
+  assert.equal('nextCursor' in secondPageResult, false);
+  const foreignList = listAgent.sendRequest('session/list', { cwd: agent.workspace });
+  assert.deepEqual((await foreignList.response).result.sessions, []);
+  const repeatPage = listAgent.sendRequest('session/list', {
+    cwd: listAgent.workspace,
+    cursor: firstPageResult.nextCursor,
+  });
+  // A read-only list leaves its cursor valid for the next page.
+  assert.equal((await repeatPage.response).result.sessions.length, 2);
+  const wrongWorkspaceCursor = listAgent.sendRequest('session/list', {
+    cwd: agent.workspace,
+    cursor: firstPageResult.nextCursor,
+  });
+  assert.equal((await wrongWorkspaceCursor.response).error.code, -32602);
+  const malformedCursor = listAgent.sendRequest('session/list', {
+    cwd: listAgent.workspace,
+    cursor: 'not-a-cursor',
+  });
+  assert.equal((await malformedCursor.response).error.code, -32602);
+  const staleCursor = listAgent.sendRequest('session/list', {
+    cwd: listAgent.workspace,
+    cursor: firstPageResult.nextCursor,
+  });
+  assert.equal((await staleCursor.response).result.sessions.length, 2);
+  const eighteenthClose = listAgent.sendRequest('session/close', {
+    sessionId: createdIds[17],
+  });
+  assert.deepEqual((await eighteenthClose.response).result, {});
+  // A committed mutation invalidates a cursor bound to the earlier revision.
+  const staleAfterMutation = listAgent.sendRequest('session/list', {
+    cwd: listAgent.workspace,
+    cursor: firstPageResult.nextCursor,
+  });
+  assert.equal((await staleAfterMutation.response).error.code, -32602);
+  await listAgent.closeAndCheck();
 
   const eofAgent = await launch('eof-pending-permission');
   const eofInitialize = eofAgent.sendRequest('initialize', { protocolVersion: 1 });
@@ -533,7 +725,7 @@ try {
     await new Promise(resolve => pendingProvider.close(resolve));
   }
 
-  console.log('ACP native stdio integration passed: negotiation, text/resource links, allow/reject approvals, provider failure and max-token distinction, provider-active cancel/close/EOF, session isolation, bounded framing, duplicate close, stale replies, and EOF drain.');
+console.log('ACP native stdio integration passed: negotiation, persistent list pagination/filtering, restart/resume with saved-context continuation and no replay, close/resume lifecycle, text/resource links, approvals, cancellation/EOF, session isolation, bounded framing, cursor validation, and EOF drain.');
 } finally {
   await rm(root, { recursive: true, force: true });
 }

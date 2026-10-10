@@ -1,5 +1,5 @@
 ///|
-const NATIVE_ACP_AGENT_VERSION : String = "0.1.6"
+const NATIVE_ACP_AGENT_VERSION : String = "0.1.10"
 
 ///|
 priv struct NativeAcpRpcError {
@@ -29,6 +29,7 @@ priv struct NativeAcpSession {
   mut last_event_seq : Int
   mut prompt_generation : Int
   mut prompt_active : Bool
+  mut resuming : Bool
   mut cancelled : Bool
   mut closing : Bool
   mut closed : Bool
@@ -201,6 +202,8 @@ async fn NativeAcpService::handle_request(
         Err(error) => Err(error)
       }
     "session/new" => self.new_session(params)
+    "session/list" => self.list_sessions(params)
+    "session/resume" => self.resume_session(params)
     "session/close" => self.close_session(params)
     "session/prompt" => self.prompt(params)
     "session/cancel" => {
@@ -255,7 +258,7 @@ fn NativeAcpService::initialize(
         "audio": false,
         "embeddedContext": false,
       },
-      "sessionCapabilities": { "close": {} },
+      "sessionCapabilities": { "list": {}, "resume": {}, "close": {} },
     },
     "authMethods": [],
   })
@@ -279,28 +282,10 @@ async fn NativeAcpService::new_session(
     Err(error) => return Err(native_acp_internal_error(error))
   }
   let native_session_id = "acp-" + random
-  let receipt = match
-    native_cli_command(
-      self.runtime,
-      None,
-      "session_create",
-      { "id": native_session_id.to_json(), "title": "ACP session".to_json() },
-      None,
-    ) {
+  let created = match
+    self.runtime.create_acp_session(native_session_id, self.workspace) {
     Ok(value) => value
     Err(error) => return Err(native_acp_internal_error(error))
-  }
-  if string_field(receipt, "status") != Some("completed") {
-    return Err(
-      native_acp_internal_error("native session creation was not committed"),
-    )
-  }
-  let created = match object_field(receipt, "result") {
-    Some(value) => value
-    None =>
-      return Err(
-        native_acp_internal_error("native session creation returned no result"),
-      )
   }
   let session_id = match string_field(created, "id") {
     Some(value) => value
@@ -316,6 +301,7 @@ async fn NativeAcpService::new_session(
     last_event_seq: 0,
     prompt_generation: 0,
     prompt_active: false,
+    resuming: false,
     cancelled: false,
     closing: false,
     closed: false,
@@ -352,9 +338,10 @@ async fn native_acp_validate_new_session(
     Some(_) => return Err("additionalDirectories is not supported")
   }
   match object_field(params, "mcpServers") {
-    None | Some(Json::Null) => ()
     Some(Json::Array(values)) if values.length() == 0 => ()
-    Some(_) => return Err("ACP session MCP server mounts are not supported")
+    Some(Json::Array(_)) =>
+      return Err("ACP session MCP server mounts are not supported")
+    _ => return Err("mcpServers must be an array")
   }
   Ok(())
 }
@@ -457,6 +444,9 @@ fn NativeAcpService::prepare_prompt(
   if session.closing {
     return Err(native_acp_invalid_params("session is closing"))
   }
+  if session.resuming {
+    return Err(native_acp_invalid_params("session resume is still in progress"))
+  }
   if session.prompt_active {
     return Err(
       native_acp_invalid_params(
@@ -500,7 +490,14 @@ async fn NativeAcpService::execute_prompt(
   prepared.session.prompt_active = false
   prepared.session.prompt_done = None
   prepared.done.resolve()
-  outcome
+  let activity = self.runtime.record_acp_activity(
+    prepared.session.native_session_id,
+  )
+  match (outcome, activity) {
+    (Err(error), _) => Err(error)
+    (_, Err(error)) => Err(native_acp_internal_error(error))
+    (Ok(value), Ok(_)) => Ok(value)
+  }
 }
 
 ///|
@@ -516,6 +513,7 @@ async fn NativeAcpService::run_prompt_turn(
       "session_send",
       { "prompt": Json::string(prepared.text) },
       None,
+      acp_activity_session_id=session.native_session_id,
     ) {
     Ok(value) => value
     Err(error) => {
@@ -628,6 +626,7 @@ async fn NativeAcpService::run_prompt_turn(
         "tool_approve",
         { "call_id": call_id.to_json(), "approved": approved.to_json() },
         Some(revision),
+        acp_activity_session_id=session.native_session_id,
       ) {
       Ok(value) => value
       Err(error) => {
@@ -674,17 +673,8 @@ async fn NativeAcpService::native_session(
   self : NativeAcpService,
   session : NativeAcpSession,
 ) -> Result[Json, NativeAcpRpcError] {
-  match
-    self.runtime.invoke("session_get", {
-      "session_id": Json::string(session.native_session_id),
-    }) {
-    Ok((value, effects)) if effects.length() == 0 => Ok(value)
-    Ok(_) =>
-      Err(
-        native_acp_internal_error(
-          "session lookup unexpectedly produced effects",
-        ),
-      )
+  match self.runtime.read_acp_session(session.native_session_id) {
+    Ok((value, _)) => Ok(value)
     Err(error) => Err(native_acp_internal_error(error))
   }
 }
@@ -1086,6 +1076,9 @@ fn NativeAcpService::begin_cancel(
     Some(value) if closing => return Ok(value)
     _ => return Err(native_acp_invalid_params("unknown session: " + session_id))
   }
+  if session.resuming && !closing {
+    return Err(native_acp_invalid_params("session resume is still in progress"))
+  }
   if closing {
     session.closing = true
   }
@@ -1112,6 +1105,7 @@ async fn NativeAcpService::apply_cancel(
       "session_cancel",
       Json::empty_object(),
       None,
+      acp_activity_session_id=session.native_session_id,
     ) {
     Ok(receipt) if string_field(receipt, "status") == Some("completed") =>
       Ok(())
@@ -1210,6 +1204,10 @@ async fn NativeAcpService::finish_close(
       None => ()
     }
   }
+  match self.runtime.record_acp_activity(session.native_session_id) {
+    Ok(_) => ()
+    Err(error) => return Err(native_acp_internal_error(error))
+  }
   session.closed = true
   match cancel_result {
     Ok(_) => Ok(Json::empty_object())
@@ -1246,6 +1244,7 @@ async fn NativeAcpService::shutdown(
           "session_cancel",
           Json::empty_object(),
           None,
+          acp_activity_session_id=session.native_session_id,
         ) {
         Ok(receipt) if string_field(receipt, "status") == Some("completed") =>
           Ok(())

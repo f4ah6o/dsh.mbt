@@ -57,6 +57,7 @@ async test "native store persists one private versioned envelope and locks write
       auth_revision: 0,
       external_mcp_catalog_hash: None,
       lsp_catalog_hash: None,
+      acp_sessions: [],
     }
     assert_true(store.save(state) is Ok(_))
     let (envelope_text, envelope_version) = match
@@ -122,6 +123,7 @@ async test "native store persists one private versioned envelope and locks write
       auth_revision: 0,
       external_mcp_catalog_hash: None,
       lsp_catalog_hash: None,
+      acp_sessions: [],
     }
     assert_true(reopened.save(changed) is Err(_))
     assert_eq(

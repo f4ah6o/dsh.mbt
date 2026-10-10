@@ -8,9 +8,20 @@ const NATIVE_ENVELOPE_SCHEMA : String = "dsh.native-host-v1"
 const SNAPSHOT_LIMIT : Int = 33554432
 
 ///|
+/// ACP owns only the sessions it creates. This adjunct registry records the
+/// canonical startup workspace and last ACP prompt time without changing the
+/// native engine event schema.
+priv struct NativeAcpStoredSession {
+  session_id : String
+  cwd : String
+  updated_at : String?
+}
+
+///|
 priv struct NativeState {
   engine : Json
   mut receipts : Array[Json]
+  mut acp_sessions : Array[NativeAcpStoredSession]
   server_id : String
   workspace_id : String
   identity_key : String
@@ -82,6 +93,137 @@ fn json_int(value : Json?) -> Int {
       number.to_int().to_double() == number => number.to_int()
     _ => -1
   }
+}
+
+///|
+fn native_acp_timestamp_digit(character : Char) -> Int {
+  match character {
+    '0' => 0
+    '1' => 1
+    '2' => 2
+    '3' => 3
+    '4' => 4
+    '5' => 5
+    '6' => 6
+    '7' => 7
+    '8' => 8
+    '9' => 9
+    _ => -1
+  }
+}
+
+///|
+fn native_acp_valid_timestamp(value : String) -> Bool {
+  if value.length() != 20 {
+    return false
+  }
+  let mut year = 0
+  let mut month = 0
+  let mut day = 0
+  let mut hour = 0
+  let mut minute = 0
+  let mut second = 0
+  for index, character in value {
+    if index == 4 || index == 7 {
+      if character != '-' {
+        return false
+      }
+    } else if index == 10 {
+      if character != 'T' {
+        return false
+      }
+    } else if index == 13 || index == 16 {
+      if character != ':' {
+        return false
+      }
+    } else if index == 19 {
+      if character != 'Z' {
+        return false
+      }
+    } else {
+      let digit = native_acp_timestamp_digit(character)
+      if digit < 0 {
+        return false
+      }
+      if index < 4 {
+        year = year * 10 + digit
+      } else if index < 7 {
+        month = month * 10 + digit
+      } else if index < 10 {
+        day = day * 10 + digit
+      } else if index < 13 {
+        hour = hour * 10 + digit
+      } else if index < 16 {
+        minute = minute * 10 + digit
+      } else {
+        second = second * 10 + digit
+      }
+    }
+  }
+  let leap_year = year % 400 == 0 || (year % 4 == 0 && year % 100 != 0)
+  let days_in_month = match month {
+    1 | 3 | 5 | 7 | 8 | 10 | 12 => 31
+    4 | 6 | 9 | 11 => 30
+    2 if leap_year => 29
+    2 => 28
+    _ => 0
+  }
+  day >= 1 && day <= days_in_month && hour <= 23 && minute <= 59 && second <= 59
+}
+
+///|
+fn native_acp_stored_sessions_from_json(
+  value : Json?,
+) -> Result[Array[NativeAcpStoredSession], String] {
+  let entries = match value {
+    None | Some(Json::Null) => return Ok([])
+    Some(Json::Array(values)) if values.length() <= 32 => values
+    _ => return Err("native snapshot has an invalid ACP session registry")
+  }
+  let result : Array[NativeAcpStoredSession] = []
+  let seen : Map[String, Bool] = Map([])
+  for entry in entries {
+    let session_id = match string_field(entry, "session_id") {
+      Some(value) if !value.is_empty() && value.length() <= 128 => value
+      _ => return Err("native snapshot has an invalid ACP session id")
+    }
+    if @engine.SessionId::new(session_id) is Err(_) ||
+      seen.get(session_id) is Some(_) {
+      return Err("native snapshot has a duplicate or invalid ACP session id")
+    }
+    let cwd = match string_field(entry, "cwd") {
+      Some(value) if value.has_prefix("/") && value.length() <= 4096 => value
+      _ => return Err("native snapshot has an invalid ACP session cwd")
+    }
+    let updated_at = match object_field(entry, "updated_at") {
+      None | Some(Json::Null) => None
+      Some(Json::String(value)) if native_acp_valid_timestamp(value) =>
+        Some(value)
+      _ => return Err("native snapshot has an invalid ACP session timestamp")
+    }
+    seen.set(session_id, true)
+    result.push({ session_id, cwd, updated_at, })
+  }
+  Ok(result)
+}
+
+///|
+fn native_acp_stored_sessions_json(
+  sessions : Array[NativeAcpStoredSession],
+) -> Json {
+  Json::array(
+    sessions.map(session => {
+      let fields : Map[String, Json] = {
+        "session_id": Json::string(session.session_id),
+        "cwd": Json::string(session.cwd),
+      }
+      match session.updated_at {
+        Some(value) => fields["updated_at"] = Json::string(value)
+        None => ()
+      }
+      Json::object(fields)
+    }),
+  )
 }
 
 ///|
@@ -439,6 +581,7 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
       return Ok({
         engine: Json::null(),
         receipts: [],
+        acp_sessions: [],
         server_id: self.server_id,
         workspace_id: self.workspace_id,
         identity_key: "local:" + @env.get_env_var("USER").unwrap_or("owner"),
@@ -487,9 +630,17 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
                 "native snapshot has an invalid LSP catalog fingerprint",
               )
           }
+          let acp_sessions = match
+            native_acp_stored_sessions_from_json(
+              object_field(raw, "acp_sessions"),
+            ) {
+            Ok(value) => value
+            Err(error) => return Err(error)
+          }
           Ok({
             engine,
             receipts,
+            acp_sessions,
             server_id: string_field(raw, "server_id").unwrap_or(self.server_id),
             workspace_id: string_field(raw, "workspace_id").unwrap_or(
               self.workspace_id,
@@ -508,6 +659,7 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
           Ok({
             engine: raw,
             receipts: [],
+            acp_sessions: [],
             server_id: self.server_id,
             workspace_id: self.workspace_id,
             identity_key: "local:" + @env.get_env_var("USER").unwrap_or("owner"),
@@ -542,6 +694,7 @@ fn NativeStore::save(
     "auth_revision": Json::number(state.auth_revision.to_double()),
     "engine": state.engine,
     "receipts": Json::array(state.receipts),
+    "acp_sessions": native_acp_stored_sessions_json(state.acp_sessions),
   }
   match state.external_mcp_catalog_hash {
     Some(value) => fields["external_mcp_catalog_hash"] = Json::string(value)

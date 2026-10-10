@@ -16,6 +16,26 @@
 
 ### Migration
 
+## 0.1.10 - 2026-10-10
+
+### Added
+
+- Add persistent ACP `session/list` and `session/resume` for registered root sessions, with canonical workspace filtering, bounded pagination, saved-context continuation, and no replay of old updates or effects. Existing native sessions without ACP provenance are not adopted. See the [native runtime guide](docs/native-runtime.md#acp-stdio-agent) and [remaining port work](issues/open/0001-upstream-parity.md).
+
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
+- Native v1 envelopes without ACP provenance remain readable; sessions already present in those envelopes are not inferred from an `acp-` ID and do not appear in ACP list/resume. Use dsh 0.1.10+ while preserving ACP metadata; older native readers may drop the added registry when rewriting the envelope, so back up before downgrading.
+
 ## 0.1.9 - 2026-10-10
 
 ### Added

@@ -1,5 +1,30 @@
 # 検証記録
 
+## Persistent ACP session list / resume increment (0.1.10)
+
+2026-10-10、macOS arm64、Node.js `24.21.0`、MoonBit compiler / core
+`0.10.14+7d59c7ec9`、moon / moonrun `0.1.20260920`、Playwright `1.64.0` で
+keyless / local fixture を検証しました。`npm test` は一括では実行せず、以下の
+selected gates を個別に実行しました。
+
+| gate | 結果 |
+| --- | --- |
+| `moon fmt`, `moon check --target native runtime`, `npm run check` | PASS。自作 warning 0、pinned hotpath diagnostics のみ。 |
+| `moon test runtime --target native --filter '*ACP*'` | 8 / 8 PASS。永続 registry の duplicate / dangling / imported / forked / foreign validation、calendar timestamp、legacy envelope、close / resume fencing と continuation を含む。 |
+| `node --check scripts/test-acp-stdio.mjs`, native `scripts/test-acp-stdio.mjs` | PASS。pagination / canonical filter、process restart / resume / saved-context continuation / no replay、null / wrong-type cursor handling、close→resume、approval / cancellation / EOF を確認。 |
+| `npm run build`, `sh scripts/test-install.sh` | PASS。native binaries / browser assets を生成し、PATH install、terminal, MCP, demo, embedded web を確認。 |
+| `npm run test:web` | 7 / 7 PASS。 |
+| `npm run test:integration` | PASS。real Chromium の native-host smoke で CSP、compiled UI / transport、command receipts、fork / prune / import、offline shell、accessibility、auth races、service-worker cache を確認。 |
+
+Portable matrix と native runtime aggregate は同じ increment の広い suite で
+Wasm / Wasm GC / JS / native 各 157 / 157、browser / app 16 / 16、native
+runtime 138 / 138 で pass しました。最終 ACP 境界変更の後は ACP-filtered
+suite と stdio test を再実行しています。最初の aggregate command は最後の
+build step で root volume の空き容量不足に達しましたが、task-owned build
+cache を `/Volumes/DevSSD/dsh-native-tests/worktree-build` に移した後の build,
+install, browser integration は pass しました。provider fixtures は keyless
+で、live account acceptance は実施していません。
+
 ## Native session TODO tool increment
 
 2026-10-10、macOS arm64、Node.js `26.8.2`、MoonBit compiler / core

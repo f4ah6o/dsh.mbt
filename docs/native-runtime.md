@@ -412,24 +412,54 @@ dsh acp --demo --data-dir /absolute/path/to/dsh-data \
 ```
 
 Without `--demo`, provider setup follows the native runtime environment and
-options described above. The agent advertises only the session close
-capability, no image, audio, or embedded-context prompt capabilities, and no
+options described above. The agent advertises session list, resume, and close
+capabilities, no image, audio, or embedded-context prompt capabilities, and no
 authentication methods. It accepts `initialize`, `authenticate`,
-`session/new`, `session/prompt`, `session/cancel`, and `session/close`; it does
-not implement session listing, loading, or resuming. A connection can be
-initialized once with protocol version 1.
+`session/new`, `session/list`, `session/resume`, `session/prompt`,
+`session/cancel`, and `session/close`. `session/load` remains unsupported. A
+connection can be initialized once with protocol version 1.
 
 Each ACP session is bound to the one canonical workspace selected at startup.
-`session/new` requires an absolute `cwd` matching that workspace and rejects
-other working directories, additional directories, and ACP-provided MCP server
-mounts. Existing `--mcp-config` and hooks configuration still apply as startup
-settings. Prompt batches preserve order and accept text
+`session/new` and `session/resume` require an absolute `cwd` matching that
+workspace and an empty `mcpServers` array; other working directories,
+additional directories, and ACP-provided MCP server mounts are rejected.
+Existing `--mcp-config` and hooks configuration still apply as startup
+settings. `session/list` optionally filters by a canonicalized `cwd`; absent
+or `null` `cwd` and `cursor` values are treated as omitted, while other
+non-string values are rejected. It uses bounded pages of 16 entries. Its
+cursor is bound to the current native store revision, so a committed change
+invalidates earlier cursors. Listing is read-only and returns only
+ACP-registered, non-imported root sessions, newest ACP activity first. Prompt
+batches preserve order and accept text
 and `resource_link` blocks; a resource link is rendered as a bracketed name
 and URI in the prompt, and the referenced resource is not fetched. Images,
 audio, embedded context, and other content blocks are rejected. The prompt is
 limited to 16,384 characters, 64 blocks, and the same bounded JSON parser used
 by the ACP transport. Incoming lines are limited to 1 MiB and JSON container
 nesting to 24 levels.
+
+The ACP registry is stored beside the native session snapshot and records each
+session's canonical workspace and last ACP activity. `updatedAt` is returned
+when the host clock supplies a valid UTC timestamp; it means the last
+ACP-managed creation, prompt, approval, cancellation, close, or resume activity,
+not arbitrary activity made later through other native interfaces. Ordering
+uses the persisted ACP activity order, then creation order; native events are
+not reinterpreted to invent timestamps. The current ACP registry belongs to
+the single startup workspace, so reopening this data directory requires that
+same canonical workspace. Older native envelopes without ACP provenance still
+open, but their sessions are not inferred from an `acp-` ID or adopted into
+ACP list/resume. Use dsh 0.1.10 or later to preserve the ACP registry; an older
+native reader may ignore the added field and later rewrite the envelope without
+it. Back up the data directory before downgrading.
+
+`session/resume` attaches an inactive, non-imported root session to the new
+connection. A session already attached to the current connection must be
+closed before it can be resumed again. It rejects unknown or unregistered
+sessions, active or busy work, forks, imported history, and workspace
+mismatches. Resume restores saved native context without emitting old
+`session/update` messages or replaying provider, tool, or approval effects; a
+new prompt continues from that context. Closing a connection session keeps its
+durable ACP registration for a later list or resume.
 
 When a native tool needs approval, the agent emits a generic `tool_call` update
 before requesting an explicit `allow-once` or `reject-once` decision. Unknown,
@@ -441,10 +471,12 @@ returns. Restoring the native store retains the committed outcome and does not
 replay an interrupted provider request or tool call.
 
 This is a bounded agent-service increment, not full upstream ACP parity. It
-does not support ACP session list/load/resume, multi-workspace sessions,
-client-mounted MCP servers, resource fetching, attachments, streaming deltas,
-or persistent permission grants. Keyless tests cover the native demo path and
-approval lifecycle; they do not claim a live provider-account smoke test.
+does not support `session/load`, multi-workspace sessions, client-mounted MCP
+servers, resource fetching, attachments, streaming deltas, or persistent
+permission grants. Keyless tests cover list pagination/filtering, process
+restart and context continuation, no-replay, workspace / provenance rejection,
+approval lifecycle, and cancellation; they do not claim a live provider-account
+smoke test.
 
 ## Native command hooks
 
