@@ -40,7 +40,20 @@ fn prepare_responses_impl(
     if role != "tool" && !pending.is_empty() {
       reject("INVALID_REQUEST", "tool calls need immediate matching results")
     }
-    let content = text_field(message, "content")
+    let content_value = field(message, "content")
+    if content_value is Array(_) &&
+      (role != "user" || !has_hooks_context_source(message)) {
+      reject(
+        "INVALID_REQUEST", "content blocks are supported only for hooks-claude-code user messages",
+      )
+    }
+    let content_blocks = text_content_blocks(content_value, "message")
+    let content = match content_value {
+      String(value) => value
+      _ if role == "tool" =>
+        reject("INVALID_REQUEST", "tool result content must be a string")
+      _ => ""
+    }
     let calls = optional_array(message, "tool_calls")
     if role != "assistant" && !calls.is_empty() {
       reject(
@@ -77,6 +90,15 @@ fn prepare_responses_impl(
     }
     if !content.is_empty() {
       input.push({ "role": role.to_json(), "content": content.to_json() })
+    } else if !content_blocks.is_empty() {
+      let response_blocks : Array[Json] = content_blocks.map(block => {
+        "type": "input_text".to_json(),
+        "text": text_field(object(block, "text content block"), "text").to_json(),
+      })
+      input.push({
+        "role": role.to_json(),
+        "content": Json::array(response_blocks),
+      })
     }
     for raw_call in calls {
       let call = object(raw_call, "tool call")

@@ -5,6 +5,66 @@ priv enum NativeHookAction {
 }
 
 ///|
+priv struct NativeHookOutcome {
+  action : NativeHookAction
+  additional_contexts : Array[String]
+}
+
+///|
+const NATIVE_HOOK_CONTEXT_ITEM_LIMIT : Int = 4096
+
+///|
+const NATIVE_HOOK_CONTEXT_COUNT_LIMIT : Int = 32
+
+///|
+const NATIVE_HOOK_CONTEXT_TOTAL_LENGTH_LIMIT : Int = 16384
+
+///|
+fn native_hook_add_context(
+  contexts : Array[String],
+  value : String,
+) -> Result[Unit, String] {
+  if value.is_empty() {
+    return Ok(())
+  }
+  if value.length() > NATIVE_HOOK_CONTEXT_ITEM_LIMIT {
+    return Err("hook additionalContext exceeds the 4096-character limit")
+  }
+  if contexts.length() >= NATIVE_HOOK_CONTEXT_COUNT_LIMIT {
+    return Err("hook additionalContext exceeds the 32-item limit")
+  }
+  let mut total_length = value.length()
+  for context in contexts {
+    total_length += context.length()
+  }
+  if total_length > NATIVE_HOOK_CONTEXT_TOTAL_LENGTH_LIMIT {
+    return Err(
+      "hook additionalContext exceeds the 16384-code-unit aggregate limit",
+    )
+  }
+  contexts.push(value)
+  Ok(())
+}
+
+///|
+fn native_hook_result_with_contexts(
+  result : Json,
+  contexts : Array[String],
+) -> Json {
+  if contexts.is_empty() {
+    return result
+  }
+  let fields = match native_hook_object(result) {
+    Some(value) => value.copy()
+    None => return result
+  }
+  fields["additional_contexts"] = Json::array(
+    contexts.map(context => Json::string(context)),
+  )
+  Json::object(fields)
+}
+
+///|
 fn native_hook_limit_reason(value : String) -> String {
   let output = StringBuilder()
   let mut count = 0
@@ -38,30 +98,31 @@ fn native_hook_json_string(
 fn native_hook_result_decision(
   capture : NativeHookCapture,
   event : String,
-) -> Result[NativeHookAction, String] {
+) -> Result[NativeHookOutcome, String] {
   if capture.truncated {
     return Err("hook output exceeded the 16 KiB per-stream limit")
   }
   if capture.exit_code == 2 {
     let reason = capture.stderr.trim().to_owned()
-    return Ok(
-      NativeHookAction::Deny(
+    return Ok({
+      action: NativeHookAction::Deny(
         if reason.is_empty() {
           "hook exited with blocking status 2"
         } else {
           reason
         },
       ),
-    )
+      additional_contexts: [],
+    })
   }
   if capture.exit_code != 0 {
     // Claude Code treats every non-zero exit other than 2 as a hook error that
     // does not block the tool. Keep that behavior for the supported points.
-    return Ok(NativeHookAction::Continue)
+    return Ok({ action: NativeHookAction::Continue, additional_contexts: [], })
   }
   let stdout = capture.stdout.trim().to_owned()
   if stdout.is_empty() || !stdout.has_prefix("{") {
-    return Ok(NativeHookAction::Continue)
+    return Ok({ action: NativeHookAction::Continue, additional_contexts: [], })
   }
   let document = @json.parse(stdout) catch {
     _ => return Err("hook returned malformed JSON")
@@ -80,6 +141,7 @@ fn native_hook_result_decision(
     Err(error) => return Err(error)
   }
   let mut action = NativeHookAction::Continue
+  let additional_contexts : Array[String] = []
   let decision = match
     native_hook_json_string(fields.get("decision"), "decision") {
     Ok(value) => value
@@ -108,11 +170,16 @@ fn native_hook_result_decision(
         Some(value) => value
         None => return Err("hookSpecificOutput must be an object")
       }
+      let allowed_specific_fields = if event == "PostToolUse" {
+        [
+          "hookEventName", "permissionDecision", "permissionDecisionReason", "additionalContext",
+        ]
+      } else {
+        ["hookEventName", "permissionDecision", "permissionDecisionReason"]
+      }
       match
         native_hook_exact_fields(
-          specific,
-          ["hookEventName", "permissionDecision", "permissionDecisionReason"],
-          "hookSpecificOutput",
+          specific, allowed_specific_fields, "hookSpecificOutput",
         ) {
         Ok(_) => ()
         Err(error) => return Err(error)
@@ -141,6 +208,24 @@ fn native_hook_result_decision(
           Ok(value) => value.unwrap_or("")
           Err(error) => return Err(error)
         }
+        if event == "PostToolUse" {
+          let additional_context = match
+            native_hook_json_string(
+              specific.get("additionalContext"),
+              "additionalContext",
+            ) {
+            Ok(value) => value
+            Err(error) => return Err(error)
+          }
+          match additional_context {
+            Some(value) =>
+              match native_hook_add_context(additional_contexts, value) {
+                Ok(_) => ()
+                Err(error) => return Err(error)
+              }
+            None => ()
+          }
+        }
         match permission {
           Some("deny") =>
             action = NativeHookAction::Deny(
@@ -165,5 +250,5 @@ fn native_hook_result_decision(
       }
     }
   }
-  Ok(action)
+  Ok({ action, additional_contexts, })
 }

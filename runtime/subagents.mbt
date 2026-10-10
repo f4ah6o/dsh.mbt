@@ -443,39 +443,60 @@ async fn NativeRuntime::subagent_complete_tool(
   if !["read", "glob", "grep"].contains(name) {
     return Err("child emitted a tool outside its read-only catalog")
   }
-  let tool_result = match
+  let (tool_result, additional_contexts) = match
     self.hooks.before_tool(self.tools, child_session_id, effect.request()) {
     Err(_) =>
-      tool_error(
-        "PreToolUse hook returned an unsupported result; tool was not run",
+      (
+        tool_error(
+          "PreToolUse hook returned an unsupported result; tool was not run",
+        ),
+        [],
       )
-    Ok(NativeHookAction::Deny(reason)) =>
-      tool_error(
-        "blocked by PreToolUse hook: " + native_hook_limit_reason(reason),
-      )
-    Ok(NativeHookAction::Continue) => {
-      let result = self.tools.execute(effect.request())
-      match
-        self.hooks.after_tool(
-          self.tools,
-          child_session_id,
-          effect.request(),
-          result,
-        ) {
-        Err(_) =>
-          tool_error(
-            "PostToolUse hook returned an unsupported result after the tool ran",
+    Ok(pre_outcome) =>
+      match pre_outcome.action {
+        NativeHookAction::Deny(reason) =>
+          (
+            tool_error(
+              "blocked by PreToolUse hook: " + native_hook_limit_reason(reason),
+            ),
+            [],
           )
-        Ok(NativeHookAction::Deny(reason)) =>
-          tool_error(
-            "PostToolUse hook blocked the result after the tool ran: " +
-            native_hook_limit_reason(reason),
-          )
-        Ok(NativeHookAction::Continue) => result
+        NativeHookAction::Continue => {
+          let result = self.tools.execute(effect.request())
+          match
+            self.hooks.after_tool(
+              self.tools,
+              child_session_id,
+              effect.request(),
+              result,
+            ) {
+            Err(_) =>
+              (
+                tool_error(
+                  "PostToolUse hook returned an unsupported result after the tool ran",
+                ),
+                [],
+              )
+            Ok(post_outcome) => {
+              let final_result = match post_outcome.action {
+                NativeHookAction::Deny(reason) =>
+                  tool_error(
+                    "PostToolUse hook blocked the result after the tool ran: " +
+                    native_hook_limit_reason(reason),
+                  )
+                NativeHookAction::Continue => result
+              }
+              (final_result, post_outcome.additional_contexts)
+            }
+          }
+        }
       }
-    }
   }
-  match child.complete_effect(effect.id(), tool_result) {
+  match
+    child.complete_effect(
+      effect.id(),
+      native_hook_result_with_contexts(tool_result, additional_contexts),
+    ) {
     Ok(_) => Ok(())
     Err(error) => Err(error)
   }

@@ -75,6 +75,7 @@ priv struct ToolCall {
   mut effect_id : String?
   mut completed_content : String?
   mut completed_error : Bool?
+  mut completed_contexts : Array[String]
 }
 
 ///|

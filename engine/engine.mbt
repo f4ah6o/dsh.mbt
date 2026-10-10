@@ -294,6 +294,46 @@ fn Session::append(self : Session, kind : String, data : Json) -> Unit {
 }
 
 ///|
+fn transcript_user_message(data : Json) -> Json {
+  let values = match data {
+    Json::Object(fields) => fields.copy()
+    _ => return detached(data)
+  }
+  let is_hook_context = match values.get("source") {
+    Some(Json::Object(source)) =>
+      source.length() == 1 &&
+      source.get("kind") == Some(Json::string("hooks-claude-code"))
+    _ => false
+  }
+  if !is_hook_context {
+    return Json::object(values)
+  }
+  let blocks = match values.get("content") {
+    Some(Json::Array(blocks)) => blocks
+    _ => return Json::object(values)
+  }
+  let text = StringBuilder()
+  for index, block in blocks {
+    let block_text = match block {
+      Json::Object(fields) => fields.get("text")
+      _ => None
+    }
+    match block_text {
+      Some(Json::String(value)) => {
+        if index > 0 {
+          text.write_string("\n")
+        }
+        text.write_string(value)
+      }
+      _ => ()
+    }
+  }
+  values["content"] = Json::string(text.to_string())
+  values["display_label"] = Json::string("フック補足")
+  Json::object(values)
+}
+
+///|
 fn Session::messages(self : Session) -> Array[Json] {
   if self.imported {
     return imported_messages(self.events)
@@ -314,7 +354,8 @@ fn Session::messages(self : Session) -> Array[Json] {
   let result : Array[Json] = []
   for event in self.events {
     match event.kind {
-      UserMessage | ToolResult => result.push(detached(event.data))
+      UserMessage => result.push(transcript_user_message(event.data))
+      ToolResult => result.push(detached(event.data))
       AssistantMessage =>
         match event.data {
           Json::Object(data) =>
@@ -945,6 +986,7 @@ fn parse_calls(value : Json) -> Array[ToolCall] raise EngineError {
       effect_id: None,
       completed_content: None,
       completed_error: None,
+      completed_contexts: [],
     }
   })
 }

@@ -600,21 +600,52 @@ the result as an error but cannot undo a write or remote call. If cancellation
 or shutdown stops PostToolUse after the tool completed, the known result is
 checkpointed and settled without replay.
 
+PostToolUse also accepts `hookSpecificOutput.additionalContext` as a string.
+Empty strings are skipped and whitespace-only strings are retained. Each value
+is limited to 4,096 UTF-16 code units; at most 32 values and 16,384 aggregate
+code units may be accepted for one tool call. A completed call stores the
+contexts in one separate `user/message` event with source
+`hooks-claude-code` and one text block per matching hook, in hook order. For
+parallel calls, every correlated tool result is committed before context
+messages are appended in tool-call order. The next provider request therefore
+retains the upstream ordering without weakening the provider's adjacent-result
+validation.
+
+An empty context array is omitted from the completion event. A PostToolUse
+block still returns the native tool-error result, while any valid contexts from
+that hook point remain separate model input; the already-known execution result
+stays in its own durable outcome event. A hook that exits with status 2 ignores
+its stdout, including any JSON context, while other successful matching hooks
+can still contribute. Cancellation before PostToolUse completes admits no
+context message and receipt replay does not rerun the hook. The local transcript
+flattens the text blocks for display and labels them `フック補足`; durable and
+provider history retain the structured blocks. ACP currently omits these
+synthetic messages from its user/assistant text updates because its bridge has
+no source-aware context update.
+
 The parser rejects unknown config fields, unsupported events, malformed JSON,
-unknown result fields, unsupported feedback or `additionalContext`, and
-truncated output; these strict errors differ from upstream's permissive
-handling. Only live PreToolUse and PostToolUse command hooks run. Restore,
+unknown result fields, and truncated output. A wrong-type
+`additionalContext` is rejected as a strict native error, whereas upstream
+ignores it; native session capacity and provider-shape checks also remain
+stricter. Only live PreToolUse and PostToolUse command hooks run. Restore,
 Session v4 import, receipt replay, and retries do not rerun hooks. Arbitrary
 async/prompt hooks, `${CLAUDE_PLUGIN_ROOT}` substitution, and dedicated durable
 `hook/*` diagnostic events are not implemented. A matching PostToolUse hook
 adds a durable `effect-known` result event before running the hook. Native
-session capacity limits still apply to this additional stored result.
+session capacity limits still apply to the additional context metadata and
+messages.
 
 Stores that contain `effect-known` events from this opt-in path require dsh
 0.1.5 or later: dsh 0.1.4 and earlier readers reject this event source. dsh
 0.1.5 can still read earlier native snapshots. A matching post-hook result is
 checkpointed even when the hook later denies it, so restore can settle the
 known tool outcome without repeating host work.
+
+Stores containing PostToolUse `additional_contexts` completion metadata or
+structured `hooks-claude-code` user messages require dsh 0.1.12 or later. Do
+not rewrite such a store with dsh 0.1.11 or older. dsh 0.1.12 continues to read
+context-free dsh 0.1.11 native stores; the engine replay tests cover the legacy
+completion shape without `additional_contexts`.
 
 `--approve-call` and `--deny-call` act on a session that is already waiting for approval, for example one started from the browser or MCP carrier. Pass its current `approval_revision` and `pending_approval.call_id`; stale or mismatched decisions are rejected:
 

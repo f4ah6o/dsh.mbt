@@ -4,6 +4,27 @@
 const MAX_PARALLEL_TOOL_EFFECTS : Int = 4
 
 ///|
+const MAX_POST_TOOL_CONTEXTS : Int = 32
+
+///|
+const MAX_POST_TOOL_CONTEXT_ITEM_LENGTH : Int = 4096
+
+///|
+const MAX_POST_TOOL_CONTEXT_TOTAL_LENGTH : Int = 16384
+
+///|
+fn post_tool_context_message(contexts : Array[String]) -> Json {
+  let content : Array[Json] = contexts.map(context => {
+    Json::object({ "type": Json::string("text"), "text": Json::string(context) })
+  })
+  Json::object({
+    "role": Json::string("user"),
+    "content": Json::array(content),
+    "source": Json::object({ "kind": Json::string("hooks-claude-code") }),
+  })
+}
+
+///|
 fn Session::active_tool_effect_count(self : Session) -> Int {
   let mut count = 0
   for _, _ in self.active_tool_effects {
@@ -45,6 +66,7 @@ fn Session::stage_local_tool_result(
   call.effect_id = None
   call.completed_content = Some(content)
   call.completed_error = Some(is_error)
+  call.completed_contexts = []
   self.append(
     "tool/completed",
     object([
@@ -67,6 +89,7 @@ fn Session::stage_interrupted_tool_result(
   call.effect_id = None
   call.completed_content = Some(content)
   call.completed_error = Some(true)
+  call.completed_contexts = []
   let data = Map::from_array([
     ("source", Json::string("interrupted")),
     ("call_id", Json::string(call.id)),
@@ -107,6 +130,20 @@ fn Session::commit_completed_tool_result(
 }
 
 ///|
+fn Session::commit_post_tool_contexts(self : Session) -> Unit {
+  for call in self.calls {
+    if call.completed_contexts.is_empty() {
+      continue
+    }
+    self.append(
+      "user/message",
+      post_tool_context_message(call.completed_contexts),
+    )
+    call.completed_contexts = []
+  }
+}
+
+///|
 fn Session::commit_ready_tool_results(self : Session) -> Unit {
   while self.cursor < self.calls.length() {
     let call = self.calls[self.cursor]
@@ -114,6 +151,9 @@ fn Session::commit_ready_tool_results(self : Session) -> Unit {
       return
     }
     self.commit_completed_tool_result(call)
+  }
+  if self.cursor == self.calls.length() {
+    self.commit_post_tool_contexts()
   }
 }
 
@@ -202,22 +242,27 @@ fn Engine::stage_host_tool_result(
   effect_id : String,
   content : String,
   is_error : Bool,
+  additional_contexts : Array[String],
 ) -> Unit {
   self.retire_tool_effect(session, effect_id)
   call.stage = Completed
   call.effect_id = None
   call.completed_content = Some(content)
   call.completed_error = Some(is_error)
-  session.append(
-    "tool/completed",
-    object([
-      ("source", Json::string("effect")),
-      ("call_id", Json::string(call.id)),
-      ("effect_id", Json::string(effect_id)),
-      ("content", Json::string(content)),
-      ("is_error", boolean(is_error)),
-    ]),
-  )
+  call.completed_contexts = additional_contexts
+  let data = Map::from_array([
+    ("source", Json::string("effect")),
+    ("call_id", Json::string(call.id)),
+    ("effect_id", Json::string(effect_id)),
+    ("content", Json::string(content)),
+    ("is_error", boolean(is_error)),
+  ])
+  if !additional_contexts.is_empty() {
+    data["additional_contexts"] = Json::array(
+      additional_contexts.map(context => Json::string(context)),
+    )
+  }
+  session.append("tool/completed", Json::object(data))
   session.commit_ready_tool_results()
   self.advance_tools(session)
 }
@@ -236,6 +281,7 @@ fn Session::stage_host_tool_outcome(
   call.stage = OutcomeKnown
   call.completed_content = Some(content)
   call.completed_error = Some(is_error)
+  call.completed_contexts = []
   self.append(
     "tool/completed",
     object([
@@ -277,7 +323,38 @@ fn Engine::complete_tool_effect(
   } else {
     required_string(result, "content")
   }
-  self.stage_host_tool_result(session, call, effect_id, content, is_error)
+  let additional_contexts = match fields(result).get("additional_contexts") {
+    None => []
+    Some(value) => {
+      let raw_contexts = array_value(
+        value,
+        "additional_contexts",
+        MAX_POST_TOOL_CONTEXTS,
+      )
+      let parsed : Array[String] = []
+      let mut total_length = 0
+      for raw_context in raw_contexts {
+        let context = string_value(
+          raw_context,
+          "additional_context",
+          max=MAX_POST_TOOL_CONTEXT_ITEM_LENGTH,
+        )
+        if !context.is_empty() {
+          total_length += context.length()
+          if total_length > MAX_POST_TOOL_CONTEXT_TOTAL_LENGTH {
+            raise Invalid(
+              "additional_contexts exceeds the aggregate length limit",
+            )
+          }
+          parsed.push(context)
+        }
+      }
+      parsed
+    }
+  }
+  self.stage_host_tool_result(
+    session, call, effect_id, content, is_error, additional_contexts,
+  )
 }
 
 ///|

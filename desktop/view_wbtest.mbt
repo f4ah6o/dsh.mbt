@@ -56,3 +56,21 @@ test "native desktop transcript renders the session todo list" {
   assert_eq(empty[0].label, "タスク")
   assert_eq(empty[0].lines, ["タスクはありません。"])
 }
+
+///|
+test "native desktop labels hook context separately from user input" {
+  let session : Json = {
+    "messages": [
+      {
+        "role": "user",
+        "content": "hook detail",
+        "source": { "kind": "hooks-claude-code" },
+        "display_label": "フック補足",
+      },
+    ],
+  }
+  let blocks = desktop_blocks(session, 1200.0)
+  assert_eq(blocks.length(), 1)
+  assert_eq(blocks[0].label, "フック補足")
+  assert_eq(blocks[0].lines.join(""), "hook detail")
+}

@@ -225,16 +225,21 @@ fn transcript_blocks(snapshot : Json, width : Double) -> Array[Block] {
     }
     let content = string_member(message, "content")
     if content != "" {
-      let label = match role {
-        "user" => "あなた"
-        "assistant" =>
-          if provisional {
-            "アシスタント · " + stream_status
-          } else {
-            "アシスタント"
-          }
-        "tool" => "ツール結果"
-        _ => "メッセージ"
+      let display_label = string_member(message, "display_label")
+      let label = if display_label != "" {
+        display_label
+      } else {
+        match role {
+          "user" => "あなた"
+          "assistant" =>
+            if provisional {
+              "アシスタント · " + stream_status
+            } else {
+              "アシスタント"
+            }
+          "tool" => "ツール結果"
+          _ => "メッセージ"
+        }
       }
       blocks.push({ label, role, lines: wrap_text(content, columns), })
     }
