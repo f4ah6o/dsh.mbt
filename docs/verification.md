@@ -1,5 +1,25 @@
 # 検証記録
 
+## ACP per-session model configuration increment (0.1.11)
+
+2026-10-10、macOS arm64、Node.js `24.21.0`、MoonBit compiler / core
+`0.10.14+7d59c7ec9`、moon / moonrun `0.1.20260920`、Playwright `1.64.0` で
+検証しました。`npm test` は exit 0。provider tests are keyless loopback fixtures;
+no live account or secret value was used.
+
+| gate | result |
+| --- | --- |
+| `TMPDIR=/Volumes/DevSSD/dsh-native-tests/acp-model-config-tmp npm test` | PASS / exit 0. Build and all-target checks passed with zero project warnings (only pinned `vendor/hotpath` diagnostics). Portable tests: Wasm, Wasm GC, JS, and native each 157 / 157; app fixtures 16 / 16; native runtime 144 / 144; web 7 / 7; PATH install / CLI smoke and real Chromium native-host smoke passed. Native tests also cover subagent model inheritance and refusal of a changed API endpoint on resume. |
+| `moon test runtime --target native --filter '*ACP*' --frozen --target-dir _build/acp-model-config-focused` | 13 / 13 PASS. Includes per-session route selection, resume fencing, legacy metadata adoption, escaped advertised-value roundtrip, and unchanged history on refusal. |
+| `node --check scripts/test-acp-stdio.mjs`, release worker `scripts/test-acp-stdio.mjs` | PASS. Exercises option advertisement/update ordering, simultaneous sessions, per-turn pinning / retries, catalog refusal/recovery, restart/no replay, plus invalid ACP arguments and checkpoint-version conflict. The injected conflict returns JSON-RPC errors without a config notification or persisted model change; later prompts fail closed, stdout remains JSON-RPC through EOF, stderr gets a fixed diagnostic, and the process exits nonzero. |
+| `moon info runtime --target native --frozen --target-dir _build/acp-model-config-info`; `moon info --frozen --target all api plugins` | PASS. Runtime is native-only; native interface was emitted under the external target directory. API/plugin interfaces are current. |
+| `git diff --check` | PASS. |
+
+The ACP checkpoint regression documents a native carrier defect, not an upstream
+DeepSeek Harness issue: fatal ACP paths previously used native `abort`, whose
+diagnostic could corrupt the JSON-RPC stdout stream. Fatal argument, startup,
+carrier, and shutdown paths now use a fixed stderr diagnostic and nonzero exit.
+
 ## Persistent ACP session list / resume increment (0.1.10)
 
 2026-10-10、macOS arm64、Node.js `24.21.0`、MoonBit compiler / core

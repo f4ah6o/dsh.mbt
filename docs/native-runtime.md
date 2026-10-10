@@ -415,9 +415,59 @@ Without `--demo`, provider setup follows the native runtime environment and
 options described above. The agent advertises session list, resume, and close
 capabilities, no image, audio, or embedded-context prompt capabilities, and no
 authentication methods. It accepts `initialize`, `authenticate`,
-`session/new`, `session/list`, `session/resume`, `session/prompt`,
-`session/cancel`, and `session/close`. `session/load` remains unsupported. A
-connection can be initialized once with protocol version 1.
+`session/new`, `session/list`, `session/resume`, `session/set_config_option`,
+`session/prompt`, `session/cancel`, and `session/close`. A connection can be
+initialized once with protocol version 1. The pinned upstream baseline also
+lists `session/load` as unsupported ([upstream ACP scope](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/acp/acp/README.md));
+this port does not add a load extension.
+
+`session/new` and `session/resume` return a `model` select option in
+`configOptions` when a startup model or account-visible selected model is
+available. An unauthenticated ChatGPT route or one without a selected visible
+model returns an empty `configOptions` array. The option's current value and
+choices identify the configured provider route and model.
+`session/set_config_option` changes that model for
+one ACP session and persists the selection. It is accepted only while that
+session is idle or settled; an active turn rejects the change, so every step
+and retry in an admitted turn keeps its selected model. Other ACP sessions
+and the host's shared provider selection are unaffected. Native foreground
+subagents inherit the parent's selected model. This follows the pinned
+upstream [`model-control.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/acp/acp/src/model-control.ts)
+and [`session.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/acp/acp/src/session.ts)
+model selection surface; the native port keeps its startup provider/auth route fixed.
+
+ACP reserves stdout exclusively for JSON-RPC. Invalid ACP arguments and fatal
+startup, carrier, or shutdown failures write a fixed diagnostic to stderr and
+exit nonzero; they never print a runtime panic into the protocol stream. If a
+durable checkpoint fails, the request returns a JSON-RPC error without a
+`config_option_update`; the stopped runtime rejects subsequent operations, and
+the fatal shutdown diagnostic remains on stderr.
+
+The current startup route remains fixed: model selection does not switch
+provider protocol or authentication route. For an API-key route,
+`DSH_ACP_MODELS` adds selectable model names to the startup model. For a
+ChatGPT route, choices come from the account-visible catalog; setting
+`DSH_ACP_MODELS` restricts that catalog while retaining the currently selected
+visible model. Set the variable to a strict JSON array of unique, nonempty
+strings, for example `DSH_ACP_MODELS='["gpt-4.1","gpt-4.1-mini"]'`.
+The input is limited to 16 KiB, 32 models, and 256 characters per model name.
+Malformed values reject ACP initialization. The offline demo route does not
+accept additional model names.
+
+ACP model and a non-secret route fingerprint are stored in native session
+metadata. The fingerprint binds provider protocol, auth mode, demo route, and
+the provider-normalized API root (origin and path prefix) without storing the
+raw URL. Equivalent roots such as an omitted `/v1` or trailing slash share a
+fingerprint. Credentials and account
+identity remain host-managed and are not copied into ACP metadata; a resumed
+turn uses the currently configured account or API key. Within an admitted turn,
+the provider selection's account and generation checks still fence retries.
+A resumed session must match the saved route fingerprint and its model must
+remain in the current catalog; otherwise resume is refused without changing
+session activity or history. Keep the same
+`DSH_ACP_MODELS` choices when reopening a session that selected an added
+model. dsh 0.1.10 stores without an ACP model selection adopt the current
+startup model on resume.
 
 Each ACP session is bound to the one canonical workspace selected at startup.
 `session/new` and `session/resume` require an absolute `cwd` matching that
@@ -448,9 +498,9 @@ not reinterpreted to invent timestamps. The current ACP registry belongs to
 the single startup workspace, so reopening this data directory requires that
 same canonical workspace. Older native envelopes without ACP provenance still
 open, but their sessions are not inferred from an `acp-` ID or adopted into
-ACP list/resume. Use dsh 0.1.10 or later to preserve the ACP registry; an older
-native reader may ignore the added field and later rewrite the envelope without
-it. Back up the data directory before downgrading.
+ACP list/resume. Use dsh 0.1.11 or later to preserve ACP model selections and
+route identity; an older native reader may ignore the added metadata and later
+rewrite the envelope without it. Back up the data directory before downgrading.
 
 `session/resume` attaches an inactive, non-imported root session to the new
 connection. A session already attached to the current connection must be
@@ -471,12 +521,13 @@ returns. Restoring the native store retains the committed outcome and does not
 replay an interrupted provider request or tool call.
 
 This is a bounded agent-service increment, not full upstream ACP parity. It
-does not support `session/load`, multi-workspace sessions, client-mounted MCP
-servers, resource fetching, attachments, streaming deltas, or persistent
-permission grants. Keyless tests cover list pagination/filtering, process
-restart and context continuation, no-replay, workspace / provenance rejection,
-approval lifecycle, and cancellation; they do not claim a live provider-account
-smoke test.
+does not support multi-workspace sessions, client-mounted MCP servers,
+resource fetching, attachments, streaming deltas, persistent permission
+grants, provider switching, or reasoning controls. Keyless tests cover model
+catalog validation, per-session routing, busy-change rejection, retries,
+subagent inheritance, restart / resume, and no-replay alongside list
+pagination, workspace / provenance rejection, approval lifecycle, and
+cancellation; they do not claim a live provider-account smoke test.
 
 ## Native command hooks
 

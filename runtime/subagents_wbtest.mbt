@@ -153,6 +153,12 @@ async test "native foreground subagent runs a bounded child loop and restores co
       native_fixture_provider_server(
         server,
         [
+          {
+            code: 503,
+            reason: "Service Unavailable",
+            body: "",
+            retry_after: Some("0.001"),
+          },
           native_subagent_http_response(
             native_fixture_openai_calls_stream([
               (
@@ -165,6 +171,12 @@ async test "native foreground subagent runs a bounded child loop and restores co
               ),
             ]),
           ),
+          {
+            code: 503,
+            reason: "Service Unavailable",
+            body: "",
+            retry_after: Some("0.001"),
+          },
           native_subagent_http_response(
             native_fixture_openai_calls_stream([
               (
@@ -200,7 +212,7 @@ async test "native foreground subagent runs a bounded child loop and restores co
         mode_override="openai",
         model_override="fixture-model",
         base_url_override=base_url,
-        max_retries=0,
+        max_retries=1,
         enable_subagents=true,
       ) {
       Ok(value) => value
@@ -210,10 +222,16 @@ async test "native foreground subagent runs a bounded child loop and restores co
       @async.protect_from_cancel(() => ignore(runtime.close()))
     })
     let session_id = "native-subagent-restore"
-    let (_, create_effects) = runtime
-      .invoke("session_create", { "id": session_id, "title": "Subagent" })
-      .unwrap()
-    assert_true(create_effects.is_empty())
+    let _created = match
+      runtime.create_acp_session(
+        session_id,
+        runtime.tools.workspace,
+        Some("acp-child-model"),
+        runtime.acp_route_id().unwrap(),
+      ) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
     let (_, initial_effects) = runtime
       .invoke("session_send", {
         "session_id": session_id,
@@ -244,14 +262,16 @@ async test "native foreground subagent runs a bounded child loop and restores co
     serving.wait()
 
     assert_true(auth_ok.val)
-    assert_eq(bodies.val.length(), 4)
+    assert_eq(bodies.val.length(), 6)
     for body in bodies.val {
       let request = @json.parse(body)
-      assert_eq(string_field(request, "model"), Some("fixture-model"))
+      assert_eq(string_field(request, "model"), Some("acp-child-model"))
     }
+    assert_eq(bodies.val[0], bodies.val[1])
+    assert_eq(bodies.val[2], bodies.val[3])
     let parent_request = @json.parse(bodies.val[0])
     assert_true(native_subagent_tool_names(parent_request).contains("subagent"))
-    let child_request = @json.parse(bodies.val[1])
+    let child_request = @json.parse(bodies.val[3])
     assert_eq(native_subagent_tool_names(child_request), [
       "read", "glob", "grep",
     ])
@@ -327,7 +347,7 @@ async test "native foreground subagent runs a bounded child loop and restores co
       envelope,
     )
     assert_true(reopened.api.take_typed_effects().is_empty())
-    assert_eq(bodies.val.length(), 4)
+    assert_eq(bodies.val.length(), 6)
     reopened.close().unwrap()
     assert_true(
       NativeRuntime::open(
@@ -342,7 +362,7 @@ async test "native foreground subagent runs a bounded child loop and restores co
       )
       is Err(_),
     )
-    assert_eq(bodies.val.length(), 4)
+    assert_eq(bodies.val.length(), 6)
   }
 }
 

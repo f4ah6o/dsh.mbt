@@ -1527,6 +1527,12 @@ async fn NativeRuntime::run_provider_effect(
   }
   let request = effect.request()
   let mut final_result : Json? = None
+  let acp_model = match
+    self.acp_model_for_session(effect.session_id().as_string()) {
+    Ok(value) => value
+    Err(error) =>
+      return self.complete(effect.id(), native_provider_failure(error))
+  }
   // Bind every retry to the account, model, and generation selected for this
   // effect. A sign-out, re-login, or model switch during backoff must make the
   // old effect fail instead of silently sending it under a new identity.
@@ -1543,7 +1549,11 @@ async fn NativeRuntime::run_provider_effect(
         return self.complete(effect.id(), native_provider_failure(error))
     }
   } else if self.provider_config.auth_mode == NativeAuthMode::ChatGPT {
-    match self.auth.provider_selection() {
+    let selected = match acp_model {
+      Some(model) => self.auth.provider_selection_for_model(model)
+      None => self.auth.provider_selection()
+    }
+    match selected {
       Ok(value) => value
       Err(error) =>
         return self.complete(effect.id(), native_provider_failure(error))
@@ -1552,7 +1562,7 @@ async fn NativeRuntime::run_provider_effect(
     match
       NativeProviderSelection::api_key(
         self.provider_config.protocol,
-        self.provider_config.model,
+        acp_model.unwrap_or(self.provider_config.model),
         self.provider_config.base_url,
         self.provider_config.generation,
       ) {
