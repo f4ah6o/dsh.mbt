@@ -144,6 +144,7 @@ async fn native_cli_command(
   operation : String,
   input : Json,
   approval_revision : Int?,
+  acp_activity_session_id? : String = "",
 ) -> Result[Json, String] {
   let command_id = match native_command_id() {
     Ok(value) => value
@@ -168,7 +169,11 @@ async fn native_cli_command(
   }
   let identity_key = runtime.state.identity_key
   let (receipt, effects, should_start, control) = match
-    runtime.accept_remote_command(command, identity_key) {
+    runtime.accept_remote_command(
+      command,
+      identity_key,
+      acp_activity_session_id~,
+    ) {
     Ok(value) => value
     Err(error) => return Err(error)
   }

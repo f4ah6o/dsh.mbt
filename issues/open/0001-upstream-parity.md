@@ -4,7 +4,7 @@ Status: open
 Model: gpt-6-luna
 Created: 2026-10-05
 Updated: 2026-10-10
-Branch: feat/20261010-deepseek-harness-subagent
+Branch: feat/20261010-deepseek-harness-acp-resume
 upstream baseline は `5badb15009ae1756c3afe0ae0cef1faafc290ccc`。
 
 ## 概要
@@ -51,6 +51,7 @@ Bounded native subset と upstream package の名称が近いため、互換範�
 
 ## 変更履歴
 
+- 2026-10-10: ACP v1 persistent list / resume slice を追加し、workspace provenance、pagination、restart continuation、no-replay と残る load / multi-workspace 差分を記録。
 - 2026-10-10: bounded foreground subagent slice とその recovery / hook limits を section 3 に追加。upstream subagent lifecycle parity は未完了。
 
 ## 注記
@@ -188,18 +189,25 @@ hook command は設定した利用者の trusted shell code として動き、ch
 全 upstream lifecycle / event coverage は未実装のため、本 issue は open のままです。
 
 ACP の部分対応（2026-10-10）: pinned upstream `packages/acp` の automation-agent 方向を参照し、native `dsh acp` stdio
-service を追加しました。ACP v1 の initialize / authenticate、session new / prompt / cancel / close、ordered text / resource-link
-prompt subset、generic committed update、engine の per-call approval を接続します。allow-once / reject-once は pending native call ID、
-prompt generation、durable approval revision に結び、unknown / stale / cancelled response は許可しません。cancel / close / EOF は
-durable native cancellation 後に active task を drain し、reopen は中断した provider / tool effect を再送しません。実行 service は native
-runtime のみを使い、stdio integration と native demo runtime の keyless tests で session isolation、pending approval、busy prompt、
-late reply、EOF、durable reopen を確認します。
+service を追加しました。ACP v1 の initialize / authenticate、session new / list / resume / prompt / cancel / close、ordered
+text / resource-link prompt subset、generic committed update、engine の per-call approval を接続します。allow-once / reject-once は
+pending native call ID、prompt generation、durable approval revision に結び、unknown / stale / cancelled response は許可しません。
+cancel / close / EOF は durable native cancellation 後に active task を drain し、reopen は中断した provider / tool effect を再送しません。
 
-これは ACP 全体の互換ではありません。接続あたり initialize は一度、session は起動時の単一 canonical workspace に限り、
-additional directory と client MCP mounts は拒否します。prompt block は text と resource_link のみで、resource を fetch せず、
-image / audio / embedded context、list / load / resume、persistent grant、raw stream delta は提供しません。JSON line は 1 MiB、
-nesting は 24、prompt は 16,384 characters、block は 64 個までです。authMethods は空です。実 provider credential を使う ACP smoke test
-は未実行です。本 issue は open のままです。
+ACP は root native session に結び付いた canonical workspace / ACP activity metadata を `sessions.json` envelope 内で永続化します。
+`session/list` は canonical `cwd` filter と revision-bound 16-session cursor で newest ACP activity first の一覧を返し、read-only です。
+`session/resume` は同じ workspace の inactive non-imported root session だけを接続に戻し、過去の `session/update`、provider / tool / approval
+effect を replay せず、新しい prompt から保存 context を続けます。既存 0.1.9 envelope は引き続き読めますが、provenance のない session は
+`acp-` ID prefix だけで自動採用しません。updatedAt は有効な host UTC clock がある場合のみ出し、ACP-managed activity を表します。
+native runtime / CLI からの ACP 外 activity を global last-activity として推定しません。Native keyless tests は list pagination / canonical
+filter / stale cursor、process restart、context continuation / no-replay、legacy / imported / forked / active / unknown / foreign workspace
+rejection、resume / prompt / close fencing を確認します。
+
+これは ACP 全体の互換ではありません。接続あたり initialize は一度、session は起動時の単一 canonical workspace に限り、additional
+directory と client MCP mounts は拒否します。prompt block は text と resource_link のみで、resource を fetch せず、image / audio /
+embedded context、`session/load`、persistent grant、raw stream delta は提供しません。JSON line は 1 MiB、nesting は 24、prompt は
+16,384 characters、block は 64 個までです。authMethods は空です。実 provider credential を使う ACP smoke test は未実行です。本 issue は
+open のままです。
 
 LSP navigation の部分対応（2026-10-10）: pinned upstream
 [`packages/lsp`](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/lsp)、

@@ -308,6 +308,22 @@ async fn NativeRuntime::open(
         }
       }
   }
+  match
+    native_acp_validate_registry(
+      api.snapshot(),
+      loaded.acp_sessions,
+      workspace_path,
+    ) {
+    Ok(_) => ()
+    Err(error) => {
+      api.close()
+      lsp.close()
+      external_mcp.close()
+      ignore(store.close())
+      workspace_root.close()
+      return Err(error)
+    }
+  }
   let epoch = match random_uuid() {
     Ok(value) => value
     Err(error) => {
@@ -366,6 +382,7 @@ async fn NativeRuntime::open(
     state: {
       engine: api.snapshot(),
       receipts: recovered_receipts,
+      acp_sessions: loaded.acp_sessions,
       server_id: loaded.server_id,
       workspace_id: loaded.workspace_id,
       identity_key,
@@ -403,6 +420,7 @@ fn NativeRuntime::checkpoint_locked(
   let next = {
     engine: self.api.snapshot(),
     receipts: self.state.receipts,
+    acp_sessions: self.state.acp_sessions,
     server_id: self.state.server_id,
     workspace_id: self.state.workspace_id,
     identity_key: self.state.identity_key,
@@ -862,10 +880,15 @@ async fn NativeRuntime::accept_remote_command(
   self : NativeRuntime,
   command : @protocol.RemoteCommand,
   identity_key : String,
+  acp_activity_session_id? : String = "",
 ) -> Result[
   (Json, Array[@engine.EngineEffect], Bool, NativeJobControl?),
   String,
 ] {
+  if !acp_activity_session_id.is_empty() &&
+    command.session_id != Some(acp_activity_session_id) {
+    return Err("ACP activity does not match the remote command session")
+  }
   let fingerprint = match
     self.preflight_existing_command(command, identity_key) {
     Err(error) => return Err(error)
@@ -892,6 +915,17 @@ async fn NativeRuntime::accept_remote_command(
   }
   if command.workspace_id != self.state.workspace_id {
     return Err("command belongs to another workspace")
+  }
+  if !acp_activity_session_id.is_empty() {
+    if !["session_send", "session_cancel", "tool_approve"].contains(
+        command.operation,
+      ) ||
+      command.session_id != Some(acp_activity_session_id) ||
+      !self.state.acp_sessions.any(session => {
+        session.session_id == acp_activity_session_id
+      }) {
+      return Err("ACP activity does not match a registered session command")
+    }
   }
   if !@protocol.validate_uuid_v7_command_id_time(
       command.command_id,
@@ -987,6 +1021,15 @@ async fn NativeRuntime::accept_remote_command(
         Ok(value) => {
           result = Some(value)
           effects = self.api.take_typed_effects()
+          if status == "accepted" && !acp_activity_session_id.is_empty() {
+            match self.record_acp_activity_locked(acp_activity_session_id) {
+              Ok(_) => ()
+              Err(error) => {
+                self.stopped = true
+                return Err(error)
+              }
+            }
+          }
         }
       }
     }
