@@ -252,3 +252,103 @@ fn native_hook_result_decision(
   }
   Ok({ action, additional_contexts, })
 }
+
+///|
+fn native_hook_prompt_result_decision(
+  capture : NativeHookCapture,
+) -> Result[NativeHookOutcome, String] {
+  if capture.truncated {
+    return Err("hook output exceeded the 16 KiB per-stream limit")
+  }
+  if capture.exit_code == 2 {
+    let reason = native_hook_limit_reason(capture.stderr.trim().to_owned())
+    return Ok({
+      action: NativeHookAction::Deny(
+        if reason.is_empty() {
+          "hook exited with blocking status 2"
+        } else {
+          reason
+        },
+      ),
+      additional_contexts: [],
+    })
+  }
+  if capture.exit_code != 0 {
+    return Ok({ action: NativeHookAction::Continue, additional_contexts: [], })
+  }
+  let stdout = capture.stdout.trim().to_owned()
+  if !stdout.has_prefix("{") {
+    return Ok({ action: NativeHookAction::Continue, additional_contexts: [], })
+  }
+  let document = @json.parse(stdout) catch {
+    // The pinned hook protocol treats malformed JSON as plain stdout. The
+    // Claude Code prompt bridge only consumes structured additionalContext.
+    _ =>
+      return Ok({ action: NativeHookAction::Continue, additional_contexts: [], })
+  }
+  let fields = match native_hook_object(document) {
+    Some(value) => value
+    None =>
+      return Ok({ action: NativeHookAction::Continue, additional_contexts: [], })
+  }
+  let mut action = NativeHookAction::Continue
+  let reason = match fields.get("reason") {
+    Some(Json::String(value)) => native_hook_limit_reason(value)
+    _ => ""
+  }
+  match fields.get("decision") {
+    Some(Json::String("block")) =>
+      action = NativeHookAction::Deny(
+        if reason.is_empty() {
+          "blocked by hook"
+        } else {
+          reason
+        },
+      )
+    // Only the legacy approve/block values are recognized at top level.
+    Some(Json::String("approve")) => ()
+    _ => ()
+  }
+  let additional_contexts : Array[String] = []
+  match fields.get("hookSpecificOutput") {
+    Some(Json::Object(specific)) if specific.get("hookEventName") ==
+      Some(Json::string("UserPromptSubmit")) => {
+      let permission = match specific.get("permissionDecision") {
+        Some(Json::String(value)) => value
+        _ => ""
+      }
+      let permission_reason = match specific.get("permissionDecisionReason") {
+        Some(Json::String(value)) => native_hook_limit_reason(value)
+        _ => ""
+      }
+      match permission {
+        "deny" =>
+          action = NativeHookAction::Deny(
+            if permission_reason.is_empty() {
+              if reason.is_empty() {
+                "denied by hook"
+              } else {
+                reason
+              }
+            } else {
+              permission_reason
+            },
+          )
+        // UserPromptSubmit maps only a deny to rejection. Claude Code's
+        // ask/allow values do not create a new approval gate here.
+        "allow" | "ask" => action = NativeHookAction::Continue
+        _ => ()
+      }
+      match specific.get("additionalContext") {
+        Some(Json::String(value)) =>
+          match native_hook_add_context(additional_contexts, value) {
+            Ok(_) => ()
+            Err(error) => return Err(error)
+          }
+        _ => ()
+      }
+    }
+    _ => ()
+  }
+  Ok({ action, additional_contexts, })
+}

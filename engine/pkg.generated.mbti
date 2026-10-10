@@ -49,6 +49,7 @@ pub(all) enum EngineCommand {
   ImportSession(String)
   GetSession(SessionId)
   SendPrompt(SessionId, String)
+  SendPromptWithContexts(SessionId, String, Array[String])
   CancelSession(SessionId)
   PruneToolResults(SessionId, ToolResultPruneConfig)
   ApproveTool(SessionId, ToolCallId, Bool)

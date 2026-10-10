@@ -23,6 +23,7 @@ priv struct NativeHookGroup {
 priv struct NativeHooks {
   pre_tool : Array[NativeHookGroup]
   post_tool : Array[NativeHookGroup]
+  user_prompt_submit : Array[NativeHookGroup]
   project_dir : String
 }
 
@@ -141,16 +142,23 @@ fn native_hook_parse_groups(
       Ok(_) => ()
       Err(error) => return Err(error)
     }
-    let matcher = match native_hook_string(fields.get("matcher"), "matcher") {
-      Ok(value) => value
-      Err(error) => return Err(error)
-    }
-    match matcher {
-      Some(value) if !native_hook_valid_literal_matcher(value) =>
-        return Err(
-          "hook matcher must use literal tool names separated by |; regex is unsupported",
-        )
-      _ => ()
+    // The pinned Claude Code bridge discards matcher values for
+    // UserPromptSubmit because the event has no matcher subject.
+    let matcher = if event == "UserPromptSubmit" {
+      None
+    } else {
+      let matcher = match native_hook_string(fields.get("matcher"), "matcher") {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+      match matcher {
+        Some(value) if !native_hook_valid_literal_matcher(value) =>
+          return Err(
+            "hook matcher must use literal tool names separated by |; regex is unsupported",
+          )
+        _ => ()
+      }
+      matcher
     }
     let commands = match fields.get("hooks") {
       Some(Json::Array(values)) if !values.is_empty() => values
@@ -176,7 +184,10 @@ fn native_hook_parse_groups(
 ///|
 fn native_hook_parse_config(
   value : Json,
-) -> Result[(Array[NativeHookGroup], Array[NativeHookGroup]), String] {
+) -> Result[
+  (Array[NativeHookGroup], Array[NativeHookGroup], Array[NativeHookGroup]),
+  String,
+] {
   let root = match native_hook_object(value) {
     Some(value) => value
     None => return Err("hooks config must be a JSON object")
@@ -197,7 +208,7 @@ fn native_hook_parse_config(
   match
     native_hook_exact_fields(
       hook_map,
-      ["PreToolUse", "PostToolUse"],
+      ["PreToolUse", "PostToolUse", "UserPromptSubmit"],
       "hook event",
     ) {
     Ok(_) => ()
@@ -213,12 +224,20 @@ fn native_hook_parse_config(
     Ok(value) => value
     Err(error) => return Err(error)
   }
-  if pre_tool.is_empty() && post_tool.is_empty() {
-    return Err(
-      "hooks config must define at least one PreToolUse or PostToolUse command",
-    )
+  let user_prompt_submit = match
+    native_hook_parse_groups(
+      hook_map.get("UserPromptSubmit"),
+      "UserPromptSubmit",
+    ) {
+    Ok(value) => value
+    Err(error) => return Err(error)
   }
-  Ok((pre_tool, post_tool))
+  if pre_tool.is_empty() &&
+    post_tool.is_empty() &&
+    user_prompt_submit.is_empty() {
+    return Err("hooks config must define at least one supported command hook")
+  }
+  Ok((pre_tool, post_tool, user_prompt_submit))
 }
 
 ///|
@@ -264,7 +283,8 @@ async fn NativeHooks::load(
   project_dir : String,
 ) -> Result[NativeHooks, String] {
   match path {
-    None => Ok({ pre_tool: [], post_tool: [], project_dir, })
+    None =>
+      Ok({ pre_tool: [], post_tool: [], user_prompt_submit: [], project_dir, })
     Some(path) => {
       let text = match native_hook_read_config(path) {
         Ok(value) => value
@@ -274,7 +294,8 @@ async fn NativeHooks::load(
         _ => return Err("hooks config is not valid JSON")
       }
       match native_hook_parse_config(document) {
-        Ok((pre_tool, post_tool)) => Ok({ pre_tool, post_tool, project_dir, })
+        Ok((pre_tool, post_tool, user_prompt_submit)) =>
+          Ok({ pre_tool, post_tool, user_prompt_submit, project_dir, })
         Err(error) => Err(error)
       }
     }

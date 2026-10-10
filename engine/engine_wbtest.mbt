@@ -338,6 +338,61 @@ test "read calls overlap while durable results stay in model order" {
 }
 
 ///|
+test "UserPromptSubmit contexts are one source-tagged message after the prompt" {
+  let engine = Engine::new(test_tools())
+  let session_id = SessionId::new("prompt-context-session").unwrap()
+  ignore(
+    success(
+      engine.invoke("session_create", {
+        "id": Json::string(session_id.as_string()),
+        "title": Json::string("Prompt hook context"),
+      }),
+    ),
+  )
+  let session = success(
+    engine.invoke("session_send", {
+      "session_id": Json::string(session_id.as_string()),
+      "prompt": Json::string("original prompt"),
+      "additional_contexts": Json::array([
+        Json::string("first hook context"),
+        Json::string("second hook context"),
+      ]),
+    }),
+  )
+  let messages = array_value(required_field(session, "messages"), "messages", 8)
+  assert_eq(messages.length(), 2)
+  assert_eq(required_string(messages[0], "content"), "original prompt")
+  assert_eq(required_string(messages[1], "role"), "user")
+  assert_eq(
+    required_field(messages[1], "source"),
+    Json::object({ "kind": Json::string("hooks-claude-code") }),
+  )
+  assert_eq(
+    array_value(required_field(messages[1], "content"), "content", 8).map(block => {
+      required_string(block, "text")
+    }),
+    ["first hook context", "second hook context"],
+  )
+  let provider = engine.take_effects()[0]
+  let request_messages = array_value(
+    required_field(required_field(provider, "request"), "messages"),
+    "provider messages",
+    8,
+  )
+  assert_eq(request_messages.length(), 2)
+  assert_eq(
+    array_value(required_field(request_messages[1], "content"), "content", 8).map(block => {
+        required_string(block, "text")
+      },
+    ),
+    ["first hook context", "second hook context"],
+  )
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session(restored), session)
+}
+
+///|
 test "PostToolUse contexts stay structured after every result and reject forged restore" {
   let (engine, llm) = started_engine()
   ignore(
@@ -1904,6 +1959,15 @@ test "public typed commands validate direct values before changing state" {
   assert_eq(engine.snapshot(), before)
   assert_true(
     engine.apply(SendPrompt(SessionId::new("valid-id").unwrap(), "")) is Err(_),
+  )
+  assert_eq(engine.snapshot(), before)
+  assert_true(
+    engine.apply(
+      SendPromptWithContexts(SessionId::new("valid-id").unwrap(), "prompt", [
+        "x".repeat(4097),
+      ]),
+    )
+    is Err(_),
   )
   assert_eq(engine.snapshot(), before)
   assert_true(engine.apply(ImportSession("x".repeat(262145))) is Err(_))

@@ -16,6 +16,28 @@ fn native_hook_test_config(
 }
 
 ///|
+fn native_hook_remote_prompt_command(
+  workspace_id : String,
+  session_id : String,
+  command_id : String,
+  input : Json,
+) -> @protocol.RemoteCommand raise {
+  let command : Json = {
+    "protocol_version": @protocol.PROTOCOL_VERSION.to_json(),
+    "workspace_id": workspace_id.to_json(),
+    "command_id": command_id.to_json(),
+    "session_id": session_id.to_json(),
+    "operation": "session_send".to_json(),
+    "input": input,
+    "approval_revision": Json::null(),
+  }
+  match @protocol.RemoteCommand::parse(command.stringify()) {
+    Ok(value) => value
+    Err(error) => fail(error)
+  }
+}
+
+///|
 fn native_hook_test_tools(workspace : String) -> NativeTools {
   let root = SafeRoot::open(workspace).unwrap()
   let (device, inode) = root.identity().unwrap()
@@ -205,6 +227,72 @@ test "native Claude hook config rejects unsupported events and matcher syntax" {
       ),
     )
     is Err(_),
+  )
+}
+
+///|
+test "UserPromptSubmit ignores matchers and follows the prompt decision codec" {
+  let parsed = native_hook_parse_config(
+    @json.parse(
+      native_hook_test_config(
+        "UserPromptSubmit", "matcher-that-must-not-filter", "true",
+      ),
+    ),
+  ).unwrap()
+  assert_eq(parsed.2.length(), 1)
+  assert_eq(parsed.2[0].matcher, None)
+
+  let plain = native_hook_prompt_result_decision({
+    exit_code: 0,
+    stdout: "ordinary hook output",
+    stderr: "",
+    truncated: false,
+  }).unwrap()
+  assert_true(plain.action is NativeHookAction::Continue)
+  assert_true(plain.additional_contexts.is_empty())
+
+  let context = native_hook_prompt_result_decision({
+    exit_code: 0,
+    stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"prompt context\"}}",
+    stderr: "",
+    truncated: false,
+  }).unwrap()
+  assert_true(context.action is NativeHookAction::Continue)
+  assert_eq(context.additional_contexts, ["prompt context"])
+
+  let denied = native_hook_prompt_result_decision({
+    exit_code: 0,
+    stdout: "{\"decision\":\"block\",\"reason\":\"top-level block\",\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"event block\"}}",
+    stderr: "",
+    truncated: false,
+  }).unwrap()
+  assert_true(denied.action is NativeHookAction::Deny("event block"))
+  assert_true(denied.additional_contexts.is_empty())
+
+  let mismatch = native_hook_prompt_result_decision({
+    exit_code: 0,
+    stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"additionalContext\":\"ignored\"}}",
+    stderr: "",
+    truncated: false,
+  }).unwrap()
+  assert_true(mismatch.action is NativeHookAction::Continue)
+  assert_true(mismatch.additional_contexts.is_empty())
+
+  let exit_two = native_hook_prompt_result_decision({
+    exit_code: 2,
+    stdout: "ignored",
+    stderr: "blocked by stderr",
+    truncated: false,
+  }).unwrap()
+  assert_true(exit_two.action is NativeHookAction::Deny("blocked by stderr"))
+  assert_true(
+    native_hook_prompt_result_decision({
+      exit_code: 0,
+      stdout: "{malformed json",
+      stderr: "",
+      truncated: false,
+    }).unwrap().action ==
+    NativeHookAction::Continue,
   )
 }
 
@@ -1131,6 +1219,364 @@ async test "native runtime without hooks keeps the original tool event stream" {
       .unwrap()
     assert_true(native_hook_has_successful_write_result(session))
     assert_false(session.stringify().contains("effect-known"))
+  }
+}
+
+///|
+async test "UserPromptSubmit injects grouped source context before provider admission and replay skips hooks" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-prompt-hook-context")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let command = "cat > \"${CLAUDE_PROJECT_DIR}/hook-prompt.json\"; printf x >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\"; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"from prompt hook\"}}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(
+        native_hook_test_config(
+          "UserPromptSubmit", "matcher-that-must-not-filter", command,
+        ),
+      ),
+    )
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "prompt-hook-session"
+    ignore(
+      runtime
+      .invoke("session_create", {
+        "id": session_id.to_json(),
+        "title": "Prompt hook context",
+      })
+      .unwrap(),
+    )
+    let command_time = native_auth_now().to_int64() * 1000L
+    let command_id = @protocol.uuid_v7_command_id_from_entropy(
+      command_time, "1234567890abcdeffedcba9876543210",
+    ).unwrap()
+    let command = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      session_id,
+      command_id,
+      {
+        "prompt": Json::string("Use the user's original request"),
+        "additional_contexts": Json::array([Json::string("forged context")]),
+      },
+    )
+    let identity = runtime.state.identity_key
+    let (accepted, effects, should_start, control) = runtime
+      .accept_remote_command(command, identity)
+      .unwrap()
+    assert_eq(string_field(accepted, "status"), Some("accepted"))
+    assert_true(should_start)
+    assert_eq(effects.length(), 1)
+    assert_true(effects[0].kind() == @engine.EffectType::Provider)
+    let provider_messages = native_hook_test_array(
+      native_hook_test_required_field(effects[0].request(), "messages"),
+      "provider messages",
+    )
+    assert_eq(provider_messages.length(), 2)
+    assert_eq(
+      string_field(provider_messages[0], "content"),
+      Some("Use the user's original request"),
+    )
+    let grouped_context = provider_messages[1]
+    assert_eq(string_field(grouped_context, "role"), Some("user"))
+    assert_eq(
+      native_hook_test_array(
+        native_hook_test_required_field(grouped_context, "content"),
+        "hook context blocks",
+      ).map(block => native_hook_test_required_string(block, "text")),
+      ["from prompt hook"],
+    )
+    assert_eq(
+      native_hook_test_required_field(grouped_context, "source"),
+      Json::object({ "kind": Json::string("hooks-claude-code") }),
+    )
+    let payload = @json.parse(
+      @fs.read_file(workspace + "/hook-prompt.json").text(),
+    )
+    let payload_fields = native_hook_test_fields(payload)
+    assert_eq(payload_fields.length(), 5)
+    assert_eq(
+      string_field(payload, "hook_event_name"),
+      Some("UserPromptSubmit"),
+    )
+    assert_eq(string_field(payload, "session_id"), Some(session_id))
+    assert_eq(
+      string_field(payload, "prompt"),
+      Some("Use the user's original request"),
+    )
+    assert_eq(string_field(payload, "transcript_path"), Some(""))
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+
+    runtime.run_command_job(
+      command_id,
+      identity,
+      int_field(accepted, "accepted_revision").unwrap(),
+      effects,
+      control~,
+    )
+    let replay = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      session_id,
+      command_id,
+      {
+        "prompt": Json::string("Use the user's original request"),
+        "additional_contexts": Json::array([Json::string("forged context")]),
+      },
+    )
+    let (replayed, replay_effects, replay_started, _) = runtime
+      .accept_remote_command(replay, identity)
+      .unwrap()
+    assert_eq(string_field(replayed, "status"), Some("completed"))
+    assert_true(replay_effects.is_empty())
+    assert_false(replay_started)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+    let (completed_session, _) = runtime
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(native_hook_context_messages(completed_session).length(), 1)
+    assert_true(native_hook_has_context_event(completed_session))
+
+    assert_true(runtime.close() is Ok(_))
+    let reopened = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(reopened.close()))
+    })
+    let restart_replay = native_hook_remote_prompt_command(
+      reopened.state.workspace_id,
+      session_id,
+      command_id,
+      {
+        "prompt": Json::string("Use the user's original request"),
+        "additional_contexts": Json::array([Json::string("forged context")]),
+      },
+    )
+    let (_, restart_effects, restart_started, _) = reopened
+      .accept_remote_command(restart_replay, identity)
+      .unwrap()
+    assert_true(restart_effects.is_empty())
+    assert_false(restart_started)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+  }
+}
+
+///|
+async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do not run hooks" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-prompt-hook-deny")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let command = "cat >/dev/null; printf x >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"prompt denied\"}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(native_hook_test_config("UserPromptSubmit", "*", command)),
+    )
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "prompt-hook-denied-session"
+    ignore(
+      runtime
+      .invoke("session_create", {
+        "id": session_id.to_json(),
+        "title": "Prompt hook denial",
+      })
+      .unwrap(),
+    )
+    let command_time = native_auth_now().to_int64() * 1000L
+    let identity = runtime.state.identity_key
+    let command_id = @protocol.uuid_v7_command_id_from_entropy(
+      command_time, "2234567890abcdeffedcba9876543210",
+    ).unwrap()
+    let send = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      session_id,
+      command_id,
+      { "prompt": Json::string("do not admit") },
+    )
+    let (rejected, effects, started, control) = runtime
+      .accept_remote_command(send, identity)
+      .unwrap()
+    assert_eq(string_field(rejected, "status"), Some("rejected"))
+    assert_true(
+      string_field(rejected, "error").unwrap().contains("prompt denied"),
+    )
+    assert_true(effects.is_empty())
+    assert_false(started)
+    assert_true(control is None)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+    let (unchanged, _) = runtime
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(int_field(unchanged, "turn_id"), Some(0))
+
+    let replay = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      session_id,
+      command_id,
+      { "prompt": Json::string("do not admit") },
+    )
+    let (replayed, replay_effects, replay_started, _) = runtime
+      .accept_remote_command(replay, identity)
+      .unwrap()
+    assert_eq(string_field(replayed, "status"), Some("rejected"))
+    assert_true(replay_effects.is_empty())
+    assert_false(replay_started)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+
+    let too_long_id = @protocol.uuid_v7_command_id_from_entropy(
+      command_time + 1L,
+      "3234567890abcdeffedcba9876543210",
+    ).unwrap()
+    let too_long = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      session_id,
+      too_long_id,
+      { "prompt": Json::string("p".repeat(16385)) },
+    )
+    let (invalid, invalid_effects, invalid_started, _) = runtime
+      .accept_remote_command(too_long, identity)
+      .unwrap()
+    assert_eq(string_field(invalid, "status"), Some("rejected"))
+    assert_true(invalid_effects.is_empty())
+    assert_false(invalid_started)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+    assert_true(
+      runtime.invoke("session_send", {
+        "session_id": session_id.to_json(),
+        "prompt": Json::string("p".repeat(16385)),
+        "additional_contexts": Json::array([Json::string("forged")]),
+      })
+      is Err(_),
+    )
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+  }
+}
+
+///|
+async test "MCP session_cancel interrupts a running UserPromptSubmit command" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-prompt-hook-cancel")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    group.add_defer(() => {
+      ignore(
+        @fs.write_file(workspace + "/hook-release", @utf8.encode("release")),
+      )
+    })
+    let hooks_path = fixture + "/hooks.json"
+    let command = "cat >/dev/null; printf x >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\"; printf started > \"${CLAUDE_PROJECT_DIR}/hook-started\"; (trap '' TERM; while [ ! -f \"${CLAUDE_PROJECT_DIR}/hook-release\" ]; do /bin/sleep 0.01; done; printf escaped > \"${CLAUDE_PROJECT_DIR}/hook-child-alive\") & wait; printf '{}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(native_hook_test_config("UserPromptSubmit", "*", command)),
+    )
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "prompt-hook-mcp-cancel-session"
+    ignore(
+      runtime
+      .invoke("session_create", {
+        "id": session_id.to_json(),
+        "title": "Prompt hook MCP cancellation",
+      })
+      .unwrap(),
+    )
+    let send_line = native_fixture_mcp_line(
+      "prompt-hook-mcp-send",
+      "session_send",
+      {
+        "session_id": session_id.to_json(),
+        "prompt": "wait for cancellation before provider admission",
+      },
+    )
+    let send_task = group.spawn(
+      async fn() { runtime.mcp_handle(send_line, group) },
+      no_wait=true,
+      allow_failure=true,
+    )
+    let mut hook_started = false
+    for _ in 0..<600 {
+      if @fs.exists(workspace + "/hook-started") {
+        hook_started = true
+        break
+      }
+      @async.sleep(5)
+    }
+    assert_true(hook_started)
+
+    let cancel_line = native_fixture_mcp_line(
+      "prompt-hook-mcp-cancel",
+      "session_cancel",
+      { "session_id": session_id.to_json() },
+    )
+    let cancel_response = match
+      @async.with_timeout_opt(500, async fn() {
+        runtime.mcp_handle(cancel_line, group)
+      }) {
+      Some(Ok(value)) => value
+      Some(Err(error)) => fail(error)
+      None => fail("MCP session_cancel waited for the UserPromptSubmit command")
+    }
+    assert_eq(
+      string_field(native_fixture_mcp_structured(cancel_response), "status"),
+      Some("cancelled"),
+    )
+    let send_response = match
+      @async.with_timeout_opt(3000, async fn() { send_task.wait() }) {
+      Some(Ok(Ok(value))) => value
+      Some(Ok(Err(error))) => fail(error)
+      Some(Err(_)) => fail("MCP session_send task failed during cancellation")
+      None => fail("cancelled MCP session_send did not return")
+    }
+    let send_result = @json.parse(send_response)
+    assert_true(object_field(send_result, "error") is Some(_))
+    assert_true(
+      string_field(object_field(send_result, "error").unwrap(), "message")
+      .unwrap_or("")
+      .contains("cancelled before admission"),
+    )
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+    let (session, _) = runtime
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(string_field(session, "status"), Some("cancelled"))
+    assert_eq(int_field(session, "turn_id"), Some(0))
+    @async.sleep(100)
+    assert_false(@fs.exists(workspace + "/hook-child-alive"))
   }
 }
 
