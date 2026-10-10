@@ -1,58 +1,100 @@
 ///|
-async test "native service listener rebinds a fixed port after TIME_WAIT" {
-  let mut port = 0
-  let mut ready_generation = 0
-  @async.with_task_group() <| group => {
-    group.spawn_bg() <| () => {
-      for index in 0..<2 {
-        let server = native_service_listener(
-          @socket.Addr::parse("127.0.0.1:" + port.to_string()),
-        )
-        defer server.close()
-        port = server.addr.port()
-        let duplicate_bind_succeeded = try {
-          let duplicate = native_service_listener(
-            @socket.Addr::parse("127.0.0.1:" + port.to_string()),
-          )
-          duplicate.close()
-          true
-        } catch {
-          _ => false
+async fn native_service_restart_request(port : Int) -> Unit {
+  let client = @socket.Tcp::connect(
+    @socket.Addr::parse("127.0.0.1:" + port.to_string()),
+  )
+  defer client.close()
+  client.write(
+    "GET /restart HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+  )
+  let response = client.read_all().text()
+  assert_true(response.has_prefix("HTTP/1.1 200 OK"))
+  assert_true(response.has_suffix("done"))
+}
+
+///|
+test "native service listener rebinds a fixed port after TIME_WAIT" {
+  let mut failure = None
+  // Synchronous tests run before the generated driver's concurrent async batch;
+  // keep this bind lifecycle away from overlapping native process spawns.
+  @async.run_async_main(async fn() {
+    try {
+      let mut port = 0
+      let mut ready_generation = 0
+      let mut client_closed_generation = 0
+      @async.with_task_group() <| group => {
+        group.spawn_bg() <| () => {
+          for index in 0..<2 {
+            let requested_port = port
+            let server = native_service_listener(
+              @socket.Addr::parse("127.0.0.1:" + requested_port.to_string()),
+            ) catch {
+              error =>
+                fail(
+                  "service listener generation " +
+                  (index + 1).to_string() +
+                  " could not bind requested port 127.0.0.1:" +
+                  requested_port.to_string() +
+                  ": " +
+                  error.to_string(),
+                )
+            }
+            defer server.close()
+            port = server.addr.port()
+            let duplicate_bind_succeeded = try {
+              let duplicate = native_service_listener(
+                @socket.Addr::parse("127.0.0.1:" + port.to_string()),
+              )
+              duplicate.close()
+              true
+            } catch {
+              _ => false
+            }
+            assert_true(!duplicate_bind_succeeded)
+            ready_generation = index + 1
+            let (connection, _) = server.accept()
+            let request = connection.read_request()
+            assert_eq(request.path, "/restart")
+            connection.send_response(200, "OK", extra_headers={
+              "Connection": "close",
+              "Content-Length": "4",
+            })
+            connection.write("done")
+            connection.end_response()
+            connection.close()
+            if index == 0 {
+              // Wait until the client has closed after reading the server FIN,
+              // so generation 2 tests a completed close/TIME_WAIT rebind.
+              for _ in 0..<200 {
+                if client_closed_generation == index + 1 {
+                  break
+                }
+                @async.sleep(5)
+              }
+              assert_eq(client_closed_generation, index + 1)
+            }
+          }
         }
-        assert_true(!duplicate_bind_succeeded)
-        ready_generation = index + 1
-        let (connection, _) = server.accept()
-        let request = connection.read_request()
-        assert_eq(request.path, "/restart")
-        connection.send_response(200, "OK", extra_headers={
-          "Connection": "close",
-          "Content-Length": "4",
-        })
-        connection.write("done")
-        connection.end_response()
-        connection.close()
-      }
-    }
-    for index in 0..<2 {
-      let expected_generation = index + 1
-      for _ in 0..<200 {
-        if ready_generation == expected_generation {
-          break
+        for index in 0..<2 {
+          let expected_generation = index + 1
+          for _ in 0..<200 {
+            if ready_generation == expected_generation {
+              break
+            }
+            @async.sleep(5)
+          }
+          assert_eq(ready_generation, expected_generation)
+          assert_true(port != 0)
+          native_service_restart_request(port)
+          client_closed_generation = expected_generation
         }
-        @async.sleep(5)
       }
-      assert_eq(ready_generation, expected_generation)
-      assert_true(port != 0)
-      let client = @socket.Tcp::connect(
-        @socket.Addr::parse("127.0.0.1:" + port.to_string()),
-      )
-      defer client.close()
-      client.write(
-        "GET /restart HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-      )
-      let response = client.read_all().text()
-      assert_true(response.has_prefix("HTTP/1.1 200 OK"))
-      assert_true(response.has_suffix("done"))
+    } catch {
+      error => failure = Some(error.to_string())
     }
+  })
+  match failure {
+    Some(error) => fail(error)
+    None => ()
   }
 }
