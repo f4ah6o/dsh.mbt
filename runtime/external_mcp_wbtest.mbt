@@ -864,7 +864,18 @@ async test "external MCP cancellation closes the server and prevents a second di
     let workspace = fixture + "/workspace"
     @fs.mkdir(workspace)
     let counter = fixture + "/calls"
-    let behavior = "sleep 30 &\nprintf x >> '" + counter + "'\nsleep 30\n"
+    let child_ready_path = fixture + "/child.ready"
+    let child_release_path = fixture + "/child.release"
+    let child_escape_path = fixture + "/child.escaped"
+    let behavior = "(trap '' TERM; printf ready > '" +
+      child_ready_path +
+      "'; while [ ! -f '" +
+      child_release_path +
+      "' ]; do /bin/sleep 0.01; done; printf escaped > '" +
+      child_escape_path +
+      "') &\nprintf x >> '" +
+      counter +
+      "'\nwait\n"
     let script = native_mcp_test_server_script(
       native_mcp_test_schema("fixture"),
       counter,
@@ -900,17 +911,39 @@ async test "external MCP cancellation closes the server and prevents a second di
       allow_failure=true,
     )
     let mut polls = 0
-    while !@fs.exists(counter) && polls < 200 {
+    while (!@fs.exists(counter) || !@fs.exists(child_ready_path)) && polls < 200 {
       @async.sleep(5)
       polls += 1
     }
-    assert_true(@fs.exists(counter))
+    if !@fs.exists(counter) || !@fs.exists(child_ready_path) {
+      fail(
+        "external MCP cancellation fixture did not become ready; pid=" +
+        pid.to_string() +
+        "; counter=" +
+        @fs.exists(counter).to_string() +
+        "; child_ready=" +
+        @fs.exists(child_ready_path).to_string(),
+      )
+    }
     call_task.cancel()
     ignore(call_task.wait()) catch {
       _ => ()
     }
+    assert_false(os_process_alive(pid))
+    @fs.write_file(child_release_path, @utf8.encode("release"))
+    polls = 0
+    while !@fs.exists(child_escape_path) && polls < 100 {
+      @async.sleep(5)
+      polls += 1
+    }
+    if @fs.exists(child_escape_path) {
+      fail(
+        "external MCP cancellation left a descendant able to escape; pid=" +
+        pid.to_string() +
+        "; child_ready=true; released=true; marker=true",
+      )
+    }
     assert_eq(@fs.read_file(counter).text(), "x")
-    assert_false(os_process_group_alive(pid))
     let retry = pool.execute(request)
     assert_eq(object_field(retry, "ok"), Some(Json::boolean(false)))
     assert_eq(@fs.read_file(counter).text(), "x")
