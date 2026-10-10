@@ -106,6 +106,29 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 - 是正方針・回帰条件: 終了処理でも全 tool result の後、calls clear / step end より前に受理済み context を保存する。cancel、interrupted restore、capacity closure と繰り返し restore を検証する。post-hook 中の cancel で未受理の context は追加しない。
 - 修正 commit / close 判定: [`2c792853`](https://github.com/f4ah6o/dsh.mbt/commit/2c792853279ff1a5f2b69ab8edc4e3b91bd2eaa9) で終了時の context 保存と回帰テストを追加。実装担当の engine native suite は 79 / 79 PASS。独立レビューで元の 2 probe は 2 / 2 PASS、cancel / interrupted restore、capacity closure、post-hook 中の未受理 context 排除も各 1 / 1 PASS。修正後の 3 パスレビューで新たな指摘はない。動作不具合の修正として閉じ、DEBT-001 / 003 / 004 の設計改善候補は開いたまま維持する。
 
+### 0.1.13 UserPromptSubmit 移植で維持した構造
+
+機能実装の固定 snapshot は [`b6f07c6d`](https://github.com/f4ah6o/dsh.mbt/tree/b6f07c6d580179ac508c3a4463b4426f3f3b98b4)。実装は `gpt-6-luna / max`、独立レビューは `gpt-6.1-sol / xhigh`。以下は既存項目の追加根拠であり、動作不具合の報告ではない。
+
+- **DEBT-001**: [`engine/engine.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/engine/engine.mbt#L123-L157) と [`engine/tool_calls.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/engine/tool_calls.mbt#L16-L29) は、受理した prompt の後に原典と同じ source 付き user message を既存の Json event として追加する。複数 hook の context は 1 メッセージ内の text block に順序を保ってまとめる。型付き event payload への横断的な改修は行わない。
+- **DEBT-003**: [`runtime/hooks_codec.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/hooks_codec.mbt#L257-L261) と [`runtime/runtime.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/runtime.mbt#L606-L679) も、成功値は型付き outcome、拒否や上限の失敗は String という既存の契約を維持する。型付き command の `SendPrompt(SessionId, String)` は保持し、内部 context を伴う別 variant を追加する。
+- **DEBT-005**: [`engine/domain.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/engine/domain.mbt) の command decode / validate、[`engine/persistence.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/engine/persistence.mbt) の保存 event validation、[`runtime/hooks_codec.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/hooks_codec.mbt) の hook output decode に、context の長さ・件数・合計量の検証が分かれて存在する。境界ごとの防御を保持した観測であり、契約不一致を確認したものではない。
+- **DEBT-006**: [`runtime/hooks_runtime.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/hooks_runtime.mbt#L33-L46) の UserPromptSubmit payload でも原典と同じ空の `transcript_path` を維持する。
+
+確認方法は固定 source の静的照合。設計改善、性能測定、live provider / 外部 hook 製品との互換性検証は実施していない。最終的な feature 検証と独立レビュー結果は、結果が確定した後に追記する。
+
+### DEBT-008: 原典の hook 出力にある未反映 control を維持
+
+- 起点・種類・優先度・状態: `UPSTREAM, PORT / compatibility, design, docs`、優先度未査定、`observed`。
+- upstream baseline / path: [`5badb150` の hooks-claude-code/src/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts#L181-L201)。`updatedInput` / `systemMessage` は警告して未反映、merge された stop は run-level halt mechanism が必要という TODO のまま。UserPromptSubmit listener は deny と additional context を消費する。
+- port baseline / path: [`b6f07c6d` の runtime/hooks_codec.mbt](https://github.com/f4ah6o/dsh.mbt/blob/b6f07c6d580179ac508c3a4463b4426f3f3b98b4/runtime/hooks_codec.mbt#L257-L355)、`native_hook_prompt_result_decision`。今回の prompt hook subset は `continue` / `stopReason` / `updatedInput` / `systemMessage` を実行制御や provider input の書換えに使わない。
+- 観測事実 / 確認: 固定した原典と port のソースを照合した。原典に未反映の明示がある control を port の機能として新規実装しなかった。原典と port の診断ログや full output record は同一ではなく、今回の互換対象は prompt admission と context の挙動に限る。
+- 不明点・影響: これらの control に依存する既存 hook は期待した停止・書換え・system message 表示を得られない可能性がある。特定 hook の動作不具合は再現しておらず、原典の動作バグと断定しない。
+- 互換性判断: 非不具合の原典側制約を維持する指示に従い、今回の port では適用範囲を拡張しない。deny / blocking exit の拒否と bounded additionalContext は別に実装する。
+- 後続改修方針: run halt、prompt rewrite、診断表示を別の capability として設計し、許可境界、receipt、checkpoint、cancel、replay の契約をそろえる。
+- 完了条件・回帰テスト: control 単独と競合する hook の結果、拒否前後の履歴、provider 不実行、停止中の cancel、durable reopen / no replay を固定 fixture で検証する。未対応を維持する場合は公開契約と理由を記録して `wontfix` とする。
+- 修正 PR / close 判定: 未着手。今回維持した原典の制約として登録する。
+
 ### 後続追記テンプレート
 
 #### DEBT-NNN: 短い見出し
@@ -143,6 +166,8 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 - 2026-10-10: PostToolUse `additionalContext` の移植で維持した Json payload、文字列エラー、個別 state copy を、DEBT-001 / 003 / 004 の固定 source 根拠として追記。
 - 2026-10-10: 独立レビューで再現した移植固有の終了時 context 保存漏れを DEBT-007 に登録。公開前の是正対象として追跡。
 - 2026-10-10: `2c792853` の修正と独立 probe の成功を記録し、DEBT-007 を `fixed` に更新。
+
+- 2026-10-10: UserPromptSubmit 移植で維持した Json event、文字列エラー、境界ごとの手書き validation、空の transcript_path を固定 source で追記。原典の未反映 hook control を DEBT-008 に登録。
 
 ## 注記
 
