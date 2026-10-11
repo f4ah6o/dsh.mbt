@@ -714,6 +714,14 @@ answer and does not append rejected context. The initial prompt is still
 subject to the existing three-step and child deadline limits. A callback that
 finishes after the child becomes terminal cannot add context.
 
+The Engine counts initial Start source-message text once toward the shared
+32-item / 16,384 UTF-16-unit hook-context budget. The native bridge invokes one
+Start callback per child; Engine callers may queue later batches, which use the
+remaining budget. In the direct-admission fallback without a later
+UserPromptSubmit checkpoint, queued text that exceeds the shared budget is
+dropped; the next step still advances and its snapshot replays from the
+ordinary `step/start` event after Stop settlement.
+
 This admission path covers Start batches combined with the initial prompt,
 Start-only input batches at later steps, and Start batches combined with a Stop
 continuation. The upstream bridge also runs `UserPromptSubmit` for any
@@ -840,9 +848,16 @@ later. Do not rewrite any of these stores with an older reader. dsh 0.1.12
 continues to read context-free dsh 0.1.11 native stores; the engine replay
 tests cover the legacy completion shape without `additional_contexts`.
 Engine snapshots containing the additive `hook/subagent-start-context` event
-require dsh 0.1.16 or later. The native runtime does not persist child Engine
-snapshots as root sessions, so ordinary native subagent calls do not add that
-event to the parent store.
+or `hook/stop-settled` event require dsh 0.1.16 or later. The former is a
+SubagentStart admission marker in a child Engine, and native subagent child
+snapshots are not persisted as root sessions. The latter is an empty-data
+boundary emitted when Stop completes without a staged continuation and queued
+hook input advances to the next step. It may appear in root Engine snapshots
+too. Replay clears only the completed Stop continuation state and preserves
+sticky max-token completion; a following Start marker must come after this
+boundary. If a snapshot ends here while prompt admission is unresolved,
+restore marks the work interrupted and does not replay the hook or provider
+effect. Do not reopen either event with an older reader.
 
 `--approve-call` and `--deny-call` act on a session that is already waiting for approval, for example one started from the browser or MCP carrier. Pass its current `approval_revision` and `pending_approval.call_id`; stale or mismatched decisions are rejected:
 

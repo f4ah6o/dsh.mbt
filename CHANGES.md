@@ -9,13 +9,16 @@
 ### Changed
 
 - Record an additive `hook/subagent-start-context` Engine marker with the count and length of an admitted Start batch; the following source-tagged user message carries the context. The child runs configured `UserPromptSubmit` for Start batches claimed at the initial or a later input boundary, including a Stop continuation, preserving claimed-batch order and leaving arrivals during the hook for a later step. The remaining PostToolUse-to-UserPromptSubmit gap is documented in the [native runtime guide](docs/native-runtime.md#native-command-hooks).
+- When queued hook input advances after an allowed Stop, record the additive empty-data `hook/stop-settled` replay boundary before the next prompt admission. The shared Stop engine can write this event in root snapshots.
 - Native child lifecycle work cancels and drains a pending Start callback at child settlement. SubagentStop gets one protected aggregate 1-second command-execution grace after the child drive outcome; process-group cleanup and drain may add wall time, but Stop cannot change the child outcome.
 
 ### Fixed
 
 - Keep a completed child result when observational SubagentStop cleanup outlasts the child drive deadline.
+- Restore allowed Stop settlement before accepted or denied queued Start admission, including snapshots interrupted at the prompt-admission boundary; when the existing context budget drops all queued input, accept the normal next-step boundary. Reject malformed marker/reason/settlement order.
 - Restore accepted Start context batches that are staged with a Stop continuation, and reject malformed marker/reason order.
 - Reject empty or oversized child prompts before the Engine claims the pending Start context batch.
+- Count initial Start context once against the Engine's shared hook-context item and UTF-16 limits, preserving remaining capacity for queued later input.
 
 ### Deprecated
 
@@ -25,7 +28,7 @@
 
 ### Migration
 
-- Engine snapshots containing `hook/subagent-start-context` require dsh 0.1.16 or later. Native subagent child engines are ephemeral and are not saved as root sessions.
+- Engine snapshots containing `hook/subagent-start-context` or `hook/stop-settled` require dsh 0.1.16 or later. Native subagent child engines are ephemeral and are not saved as root sessions; the shared Stop engine may record `hook/stop-settled` in a root snapshot when queued hook input advances to the next step.
 
 ## Unreleased
 
