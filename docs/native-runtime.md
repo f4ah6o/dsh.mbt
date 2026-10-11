@@ -714,13 +714,15 @@ answer and does not append rejected context. The initial prompt is still
 subject to the existing three-step and child deadline limits. A callback that
 finishes after the child becomes terminal cannot add context.
 
-The Engine counts initial Start source-message text once toward the shared
-32-item / 16,384 UTF-16-unit hook-context budget. The native bridge invokes one
-Start callback per child; Engine callers may queue later batches, which use the
-remaining budget. In the direct-admission fallback without a later
-UserPromptSubmit checkpoint, queued text that exceeds the shared budget is
-dropped; the next step still advances and its snapshot replays from the
-ordinary `step/start` event after Stop settlement.
+The direct-admission fallback counts initial Start source-message text once
+toward the shared 32-item / 16,384 UTF-16-unit hook-context budget. The native
+bridge invokes one Start callback per child; Engine callers may queue later
+batches, which use the remaining budget on this fallback path. With
+`UserPromptSubmit` checkpoint admission enabled, each currently claimed batch
+is validated against the same per-batch bounds instead of cumulative turn
+statistics. In the direct-admission fallback, queued text that exceeds the
+shared budget is dropped; the next step still advances and its snapshot
+replays from the ordinary `step/start` event after Stop settlement.
 
 This admission path covers Start batches combined with the initial prompt,
 Start-only input batches at later steps, and Start batches combined with a Stop

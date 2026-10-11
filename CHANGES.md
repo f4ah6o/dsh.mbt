@@ -18,7 +18,7 @@
 - Restore allowed Stop settlement before accepted or denied queued Start admission, including snapshots interrupted at the prompt-admission boundary; when the existing context budget drops all queued input, accept the normal next-step boundary. Reject malformed marker/reason/settlement order.
 - Restore accepted Start context batches that are staged with a Stop continuation, and reject malformed marker/reason order.
 - Reject empty or oversized child prompts before the Engine claims the pending Start context batch.
-- Count initial Start context once against the Engine's shared hook-context item and UTF-16 limits, preserving remaining capacity for queued later input.
+- In direct-admission fallback, count initial Start context once against the Engine's shared hook-context item and UTF-16 limits, leaving only the remaining capacity for later queued input; prompt-hook checkpoints validate each claimed batch separately.
 
 ### Deprecated
 
