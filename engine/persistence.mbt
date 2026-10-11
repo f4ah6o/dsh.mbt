@@ -329,7 +329,7 @@ fn restore_session(
                   }
                   admitted_user = true
                 }
-                Some(source) => {
+                Some(source) =>
                   if session.stop_hook_pending &&
                     session.stop_continuation_text is Some(_) &&
                     !session.stop_continuation_admitted {
@@ -377,11 +377,13 @@ fn restore_session(
                     )
                     prompt_context_count += context_count
                     prompt_context_length += context_length
-                    if prompt_context_count > 32 || prompt_context_length > 16384 {
-                      raise Invalid("Prompt contexts exceed the configured limit")
+                    if prompt_context_count > 32 ||
+                      prompt_context_length > 16384 {
+                      raise Invalid(
+                        "Prompt contexts exceed the configured limit",
+                      )
                     }
                   }
-                }
               }
           }
         "llm/request" | "tool/request" => {
@@ -1148,7 +1150,9 @@ fn restore_session(
             session.pending_retry_id is Some(_) ||
             session.stop_hook_pending ||
             (reason != "completed" && reason != "max_tokens") {
-            raise Invalid("Stop hook is pending outside a final provider outcome")
+            raise Invalid(
+              "Stop hook is pending outside a final provider outcome",
+            )
           }
           session.sticky_max_tokens = session.sticky_max_tokens ||
             reason == "max_tokens"
@@ -1201,7 +1205,9 @@ fn restore_session(
           )
           if context_count != session.stop_prompt_context_count ||
             context_length != session.stop_prompt_context_length {
-            raise Invalid("Stop continuation admission differs from its messages")
+            raise Invalid(
+              "Stop continuation admission differs from its messages",
+            )
           }
           session.stop_continuation_admitted = true
         }
@@ -1211,7 +1217,9 @@ fn restore_session(
             session.stop_continuation_text is None ||
             stop_continuation_reason_seen ||
             session.stop_continuation_admitted ||
-            !error.has_prefix("UserPromptSubmit hook blocked the Stop continuation") {
+            !error.has_prefix(
+              "UserPromptSubmit hook blocked the Stop continuation",
+            ) {
             raise Invalid("Invalid blocked Stop continuation")
           }
           session.stop_continuation_text = None
@@ -1230,7 +1238,8 @@ fn restore_session(
           }
           let reason = required_string(data, "reason", max=64)
           if session.stop_hook_pending {
-            let has_staged_continuation = session.stop_continuation_text is Some(_)
+            let has_staged_continuation = session.stop_continuation_text
+              is Some(_)
             let allowed_stop_end = if stop_continuation_rejected {
               reason == "blocked" && !has_staged_continuation
             } else if has_staged_continuation {
@@ -1240,17 +1249,25 @@ fn restore_session(
               reason == "effect_limit" ||
               reason == "interrupted"
             } else if session.sticky_max_tokens {
-              reason == "max_tokens" || reason == "cancelled" ||
-              reason == "session_capacity" || reason == "interrupted"
+              reason == "max_tokens" ||
+              reason == "cancelled" ||
+              reason == "session_capacity" ||
+              reason == "interrupted"
             } else {
-              reason == "completed" || reason == "cancelled" ||
-              reason == "session_capacity" || reason == "interrupted"
+              reason == "completed" ||
+              reason == "cancelled" ||
+              reason == "session_capacity" ||
+              reason == "interrupted"
             }
             if !allowed_stop_end {
-              raise Invalid("Turn ended without settling its Stop-hook boundary")
+              raise Invalid(
+                "Turn ended without settling its Stop-hook boundary",
+              )
             }
           } else if stop_continuation_rejected {
-            raise Invalid("Blocked Stop continuation is missing its pending boundary")
+            raise Invalid(
+              "Blocked Stop continuation is missing its pending boundary",
+            )
           }
           session.status = match reason {
             "completed" => Completed

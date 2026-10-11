@@ -68,10 +68,15 @@ test "Stop continuation stages before UserPromptSubmit and commits source messag
   )
   let checkpoint = stop_hook_checkpoint(engine)
   let staged = success(
-    engine.prepare_stop_continuation(checkpoint, "continue: blocked by Stop hook"),
+    engine.prepare_stop_continuation(
+      checkpoint, "continue: blocked by Stop hook",
+    ),
   )
   assert_eq(event_type_count(staged, "hook/stop-continuation-pending"), 1)
-  assert_eq(array_value(required_field(staged, "messages"), "messages", 16).length(), 2)
+  assert_eq(
+    array_value(required_field(staged, "messages"), "messages", 16).length(),
+    2,
+  )
 
   let recovered = Engine::new(test_tools())
   assert_eq(recovered.restore(engine.snapshot()), Ok(()))
@@ -85,15 +90,25 @@ test "Stop continuation stages before UserPromptSubmit and commits source messag
   )
   assert_true(recovered.take_effects().is_empty())
 
-  let continued = success(engine.continue_stop_hook(checkpoint, ["extra context"]))
+  let continued = success(
+    engine.continue_stop_hook(checkpoint, ["extra context"]),
+  )
   assert_eq(get_status(continued), "running")
   assert_eq(event_type_count(continued, "hook/stop-continuation-admitted"), 1)
   let effects = engine.take_typed_effects()
   assert_eq(effects.length(), 1)
-  let messages = array_value(required_field(effects[0].request(), "messages"), "messages", 8)
+  let messages = array_value(
+    required_field(effects[0].request(), "messages"),
+    "messages",
+    8,
+  )
   assert_eq(messages.length(), 4)
-  assert_eq(required_field(messages[2], "source"), { "kind": "hooks-claude-code" })
-  assert_eq(required_field(messages[3], "source"), { "kind": "hooks-claude-code" })
+  assert_eq(required_field(messages[2], "source"), {
+    "kind": "hooks-claude-code",
+  })
+  assert_eq(required_field(messages[3], "source"), {
+    "kind": "hooks-claude-code",
+  })
   let restarted = Engine::new(test_tools())
   assert_eq(restarted.restore(engine.snapshot()), Ok(()))
   assert_eq(get_status(get_session(restarted)), "failed")
@@ -119,7 +134,10 @@ test "UserPromptSubmit rejection preserves the answer and ends with an explicit 
   assert_eq(get_status(blocked), "failed")
   assert_eq(event_type_count(blocked, "hook/stop-continuation-rejected"), 1)
   assert_eq(event_type_count(blocked, "assistant/message"), 1)
-  assert_eq(array_value(required_field(blocked, "messages"), "messages", 16).length(), 2)
+  assert_eq(
+    array_value(required_field(blocked, "messages"), "messages", 16).length(),
+    2,
+  )
   assert_true(
     array_value(required_field(blocked, "events"), "events", 100).any(event => {
       required_string(event, "type") == "turn/end" &&

@@ -53,10 +53,7 @@ fn Session::mark_stop_hook_pending(self : Session, reason : String) -> Unit {
   self.stop_continuation_admitted = false
   self.stop_prompt_context_count = 0
   self.stop_prompt_context_length = 0
-  self.append(
-    "hook/stop-pending",
-    object([("reason", Json::string(reason))]),
-  )
+  self.append("hook/stop-pending", object([("reason", Json::string(reason))]))
 }
 
 ///|
@@ -111,11 +108,8 @@ pub fn Engine::pending_stop_hook(
     return None
   }
   match session.stop_hook_event_seq {
-    Some(event_seq) => Some({
-      session_id: session.id,
-      turn_id: session.turn_id,
-      event_seq,
-    })
+    Some(event_seq) =>
+      Some({ session_id: session.id, turn_id: session.turn_id, event_seq, })
     None => None
   }
 }
@@ -184,7 +178,10 @@ pub fn Engine::finish_stop_hook(
       )
     } else {
       session.status = Completed
-      session.append("turn/end", object([("reason", Json::string("completed"))]))
+      session.append(
+        "turn/end",
+        object([("reason", Json::string("completed"))]),
+      )
       session.clear_stop_hook_state()
     }
     Ok(session.json())
@@ -215,11 +212,15 @@ pub fn Engine::continue_stop_hook(
     let mut total_length = 0
     for context in contexts {
       if context.is_empty() || stop_hook_utf16_units(context) > 4096 {
-        raise Invalid("UserPromptSubmit contexts must contain 1 to 4096 code units")
+        raise Invalid(
+          "UserPromptSubmit contexts must contain 1 to 4096 code units",
+        )
       }
       total_length += stop_hook_utf16_units(context)
       if total_length > MAX_POST_TOOL_CONTEXT_TOTAL_LENGTH {
-        raise Invalid("UserPromptSubmit contexts exceed the aggregate length limit")
+        raise Invalid(
+          "UserPromptSubmit contexts exceed the aggregate length limit",
+        )
       }
     }
     if contexts.length() > MAX_POST_TOOL_CONTEXTS ||
