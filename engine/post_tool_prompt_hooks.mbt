@@ -81,14 +81,17 @@ fn Engine::settle_post_tool_prompt_candidate(
   self : Engine,
   candidate : Engine,
   session_id : String,
-) -> Json {
+) -> Result[Json, String] {
   if candidate.within_capacity() {
     self.adopt(candidate)
-    self.sessions.get(session_id).unwrap().json()
+    Ok(self.sessions.get(session_id).unwrap().json())
   } else {
     let session = self.sessions.get(session_id).unwrap()
+    if !native_hook_pending_invocations(session).is_empty() {
+      return Err(CAPACITY_ERROR)
+    }
     self.terminate(session, Failed, "session_capacity", CAPACITY_ERROR)
-    session.json()
+    Ok(session.json())
   }
 }
 
@@ -137,9 +140,7 @@ pub fn Engine::accept_post_tool_prompt_hook(
   match changed {
     Err(message) => Err(message)
     Ok(_) =>
-      Ok(
-        self.settle_post_tool_prompt_candidate(candidate, checkpoint.session_id),
-      )
+      self.settle_post_tool_prompt_candidate(candidate, checkpoint.session_id)
   }
 }
 
@@ -153,6 +154,9 @@ pub fn Engine::block_post_tool_prompt_hook(
   let candidate = self.copy_state()
   let changed = try {
     let session = candidate.post_tool_prompt_hook_session(checkpoint)
+    if !native_hook_pending_invocations(session).is_empty() {
+      raise Invalid("Cannot close a turn with pending native hook results")
+    }
     let error = if reason.is_empty() {
       "UserPromptSubmit hook rejected the PostToolUse context"
     } else {
@@ -177,8 +181,6 @@ pub fn Engine::block_post_tool_prompt_hook(
   match changed {
     Err(message) => Err(message)
     Ok(_) =>
-      Ok(
-        self.settle_post_tool_prompt_candidate(candidate, checkpoint.session_id),
-      )
+      self.settle_post_tool_prompt_candidate(candidate, checkpoint.session_id)
   }
 }

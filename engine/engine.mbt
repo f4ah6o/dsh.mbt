@@ -1277,6 +1277,12 @@ fn Engine::complete_impl(
           )
       }
     }
+    if !native_hook_pending_invocations(session).is_empty() &&
+      (session.status != Running || session.active_effect is Some(_)) {
+      raise Invalid(
+        "Effect completion advanced or ended a turn before native hook results",
+      )
+    }
     Ok(session.json())
   } catch {
     Invalid(message) => Err(message)

@@ -59,6 +59,24 @@ fn Engine::restore_impl(self : Engine, snapshot : Json) -> Result[Unit, String] 
       order.push(session.id)
     }
     validate_fork_lineage(loaded, order)
+    // A live native hook invocation reserves its largest valid result together
+    // with the interrupted closure that restore will append. Check both on a
+    // candidate engine before replacing state, without simulating retry starts
+    // for effects that restore deliberately abandons.
+    let recovery = self.copy_state()
+    recovery.sessions.clear()
+    recovery.order.clear()
+    recovery.effects.clear()
+    recovery.queued.clear()
+    for id in order {
+      recovery.sessions.set(id, loaded.get(id).unwrap())
+      recovery.order.push(id)
+    }
+    if !recovery.within_capacity(simulate_retry=false) {
+      raise Invalid(
+        "Snapshot leaves no room for native hook results and interruption",
+      )
+    }
     // All validation is complete. No operation below can fail or dispatch I/O.
     self.sessions.clear()
     self.order.clear()

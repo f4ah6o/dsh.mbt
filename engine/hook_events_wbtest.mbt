@@ -68,6 +68,232 @@ test "native hook checkpoints pair by turn and preserve upstream result fields" 
 }
 
 ///|
+test "native hook invocation rejects matcher NUL before changing the snapshot" {
+  let (engine, _) = started_engine()
+  let before = engine.snapshot()
+  assert_true(
+    engine.record_native_hook_invoked(
+      "test",
+      "PreToolUse",
+      "claude-code:PreToolUse:3",
+      Some("r\u0000ead"),
+    )
+    is Err(_),
+  )
+  assert_eq(engine.snapshot(), before)
+}
+
+///|
+test "native hook result reservation includes the interrupted closure" {
+  let (engine, provider) = started_engine()
+  let mut fills = 0
+  for _ in 0..<128 {
+    let admitted = engine.copy_state()
+    if admitted.project_stream(id_of(provider), "x".repeat(4096), "") is Err(_) {
+      break
+    }
+    let checkpoint = match
+      admitted.record_native_hook_invoked(
+        "test",
+        "PreToolUse",
+        "claude-code:PreToolUse:14",
+        None,
+      ) {
+      Ok(value) => value
+      Err(_) => break
+    }
+    assert_true(
+      admitted.record_native_hook_result(
+        checkpoint,
+        "approve",
+        Some(-2147483648),
+        Some("\u0000".repeat(501)),
+        2147483647,
+      )
+      is Ok(_),
+    )
+    let filled = engine.copy_state()
+    assert_true(
+      filled.project_stream(id_of(provider), "x".repeat(4096), "") is Ok(_),
+    )
+    engine.adopt(filled)
+    fills += 1
+  }
+  assert_true(fills > 0)
+  let trial = engine.copy_state()
+  let checkpoint = trial
+    .record_native_hook_invoked(
+      "test",
+      "PreToolUse",
+      "claude-code:PreToolUse:15",
+      None,
+    )
+    .unwrap()
+  assert_true(
+    trial.record_native_hook_result(
+      checkpoint,
+      "approve",
+      Some(-2147483648),
+      Some("\u0000".repeat(501)),
+      2147483647,
+    )
+    is Ok(_),
+  )
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(trial.snapshot()), Ok(()))
+}
+
+///|
+test "pending native hooks block Stop and PostTool closure until their result" {
+  let (stop_engine, provider) = started_engine(max_steps=4)
+  ignore(
+    success(
+      stop_engine.complete_effect_with_stop_hook(
+        stop_hook_completion_id(provider),
+        stop_response("answer"),
+      ),
+    ),
+  )
+  let stop = stop_hook_checkpoint(stop_engine)
+  ignore(success(stop_engine.prepare_stop_continuation(stop, "continue")))
+  let stop_result = stop_engine
+    .record_native_hook_invoked(
+      "test",
+      "UserPromptSubmit",
+      "claude-code:UserPromptSubmit:31",
+      None,
+    )
+    .unwrap()
+  let stop_before = stop_engine.snapshot()
+  assert_true(stop_engine.block_stop_continuation(stop, "denied") is Err(_))
+  assert_true(stop_engine.continue_stop_hook(stop, []) is Err(_))
+  assert_eq(stop_engine.snapshot(), stop_before)
+  ignore(
+    stop_engine.record_native_hook_result(stop_result, "deny", Some(0), None, 1),
+  )
+  assert_true(stop_engine.block_stop_continuation(stop, "denied") is Ok(_))
+  assert_eq(Engine::new(test_tools()).restore(stop_engine.snapshot()), Ok(()))
+
+  let (post_engine, llm) = started_engine(max_steps=4)
+  ignore(
+    success(
+      post_engine.complete(
+        id_of(llm),
+        calls_response([("post-hook", "read", "{\"file_path\":\"a.txt\"}")]),
+      ),
+    ),
+  )
+  let tool = post_engine.take_effects()[0]
+  ignore(
+    success(
+      post_engine.complete_effect_with_post_tool_prompt_hook(
+        post_tool_effect_id(tool),
+        fixture(
+          "{\"ok\":true,\"content\":\"read\",\"additional_contexts\":[\"context\"]}",
+        ),
+      ),
+    ),
+  )
+  let post = post_engine
+    .pending_post_tool_prompt_hook(SessionId::new("test").unwrap())
+    .unwrap()
+  let post_result = post_engine
+    .record_native_hook_invoked(
+      "test",
+      "UserPromptSubmit",
+      "claude-code:UserPromptSubmit:32",
+      None,
+    )
+    .unwrap()
+  let post_before = post_engine.snapshot()
+  assert_true(post_engine.block_post_tool_prompt_hook(post, "denied") is Err(_))
+  assert_eq(post_engine.snapshot(), post_before)
+  ignore(
+    post_engine.record_native_hook_result(post_result, "deny", Some(0), None, 1),
+  )
+  assert_true(post_engine.block_post_tool_prompt_hook(post, "denied") is Ok(_))
+  assert_eq(Engine::new(test_tools()).restore(post_engine.snapshot()), Ok(()))
+}
+
+///|
+test "a pending hook cannot let the final tool close a max-steps turn" {
+  let (engine, provider) = started_engine(max_steps=1)
+  ignore(
+    success(
+      engine.complete(
+        id_of(provider),
+        calls_response([("last-read", "read", "{\"file_path\":\"a.txt\"}")]),
+      ),
+    ),
+  )
+  let tool = engine.take_effects()[0]
+  ignore(
+    engine
+    .record_native_hook_invoked(
+      "test",
+      "PreToolUse",
+      "claude-code:PreToolUse:15",
+      None,
+    )
+    .unwrap(),
+  )
+  let before = engine.snapshot()
+  assert_true(
+    engine.complete(id_of(tool), fixture("{\"ok\":true,\"content\":\"read\"}"))
+    is Err(_),
+  )
+  assert_eq(engine.snapshot(), before)
+}
+
+///|
+test "a parallel tool result is preserved while a sibling hook is pending" {
+  let (engine, provider) = started_engine(max_steps=4)
+  ignore(
+    success(
+      engine.complete(
+        id_of(provider),
+        calls_response([
+          ("parallel-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("parallel-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let reads = engine.take_effects()
+  ignore(
+    engine.record_native_hook_invoked(
+      "test",
+      "PreToolUse",
+      "claude-code:PreToolUse:41",
+      Some("read"),
+    ),
+  )
+  ignore(
+    success(
+      engine.complete(
+        id_of(reads[0]),
+        fixture("{\"ok\":true,\"content\":\"alpha\"}"),
+      ),
+    ),
+  )
+  let session = get_session(engine)
+  let events = array_value(required_field(session, "events"), "events", 32768)
+  let mut preserved = false
+  for event in events {
+    if required_string(event, "type") == "tool/completed" &&
+      required_string(required_field(event, "data"), "call_id") == "parallel-a" {
+      preserved = true
+    }
+  }
+  assert_true(preserved)
+  assert_eq(get_status(session), "running")
+  assert_true(engine.take_effects().is_empty())
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_status(get_session(restored)), "failed")
+}
+
+///|
 test "unresolved native hook invocation restores as interrupted without replay" {
   let (engine, _) = started_engine()
   ignore(

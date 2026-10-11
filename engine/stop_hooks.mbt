@@ -84,14 +84,17 @@ fn Engine::settle_stop_candidate(
   candidate : Engine,
   session_id : String,
   capacity_reason? : String = "session_capacity",
-) -> Json {
+) -> Result[Json, String] {
   if candidate.within_capacity() {
     self.adopt(candidate)
-    self.sessions.get(session_id).unwrap().json()
+    Ok(self.sessions.get(session_id).unwrap().json())
   } else {
     let session = self.sessions.get(session_id).unwrap()
+    if !native_hook_pending_invocations(session).is_empty() {
+      return Err(CAPACITY_ERROR)
+    }
     self.terminate(session, Failed, capacity_reason, CAPACITY_ERROR)
-    session.json()
+    Ok(session.json())
   }
 }
 
@@ -159,7 +162,7 @@ pub fn Engine::prepare_stop_continuation(
   }
   match changed {
     Err(message) => Err(message)
-    Ok(_) => Ok(self.settle_stop_candidate(candidate, checkpoint.session_id))
+    Ok(_) => self.settle_stop_candidate(candidate, checkpoint.session_id)
   }
 }
 
@@ -223,7 +226,7 @@ pub fn Engine::finish_stop_hook(
   }
   match changed {
     Err(message) => Err(message)
-    Ok(_) => Ok(self.settle_stop_candidate(candidate, checkpoint.session_id))
+    Ok(_) => self.settle_stop_candidate(candidate, checkpoint.session_id)
   }
 }
 
@@ -238,6 +241,9 @@ pub fn Engine::continue_stop_hook(
   let candidate = self.copy_state()
   let changed = try {
     let session = candidate.stop_hook_session(checkpoint)
+    if !native_hook_pending_invocations(session).is_empty() {
+      raise Invalid("Cannot advance a turn with pending native hook results")
+    }
     let reason = match session.stop_continuation_text {
       Some(text) => text
       None => raise Invalid("Stop continuation was not staged")
@@ -320,7 +326,7 @@ pub fn Engine::continue_stop_hook(
   }
   match changed {
     Err(message) => Err(message)
-    Ok(_) => Ok(self.settle_stop_candidate(candidate, checkpoint.session_id))
+    Ok(_) => self.settle_stop_candidate(candidate, checkpoint.session_id)
   }
 }
 
@@ -336,6 +342,9 @@ pub fn Engine::block_stop_continuation(
   let candidate = self.copy_state()
   let changed = try {
     let session = candidate.stop_hook_session(checkpoint)
+    if !native_hook_pending_invocations(session).is_empty() {
+      raise Invalid("Cannot close a turn with pending native hook results")
+    }
     if session.stop_continuation_text is None ||
       session.stop_prompt_context_count != 0 ||
       session.stop_prompt_context_length != 0 {
@@ -363,6 +372,6 @@ pub fn Engine::block_stop_continuation(
   }
   match changed {
     Err(message) => Err(message)
-    Ok(_) => Ok(self.settle_stop_candidate(candidate, checkpoint.session_id))
+    Ok(_) => self.settle_stop_candidate(candidate, checkpoint.session_id)
   }
 }

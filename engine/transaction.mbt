@@ -163,7 +163,10 @@ fn Engine::adopt(self : Engine, candidate : Engine) -> Unit {
 /// Reserve the exact larger interrupted-restore closure as well as the current
 /// view. Cancellation and capacity failure use shorter closures. A later large
 /// provider/tool error itself goes through this admission transaction.
-fn Engine::within_capacity(self : Engine) -> Bool {
+fn Engine::within_capacity(
+  self : Engine,
+  simulate_retry? : Bool = true,
+) -> Bool {
   for _, session in self.sessions {
     let projected = native_hook_result_capacity_projection(session)
     if session_capacity_length(projected.json()) > SESSION_CAPACITY ||
@@ -178,18 +181,20 @@ fn Engine::within_capacity(self : Engine) -> Bool {
   // Other admitted operations preserve this reservation while the wait is
   // pending, so the host cannot be stranded after recording `llm/retry`.
   let starting = self.copy_state()
-  for id in starting.order.copy() {
-    let pending = match starting.sessions.get(id) {
-      Some(session) => (session.active_effect, session.pending_retry_id)
-      None => (None, None)
-    }
-    match pending {
-      (Some(effect_id), Some(retry_id)) =>
-        match starting.start_retry_impl(effect_id, retry_id) {
-          Ok(_) => ()
-          Err(_) => return false
-        }
-      _ => ()
+  if simulate_retry {
+    for id in starting.order.copy() {
+      let pending = match starting.sessions.get(id) {
+        Some(session) => (session.active_effect, session.pending_retry_id)
+        None => (None, None)
+      }
+      match pending {
+        (Some(effect_id), Some(retry_id)) =>
+          match starting.start_retry_impl(effect_id, retry_id) {
+            Ok(_) => ()
+            Err(_) => return false
+          }
+        _ => ()
+      }
     }
   }
   for _, session in starting.sessions {
@@ -203,8 +208,12 @@ fn Engine::within_capacity(self : Engine) -> Bool {
     }
   }
   let closed = starting.copy_state()
-  for _, session in closed.sessions {
+  for id in closed.order.copy() {
+    let session = closed.sessions.get(id).unwrap()
     if session.status == Running {
+      let projected = native_hook_result_capacity_projection(session)
+      closed.sessions.set(id, projected)
+      let session = closed.sessions.get(id).unwrap()
       session.append(
         "session/interrupted",
         object([
@@ -222,7 +231,8 @@ fn Engine::within_capacity(self : Engine) -> Bool {
         "interrupted",
         "Interrupted before durable completion; effect outcome is unknown",
       )
-      if session_capacity_length(session.json()) > SESSION_CAPACITY {
+      if session_capacity_length(session.json()) > SESSION_CAPACITY ||
+        session.events.length() > 32768 {
         return false
       }
     }
@@ -417,6 +427,9 @@ pub fn Engine::complete(
         // Their interruption closure was reserved by the prior admission.
         let effect = self.effects.get(effect_id).unwrap()
         let session = self.sessions.get(effect.session_id).unwrap()
+        if !native_hook_pending_invocations(session).is_empty() {
+          return Err(CAPACITY_ERROR)
+        }
         self.terminate(session, Failed, "session_capacity", CAPACITY_ERROR)
         Ok(session.json())
       }
@@ -441,7 +454,7 @@ pub fn Engine::complete_effect_with_stop_hook(
         Some(effect) => effect.session_id
         None => return Err("Unknown or settled effect: " + id)
       }
-      Ok(self.settle_stop_candidate(candidate, session_id))
+      self.settle_stop_candidate(candidate, session_id)
     }
   }
 }
@@ -465,6 +478,9 @@ pub fn Engine::complete_effect_with_post_tool_prompt_hook(
       } else {
         let effect = self.effects.get(id).unwrap()
         let session = self.sessions.get(effect.session_id).unwrap()
+        if !native_hook_pending_invocations(session).is_empty() {
+          return Err(CAPACITY_ERROR)
+        }
         self.terminate(session, Failed, "session_capacity", CAPACITY_ERROR)
         Ok(session.json())
       }
@@ -490,6 +506,9 @@ pub fn Engine::record_effect_outcome(
       } else {
         let effect = self.effects.get(effect_id).unwrap()
         let session = self.sessions.get(effect.session_id).unwrap()
+        if !native_hook_pending_invocations(session).is_empty() {
+          return Err(CAPACITY_ERROR)
+        }
         self.terminate(session, Failed, "session_capacity", CAPACITY_ERROR)
         Ok(session.json())
       }
@@ -557,6 +576,10 @@ pub fn Engine::start_retry(
         // the reserved start marker, fail just this turn and prevent the host
         // from launching another provider request.
         let effect = self.effects.get(effect_id).unwrap()
+        let current = self.sessions.get(effect.session_id).unwrap()
+        if !native_hook_pending_invocations(current).is_empty() {
+          return Err(CAPACITY_ERROR)
+        }
         let failed = self.copy_state()
         let session = failed.sessions.get(effect.session_id).unwrap()
         failed.terminate(session, Failed, "session_capacity", CAPACITY_ERROR)

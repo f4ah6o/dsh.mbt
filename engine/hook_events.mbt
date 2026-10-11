@@ -101,7 +101,7 @@ fn native_hook_result_capacity_projection(session : Session) -> Session {
         ("point", Json::string(invocation.point)),
         ("handlerId", Json::string(invocation.handler_id)),
         ("decision", Json::string("approve")),
-        ("exitCode", integer(2147483647)),
+        ("exitCode", integer(-2147483648)),
         ("stderrSummary", Json::string(maximum_summary)),
         ("durationMs", integer(2147483647)),
       ]),
@@ -146,7 +146,10 @@ pub fn Engine::record_native_hook_invoked(
 ) -> Result[NativeHookInvocationCheckpoint, String] {
   if !native_hook_valid_point(point) ||
     !native_hook_valid_handler_id(handler_id, point) ||
-    (matcher is Some(value) && value.length() > 128) {
+    (
+      matcher is Some(value) &&
+      (value.length() > 128 || value.contains("\u0000"))
+    ) {
     return Err("invalid native hook invocation identity")
   }
   let candidate = self.copy_state()
