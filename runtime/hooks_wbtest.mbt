@@ -627,8 +627,8 @@ test "UserPromptSubmit ignores matchers and follows the prompt decision codec" {
       ),
     ),
   ).unwrap()
-  assert_eq(parsed.2.length(), 1)
-  assert_eq(parsed.2[0].matcher, None)
+  assert_eq(parsed.3.length(), 1)
+  assert_eq(parsed.3[0].matcher, None)
 
   let plain = native_hook_prompt_result_decision({
     exit_code: 0,
