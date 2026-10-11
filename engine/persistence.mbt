@@ -1019,6 +1019,20 @@ fn restore_session(
               parsed
             }
           }
+          match
+            (
+              fields(data).get("post_tool_prompt_hook"),
+              fields(data).get("subagent_post_tool_prompt_hook"),
+            ) {
+            (Some(root_marker), Some(child_marker)) if bool_value(
+                root_marker, "post_tool_prompt_hook",
+              ) &&
+              bool_value(child_marker, "subagent_post_tool_prompt_hook") =>
+              raise Invalid(
+                "Tool completion cannot defer both root and child PostToolUse prompt admission",
+              )
+            _ => ()
+          }
           match fields(data).get("post_tool_prompt_hook") {
             Some(value) if bool_value(value, "post_tool_prompt_hook") =>
               if source != "effect" {
@@ -1030,6 +1044,21 @@ fn restore_session(
               }
             Some(_) =>
               raise Invalid("Invalid PostToolUse prompt-hook admission marker")
+            None => ()
+          }
+          match fields(data).get("subagent_post_tool_prompt_hook") {
+            Some(value) if bool_value(value, "subagent_post_tool_prompt_hook") =>
+              if source != "effect" {
+                raise Invalid(
+                  "Only completed host results may defer child PostToolUse prompt admission",
+                )
+              } else {
+                session.subagent_prompt_hook_admission = true
+              }
+            Some(_) =>
+              raise Invalid(
+                "Invalid child PostToolUse prompt-hook admission marker",
+              )
             None => ()
           }
           match source {

@@ -157,6 +157,42 @@ fn subagent_hook_over_limit_post_tool_engine(
 }
 
 ///|
+fn subagent_hook_partial_post_tool_engine() -> Engine {
+  let engine = subagent_hook_engine()
+  let initial = subagent_checkpoint_success(
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", true),
+  )
+  ignore(success(engine.accept_subagent_prompt_hook(initial, [])))
+  let provider = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete(
+        id_of(provider),
+        calls_response([
+          ("child-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("child-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let reads = engine.take_effects()
+  if reads.length() != 2 {
+    abort("Expected two child tool results before the interruption snapshot")
+  }
+  ignore(
+    success(
+      engine.complete(
+        id_of(reads[0]),
+        fixture(
+          "{\"ok\":true,\"content\":\"alpha\",\"additional_contexts\":[\"A\"]}",
+        ),
+      ),
+    ),
+  )
+  engine
+}
+
+///|
 fn subagent_hook_forge_reordered_post_tool_message(
   snapshot : Json,
 ) -> Json raise EngineError {
@@ -1233,4 +1269,132 @@ test "over-limit child PostTool prompt checkpoints terminate with restorable aba
   let length_restore = Engine::new(test_tools())
   assert_eq(length_restore.restore(over_length.0.snapshot()), Ok(()))
   assert_eq(get_session_for(length_restore, "hook-child"), over_length.1)
+}
+
+///|
+test "restore abandons child PostTool context completed before sibling result" {
+  let engine = subagent_hook_partial_post_tool_engine()
+  let session = get_session_for(engine, "hook-child")
+  let events = array_value(
+    required_field(session, "events"),
+    "partial child completion events",
+    64,
+  )
+  assert_true(
+    events.any(event => {
+      if required_string(event, "type") != "tool/completed" {
+        false
+      } else {
+        let data = required_field(event, "data")
+        required_string(data, "call_id") == "child-a" &&
+        required_field(data, "subagent_post_tool_prompt_hook") == boolean(true)
+      }
+    }),
+  )
+  let snapshot = engine.snapshot()
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(snapshot), Ok(()))
+  let interrupted = get_session_for(restored, "hook-child")
+  assert_eq(get_status(interrupted), "failed")
+  assert_eq(
+    event_type_count(interrupted, "hook/subagent-post-tool-prompt-abandoned"),
+    1,
+  )
+  let messages = array_value(
+    required_field(interrupted, "messages"),
+    "interrupted child messages",
+    16,
+  )
+  assert_true(
+    messages.any(message => {
+      required_string(message, "role") == "tool" &&
+      required_string(message, "content") == "alpha"
+    }),
+  )
+  assert_false(
+    messages.any(message => {
+      fields(message).get("source") is Some(_) &&
+      subagent_hook_message_text(message) == "A"
+    }),
+  )
+  assert_true(restored.take_effects().is_empty())
+  let replay = Engine::new(test_tools())
+  assert_eq(replay.restore(restored.snapshot()), Ok(()))
+  assert_eq(get_session_for(replay, "hook-child"), interrupted)
+  assert_true(replay.take_effects().is_empty())
+}
+
+///|
+test "child completion metadata keeps child admission precedence" {
+  let engine = subagent_hook_engine()
+  let initial = subagent_checkpoint_success(
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", true),
+  )
+  ignore(success(engine.accept_subagent_prompt_hook(initial, [])))
+  let provider = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete(
+        id_of(provider),
+        calls_response([("child-read", "read", "{\"file_path\":\"a.txt\"}")]),
+      ),
+    ),
+  )
+  let read = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete_effect_with_post_tool_prompt_hook(
+        subagent_stop_effect_id(read),
+        fixture(
+          "{\"ok\":true,\"content\":\"alpha\",\"additional_contexts\":[\"A\"]}",
+        ),
+      ),
+    ),
+  )
+  let session = get_session_for(engine, "hook-child")
+  let events = array_value(
+    required_field(session, "events"),
+    "child admission completion events",
+    64,
+  )
+  let mut completion : Json? = None
+  for event in events {
+    if required_string(event, "type") == "tool/completed" &&
+      required_string(required_field(event, "data"), "call_id") == "child-read" {
+      completion = Some(event)
+    }
+  }
+  let completion = completion.unwrap()
+  let data = required_field(completion, "data")
+  assert_eq(
+    required_field(data, "subagent_post_tool_prompt_hook"),
+    boolean(true),
+  )
+  assert_true(fields(data).get("post_tool_prompt_hook") is None)
+  assert_eq(Engine::new(test_tools()).restore(engine.snapshot()), Ok(()))
+
+  let forged = json_copy(engine.snapshot())
+  let forged_session = array_value(
+      required_field(forged, "sessions"),
+      "forged child admission sessions",
+      32,
+    )[0]
+  let forged_events = array_value(
+    required_field(forged_session, "events"),
+    "forged child admission events",
+    64,
+  )
+  for event in forged_events {
+    if required_string(event, "type") == "tool/completed" &&
+      required_string(required_field(event, "data"), "call_id") == "child-read" {
+      fields(required_field(event, "data")).set(
+        "post_tool_prompt_hook",
+        boolean(true),
+      )
+    }
+  }
+  let destination = Engine::new(test_tools())
+  let before = destination.snapshot()
+  assert_true(destination.restore(forged) is Err(_))
+  assert_eq(destination.snapshot(), before)
 }

@@ -273,7 +273,9 @@ fn Engine::stage_host_tool_result(
     ("content", Json::string(content)),
     ("is_error", boolean(is_error)),
   ])
-  if defer_prompt_hook {
+  if session.subagent_prompt_hook_admission {
+    data["subagent_post_tool_prompt_hook"] = Json::boolean(true)
+  } else if defer_prompt_hook {
     data["post_tool_prompt_hook"] = Json::boolean(true)
   }
   if !additional_contexts.is_empty() {
@@ -372,7 +374,7 @@ fn Engine::complete_tool_effect(
       parsed
     }
   }
-  if defer_prompt_hook {
+  if defer_prompt_hook && !session.subagent_prompt_hook_admission {
     session.post_tool_prompt_hook_admission = true
   }
   self.stage_host_tool_result(
