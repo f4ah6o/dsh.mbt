@@ -140,6 +140,20 @@ and can have side effects even when the child requested a read; the restricted
 tool catalog is not an OS sandbox. A child cannot add tools or widen the
 parent's configured tool policy.
 
+Configured `UserPromptSubmit` hooks run for the child's initial prompt and
+for a Stop-denial continuation. Their bounded, source-tagged context is added
+to the child request before provider admission; an initial denial prevents the
+child provider request. The existing native child-result envelope reports
+that denial as `status: "failed"`, `steps: 0`, and a bounded `failure_reason`
+inside the parent tool's `ok: false` result; it does not introduce a distinct
+child refusal status. Configured Stop hooks run after an accepted terminal
+child provider result and use the child's own Stop checkpoint. A Stop
+denial passes through `UserPromptSubmit` before the next child provider request.
+The initial prompt, hook work, provider retries, tools, and continuations share
+the child's 90-second deadline, and parent cancellation still owns and drains
+nested hook processes. Child state remains ephemeral and the parent tool result
+is the no-replay boundary.
+
 The settled JSON result is stored in the parent session's ordinary tool result.
 Reopen a store containing subagent calls with `--enable-subagents`; the engine
 validates historical calls against the startup tool catalog. Restore reads
@@ -661,10 +675,12 @@ steer text. If that hook denies or cannot run, the previous assistant answer
 stays in the transcript and the turn ends `failed` with reason `blocked`; the
 ACP carrier reports `stopReason: "refusal"`. A successful prompt hook may add
 its bounded context to the continuation. UserPromptSubmit also runs for a new
-valid user `session_send`, but this native integration does not run it on other
-ordinary internal tool-follow-up steps as upstream's `agent/pre-step` hook can.
-The foreground subagent child loop also bypasses the parent runtime's Stop
-dispatch; this is a native host integration gap.
+valid user `session_send`. The pinned Claude Code bridge invokes its
+`agent/pre-step` hook on each step but immediately skips the command hook when
+the claimed inbox message list is empty. Ordinary tool-result-only follow-up
+steps therefore do not run UserPromptSubmit upstream either. Stop-denial
+continuations contain a steered message and do run it. Foreground child prompts
+and Stop continuations use the same command hooks through the child's engine.
 
 Stop is opt-in with hooks config and its external commands run only after the
 terminal provider result has been checkpointed. Cancellation kills and drains

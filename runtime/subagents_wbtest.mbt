@@ -4,6 +4,18 @@ fn native_subagent_http_response(body : String) -> NativeFixtureHttpResponse {
 }
 
 ///|
+fn native_subagent_openai_text_stream_with_reason(
+  content : String,
+  finish_reason : String,
+) -> String {
+  let escaped = content.to_json().stringify()
+  let reason = finish_reason.to_json().stringify()
+  "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\{escaped}},\"finish_reason\":null}]}\r\n\r\n" +
+  "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\{reason}}]}\r\n\r\n" +
+  "data: [DONE]\r\n\r\n"
+}
+
+///|
 fn native_subagent_result_for_call(
   session : Json,
   call_id : String,
@@ -45,6 +57,7 @@ async fn native_subagent_parent_tool_effect(
   session_id : String,
   call_id : String,
   prompt : String,
+  child_prompt? : String = "Complete the fixture child task.",
 ) -> @engine.EngineEffect {
   runtime
   .invoke("session_create", { "id": session_id, "title": "Subagent fixture" })
@@ -59,7 +72,7 @@ async fn native_subagent_parent_tool_effect(
   )
   let arguments : Json = {
     "description": "Fixture delegation",
-    "prompt": "Complete the fixture child task.",
+    "prompt": child_prompt,
   }
   let (_, effects) = runtime
     .complete(provider.id(), {
@@ -1587,5 +1600,711 @@ async test "native subagent timeout cancels a child waiting on its provider" {
       .unwrap()
     assert_true(trailing.is_empty())
     assert_eq(string_field(completed, "status"), Some("completed"))
+  }
+}
+
+///|
+async test "native foreground child applies prompt context and Stop continuation hooks" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-subagent-lifecycle-hooks")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let canonical_workspace = @fs.realpath(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let stop_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/child-stop-payloads.jsonl\"; if [ ! -e \"${CLAUDE_PROJECT_DIR}/first-child-stop\" ]; then : > \"${CLAUDE_PROJECT_DIR}/first-child-stop\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"continue after child review\"}'; else printf '{}'; fi"
+    let prompt_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/child-prompt-payloads.jsonl\"; case \"$payload\" in *\"continue after child review\"*) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"child continuation context\"}}' ;; *) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"child initial context\"}}' ;; esac"
+    let config = Json::object({
+      "Stop": Json::array([
+        Json::object({
+          "matcher": Json::boolean(false),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(stop_command) }),
+          ]),
+        }),
+      ]),
+      "UserPromptSubmit": Json::array([
+        Json::object({
+          "matcher": Json::string("ignored prompt matcher"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(prompt_command) }),
+          ]),
+        }),
+      ]),
+    })
+    @fs.write_file(hooks_path, @utf8.encode(config.stringify()))
+    let address = @socket.Addr::parse("127.0.0.1:0")
+    let server = @http.Server::Server(address, reuse_addr=false)
+    group.add_defer(() => server.close())
+    let bodies = Ref([])
+    let auth_ok = Ref(true)
+    let serving = group.spawn(no_wait=true, async fn() {
+      native_fixture_provider_server(
+        server,
+        [
+          native_subagent_http_response(
+            native_fixture_openai_text_stream("The first child answer."),
+          ),
+          native_subagent_http_response(
+            native_fixture_openai_text_stream(
+              "The child continued after review.",
+            ),
+          ),
+        ],
+        bodies,
+        auth_ok,
+        None,
+      )
+    })
+    let runtime = match
+      NativeRuntime::open(
+        fixture + "/data",
+        workspace,
+        false,
+        false,
+        mode_override="openai",
+        model_override="fixture-model",
+        base_url_override="http://127.0.0.1:" + server.addr.port().to_string(),
+        max_retries=0,
+        hooks_config_path=Some(hooks_path),
+        enable_subagents=true,
+      ) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    assert_true(runtime.hooks.has_user_prompt_submit())
+    assert_true(runtime.hooks.has_stop())
+    let effect = native_subagent_parent_tool_effect(
+      runtime, "native-subagent-lifecycle-hooks", "parent-lifecycle-hook-call", "Use a child to finish this task.",
+    )
+    let (_, follow_up) = runtime.run_tool_effect(effect).unwrap()
+    assert_eq(follow_up.length(), 1)
+    assert_true(
+      @async.with_timeout_opt(5000, async fn() { serving.wait() }) is Some(_),
+    )
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 2)
+    assert_true(bodies.val[0].contains("child initial context"))
+    assert_true(bodies.val[1].contains("child continuation context"))
+
+    let prompt_lines = @fs.read_file(workspace + "/child-prompt-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array()
+    assert_eq(prompt_lines.length(), 3)
+    let prompt_payloads : Array[Json] = []
+    for line in prompt_lines {
+      prompt_payloads.push(@json.parse(line))
+    }
+    assert_eq(prompt_payloads.length(), 3)
+    let mut initial_prompt = Json::null()
+    let mut continuation_prompt = Json::null()
+    for payload in prompt_payloads {
+      if string_field(payload, "prompt") ==
+        Some("Complete the fixture child task.") {
+        initial_prompt = payload
+      } else if string_field(payload, "prompt") ==
+        Some("continue after child review") {
+        continuation_prompt = payload
+      }
+    }
+    assert_true(initial_prompt is Json::Object(_))
+    assert_true(continuation_prompt is Json::Object(_))
+    let parent_session = runtime
+      .invoke("session_get", { "session_id": "native-subagent-lifecycle-hooks" })
+      .unwrap().0
+    let child_id = string_field(
+      native_subagent_result_for_call(
+        parent_session, "parent-lifecycle-hook-call",
+      ),
+      "child_id",
+    )
+    assert_eq(string_field(initial_prompt, "session_id"), child_id)
+    assert_eq(
+      string_field(initial_prompt, "hook_event_name"),
+      Some("UserPromptSubmit"),
+    )
+    assert_eq(string_field(initial_prompt, "transcript_path"), Some(""))
+    assert_eq(string_field(initial_prompt, "cwd"), Some(canonical_workspace))
+    assert_eq(
+      string_field(continuation_prompt, "session_id"),
+      string_field(initial_prompt, "session_id"),
+    )
+    assert_eq(
+      string_field(continuation_prompt, "hook_event_name"),
+      Some("UserPromptSubmit"),
+    )
+
+    let stop_lines = @fs.read_file(workspace + "/child-stop-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array()
+    assert_eq(stop_lines.length(), 2)
+    for line in stop_lines {
+      let payload = @json.parse(line)
+      assert_eq(native_hook_test_fields(payload).length(), 5)
+      assert_eq(string_field(payload, "hook_event_name"), Some("Stop"))
+      assert_eq(string_field(payload, "transcript_path"), Some(""))
+      assert_eq(
+        object_field(payload, "stop_hook_active"),
+        Some(Json::boolean(false)),
+      )
+      assert_eq(string_field(payload, "cwd"), Some(canonical_workspace))
+      assert_eq(
+        string_field(payload, "session_id"),
+        string_field(initial_prompt, "session_id"),
+      )
+    }
+    let (completed, trailing) = runtime
+      .complete(follow_up[0].id(), {
+        "ok": true,
+        "content": "Parent received the child answer.",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing.is_empty())
+    let envelope = native_subagent_result_for_call(
+      completed, "parent-lifecycle-hook-call",
+    )
+    assert_eq(string_field(envelope, "status"), Some("completed"))
+    assert_eq(int_field(envelope, "steps"), Some(2))
+  }
+}
+
+///|
+async test "native child UserPromptSubmit denial prevents provider admission" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-subagent-prompt-deny")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/prompt-payloads.jsonl\"; case \"$payload\" in *\"deny child prompt\"*) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"child prompt denied by fixture\"}}' ;; *) printf '{}';; esac"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(native_hook_test_config("UserPromptSubmit", "*", command)),
+    )
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+      enable_subagents=true,
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let effect = native_subagent_parent_tool_effect(
+      runtime,
+      "native-subagent-prompt-deny",
+      "parent-prompt-deny-call",
+      "Ask a child to do work.",
+      child_prompt="deny child prompt",
+    )
+    let (_, follow_up) = runtime.run_tool_effect(effect).unwrap()
+    assert_eq(follow_up.length(), 1)
+    let (completed, trailing) = runtime
+      .complete(follow_up[0].id(), {
+        "ok": true,
+        "content": "Parent received a child refusal.",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing.is_empty())
+    let envelope = native_subagent_result_for_call(
+      completed, "parent-prompt-deny-call",
+    )
+    assert_eq(string_field(envelope, "status"), Some("failed"))
+    assert_eq(int_field(envelope, "steps"), Some(0))
+    assert_true(
+      string_field(envelope, "failure_reason")
+      .unwrap_or("")
+      .contains("child prompt denied by fixture"),
+    )
+    let payload_lines = @fs.read_file(workspace + "/prompt-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+    let payloads : Array[Json] = []
+    for line in payload_lines {
+      payloads.push(@json.parse(line))
+    }
+    assert_true(
+      payloads.any(payload => {
+        string_field(payload, "session_id")
+        .unwrap_or("")
+        .has_prefix("subagent-") &&
+        string_field(payload, "prompt") == Some("deny child prompt")
+      }),
+    )
+  }
+}
+
+///|
+async test "native child Stop denial cannot exceed the existing three-step limit" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-subagent-stop-max-steps")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let stop_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/stop-payloads.jsonl\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"continue child\"}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(native_hook_test_config("Stop", "*", stop_command)),
+    )
+    let address = @socket.Addr::parse("127.0.0.1:0")
+    let server = @http.Server::Server(address, reuse_addr=false)
+    group.add_defer(() => server.close())
+    let bodies = Ref([])
+    let auth_ok = Ref(true)
+    let serving = group.spawn(no_wait=true, async fn() {
+      native_fixture_provider_server(
+        server,
+        [
+          native_subagent_http_response(
+            native_fixture_openai_text_stream("Child step one."),
+          ),
+          native_subagent_http_response(
+            native_fixture_openai_text_stream("Child step two."),
+          ),
+          native_subagent_http_response(
+            native_fixture_openai_text_stream("Child step three."),
+          ),
+        ],
+        bodies,
+        auth_ok,
+        None,
+      )
+    })
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      false,
+      mode_override="openai",
+      model_override="fixture-model",
+      base_url_override="http://127.0.0.1:" + server.addr.port().to_string(),
+      max_retries=0,
+      hooks_config_path=Some(hooks_path),
+      enable_subagents=true,
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let effect = native_subagent_parent_tool_effect(
+      runtime, "native-subagent-stop-max-steps", "parent-stop-max-steps-call", "Ask a child to continue until bounded.",
+    )
+    let (_, follow_up) = runtime.run_tool_effect(effect).unwrap()
+    assert_eq(follow_up.length(), 1)
+    serving.wait()
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 3)
+    assert_eq(
+      @fs.read_file(workspace + "/stop-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .length(),
+      3,
+    )
+    let (completed, trailing) = runtime
+      .complete(follow_up[0].id(), {
+        "ok": true,
+        "content": "Parent received the bounded child result.",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing.is_empty())
+    let envelope = native_subagent_result_for_call(
+      completed, "parent-stop-max-steps-call",
+    )
+    assert_eq(string_field(envelope, "status"), Some("failed"))
+    assert_eq(int_field(envelope, "steps"), Some(3))
+    assert_eq(
+      string_field(envelope, "failure_reason"),
+      Some("child reached the 3-step limit before completing"),
+    )
+  }
+}
+
+///|
+async test "native child Stop continuation keeps max-token completion sticky" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-subagent-stop-max-tokens")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let stop_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/stop-payloads.jsonl\"; if [ ! -e \"${CLAUDE_PROJECT_DIR}/first-child-stop\" ]; then : > \"${CLAUDE_PROJECT_DIR}/first-child-stop\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"continue after max tokens\"}'; else printf '{}'; fi"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(native_hook_test_config("Stop", "*", stop_command)),
+    )
+    let address = @socket.Addr::parse("127.0.0.1:0")
+    let server = @http.Server::Server(address, reuse_addr=false)
+    group.add_defer(() => server.close())
+    let bodies = Ref([])
+    let auth_ok = Ref(true)
+    let serving = group.spawn(no_wait=true, async fn() {
+      native_fixture_provider_server(
+        server,
+        [
+          native_subagent_http_response(
+            native_subagent_openai_text_stream_with_reason(
+              "The first child answer reached its token limit.", "length",
+            ),
+          ),
+          native_subagent_http_response(
+            native_fixture_openai_text_stream("The child continuation answer."),
+          ),
+        ],
+        bodies,
+        auth_ok,
+        None,
+      )
+    })
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      false,
+      mode_override="openai",
+      model_override="fixture-model",
+      base_url_override="http://127.0.0.1:" + server.addr.port().to_string(),
+      max_retries=0,
+      hooks_config_path=Some(hooks_path),
+      enable_subagents=true,
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let effect = native_subagent_parent_tool_effect(
+      runtime, "native-subagent-stop-max-tokens", "parent-stop-max-tokens-call",
+      "Ask a child to finish despite a max-token stop.",
+    )
+    let (_, follow_up) = runtime.run_tool_effect(effect).unwrap()
+    assert_eq(follow_up.length(), 1)
+    serving.wait()
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 2)
+    assert_eq(
+      @fs.read_file(workspace + "/stop-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .length(),
+      2,
+    )
+    let (completed, trailing) = runtime
+      .complete(follow_up[0].id(), {
+        "ok": true,
+        "content": "Parent received the child token-limit result.",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing.is_empty())
+    let envelope = native_subagent_result_for_call(
+      completed, "parent-stop-max-tokens-call",
+    )
+    assert_eq(string_field(envelope, "status"), Some("failed"))
+    assert_eq(int_field(envelope, "steps"), Some(2))
+    assert_eq(
+      string_field(envelope, "failure_reason"),
+      Some("Model output reached its token limit"),
+    )
+  }
+}
+
+///|
+async test "native child prompt hook stays inside the total deadline and is drained" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-subagent-prompt-hook-timeout")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => {
+        ignore(
+          @fs.write_file(workspace + "/hook-release", @utf8.encode("release")),
+        )
+      })
+    })
+    let hooks_path = fixture + "/hooks.json"
+    let command = "payload=$(cat); case \"$payload\" in *\"Complete the fixture child task.\"*) printf started > \"${CLAUDE_PROJECT_DIR}/hook-started\"; (trap '' TERM; while [ ! -f \"${CLAUDE_PROJECT_DIR}/hook-release\" ]; do /bin/sleep 0.01; done; printf escaped > \"${CLAUDE_PROJECT_DIR}/hook-child-alive\") & wait; printf '{}' ;; *) printf '{}';; esac"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(native_hook_test_config("UserPromptSubmit", "*", command)),
+    )
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+      enable_subagents=true,
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let effect = native_subagent_parent_tool_effect(
+      runtime, "native-subagent-prompt-hook-timeout", "parent-prompt-timeout-call",
+      "Ask a child to wait on its prompt hook.",
+    )
+    let job = group.spawn(
+      async fn() { runtime.run_tool_effect(effect, subagent_timeout_ms=150) },
+      no_wait=true,
+      allow_failure=true,
+    )
+    let mut hook_started = false
+    for _ in 0..<600 {
+      if @fs.exists(workspace + "/hook-started") {
+        hook_started = true
+        break
+      }
+      @async.sleep(5)
+    }
+    assert_true(hook_started)
+    let (_, follow_up) = match job.wait() {
+      Ok(value) => value
+      Err(_) => fail("child prompt deadline did not settle the parent tool")
+    }
+    assert_eq(follow_up.length(), 1)
+    let (completed, trailing) = runtime
+      .complete(follow_up[0].id(), {
+        "ok": true,
+        "content": "Parent received the child timeout.",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing.is_empty())
+    let envelope = native_subagent_result_for_call(
+      completed, "parent-prompt-timeout-call",
+    )
+    assert_eq(string_field(envelope, "status"), Some("timed_out"))
+    assert_eq(
+      string_field(envelope, "failure_reason"),
+      Some("child run exceeded 150 ms"),
+    )
+    assert_eq(int_field(envelope, "steps"), Some(0))
+    @fs.write_file(workspace + "/hook-release", @utf8.encode("release"))
+    @async.sleep(100)
+    assert_false(@fs.exists(workspace + "/hook-child-alive"))
+  }
+}
+
+///|
+async test "native parent cancellation drains a running child prompt hook and frees the session" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-subagent-prompt-hook-cancel")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => {
+        ignore(
+          @fs.write_file(workspace + "/hook-release", @utf8.encode("release")),
+        )
+      })
+    })
+    let hooks_path = fixture + "/hooks.json"
+    let command = "payload=$(cat); case \"$payload\" in *\"Wait on the child prompt hook.\"*) printf x >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\"; printf started > \"${CLAUDE_PROJECT_DIR}/hook-started\"; (trap '' TERM; while [ ! -f \"${CLAUDE_PROJECT_DIR}/hook-release\" ]; do /bin/sleep 0.01; done; printf escaped > \"${CLAUDE_PROJECT_DIR}/hook-child-alive\") & wait ;; esac; printf '{}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(native_hook_test_config("UserPromptSubmit", "*", command)),
+    )
+    let address = @socket.Addr::parse("127.0.0.1:0")
+    let server = @http.Server::Server(address, reuse_addr=false)
+    group.add_defer(() => server.close())
+    let bodies = Ref([])
+    let auth_ok = Ref(true)
+    let serving = group.spawn(no_wait=true, async fn() {
+      native_fixture_provider_server(
+        server,
+        [
+          native_subagent_http_response(
+            native_fixture_openai_calls_stream([
+              (
+                "parent-child-hook-cancel",
+                "subagent",
+                {
+                  "description": "Wait",
+                  "prompt": "Wait on the child prompt hook.",
+                },
+              ),
+            ]),
+          ),
+        ],
+        bodies,
+        auth_ok,
+        None,
+      )
+    })
+    let base_url = "http://127.0.0.1:" + server.addr.port().to_string()
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      false,
+      mode_override="openai",
+      model_override="fixture-model",
+      base_url_override=base_url,
+      max_retries=0,
+      hooks_config_path=Some(hooks_path),
+      enable_subagents=true,
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "native-subagent-prompt-hook-cancel"
+    runtime
+    .invoke("session_create", { "id": session_id, "title": "Cancel child hook" })
+    .unwrap()
+    |> ignore
+    let command_time = native_auth_now().to_int64() * 1000L
+    let identity = runtime.state.identity_key
+    let send_id = @protocol.uuid_v7_command_id_from_entropy(
+      command_time, "30112233445566778899aabbccddeeff",
+    ).unwrap()
+    let send = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      session_id,
+      send_id,
+      { "prompt": Json::string("Delegate and cancel the child prompt hook.") },
+    )
+    let (accepted, effects, should_start, control) = runtime
+      .accept_remote_command(send, identity)
+      .unwrap()
+    assert_true(should_start)
+    assert_eq(effects.length(), 1)
+    let control = control.unwrap()
+    let accepted_revision = int_field(accepted, "accepted_revision").unwrap()
+    let job = group.spawn(
+      async fn() {
+        runtime.run_command_job(
+          send_id,
+          identity,
+          accepted_revision,
+          effects,
+          control=Some(control),
+        )
+      },
+      no_wait=true,
+      allow_failure=true,
+    )
+    let mut hook_started = false
+    for _ in 0..<600 {
+      if @fs.exists(workspace + "/hook-started") {
+        hook_started = true
+        break
+      }
+      @async.sleep(5)
+    }
+    assert_true(hook_started)
+
+    let cancel_id = @protocol.uuid_v7_command_id_from_entropy(
+      command_time + 1L,
+      "40112233445566778899aabbccddeeff",
+    ).unwrap()
+    let cancel = native_runtime_session_operation_command(
+      runtime.state.workspace_id,
+      session_id,
+      cancel_id,
+      "session_cancel",
+      {},
+    )
+    let (cancel_receipt, cancel_effects, cancel_started, _) = runtime
+      .accept_remote_command(cancel, identity)
+      .unwrap()
+    assert_eq(string_field(cancel_receipt, "status"), Some("accepted"))
+    assert_true(cancel_started)
+    assert_true(cancel_effects.is_empty())
+    runtime.run_command_job(
+      cancel_id,
+      identity,
+      int_field(cancel_receipt, "accepted_revision").unwrap(),
+      cancel_effects,
+    )
+    ignore(job.wait()) catch {
+      _ => ()
+    }
+    serving.wait()
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 1)
+    assert_eq(
+      string_field(
+        runtime.find_receipt(send_id, identity).unwrap().unwrap(),
+        "status",
+      ),
+      Some("uncertain"),
+    )
+    let cancelled = runtime
+      .invoke("session_get", { "session_id": session_id })
+      .unwrap().0
+    assert_eq(string_field(cancelled, "status"), Some("cancelled"))
+
+    @fs.write_file(workspace + "/hook-release", @utf8.encode("release"))
+    @async.sleep(100)
+    assert_false(@fs.exists(workspace + "/hook-child-alive"))
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+    let replay = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      session_id,
+      send_id,
+      { "prompt": Json::string("Delegate and cancel the child prompt hook.") },
+    )
+    let (replayed, replay_effects, replay_started, _) = runtime
+      .accept_remote_command(replay, identity)
+      .unwrap()
+    assert_eq(string_field(replayed, "status"), Some("uncertain"))
+    assert_true(replay_effects.is_empty())
+    assert_false(replay_started)
+
+    let (_, fresh_effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id,
+        "prompt": "Fresh parent prompt after child hook cancellation.",
+      })
+      .unwrap()
+    assert_eq(fresh_effects.length(), 1)
+    assert_true(fresh_effects[0].kind() == @engine.EffectType::Provider)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+    @async.sleep(100)
+    assert_false(@fs.exists(workspace + "/hook-child-alive"))
   }
 }

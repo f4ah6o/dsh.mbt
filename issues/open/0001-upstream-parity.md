@@ -57,7 +57,8 @@ Bounded native subset と upstream package の名称が近いため、互換範�
 - 2026-10-10: Native ACP fatal-path defect: `runtime/main.mbt` used `abort` after ACP argument/startup/carrier/shutdown failures, and the native panic diagnostic could be written to stdout, corrupting JSON-RPC framing. Fixed with bounded stderr diagnostics and nonzero exit; checkpoint conflict stdio regression verifies an RPC error, no config update/effect, later request fencing, and JSON-only stdout through EOF. This is a native carrier issue, not an upstream parity defect.
 - 2026-10-10: ACP v1 persistent list / resume slice を追加し、workspace provenance、pagination、restart continuation、no-replay と multi-workspace / MCP 差分を記録。
 - 2026-10-10: bounded foreground subagent slice とその recovery / hook limits を section 3 に追加。upstream subagent lifecycle parity は未完了。
-- 2026-10-11: pinned [hooks-claude-code/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts)、[hook-protocol/codec.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/codec.ts)、[hook-protocol/merge.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/merge.ts)、[core/agent-loop/agent.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/core/agent-loop/src/agent.ts) の Stop lifecycle を参照し、native shared runtime の command Stop slice を追加。terminal result の durable checkpoint 後に matcher を無視して hook を実行し、deny は source-tagged user steer と同一 turn の continuation へつなぐ。continuation 前の UserPromptSubmit、winner-rank の reason merge、exit-2 denial、sticky max-token completion、checkpoint / restore no-replay、process cancellation を keyless fixtures で確認した。Native host の max-step bound、UTF-16 aggregate reason / session capacity、blocked-status mapping は仕様差として記録。native は通常 internal tool-follow-up step の UserPromptSubmit を呼ばず、foreground subagent child completion は parent Stop dispatch を経由しない。Stop payload の empty transcript path / false active marker と、pinned bridge でも適用しない additional controls を維持し、本 umbrella issue は open のまま。
+- 2026-10-11: pinned [hooks-claude-code/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts)、[hook-protocol/codec.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/codec.ts)、[hook-protocol/merge.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/merge.ts)、[core/agent-loop/agent.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/core/agent-loop/src/agent.ts) の Stop lifecycle を参照し、native shared runtime の command Stop slice を追加。terminal result の durable checkpoint 後に matcher を無視して hook を実行し、deny は source-tagged user steer と同一 turn の continuation へつなぐ。continuation 前の UserPromptSubmit、winner-rank の reason merge、exit-2 denial、sticky max-token completion、checkpoint / restore no-replay、process cancellation を keyless fixtures で確認した。Native host の max-step bound、UTF-16 aggregate reason / session capacity、blocked-status mapping は仕様差として記録。ordinary tool-result-only follow-up の UserPromptSubmit は次の source correction を参照する。foreground child Stop は parent dispatcher ではなく child Engine で dispatch する。Stop payload の empty transcript path / false active marker と、pinned bridge でも適用しない additional controls を維持し、本 umbrella issue は open のまま。
+- 2026-10-11: source audit corrected the ordinary tool-follow-up hook assessment. Pinned [`agent.ts:267-289`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/core/agent-loop/src/agent.ts#L267-L289) runs `agent/pre-step` each step, but [`hooks-claude-code/index.ts:223-226`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts#L223-L226) returns immediately when claimed inbox messages are empty. Ordinary tool-result-only steps therefore skip UserPromptSubmit upstream too; a Stop denial has a steered inbox message and does run it. Native child lifecycle coverage now runs UserPromptSubmit for the first child prompt and Stop after accepted terminal child provider outcomes, with child-owned checkpoint/continuation APIs, deadline and parent cancellation ownership. No durable child schema was added; the parent unsettled tool result remains the no-replay boundary. Regression evidence is recorded with this increment. The umbrella issue remains open.
 
 ## 注記
 
@@ -216,8 +217,12 @@ units へ制限し、既存 64 KiB stdin / 262,144 UTF-16 units session capacity
 publish せず terminal session_capacity で閉じます。engine の既存 max_steps が上限で、dedicated
 consecutive-Stop cap はありません。pinned bridge が Stop で利用しない additionalContext、continue:false、
 stopReason、updatedInput 等は拡張せず、native も適用しません。upstream の agent/pre-step は各 step で
-呼ばれますが native UserPromptSubmit は通常 internal tool-follow-up に未接続です。foreground subagent child の
-complete_effect は parent NativeRuntime Stop dispatcher を経由しません。これらの差分と確認範囲は
+呼ばれますが、pinned bridge は `messages.length === 0` のとき command を呼ばずに return します。通常の tool-result-only
+follow-up は upstream / native とも UserPromptSubmit を呼びません。Stop denial は steered message があるため呼ばれます。
+foreground child は初回 prompt の UserPromptSubmit と terminal provider outcome の Stop、denial continuation の
+UserPromptSubmit を child Engine の checkpoint / admission API で実行します。initial prompt、hooks、provider retries、tools、
+continuations は既存 90 秒 deadline 内にあり、parent cancellation が nested hook process を drain します。Child state は
+ephemeral のままで parent unsettled tool result が no-replay boundary です。これらの範囲と残る lifecycle 差分は
 [native runtime guide](../../docs/native-runtime.md#native-command-hooks) と
 本 issue の残件として記録し、本 issue は open のままです。
 
@@ -297,13 +302,15 @@ Foreground subagent の部分対応（2026-10-10）: pinned upstream
 foreground loop を実行し、SafeRoot / protected runtime-store checks を通る `read` / `glob` / `grep` だけを使います。
 result JSON は 16,384 UTF-16 code units、16 transcript messages、3 model steps、8 child tool calls、90 秒に制限し、parent
 session/effect/tool-call と相関させます。parent turn は最大二 child calls、runtime は同時に一 child に制限し、parent cancellation は queued / active
-child work に伝わります。keyless fake-provider tests は child read + second response + parent continuation、limits、recursive/write denial、hook denial、
-provider / queued cancellation、restore no-replay を確認しました。
+child work に伝わります。Configured UserPromptSubmit は child initial prompt と Stop denial continuation に適用し、Stop は child
+engine の accepted terminal boundary で dispatch します。keyless fake-provider tests は child read + second response + parent continuation、
+limits、recursive/write denial、hook denial、provider / queued cancellation、restore no-replay を確認しました。
 
 これは upstream subagent lifecycle の全実装ではありません。child session は独立保存・再開せず、interruption 前に settlement した result だけが
 parent tool result に残ります。background / continuable mode、provider selection、tool filters、persona、structured output schema、provider capability
 negotiation、child-specific UI は含みません。Configured PreToolUse / PostToolUse hooks は child reads にも継承され、trusted host code として副作用を
-起こし得ます。reopen には `--enable-subagents` が必要で、中断した child は replay しません。本 issue は open のままです。
+起こし得ます。Initial UserPromptSubmit denial は provider step 0 の failed child result と bounded `failure_reason` を既存 parent tool result に返し、別の
+child refusal status を導入しません。reopen には `--enable-subagents` が必要で、中断した child は replay しません。本 issue は open のままです。
 
 受入条件:
 

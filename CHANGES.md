@@ -16,6 +16,24 @@
 
 ### Migration
 
+## 0.1.15 - 2026-10-11
+
+### Added
+
+- Apply configured UserPromptSubmit and Stop hooks at foreground child initial-prompt and Stop-continuation boundaries, preserving child-owned checkpoints and parent cancellation/no-replay behavior. See the [native runtime guide](docs/native-runtime.md#foreground-subagents) and [remaining parity work](issues/open/0001-upstream-parity.md).
+
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
 ## 0.1.14 - 2026-10-11
 
 ### Added
