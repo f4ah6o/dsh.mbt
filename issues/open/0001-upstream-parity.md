@@ -212,7 +212,7 @@ continuation child が provider job owner を奪う問題、長い astral denial
 invalid UTF-8 stderr が既知 exit-2 deny を neutralize する問題を修正し fixture で保護しました。
 
 Native の制約は別途維持します。最大 32 command と 16 KiB output capture を元に Stop reason 合計を 524,350 UTF-16
-units へ制限し、既存 64 KiB stdin / 256 KiB session capacity を適用します。容量超過候補は provider effect を
+units へ制限し、既存 64 KiB stdin / 262,144 UTF-16 units session capacity を適用します。容量超過候補は provider effect を
 publish せず terminal session_capacity で閉じます。engine の既存 max_steps が上限で、dedicated
 consecutive-Stop cap はありません。pinned bridge が Stop で利用しない additionalContext、continue:false、
 stopReason、updatedInput 等は拡張せず、native も適用しません。upstream の agent/pre-step は各 step で

@@ -674,12 +674,12 @@ work. Max-token completion still invokes Stop, and the `max_tokens` terminal
 reason stays sticky if a later continuation is allowed. The engine's existing
 `max_steps` remains the bound; neither upstream nor native adds a separate
 consecutive-Stop limit. The native decoder caps the aggregate joined Stop
-reason at 524,350 UTF-16 units. Existing 64 KiB hook-stdin and 256 KiB
-serialized-session limits apply separately; a candidate that exceeds session
-capacity closes with `session_capacity` without dispatching its provider
-effect. A UserPromptSubmit denial on this path is clipped on a Unicode scalar
-boundary to the existing 8,192 UTF-16-unit event-error limit so the turn always
-settles.
+reason at 524,350 UTF-16 units. Existing 64 KiB hook-stdin and 262,144
+UTF-16-unit serialized-session limits apply separately; a candidate that
+exceeds session capacity closes with `session_capacity` without dispatching
+the provider effect. A denial in the continuation's UserPromptSubmit hook is
+clipped on a Unicode scalar boundary to the existing 8,192 UTF-16-unit
+event-error limit so the turn always settles.
 
 PreToolUse and PostToolUse payloads include `session_id`, an empty
 `transcript_path`, the canonical workspace `cwd`, `hook_event_name`,
