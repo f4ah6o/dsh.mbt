@@ -147,7 +147,7 @@ child provider request. The existing native child-result envelope reports
 that denial as `status: "failed"`, `steps: 0`, and a bounded `failure_reason`
 inside the parent tool's `ok: false` result; it does not introduce a distinct
 child refusal status. Configured Stop hooks run after an accepted terminal
-child provider result and use the child's own durable Stop checkpoint. A Stop
+child provider result and use the child's own Stop checkpoint. A Stop
 denial passes through `UserPromptSubmit` before the next child provider request.
 The initial prompt, hook work, provider retries, tools, and continuations share
 the child's 90-second deadline, and parent cancellation still owns and drains
