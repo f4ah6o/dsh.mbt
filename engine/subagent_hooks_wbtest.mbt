@@ -823,3 +823,59 @@ test "Stop prompt denial sees earlier Start input but commits neither message" {
   assert_eq(restored.restore(engine.snapshot()), Ok(()))
   assert_eq(get_session_for(restored, "hook-child"), blocked)
 }
+
+///|
+test "child PostToolUse inbox passes through the next UserPromptSubmit checkpoint in call order" {
+  let engine = subagent_hook_engine()
+  let initial = subagent_checkpoint_success(
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", true),
+  )
+  ignore(success(engine.accept_subagent_prompt_hook(initial, [])))
+  let provider = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete(
+        id_of(provider),
+        calls_response([
+          ("child-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("child-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let reads = engine.take_effects()
+  ignore(
+    success(
+      engine.complete(
+        id_of(reads[1]),
+        fixture(
+          "{\"ok\":true,\"content\":\"beta\",\"additional_contexts\":[\"B\"]}",
+        ),
+      ),
+    ),
+  )
+  ignore(
+    success(
+      engine.complete(
+        id_of(reads[0]),
+        fixture(
+          "{\"ok\":true,\"content\":\"alpha\",\"additional_contexts\":[\"A1\",\"A2\"]}",
+        ),
+      ),
+    ),
+  )
+  let checkpoint = engine.pending_subagent_prompt_hook("hook-child").unwrap()
+  assert_eq(checkpoint.prompt(), "A1A2B")
+  assert_true(engine.take_effects().is_empty())
+  ignore(success(engine.accept_subagent_prompt_hook(checkpoint, ["U"])))
+  let next_provider = engine.take_effects()[0]
+  let messages = subagent_hook_all_messages(next_provider)
+  assert_eq(messages.length(), 7)
+  assert_eq(subagent_hook_message_text(messages[4]), "A1A2")
+  assert_eq(subagent_hook_message_text(messages[5]), "B")
+  assert_eq(subagent_hook_message_text(messages[6]), "U")
+  assert_eq(
+    required_field(messages[4], "source"),
+    Json::object({ "kind": "hooks-claude-code" }),
+  )
+}

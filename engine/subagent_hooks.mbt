@@ -103,6 +103,8 @@ pub fn Engine::begin_subagent_prompt_hook(
     session.subagent_prompt_hook_active = true
     session.subagent_prompt_hook_initial = true
     session.subagent_prompt_hook_generation += 1
+    session.subagent_prompt_hook_start_contexts = session.pending_hook_contexts.copy()
+    session.subagent_prompt_hook_post_tool_messages.clear()
     session.subagent_prompt_hook_contexts = session.pending_hook_contexts.copy()
     session.pending_hook_contexts.clear()
     session.subagent_prompt_hook_prompt = Some(prompt)
@@ -168,6 +170,8 @@ fn Session::clear_subagent_prompt_hook(self : Session) -> Unit {
   self.subagent_prompt_hook_active = false
   self.subagent_prompt_hook_initial = false
   self.subagent_prompt_hook_contexts.clear()
+  self.subagent_prompt_hook_start_contexts.clear()
+  self.subagent_prompt_hook_post_tool_messages.clear()
   self.subagent_prompt_hook_prompt = None
 }
 
@@ -214,19 +218,19 @@ pub fn Engine::accept_subagent_prompt_hook(
       session.stop_prompt_context_length = 0
       session.todos = None
       session.append("turn/start", object([]))
-      if !session.subagent_prompt_hook_contexts.is_empty() {
+      if !session.subagent_prompt_hook_start_contexts.is_empty() {
         session.append(
           "hook/subagent-start-context",
           object([
             (
               "context_count",
-              integer(session.subagent_prompt_hook_contexts.length()),
+              integer(session.subagent_prompt_hook_start_contexts.length()),
             ),
             (
               "context_length",
               integer(
                 engine_subagent_hook_context_length(
-                  session.subagent_prompt_hook_contexts,
+                  session.subagent_prompt_hook_start_contexts,
                 ),
               ),
             ),
@@ -234,7 +238,7 @@ pub fn Engine::accept_subagent_prompt_hook(
         )
         session.append(
           "user/message",
-          hook_context_message(session.subagent_prompt_hook_contexts),
+          hook_context_message(session.subagent_prompt_hook_start_contexts),
         )
       }
       session.append(
@@ -248,24 +252,27 @@ pub fn Engine::accept_subagent_prompt_hook(
         session.append("user/message", hook_context_message(contexts))
       }
     } else {
-      if !session.subagent_prompt_hook_contexts.is_empty() {
+      if !session.subagent_prompt_hook_start_contexts.is_empty() {
         let context_length = engine_subagent_hook_context_length(
-          session.subagent_prompt_hook_contexts,
+          session.subagent_prompt_hook_start_contexts,
         )
         session.append(
           "hook/subagent-start-context",
           object([
             (
               "context_count",
-              integer(session.subagent_prompt_hook_contexts.length()),
+              integer(session.subagent_prompt_hook_start_contexts.length()),
             ),
             ("context_length", integer(context_length)),
           ]),
         )
         session.append(
           "user/message",
-          hook_context_message(session.subagent_prompt_hook_contexts),
+          hook_context_message(session.subagent_prompt_hook_start_contexts),
         )
+      }
+      for message in session.subagent_prompt_hook_post_tool_messages {
+        session.append("user/message", message)
       }
       if !contexts.is_empty() {
         session.append("user/message", hook_context_message(contexts))

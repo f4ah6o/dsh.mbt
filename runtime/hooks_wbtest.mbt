@@ -78,6 +78,18 @@ fn native_hook_test_required_string(value : Json, name : String) -> String {
 }
 
 ///|
+fn native_hook_test_message_text(value : Json) -> String {
+  match object_field(value, "content") {
+    Some(Json::String(text)) => text
+    Some(Json::Array(blocks)) =>
+      blocks
+      .map(block => native_hook_test_required_string(block, "text"))
+      .join("")
+    _ => ""
+  }
+}
+
+///|
 fn native_hook_context_messages(session : Json) -> Array[Json] {
   match object_field(session, "messages") {
     Some(Json::Array(messages)) =>
@@ -1720,6 +1732,131 @@ async test "UserPromptSubmit skips ordinary tool-result-only follow-up steps" {
       string_field(payload, "hook_event_name"),
       Some("UserPromptSubmit"),
     )
+  }
+}
+
+///|
+async test "PostToolUse context runs UserPromptSubmit before root follow-up and keeps source order" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-posttool-prompt-hook")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    @fs.write_file(workspace + "/target.txt", "read this fixture")
+    let hooks_path = fixture + "/hooks.json"
+    let prompt_command = "cat > \"${CLAUDE_PROJECT_DIR}/prompt-last.json\"; printf u >> \"${CLAUDE_PROJECT_DIR}/prompt-count.txt\"; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"from UserPromptSubmit\"}}'"
+    let post_command = "cat >/dev/null; printf p >> \"${CLAUDE_PROJECT_DIR}/post-count.txt\"; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"from PostToolUse\"}}'"
+    let hook_group = fn(matcher : String, command : String) {
+      Json::object({
+        "matcher": Json::string(matcher),
+        "hooks": Json::array([
+          Json::object({
+            "type": Json::string("command"),
+            "command": Json::string(command),
+          }),
+        ]),
+      })
+    }
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(
+        Json::object({
+          "UserPromptSubmit": Json::array([
+            hook_group("ignored", prompt_command),
+          ]),
+          "PostToolUse": Json::array([hook_group("read", post_command)]),
+        }).stringify(),
+      ),
+    )
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "posttool-prompt-hook"
+    ignore(
+      runtime
+      .invoke("session_create", {
+        "id": session_id.to_json(),
+        "title": "PostToolUse prompt hook",
+      })
+      .unwrap(),
+    )
+    let (_, initial_effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id.to_json(),
+        "prompt": "Read target.txt and report its contents.".to_json(),
+      })
+      .unwrap()
+    let initial_provider = native_effect_by_kind(
+      initial_effects,
+      @engine.EffectType::Provider,
+    ).unwrap()
+    let (_, tool_effects) = runtime
+      .complete(initial_provider.id(), {
+        "ok": true,
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "posttool-prompt-read",
+            "name": "read",
+            "arguments": "{\"file_path\":\"target.txt\",\"offset\":1,\"limit\":10}",
+          },
+        ],
+        "finish_reason": "tool_calls",
+      })
+      .unwrap()
+    let (_, followup_effects) = runtime
+      .run_tool_effect(tool_effects[0])
+      .unwrap()
+    assert_eq(followup_effects.length(), 1)
+    assert_true(followup_effects[0].kind() == @engine.EffectType::Provider)
+    assert_eq(@fs.read_file(workspace + "/prompt-count.txt").text(), "uu")
+    assert_eq(@fs.read_file(workspace + "/post-count.txt").text(), "p")
+    let prompt_payload = @json.parse(
+      @fs.read_file(workspace + "/prompt-last.json").text(),
+    )
+    assert_eq(
+      native_hook_test_required_string(prompt_payload, "prompt"),
+      "from PostToolUse",
+    )
+    let request_messages = native_hook_test_array(
+      native_hook_test_required_field(followup_effects[0].request(), "messages"),
+      "follow-up provider messages",
+    )
+    let sourced = request_messages.filter(message => {
+      native_hook_test_fields(message).get("source") is Some(_)
+    })
+    assert_eq(sourced.length(), 3)
+    assert_eq(
+      native_hook_test_message_text(sourced[0]),
+      "from UserPromptSubmit",
+    )
+    assert_eq(native_hook_test_message_text(sourced[1]), "from PostToolUse")
+    assert_eq(
+      native_hook_test_message_text(sourced[2]),
+      "from UserPromptSubmit",
+    )
+    assert_eq(
+      native_hook_test_fields(sourced[1]).get("source"),
+      Some(Json::object({ "kind": Json::string("hooks-claude-code") })),
+    )
+    let (completed, trailing) = runtime
+      .complete(followup_effects[0].id(), {
+        "ok": true,
+        "content": "target.txt says read this fixture",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_eq(trailing.length(), 0)
+    assert_eq(string_field(completed, "status"), Some("completed"))
+    assert_eq(@fs.read_file(workspace + "/prompt-count.txt").text(), "uu")
   }
 }
 

@@ -2751,6 +2751,148 @@ async fn NativeRuntime::complete(
 }
 
 ///|
+/// Complete a root tool result and hold the next provider step while its
+/// committed PostToolUse contexts pass through UserPromptSubmit.
+async fn NativeRuntime::complete_tool_with_prompt_hook(
+  self : NativeRuntime,
+  effect : @engine.EngineEffect,
+  result : Json,
+  control? : NativeJobControl? = None,
+) -> Result[(Json, Array[@engine.EngineEffect]), String] {
+  let session_id = effect.session_id().as_string()
+  let typed_session_id = match @engine.SessionId::new(session_id) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  self.gate.acquire()
+  let boundary = @async.protect_from_cancel() <| () => {
+    defer self.gate.release()
+    if self.stopped || self.closed {
+      return Err("native runtime is stopped")
+    }
+    if control is Some(value) && value.cancelled.val {
+      return Err("native command was cancelled")
+    }
+    let completion = match
+      self.api.complete_effect_with_post_tool_prompt_hook(effect.id(), result) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    match self.checkpoint_locked() {
+      Err(error) => Err(error)
+      Ok(_) => {
+        let checkpoint = self.api.pending_post_tool_prompt_hook(
+          typed_session_id,
+        )
+        Ok((completion, self.api.take_typed_effects(), checkpoint))
+      }
+    }
+  }
+  if @async.is_being_cancelled() {
+    @async.pause()
+  }
+  match boundary {
+    Err(error) => Err(error)
+    Ok((completion, queued, None)) => Ok((completion, queued))
+    Ok((completion, queued, Some(checkpoint))) => {
+      if control is Some(value) && value.cancelled.val {
+        return Err("native command was cancelled")
+      }
+      let prompt = checkpoint.prompt()
+      let hook_outcome = match control {
+        Some(value) =>
+          match
+            self.run_user_prompt_hook_controlled(
+              value,
+              session_id,
+              prompt,
+              attach_task=false,
+            ) {
+            Ok(outcome) => Ok(outcome)
+            Err(_) if value.cancelled.val || @async.is_being_cancelled() =>
+              return Err("native command was cancelled")
+            Err(error) => Err(error)
+          }
+        None => self.hooks.before_user_prompt(self.tools, session_id, prompt)
+      }
+      let settlement = match hook_outcome {
+        Err(error) =>
+          self.settle_post_tool_prompt_hook(
+            checkpoint,
+            None,
+            "UserPromptSubmit hook could not run: " + error,
+            control~,
+          )
+        Ok({ action: NativeHookAction::Deny(reason), .. }) => {
+          let reason = native_hook_limit_reason(reason)
+          self.settle_post_tool_prompt_hook(
+            checkpoint,
+            None,
+            "UserPromptSubmit hook rejected the PostToolUse context: " + reason,
+            control~,
+          )
+        }
+        Ok({ action: NativeHookAction::Continue, additional_contexts, }) =>
+          self.settle_post_tool_prompt_hook(
+            checkpoint,
+            Some(additional_contexts),
+            "",
+            control~,
+          )
+      }
+      match settlement {
+        Ok((settled, effects)) => Ok((settled, effects))
+        Err(error) =>
+          if control is Some(value) && value.cancelled.val {
+            Err("native command was cancelled")
+          } else {
+            Err(error)
+          }
+      }
+    }
+  }
+}
+
+///|
+async fn NativeRuntime::settle_post_tool_prompt_hook(
+  self : NativeRuntime,
+  checkpoint : @engine.NativePostToolPromptHookCheckpoint,
+  contexts : Array[String]?,
+  reason : String,
+  control? : NativeJobControl? = None,
+) -> Result[(Json, Array[@engine.EngineEffect]), String] {
+  self.gate.acquire()
+  defer self.gate.release()
+  if self.stopped || self.closed {
+    return Err("native runtime is stopped")
+  }
+  if control is Some(value) && value.cancelled.val {
+    return Err("native command was cancelled")
+  }
+  let settled = match contexts {
+    Some(value) =>
+      match self.api.accept_post_tool_prompt_hook(checkpoint, value) {
+        Ok(result) => Ok(result)
+        Err(error) =>
+          self.api.block_post_tool_prompt_hook(
+            checkpoint,
+            "UserPromptSubmit hook could not admit the PostToolUse context: " +
+            error,
+          )
+      }
+    None => self.api.block_post_tool_prompt_hook(checkpoint, reason)
+  }
+  let session = match settled {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  match self.checkpoint_locked() {
+    Err(error) => Err(error)
+    Ok(_) => Ok((session, self.api.take_typed_effects()))
+  }
+}
+
+///|
 async fn NativeRuntime::run_stop_hook_controlled(
   self : NativeRuntime,
   session_id : String,
@@ -3121,10 +3263,14 @@ async fn NativeRuntime::finish_tool_effect(
       (result, outcome.additional_contexts)
     }
   }
-  self.complete(
-    effect.id(),
-    native_hook_result_with_contexts(final_result, additional_contexts),
+  let result = native_hook_result_with_contexts(
+    final_result, additional_contexts,
   )
+  if self.hooks.has_user_prompt_submit() {
+    self.complete_tool_with_prompt_hook(effect, result, control~)
+  } else {
+    self.complete(effect.id(), result)
+  }
 }
 
 ///|

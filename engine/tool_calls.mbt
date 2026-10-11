@@ -140,10 +140,20 @@ fn Session::commit_post_tool_contexts(self : Session) -> Unit {
     if call.completed_contexts.is_empty() {
       continue
     }
-    self.append(
-      "user/message",
-      post_tool_context_message(call.completed_contexts),
-    )
+    let message = post_tool_context_message(call.completed_contexts)
+    if self.subagent_prompt_hook_admission {
+      self.pending_subagent_post_tool_messages.push(message)
+      for context in call.completed_contexts {
+        self.pending_subagent_post_tool_contexts.push(context)
+      }
+    } else if self.post_tool_prompt_hook_admission {
+      self.post_tool_prompt_hook_messages.push(message)
+      for context in call.completed_contexts {
+        self.post_tool_prompt_hook_contexts.push(context)
+      }
+    } else {
+      self.append("user/message", message)
+    }
     call.completed_contexts = []
   }
 }
@@ -248,6 +258,7 @@ fn Engine::stage_host_tool_result(
   content : String,
   is_error : Bool,
   additional_contexts : Array[String],
+  defer_prompt_hook : Bool,
 ) -> Unit {
   self.retire_tool_effect(session, effect_id)
   call.stage = Completed
@@ -262,6 +273,9 @@ fn Engine::stage_host_tool_result(
     ("content", Json::string(content)),
     ("is_error", boolean(is_error)),
   ])
+  if defer_prompt_hook {
+    data["post_tool_prompt_hook"] = Json::boolean(true)
+  }
   if !additional_contexts.is_empty() {
     data["additional_contexts"] = Json::array(
       additional_contexts.map(context => Json::string(context)),
@@ -306,6 +320,7 @@ fn Engine::complete_tool_effect(
   effect : Effect,
   effect_id : String,
   result : Json,
+  defer_prompt_hook : Bool,
 ) -> Unit raise EngineError {
   let call_id = match effect.call_id {
     Some(call_id) => call_id
@@ -357,8 +372,11 @@ fn Engine::complete_tool_effect(
       parsed
     }
   }
+  if defer_prompt_hook {
+    session.post_tool_prompt_hook_admission = true
+  }
   self.stage_host_tool_result(
-    session, call, effect_id, content, is_error, additional_contexts,
+    session, call, effect_id, content, is_error, additional_contexts, defer_prompt_hook,
   )
 }
 

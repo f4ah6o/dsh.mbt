@@ -738,6 +738,50 @@ fn Engine::start_step(
   session : Session,
   skip_pending_hook_contexts? : Bool = false,
 ) -> Unit {
+  if !skip_pending_hook_contexts && session.post_tool_prompt_hook_admission {
+    session.post_tool_prompt_hook_admission = false
+    if !session.post_tool_prompt_hook_messages.is_empty() {
+      let contexts = session.post_tool_prompt_hook_contexts.copy()
+      ignore(engine_validate_hook_contexts(contexts)) catch {
+        Invalid(error) => {
+          session.append(
+            "hook/post-tool-prompt-rejected",
+            object([
+              (
+                "error",
+                Json::string(
+                  "PostToolUse context batch could not be admitted: " + error,
+                ),
+              ),
+            ]),
+          )
+          session.clear_post_tool_prompt_hook()
+          self.terminate(session, Failed, "session_capacity", error)
+          return
+        }
+      }
+      session.post_tool_prompt_hook_active = true
+      session.post_tool_prompt_hook_generation += 1
+      session.post_tool_prompt_hook_event_seq = Some(session.events.length())
+      session.append(
+        "hook/post-tool-prompt-pending",
+        object([
+          ("context_count", integer(contexts.length())),
+          (
+            "context_length",
+            integer(engine_subagent_hook_context_length(contexts)),
+          ),
+          (
+            "message_count",
+            integer(session.post_tool_prompt_hook_messages.length()),
+          ),
+        ]),
+      )
+      return
+    }
+    session.post_tool_prompt_hook_contexts.clear()
+    session.post_tool_prompt_hook_messages.clear()
+  }
   if session.step >= session.max_steps {
     self.terminate(session, Failed, "max_steps", "Maximum model steps reached")
     return
@@ -753,12 +797,32 @@ fn Engine::start_step(
   }
   if !skip_pending_hook_contexts &&
     session.subagent_prompt_hook_admission &&
-    !session.pending_hook_contexts.is_empty() {
+    (
+      !session.pending_hook_contexts.is_empty() ||
+      !session.pending_subagent_post_tool_messages.is_empty()
+    ) {
+    let child_contexts = session.pending_hook_contexts.copy()
+    for context in session.pending_subagent_post_tool_contexts {
+      child_contexts.push(context)
+    }
+    ignore(engine_validate_hook_contexts(child_contexts)) catch {
+      Invalid(error) => {
+        session.pending_hook_contexts.clear()
+        session.pending_subagent_post_tool_messages.clear()
+        session.pending_subagent_post_tool_contexts.clear()
+        self.terminate(session, Failed, "session_capacity", error)
+        return
+      }
+    }
     session.subagent_prompt_hook_active = true
     session.subagent_prompt_hook_initial = false
     session.subagent_prompt_hook_generation += 1
-    session.subagent_prompt_hook_contexts = session.pending_hook_contexts.copy()
+    session.subagent_prompt_hook_start_contexts = session.pending_hook_contexts.copy()
+    session.subagent_prompt_hook_post_tool_messages = session.pending_subagent_post_tool_messages.copy()
+    session.subagent_prompt_hook_contexts = child_contexts
     session.pending_hook_contexts.clear()
+    session.pending_subagent_post_tool_messages.clear()
+    session.pending_subagent_post_tool_contexts.clear()
     session.subagent_prompt_hook_prompt = None
     return
   }
@@ -892,7 +956,11 @@ fn Engine::terminate(
   self.retire_tool_effects(session)
   session.pending_retry_id = None
   session.pending_hook_contexts.clear()
+  session.pending_subagent_post_tool_contexts.clear()
+  session.pending_subagent_post_tool_messages.clear()
   session.subagent_prompt_hook_contexts.clear()
+  session.subagent_prompt_hook_start_contexts.clear()
+  session.subagent_prompt_hook_post_tool_messages.clear()
   session.subagent_prompt_hook_active = false
   session.subagent_prompt_hook_initial = false
   session.subagent_prompt_hook_prompt = None
@@ -927,6 +995,16 @@ fn Engine::terminate(
     }
   }
   session.commit_post_tool_contexts()
+  if session.post_tool_prompt_hook_active ||
+    !session.post_tool_prompt_hook_messages.is_empty() {
+    session.append(
+      "hook/post-tool-prompt-abandoned",
+      object([("reason", Json::string(reason))]),
+    )
+    session.clear_post_tool_prompt_hook()
+  } else {
+    session.post_tool_prompt_hook_admission = false
+  }
   session.calls.clear()
   session.cursor = 0
   session.schedule_cursor = 0
@@ -992,6 +1070,7 @@ fn Engine::complete_impl(
   effect_id : String,
   result : Json,
   defer_stop_hook : Bool,
+  defer_post_tool_prompt_hook : Bool,
 ) -> Result[Json, String] {
   try {
     let effect = match self.effects.get(effect_id) {
@@ -1026,7 +1105,9 @@ fn Engine::complete_impl(
           // terminate still sees the live LLM effect and logs its failed attempt.
           self.terminate(session, Failed, "provider_error", error)
         ToolExecution =>
-          self.complete_tool_effect(session, effect, effect_id, result)
+          self.complete_tool_effect(
+            session, effect, effect_id, result, defer_post_tool_prompt_hook,
+          )
       }
     } else {
       match effect.kind {
@@ -1135,7 +1216,9 @@ fn Engine::complete_impl(
           }
         }
         ToolExecution =>
-          self.complete_tool_effect(session, effect, effect_id, result)
+          self.complete_tool_effect(
+            session, effect, effect_id, result, defer_post_tool_prompt_hook,
+          )
       }
     }
     Ok(session.json())

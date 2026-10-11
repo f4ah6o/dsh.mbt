@@ -586,6 +586,62 @@ pub fn HarnessApi::complete_effect_with_stop_hook(
 }
 
 ///|
+/// Native tool completion that pauses a committed PostToolUse inbox batch for
+/// UserPromptSubmit before the next provider request is released.
+pub fn HarnessApi::complete_effect_with_post_tool_prompt_hook(
+  self : HarnessApi,
+  id : @engine.EffectId,
+  result : Json,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.complete", () => {
+    self.engine.complete_effect_with_post_tool_prompt_hook(id, result)
+  })
+}
+
+///|
+pub fn HarnessApi::pending_post_tool_prompt_hook(
+  self : HarnessApi,
+  session_id : @engine.SessionId,
+) -> @engine.NativePostToolPromptHookCheckpoint? {
+  if self.registry.is_alive() {
+    self.engine.pending_post_tool_prompt_hook(session_id)
+  } else {
+    None
+  }
+}
+
+///|
+pub fn HarnessApi::accept_post_tool_prompt_hook(
+  self : HarnessApi,
+  checkpoint : @engine.NativePostToolPromptHookCheckpoint,
+  contexts : Array[String],
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.post_tool_prompt_hook_accept", () => {
+    self.engine.accept_post_tool_prompt_hook(checkpoint, contexts)
+  })
+}
+
+///|
+pub fn HarnessApi::block_post_tool_prompt_hook(
+  self : HarnessApi,
+  checkpoint : @engine.NativePostToolPromptHookCheckpoint,
+  reason : String,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.post_tool_prompt_hook_block", () => {
+    self.engine.block_post_tool_prompt_hook(checkpoint, reason)
+  })
+}
+
+///|
 pub fn HarnessApi::pending_stop_hook(
   self : HarnessApi,
   session_id : @engine.SessionId,
