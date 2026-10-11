@@ -51,6 +51,32 @@ fn native_user_prompt_payload(
 }
 
 ///|
+fn native_session_start_payload(
+  project_dir : String,
+  session_id : String,
+  source : String,
+) -> Result[String, String] {
+  let text = Json::object({
+      "session_id": Json::string(session_id),
+      "transcript_path": Json::string(""),
+      "cwd": Json::string(project_dir),
+      "hook_event_name": Json::string("SessionStart"),
+      "source": Json::string(source),
+    }).stringify() +
+    "\n"
+  if @utf8.encode(text).length() > NATIVE_HOOK_STDIN_LIMIT {
+    Err("hooks stdin exceeds the 64 KiB limit")
+  } else {
+    Ok(text)
+  }
+}
+
+///|
+fn NativeHooks::has_session_start(self : NativeHooks) -> Bool {
+  !self.session_start.is_empty()
+}
+
+///|
 fn NativeHooks::has_post_tool_match(
   self : NativeHooks,
   tool_name : String,
@@ -61,6 +87,52 @@ fn NativeHooks::has_post_tool_match(
 ///|
 fn NativeHooks::has_user_prompt_submit(self : NativeHooks) -> Bool {
   !self.user_prompt_submit.is_empty()
+}
+
+///|
+/// Run matching context-only SessionStart commands in configuration order.
+/// This follows the pinned Claude bridge's JSON-only additionalContext path;
+/// decisions, plain stdout, and other controls are intentionally ignored.
+async fn NativeHooks::before_session_start(
+  self : NativeHooks,
+  tools : NativeTools,
+  session_id : String,
+  source : String,
+) -> Array[String] {
+  let payload = match
+    native_session_start_payload(self.project_dir, session_id, source) {
+    Ok(value) => value
+    Err(_) => return []
+  }
+  let contexts : Array[String] = []
+  let mut overflow = false
+  for group in self.session_start {
+    if !native_hook_matches(group.matcher, source) {
+      continue
+    }
+    for hook in group.commands {
+      let capture = match native_run_hook_command(tools, hook, payload) {
+        Ok(value) => value
+        Err(_) => continue
+      }
+      if overflow {
+        continue
+      }
+      match native_hook_session_start_context(capture) {
+        Some(context) =>
+          match native_hook_add_context(contexts, context) {
+            Ok(_) => ()
+            Err(_) => overflow = true
+          }
+        None => ()
+      }
+    }
+  }
+  if overflow {
+    []
+  } else {
+    contexts
+  }
 }
 
 ///|
@@ -178,6 +250,21 @@ fn native_hook_prompt_input(input : Json, contexts : Array[String]) -> Json {
     )
   }
   Json::object(fields)
+}
+
+///|
+fn native_hook_combine_contexts(
+  first : Array[String],
+  second : Array[String],
+) -> Result[Array[String], String] {
+  let combined = first.copy()
+  for context in second {
+    match native_hook_add_context(combined, context) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
+  }
+  Ok(combined)
 }
 
 ///|

@@ -16,6 +16,25 @@
 
 ### Migration
 
+## 0.1.18 - 2026-10-12
+
+### Added
+
+- Add bounded native `SessionStart` command hooks to the shared runtime entrypoints. Root sessions run lazily on their first valid non-replay send; restored sessions use `resume`, newly created sessions and foreground children use `startup`. Child SessionStart runs before SubagentStart and initial UserPromptSubmit under the aggregate child deadline. See the [native runtime guide](docs/native-runtime.md#native-command-hooks), [port status](docs/port-status.md), and [remaining parity work](issues/open/0001-upstream-parity.md).
+
+### Changed
+
+- Preserve the pinned SessionStart context flow: the context precedes the prompt, is flattened into the UserPromptSubmit payload without a separator, and is dropped if UserPromptSubmit rejects the prompt. The listener applies only `additionalContext`; other decision and control fields remain ignored.
+- Reuse the `hook/subagent-start-context` marker/batch format for root SessionStart batches as well as child SubagentStart batches. A static source audit confirms the dsh 0.1.16 reader accepts this format; the unchanged dsh 0.1.17 reader logic and current probes also accept it. No dsh 0.1.16 binary was run. This format-specific compatibility is not a whole-store downgrade guarantee: other persisted content, such as PostToolUse boundaries introduced in 0.1.17, can require a newer reader.
+
+### Fixed
+
+- Continue running matching SessionStart commands in order after native context aggregation exceeds its bound, then discard the over-limit context batch. Share the existing child run deadline across SessionStart and child execution.
+
+### Migration
+
+- SessionStart context uses the existing Engine marker and source-tagged message representation; this increment adds no snapshot fields or event kinds. Determine a store's minimum reader from all persisted content, not this marker alone, and do not downgrade or rewrite a store using an older reader.
+
 ## 0.1.17 - 2026-10-11
 
 ### Added

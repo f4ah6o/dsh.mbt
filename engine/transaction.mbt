@@ -353,6 +353,41 @@ pub fn Engine::apply(
 }
 
 ///|
+/// Atomically admit a native root prompt with source-ordered hook contexts.
+/// SessionStart contexts are committed before the user message; UserPromptSubmit
+/// contexts follow it. The ordinary JSON command schema remains closed.
+pub fn Engine::apply_session_send_with_hook_contexts(
+  self : Engine,
+  session_id : SessionId,
+  prompt : String,
+  initial_contexts : Array[String],
+  additional_contexts : Array[String],
+) -> Result[Json, String] {
+  match EngineCommand::SendPrompt(session_id, prompt).validate() {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  let all_contexts = initial_contexts.copy()
+  for context in additional_contexts {
+    all_contexts.push(context)
+  }
+  ignore(engine_validate_hook_contexts(all_contexts)) catch {
+    Invalid(error) => return Err(error)
+  }
+  let candidate = self.copy_state()
+  let value = candidate.send_prompt(
+    session_id, prompt, initial_contexts, additional_contexts,
+  ) catch {
+    Invalid(error) => return Err(error)
+  }
+  if !candidate.within_capacity() {
+    return Err(CAPACITY_ERROR)
+  }
+  self.adopt(candidate)
+  Ok(value)
+}
+
+///|
 /// Settle one host effect atomically. An oversized result closes the original
 /// admitted step explicitly without publishing candidate effects or tools.
 pub fn Engine::complete(

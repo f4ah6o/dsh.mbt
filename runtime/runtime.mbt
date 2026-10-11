@@ -14,11 +14,25 @@ priv struct NativeRuntime {
   lsp : NativeLspPool
   scheduler : NativeScheduler
   subagent_semaphore : @async.Semaphore
+  session_start_semaphore : @async.Semaphore
   gate : @async.Mutex
   mut state : NativeState
+  session_start_initial_ids : Map[String, Bool]
+  session_start_completed : Map[String, Bool]
+  session_start_pending : Map[String, Array[String]]
   mut stopped : Bool
   mut closed : Bool
 }
+
+///|
+priv struct NativeRootHookOutcome {
+  action : NativeHookAction
+  session_start_contexts : Array[String]
+  additional_contexts : Array[String]
+}
+
+///|
+const NATIVE_SESSION_START_PENDING_INBOX_LIMIT : Int = 64
 
 ///|
 /// Immutable host-level provider settings. API-key bytes are read into an
@@ -308,6 +322,36 @@ async fn NativeRuntime::open(
         }
       }
   }
+  let session_start_initial_ids : Map[String, Bool] = Map([])
+  if hooks.has_session_start() {
+    let sessions = match api.invoke("session_list", {}) {
+      Ok(Json::Array(values)) => values
+      Ok(_) => {
+        api.close()
+        lsp.close()
+        external_mcp.close()
+        ignore(store.close())
+        workspace_root.close()
+        return Err("cannot inspect native sessions for SessionStart activation")
+      }
+      Err(error) => {
+        api.close()
+        lsp.close()
+        external_mcp.close()
+        ignore(store.close())
+        workspace_root.close()
+        return Err(
+          "cannot inspect native sessions for SessionStart activation: " + error,
+        )
+      }
+    }
+    for session in sessions {
+      match string_field(session, "id") {
+        Some(session_id) => session_start_initial_ids.set(session_id, true)
+        None => ()
+      }
+    }
+  }
   match
     native_acp_validate_registry(
       api.snapshot(),
@@ -379,6 +423,7 @@ async fn NativeRuntime::open(
     lsp,
     gate: @async.Mutex::Mutex(),
     subagent_semaphore: @async.Semaphore::Semaphore(1, initial_value=1),
+    session_start_semaphore: @async.Semaphore::Semaphore(1, initial_value=1),
     state: {
       engine: api.snapshot(),
       receipts: recovered_receipts,
@@ -392,6 +437,9 @@ async fn NativeRuntime::open(
       external_mcp_catalog_hash: external_mcp.catalog_hash,
       lsp_catalog_hash: lsp.catalog_hash,
     },
+    session_start_initial_ids,
+    session_start_completed: Map([]),
+    session_start_pending: Map([]),
     stopped: false,
     closed: false,
   }
@@ -453,7 +501,8 @@ async fn NativeRuntime::invoke(
   operation : String,
   input : Json,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
-  if operation == "session_send" && self.hooks.has_user_prompt_submit() {
+  if operation == "session_send" &&
+    (self.hooks.has_user_prompt_submit() || self.hooks.has_session_start()) {
     return self.invoke_with_user_prompt_hook(input)
   }
   self.gate.acquire()
@@ -567,6 +616,7 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
   session_id : String,
   prompt : String,
   attach_task? : Bool = true,
+  payload_prompt? : String? = None,
 ) -> Result[NativeHookOutcome, String] {
   let outcome : Ref[Result[NativeHookOutcome, String]?] = Ref(None)
   let task_result = @async.handle_cancellation(async fn() {
@@ -576,7 +626,7 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
           let result = self.hooks.before_user_prompt(
             self.tools,
             session_id,
-            prompt,
+            payload_prompt.unwrap_or(prompt),
           )
           outcome.val = Some(result)
           result.map(_ => ())
@@ -603,6 +653,180 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
         Some(Ok(value)) => Ok(value)
         Some(Err(error)) => Err(error)
         None => Err("UserPromptSubmit hook did not return an outcome")
+      }
+  }
+}
+
+///|
+async fn NativeRuntime::run_session_start_hook_controlled(
+  self : NativeRuntime,
+  control : NativeJobControl,
+  session_id : String,
+  source : String,
+) -> Result[Array[String], String] {
+  let contexts : Ref[Array[String]?] = Ref(None)
+  let task_result = @async.handle_cancellation(async fn() {
+    try
+      @async.with_task_group() <| workers => {
+        let task = workers.spawn(no_wait=true, allow_failure=true, async fn() {
+          let value = self.hooks.before_session_start(
+            self.tools,
+            session_id,
+            source,
+          )
+          contexts.val = Some(value)
+          Ok(())
+        })
+        self.scheduler.attach_task(control, task)
+        task.wait()
+      }
+    catch {
+      @async.WaitedTaskAlreadyCancelled =>
+        Err("SessionStart hook was cancelled")
+      _ => Err("SessionStart hook task failed")
+    }
+  })
+  match task_result {
+    None => Err("SessionStart hook was cancelled before admission")
+    Some(Err(error)) => Err(error)
+    Some(Ok(_)) =>
+      match contexts.val {
+        Some(value) => Ok(value)
+        None => Err("SessionStart hook did not return an outcome")
+      }
+  }
+}
+
+///|
+/// Resolve the lazy native activation edge for a preflight-valid root send.
+/// Sessions restored when the runtime opened resume; sessions created later
+/// in this runtime start up. The resulting inbox is process-local until a send
+/// commits it into the durable user-message stream.
+async fn NativeRuntime::prepare_session_start_contexts(
+  self : NativeRuntime,
+  control : NativeJobControl,
+  session_id : String,
+) -> Result[Array[String], String] {
+  if !self.hooks.has_session_start() {
+    return Ok([])
+  }
+  self.session_start_semaphore.acquire()
+  defer self.session_start_semaphore.release()
+  self.gate.acquire()
+  if self.stopped || self.closed {
+    self.gate.release()
+    return Err("native runtime is stopped")
+  }
+  if control.cancelled.val {
+    self.gate.release()
+    return Err("SessionStart hook was cancelled before admission")
+  }
+  if self.session_start_completed.get(session_id) is Some(_) {
+    let contexts = self.session_start_pending.get(session_id).unwrap_or([])
+    ignore(self.session_start_pending.remove(session_id))
+    self.gate.release()
+    return Ok(contexts.copy())
+  }
+  if self.session_start_pending.get(session_id) is None &&
+    self.session_start_pending.keys().length() >=
+    NATIVE_SESSION_START_PENDING_INBOX_LIMIT {
+    self.gate.release()
+    return Err("native SessionStart pending inbox limit reached")
+  }
+  let source = if self.session_start_initial_ids.get(session_id) is Some(_) {
+    "resume"
+  } else {
+    "startup"
+  }
+  self.gate.release()
+
+  let hook_result = @async.handle_cancellation(async fn() {
+    self.run_session_start_hook_controlled(control, session_id, source)
+  })
+  @async.protect_from_cancel(async fn() { self.gate.acquire() })
+  let owner_cancelled = @async.is_being_cancelled()
+  let result : Ref[Result[Array[String], String]] = Ref(
+    Err("SessionStart hook was cancelled before admission"),
+  )
+  @async.protect_from_cancel(() => {
+    defer self.gate.release()
+    if self.stopped || self.closed {
+      result.val = Err("native runtime is stopped")
+    } else {
+      match hook_result {
+        Some(Ok(contexts)) => {
+          self.session_start_completed.set(session_id, true)
+          result.val = if owner_cancelled || control.cancelled.val {
+            if !contexts.is_empty() {
+              self.session_start_pending.set(session_id, contexts.copy())
+            }
+            Err("SessionStart hook was cancelled before prompt admission")
+          } else {
+            ignore(self.session_start_pending.remove(session_id))
+            Ok(contexts)
+          }
+        }
+        Some(Err(error)) => result.val = Err(error)
+        None =>
+          result.val = Err("SessionStart hook was cancelled before admission")
+      }
+    }
+  })
+  if owner_cancelled {
+    @async.pause()
+  }
+  result.val
+}
+
+///|
+async fn NativeRuntime::run_root_send_hooks_controlled(
+  self : NativeRuntime,
+  control : NativeJobControl,
+  session_id : String,
+  prompt : String,
+  attach_task? : Bool = true,
+) -> Result[NativeRootHookOutcome, String] {
+  let start_contexts = match
+    self.prepare_session_start_contexts(control, session_id) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let prompt_outcome = if self.hooks.has_user_prompt_submit() {
+    match
+      self.run_user_prompt_hook_controlled(
+        control,
+        session_id,
+        prompt,
+        attach_task~,
+        payload_prompt=Some(start_contexts.join("") + prompt),
+      ) {
+      Ok(value) => value
+      Err(error) => return Err("UserPromptSubmit hook could not run: " + error)
+    }
+  } else {
+    { action: NativeHookAction::Continue, additional_contexts: [], }
+  }
+  match prompt_outcome.action {
+    NativeHookAction::Deny(reason) =>
+      Ok({
+        action: NativeHookAction::Deny(reason),
+        session_start_contexts: [],
+        additional_contexts: [],
+      })
+    NativeHookAction::Continue =>
+      match
+        native_hook_combine_contexts(
+          start_contexts,
+          prompt_outcome.additional_contexts,
+        ) {
+        Ok(_) =>
+          Ok({
+            action: NativeHookAction::Continue,
+            session_start_contexts: start_contexts,
+            additional_contexts: prompt_outcome.additional_contexts,
+          })
+        Err(error) =>
+          Err("hook additionalContext could not be combined: " + error)
       }
   }
 }
@@ -687,7 +911,7 @@ async fn NativeRuntime::invoke_with_user_prompt_hook(
   }
   self.gate.release()
   let hook_result = @async.handle_cancellation(async fn() {
-    self.run_user_prompt_hook_controlled(control, session_id, prompt)
+    self.run_root_send_hooks_controlled(control, session_id, prompt)
   })
   @async.protect_from_cancel(async fn() { self.gate.acquire() })
   let owner_cancelled_before_admission = @async.is_being_cancelled()
@@ -706,8 +930,7 @@ async fn NativeRuntime::invoke_with_user_prompt_hook(
       } else {
         match hook_result {
           None => Err("session prompt was cancelled before admission")
-          Some(Err(error)) =>
-            Err("UserPromptSubmit hook could not run: " + error)
+          Some(Err(error)) => Err(error)
           Some(Ok(outcome)) =>
             match outcome.action {
               NativeHookAction::Deny(reason) =>
@@ -717,8 +940,9 @@ async fn NativeRuntime::invoke_with_user_prompt_hook(
                 )
               NativeHookAction::Continue =>
                 match
-                  self.api.invoke_session_send_with_prompt_contexts(
+                  self.api.invoke_session_send_with_hook_contexts(
                     prepared_input,
+                    outcome.session_start_contexts,
                     outcome.additional_contexts,
                   ) {
                   Err(error) => Err(error)
@@ -1180,7 +1404,8 @@ async fn NativeRuntime::accept_remote_command(
       None => ()
     }
   }
-  if command.operation == "session_send" && self.hooks.has_user_prompt_submit() {
+  if command.operation == "session_send" &&
+    (self.hooks.has_user_prompt_submit() || self.hooks.has_session_start()) {
     return self.accept_remote_prompt_command(
       command, identity_key, acp_activity_session_id, fingerprint,
     )
@@ -1554,7 +1779,7 @@ async fn NativeRuntime::accept_remote_prompt_command(
   }
   self.gate.release()
   let hook_result = @async.handle_cancellation(async fn() {
-    self.run_user_prompt_hook_controlled(control, session_id, prompt)
+    self.run_root_send_hooks_controlled(control, session_id, prompt)
   })
   @async.protect_from_cancel(async fn() { self.gate.acquire() })
   let cancelled_before_admission = @async.is_being_cancelled()
@@ -1578,7 +1803,7 @@ async fn NativeRuntime::accept_remote_prompt_command(
 async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
   self : NativeRuntime,
   control : NativeJobControl,
-  hook_result : Result[NativeHookOutcome, String]?,
+  hook_result : Result[NativeRootHookOutcome, String]?,
   owner_cancelled : Bool,
   session_id : String,
   command_id : String,
@@ -1605,7 +1830,7 @@ async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
   } else {
     match hook_result {
       None => Err("session prompt was cancelled before admission")
-      Some(Err(error)) => Err("UserPromptSubmit hook could not run: " + error)
+      Some(Err(error)) => Err(error)
       Some(Ok(_)) if control.cancelled.val =>
         Err("session prompt was cancelled before admission")
       Some(Ok(value)) =>
@@ -1648,8 +1873,9 @@ async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
     }
     Ok(outcome) =>
       match
-        self.api.invoke_session_send_with_prompt_contexts(
+        self.api.invoke_session_send_with_hook_contexts(
           prepared_input,
+          outcome.session_start_contexts,
           outcome.additional_contexts,
         ) {
         Err(error) => {
@@ -1891,7 +2117,7 @@ async fn[X] NativeRuntime::mcp_handle(
     return Err("native runtime is stopped")
   }
   let prompt_hooks_enabled = tool_name == "session_send" &&
-    self.hooks.has_user_prompt_submit()
+    (self.hooks.has_user_prompt_submit() || self.hooks.has_session_start())
   // Validate the original wire envelope before native preprocessing can
   // canonicalize it. In particular, ProtocolServer owns duplicate-key,
   // request-id, JSON-RPC, metadata, and raw-line size checks. A tool-level
@@ -1933,6 +2159,7 @@ async fn[X] NativeRuntime::mcp_handle(
   } else {
     line
   }
+  let mut session_start_contexts : Array[String] = []
   let mut prompt_hook_contexts : Array[String] = []
   match prompt_request {
     Some(None) => {
@@ -2058,7 +2285,7 @@ async fn[X] NativeRuntime::mcp_handle(
       }
       self.gate.release()
       let hook_result = @async.handle_cancellation(async fn() {
-        self.run_user_prompt_hook_controlled(
+        self.run_root_send_hooks_controlled(
           hook_control, prompt_session, prompt,
         )
       })
@@ -2081,7 +2308,7 @@ async fn[X] NativeRuntime::mcp_handle(
         None => Err("session prompt was cancelled before admission")
         Some(_) if hook_control.cancelled.val =>
           Err("session prompt was cancelled before admission")
-        Some(Err(error)) => Err("UserPromptSubmit hook could not run: " + error)
+        Some(Err(error)) => Err(error)
         Some(Ok(value)) =>
           match value.action {
             NativeHookAction::Deny(reason) =>
@@ -2090,6 +2317,7 @@ async fn[X] NativeRuntime::mcp_handle(
                 native_hook_limit_reason(reason),
               )
             NativeHookAction::Continue => {
+              session_start_contexts = value.session_start_contexts
               prompt_hook_contexts = value.additional_contexts
               Ok(())
             }
@@ -2109,9 +2337,11 @@ async fn[X] NativeRuntime::mcp_handle(
     _ => ()
   }
   let response = if tool_name == "session_send" &&
-    !prompt_hook_contexts.is_empty() {
+    (!session_start_contexts.is_empty() || !prompt_hook_contexts.is_empty()) {
     self.api
-    .mcp_handle_with_prompt_contexts(prompt_dispatch_line, prompt_hook_contexts)
+    .mcp_handle_with_hook_contexts(
+      prompt_dispatch_line, session_start_contexts, prompt_hook_contexts,
+    )
     .unwrap_or("")
   } else {
     self.api.mcp_handle(prompt_dispatch_line).unwrap_or("")

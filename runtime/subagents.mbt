@@ -891,6 +891,7 @@ async fn NativeRuntime::run_subagent_tool(
     1,
     Int::min(run_timeout_ms, NATIVE_SUBAGENT_MAX_RUN_MS),
   )
+  let phase = Ref("SessionStart")
   let outcome = @async.with_task_group() <| group => {
     group.add_defer(() => {
       @async.protect_from_cancel(async fn() {
@@ -910,19 +911,42 @@ async fn NativeRuntime::run_subagent_tool(
         }
       })
     })
-    let start_task = if self.hooks.has_subagent_start() {
-      Some(
-        group.spawn(no_wait=true, allow_failure=true, async fn() {
-          let contexts = self.hooks.before_subagent_start(self.tools, child_id)
-          if !contexts.is_empty() {
-            ignore(child.inject_hook_contexts(child_id, contexts))
-          }
-        }),
-      )
-    } else {
-      None
-    }
+    let mut start_task = None
     let drive_outcome = @async.with_timeout_opt(timeout_ms, async fn() {
+      if self.hooks.has_session_start() {
+        let contexts = self.hooks.before_session_start(
+          self.tools,
+          child_id,
+          "startup",
+        )
+        if !contexts.is_empty() {
+          match child.inject_hook_contexts(child_id, contexts) {
+            Ok(true) => ()
+            Ok(false) =>
+              return Err("subagent could not admit SessionStart context")
+            Err(error) =>
+              return Err(
+                "subagent could not admit SessionStart context: " + error,
+              )
+          }
+        }
+      }
+      phase.val = "child run"
+      start_task = if self.hooks.has_subagent_start() {
+        Some(
+          group.spawn(no_wait=true, allow_failure=true, async fn() {
+            let contexts = self.hooks.before_subagent_start(
+              self.tools,
+              child_id,
+            )
+            if !contexts.is_empty() {
+              ignore(child.inject_hook_contexts(child_id, contexts))
+            }
+          }),
+        )
+      } else {
+        None
+      }
       self.start_and_drive_subagent(child, child_id, prompt, binding, control~)
     })
     match start_task {
@@ -959,7 +983,17 @@ async fn NativeRuntime::run_subagent_tool(
       (
         value,
         "timed_out",
-        Some("child run exceeded " + timeout_ms.to_string() + " ms"),
+        Some(
+          if phase.val == "SessionStart" {
+            "subagent timed out during SessionStart hook"
+          } else if self.hooks.has_session_start() {
+            "child run exceeded the aggregate " +
+            timeout_ms.to_string() +
+            " ms SessionStart and child-run budget"
+          } else {
+            "child run exceeded " + timeout_ms.to_string() + " ms"
+          },
+        ),
       )
     }
   }

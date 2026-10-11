@@ -207,19 +207,26 @@ test "native Claude hook config accepts Stop and rejects unsupported events and 
   assert_true(
     native_hook_parse_config(@json.parse("{\"SessionStart\":[]}")) is Err(_),
   )
+  let session_start = native_hook_parse_config(
+    @json.parse(
+      native_hook_test_config("SessionStart", "startup|resume", "true"),
+    ),
+  ).unwrap()
+  assert_eq(session_start.0.length(), 1)
+  assert_eq(session_start.0[0].matcher, Some("startup|resume"))
   let stop = native_hook_parse_config(
     @json.parse(
       native_hook_test_config("Stop", "matcher-that-must-not-filter", "true"),
     ),
   ).unwrap()
-  assert_eq(stop.3.length(), 1)
-  assert_eq(stop.3[0].matcher, None)
+  assert_eq(stop.4.length(), 1)
+  assert_eq(stop.4[0].matcher, None)
   let ignored_stop_matcher = native_hook_parse_config(
     @json.parse(
       "{\"Stop\":[{\"matcher\":false,\"hooks\":[{\"command\":\"true\"}]}]}",
     ),
   ).unwrap()
-  assert_eq(ignored_stop_matcher.3.length(), 1)
+  assert_eq(ignored_stop_matcher.4.length(), 1)
   assert_true(
     native_hook_parse_config(
       @json.parse(
@@ -244,15 +251,15 @@ test "native Claude hook config accepts Stop and rejects unsupported events and 
       native_hook_test_config("SubagentStart", "general-purpose", "true"),
     ),
   ).unwrap()
-  assert_eq(start.4.length(), 1)
-  assert_eq(start.4[0].matcher, Some("general-purpose"))
+  assert_eq(start.5.length(), 1)
+  assert_eq(start.5[0].matcher, Some("general-purpose"))
   let subagent_stop = native_hook_parse_config(
     @json.parse(
       native_hook_test_config("SubagentStop", "general-purpose", "true"),
     ),
   ).unwrap()
-  assert_eq(subagent_stop.5.length(), 1)
-  assert_eq(subagent_stop.5[0].matcher, Some("general-purpose"))
+  assert_eq(subagent_stop.6.length(), 1)
+  assert_eq(subagent_stop.6[0].matcher, Some("general-purpose"))
   assert_true(
     native_hook_parse_config(@json.parse("{\"SubagentNotification\":[]}"))
     is Err(_),
@@ -273,6 +280,171 @@ test "native Claude hook config accepts Stop and rejects unsupported events and 
     )
     is Err(_),
   )
+}
+
+///|
+test "SessionStart payload and context codec retain the pinned context-only contract" {
+  let payload = native_session_start_payload(
+    "/workspace", "session-start-fixture", "resume",
+  ).unwrap()
+  let value = @json.parse(payload.trim())
+  assert_eq(native_hook_test_fields(value).length(), 5)
+  assert_eq(string_field(value, "hook_event_name"), Some("SessionStart"))
+  assert_eq(string_field(value, "session_id"), Some("session-start-fixture"))
+  assert_eq(string_field(value, "transcript_path"), Some(""))
+  assert_eq(string_field(value, "cwd"), Some("/workspace"))
+  assert_eq(string_field(value, "source"), Some("resume"))
+  assert_true(native_hook_matches(Some("startup|resume"), "startup"))
+  assert_true(native_hook_matches(Some("startup|resume"), "resume"))
+  assert_false(native_hook_matches(Some("startup|resume"), "clear"))
+
+  assert_eq(
+    native_hook_session_start_context({
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"systemMessage\":\"ignored\",\"updatedInput\":{\"prompt\":\"ignored\"},\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"start context\"}}",
+      stderr: "",
+      truncated: false,
+    }),
+    Some("start context"),
+  )
+  for
+    capture in [
+      {
+        exit_code: 0,
+        stdout: "plain stdout is ignored",
+        stderr: "",
+        truncated: false,
+      },
+      { exit_code: 0, stdout: "{malformed", stderr: "", truncated: false, },
+      {
+        exit_code: 0,
+        stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStart\",\"additionalContext\":\"wrong event\"}}",
+        stderr: "",
+        truncated: false,
+      },
+      {
+        exit_code: 0,
+        stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":9}}",
+        stderr: "",
+        truncated: false,
+      },
+      {
+        exit_code: 1,
+        stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"failed\"}}",
+        stderr: "hook failed",
+        truncated: false,
+      },
+      {
+        exit_code: 0,
+        stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"truncated\"}}",
+        stderr: "",
+        truncated: true,
+      },
+    ] {
+    assert_true(native_hook_session_start_context(capture) is None)
+  }
+
+  assert_eq(
+    native_hook_combine_contexts(["from SessionStart"], ["from prompt"]),
+    Ok(["from SessionStart", "from prompt"]),
+  )
+  assert_true(
+    native_hook_combine_contexts(Array::make(32, "start"), ["prompt"]) is Err(_),
+  )
+  assert_true(
+    native_hook_combine_contexts(
+      ["x".repeat(4096), "x".repeat(4096), "x".repeat(4096), "x".repeat(4096)],
+      ["x"],
+    )
+    is Err(_),
+  )
+}
+
+///|
+async test "SessionStart overflow still runs every later matching command" {
+  let fixture = @fs.tmpdir(prefix="dsh-session-start-overflow-order")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let tools = native_hook_test_tools(workspace)
+    group.add_defer(() => tools.root.close())
+    let config_path = fixture + "/hooks.json"
+    let context_output = (value : String) => {
+      Json::object({
+        "hookSpecificOutput": Json::object({
+          "hookEventName": Json::string("SessionStart"),
+          "additionalContext": Json::string(value),
+        }),
+      }).stringify()
+    }
+    let command = (path : String, marker : String, stdout : String) => {
+      "printf '%s' " +
+      native_hook_shell_quote(marker) +
+      " >> " +
+      native_hook_shell_quote(path) +
+      "; printf '%s' " +
+      native_hook_shell_quote(stdout)
+    }
+    let group_for = (command : String) => {
+      Json::object({
+        "matcher": Json::string("startup"),
+        "hooks": Json::array([
+          Json::object({ "command": Json::string(command) }),
+        ]),
+      })
+    }
+
+    let individual_marker = workspace + "/individual-order.txt"
+    let individual_overflow = Json::object({
+      "SessionStart": Json::array([
+        group_for(
+          command(individual_marker, "1", context_output("x".repeat(4097))),
+        ),
+        group_for(command(individual_marker, "2", "{}")),
+      ]),
+    })
+    @fs.write_file(config_path, @utf8.encode(individual_overflow.stringify()))
+    let individual_hooks = NativeHooks::load(Some(config_path), workspace).unwrap()
+    assert_eq(
+      individual_hooks.before_session_start(
+        tools, "individual-overflow", "startup",
+      ),
+      [],
+    )
+    assert_eq(@fs.read_file(individual_marker).text(), "12")
+
+    let aggregate_marker = workspace + "/aggregate-order.txt"
+    let aggregate_groups : Array[Json] = []
+    let letters = ["a", "b", "c", "d"]
+    for index in 0..<letters.length() {
+      aggregate_groups.push(
+        group_for(
+          command(
+            aggregate_marker,
+            index.to_string(),
+            context_output(letters[index].repeat(4096)),
+          ),
+        ),
+      )
+    }
+    aggregate_groups.push(
+      group_for(command(aggregate_marker, "4", context_output("e"))),
+    )
+    aggregate_groups.push(group_for(command(aggregate_marker, "5", "{}")))
+    let aggregate_overflow = Json::object({
+      "SessionStart": Json::array(aggregate_groups),
+    })
+    @fs.write_file(config_path, @utf8.encode(aggregate_overflow.stringify()))
+    let aggregate_hooks = NativeHooks::load(Some(config_path), workspace).unwrap()
+    assert_eq(
+      aggregate_hooks.before_session_start(
+        tools, "aggregate-overflow", "startup",
+      ),
+      [],
+    )
+    assert_eq(@fs.read_file(aggregate_marker).text(), "012345")
+  }
 }
 
 ///|
@@ -455,8 +627,8 @@ test "UserPromptSubmit ignores matchers and follows the prompt decision codec" {
       ),
     ),
   ).unwrap()
-  assert_eq(parsed.2.length(), 1)
-  assert_eq(parsed.2[0].matcher, None)
+  assert_eq(parsed.3.length(), 1)
+  assert_eq(parsed.3[0].matcher, None)
 
   let plain = native_hook_prompt_result_decision({
     exit_code: 0,
@@ -1482,6 +1654,299 @@ async test "native runtime without hooks keeps the original tool event stream" {
       .unwrap()
     assert_true(native_hook_has_successful_write_result(session))
     assert_false(session.stringify().contains("effect-known"))
+  }
+}
+
+///|
+async test "SessionStart context is claimed before UserPromptSubmit and prompt context follows it" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-session-start-order")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let start_command = "payload=$(cat); printf x >> \"${CLAUDE_PROJECT_DIR}/session-start-count.txt\"; printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/session-start-payloads.jsonl\"; printf '%s' '{\"decision\":\"block\",\"systemMessage\":\"ignored\",\"updatedInput\":{\"prompt\":\"ignored\"},\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"from SessionStart\"}}'"
+    let prompt_command = "payload=$(cat); printf '%s' \"$payload\" > \"${CLAUDE_PROJECT_DIR}/prompt-payload.json\"; case \"$payload\" in *\"Original user request\"*) printf '%s' '{\"decision\":\"block\",\"reason\":\"first prompt denied\"}' ;; *) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"from UserPromptSubmit\"}}' ;; esac"
+    let hook_command = (command : String) => {
+      Json::object({
+        "type": Json::string("command"),
+        "command": Json::string(command),
+      })
+    }
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(
+        Json::object({
+          "SessionStart": Json::array([
+            Json::object({
+              "matcher": Json::string("startup"),
+              "hooks": Json::array([hook_command(start_command)]),
+            }),
+          ]),
+          "UserPromptSubmit": Json::array([
+            Json::object({
+              "matcher": Json::string("ignored"),
+              "hooks": Json::array([hook_command(prompt_command)]),
+            }),
+          ]),
+        }).stringify(),
+      ),
+    )
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "session-start-order"
+    ignore(
+      runtime
+      .invoke("session_create", {
+        "id": session_id.to_json(),
+        "title": "SessionStart order",
+      })
+      .unwrap(),
+    )
+    assert_false(@fs.exists(workspace + "/session-start-payloads.jsonl"))
+
+    let now = native_auth_now().to_int64() * 1000L
+    let identity = runtime.state.identity_key
+    let denied_id = @protocol.uuid_v7_command_id_from_entropy(
+      now, "6234567890abcdeffedcba9876543210",
+    ).unwrap()
+    let denied_command = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      session_id,
+      denied_id,
+      { "prompt": Json::string("Original user request") },
+    )
+    let (denied, denied_effects, denied_started, denied_control) = runtime
+      .accept_remote_command(denied_command, identity)
+      .unwrap()
+    assert_eq(string_field(denied, "status"), Some("rejected"))
+    assert_true(
+      string_field(denied, "error").unwrap().contains("first prompt denied"),
+    )
+    assert_true(denied_effects.is_empty())
+    assert_false(denied_started)
+    assert_true(denied_control is None)
+    assert_eq(runtime.session_start_completed.get(session_id), Some(true))
+    assert_eq(runtime.session_start_pending.get(session_id), None)
+    let start_payload = @json.parse(
+      @fs.read_file(workspace + "/session-start-payloads.jsonl").text().trim(),
+    )
+    assert_eq(native_hook_test_fields(start_payload).length(), 5)
+    assert_eq(string_field(start_payload, "source"), Some("startup"))
+    assert_eq(@fs.read_file(workspace + "/session-start-count.txt").text(), "x")
+    let first_prompt_payload = @json.parse(
+      @fs.read_file(workspace + "/prompt-payload.json").text(),
+    )
+    assert_eq(
+      string_field(first_prompt_payload, "prompt"),
+      Some("from SessionStartOriginal user request"),
+    )
+    let (denied_session, _) = runtime
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(int_field(denied_session, "turn_id"), Some(0))
+
+    let retry_id = @protocol.uuid_v7_command_id_from_entropy(
+      now + 1L,
+      "7234567890abcdeffedcba9876543210",
+    ).unwrap()
+    let retry_command = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      session_id,
+      retry_id,
+      { "prompt": Json::string("Retry after denial") },
+    )
+    let (retry_receipt, effects, should_start, control) = runtime
+      .accept_remote_command(retry_command, identity)
+      .unwrap()
+    assert_eq(string_field(retry_receipt, "status"), Some("accepted"))
+    assert_true(should_start)
+    assert_true(control is Some(_))
+    assert_eq(effects.length(), 1)
+    assert_true(effects[0].kind() == @engine.EffectType::Provider)
+    let provider_messages = native_hook_test_array(
+      native_hook_test_required_field(effects[0].request(), "messages"),
+      "provider messages",
+    )
+    assert_eq(provider_messages.length(), 2)
+    assert_eq(
+      string_field(provider_messages[0], "content"),
+      Some("Retry after denial"),
+    )
+    assert_eq(
+      native_hook_test_array(
+        native_hook_test_required_field(provider_messages[1], "content"),
+        "UserPromptSubmit message content",
+      ).map(block => native_hook_test_required_string(block, "text")),
+      ["from UserPromptSubmit"],
+    )
+    let retry_prompt_payload = @json.parse(
+      @fs.read_file(workspace + "/prompt-payload.json").text(),
+    )
+    assert_eq(
+      string_field(retry_prompt_payload, "prompt"),
+      Some("Retry after denial"),
+    )
+    assert_eq(@fs.read_file(workspace + "/session-start-count.txt").text(), "x")
+
+    let accepted_session_id = "session-start-accepted"
+    ignore(
+      runtime
+      .invoke("session_create", {
+        "id": accepted_session_id.to_json(),
+        "title": "SessionStart accepted order",
+      })
+      .unwrap(),
+    )
+    let accepted_id = @protocol.uuid_v7_command_id_from_entropy(
+      now + 1L,
+      "8234567890abcdeffedcba9876543210",
+    ).unwrap()
+    let accepted_command = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      accepted_session_id,
+      accepted_id,
+      { "prompt": Json::string("Accepted original request") },
+    )
+    let (accepted_receipt, accepted_effects, accepted_started, accepted_control) = runtime
+      .accept_remote_command(accepted_command, identity)
+      .unwrap()
+    assert_eq(string_field(accepted_receipt, "status"), Some("accepted"))
+    assert_true(accepted_started)
+    assert_true(accepted_control is Some(_))
+    let ordered_messages = native_hook_test_array(
+      native_hook_test_required_field(accepted_effects[0].request(), "messages"),
+      "ordered provider messages",
+    )
+    assert_eq(ordered_messages.length(), 3)
+    assert_eq(
+      native_hook_test_array(
+        native_hook_test_required_field(ordered_messages[0], "content"),
+        "SessionStart message content",
+      ).map(block => native_hook_test_required_string(block, "text")),
+      ["from SessionStart"],
+    )
+    assert_eq(
+      string_field(ordered_messages[1], "content"),
+      Some("Accepted original request"),
+    )
+    assert_eq(
+      native_hook_test_array(
+        native_hook_test_required_field(ordered_messages[2], "content"),
+        "UserPromptSubmit message content",
+      ).map(block => native_hook_test_required_string(block, "text")),
+      ["from UserPromptSubmit"],
+    )
+    let accepted_prompt_payload = @json.parse(
+      @fs.read_file(workspace + "/prompt-payload.json").text(),
+    )
+    assert_eq(
+      string_field(accepted_prompt_payload, "prompt"),
+      Some("from SessionStartAccepted original request"),
+    )
+    assert_eq(
+      @fs.read_file(workspace + "/session-start-count.txt").text(),
+      "xx",
+    )
+
+    let replay = native_hook_remote_prompt_command(
+      runtime.state.workspace_id,
+      accepted_session_id,
+      accepted_id,
+      { "prompt": Json::string("Accepted original request") },
+    )
+    let (_, replay_effects, replay_started, _) = runtime
+      .accept_remote_command(replay, identity)
+      .unwrap()
+    assert_true(replay_effects.is_empty())
+    assert_false(replay_started)
+    assert_eq(
+      @json.parse(@fs.read_file(workspace + "/prompt-payload.json").text()),
+      accepted_prompt_payload,
+    )
+    assert_eq(
+      @fs.read_file(workspace + "/session-start-count.txt").text(),
+      "xx",
+    )
+    assert_true(runtime.close() is Ok(_))
+  }
+}
+
+///|
+async test "SessionStart uses resume for sessions restored when the runtime opens" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-session-start-resume")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let data_dir = fixture + "/data"
+    let session_id = "session-start-resume"
+    let initial = NativeRuntime::open(data_dir, workspace, false, true).unwrap()
+    ignore(
+      initial
+      .invoke("session_create", {
+        "id": session_id.to_json(),
+        "title": "SessionStart resume",
+      })
+      .unwrap(),
+    )
+    assert_true(initial.close() is Ok(_))
+
+    let hooks_path = fixture + "/hooks.json"
+    let command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/session-start-payloads.jsonl\"; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"resumed context\"}}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(
+        native_hook_test_config("SessionStart", "startup|resume", command),
+      ),
+    )
+    let runtime = NativeRuntime::open(
+      data_dir,
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    assert_false(@fs.exists(workspace + "/session-start-payloads.jsonl"))
+    let (_, effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id.to_json(),
+        "prompt": "Continue the restored session.",
+      })
+      .unwrap()
+    assert_eq(effects.length(), 1)
+    let payload = @json.parse(
+      @fs.read_file(workspace + "/session-start-payloads.jsonl").text().trim(),
+    )
+    assert_eq(string_field(payload, "source"), Some("resume"))
+    let messages = native_hook_test_array(
+      native_hook_test_required_field(effects[0].request(), "messages"),
+      "resume provider messages",
+    )
+    assert_eq(messages.length(), 2)
+    assert_eq(
+      native_hook_test_array(
+        native_hook_test_required_field(messages[0], "content"),
+        "resume SessionStart message content",
+      ).map(block => native_hook_test_required_string(block, "text")),
+      ["resumed context"],
+    )
+    assert_eq(
+      string_field(messages[1], "content"),
+      Some("Continue the restored session."),
+    )
+    assert_true(runtime.close() is Ok(_))
   }
 }
 
