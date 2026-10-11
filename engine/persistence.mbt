@@ -1500,6 +1500,12 @@ fn restore_session(
             all_contexts.push(context)
           }
           let context_length = engine_validate_hook_contexts(all_contexts)
+          if late_subagent_context_count + all_contexts.length() > 32 ||
+            late_subagent_context_length + context_length > 16384 {
+            raise Invalid(
+              "Combined late SubagentStart and child PostToolUse contexts exceed the configured limit",
+            )
+          }
           if int_value(
               required_field(data, "context_count"),
               "Child PostToolUse admitted context count",

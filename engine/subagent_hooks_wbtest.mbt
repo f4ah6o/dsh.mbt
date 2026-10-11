@@ -104,6 +104,20 @@ fn subagent_hook_post_tool_pending_engine() -> Engine {
 }
 
 ///|
+fn subagent_hook_completed_post_tool_snapshot(
+  prompt_contexts : Array[String],
+) -> Json {
+  let engine = subagent_hook_post_tool_pending_engine()
+  let checkpoint = engine.pending_subagent_prompt_hook("hook-child").unwrap()
+  ignore(
+    success(engine.accept_subagent_prompt_hook(checkpoint, prompt_contexts)),
+  )
+  let next_provider = engine.take_effects()[0]
+  ignore(success(engine.complete(id_of(next_provider), stop_response("done"))))
+  engine.snapshot()
+}
+
+///|
 fn subagent_hook_forge_reordered_post_tool_message(
   snapshot : Json,
 ) -> Json raise EngineError {
@@ -1074,4 +1088,50 @@ test "child cancellation abandons known PostToolUse context while a sibling is s
   let restored = Engine::new(test_tools())
   assert_eq(restored.restore(engine.snapshot()), Ok(()))
   assert_eq(get_session_for(restored, "hook-child"), cancelled)
+}
+
+///|
+test "restore enforces combined late Start and child PostTool context count" {
+  let snapshot = subagent_hook_completed_post_tool_snapshot([])
+  let exact = subagent_hook_forge_start_contexts(snapshot, Array::make(31, "s"))
+  let valid = Engine::new(test_tools())
+  assert_eq(valid.restore(exact), Ok(()))
+
+  let one_over = subagent_hook_forge_start_contexts(
+    snapshot,
+    Array::make(32, "s"),
+  )
+  let destination = Engine::new(test_tools())
+  let before = destination.snapshot()
+  assert_true(destination.restore(one_over) is Err(_))
+  assert_eq(destination.snapshot(), before)
+
+  let two_over = subagent_hook_forge_start_contexts(
+    subagent_hook_completed_post_tool_snapshot(["U"]),
+    Array::make(32, "s"),
+  )
+  let second_destination = Engine::new(test_tools())
+  let second_before = second_destination.snapshot()
+  assert_true(second_destination.restore(two_over) is Err(_))
+  assert_eq(second_destination.snapshot(), second_before)
+}
+
+///|
+test "restore enforces combined late Start and child PostTool UTF-16 length" {
+  let snapshot = subagent_hook_completed_post_tool_snapshot([])
+  let exact = subagent_hook_forge_start_contexts(
+    snapshot,
+    subagent_hook_large_contexts("d".repeat(4093) + "😀"),
+  )
+  let valid = Engine::new(test_tools())
+  assert_eq(valid.restore(exact), Ok(()))
+
+  let one_unit_over = subagent_hook_forge_start_contexts(
+    snapshot,
+    subagent_hook_large_contexts("d".repeat(4094) + "😀"),
+  )
+  let destination = Engine::new(test_tools())
+  let before = destination.snapshot()
+  assert_true(destination.restore(one_unit_over) is Err(_))
+  assert_eq(destination.snapshot(), before)
 }
