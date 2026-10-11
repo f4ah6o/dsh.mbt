@@ -77,7 +77,7 @@ DeepSeek Harness → dsh.mbt の移植時に見つけた不備を、移植と同
 ### DEBT-006: command hook の transcript_path が空文字のまま
 
 - 起点・種類・優先度・状態: `UPSTREAM, PORT / compatibility, design, docs`、優先度未査定、`observed`。
-- upstream baseline / path: [`5badb150` の base / SessionStart payload](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts#L327-L339) は `transcript_path: ''` を渡す。原典のコメントも persistence seam が artifact path を提供しない制約と説明する。0.1.18 の SessionStart payload も同じ共通 base を通る。
+- upstream baseline / path: [`5badb150` の base / SessionStart payload](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts#L327-L339) は `transcript_path: ''` を渡す。原典のコメントも persistence seam が artifact path を提供しない制約と説明する。固定原典の SessionStart payload は同じ共通 `base` を通る。0.1.18 移植では空文字を維持する方針だが、実装確認は pending。
 - port baseline / path: [`30da581` の runtime/hooks_runtime.mbt](https://github.com/f4ah6o/dsh.mbt/blob/30da581bc600a87355b20e7583aa7e7f87ae8d29/runtime/hooks_runtime.mbt)、`native_hook_payload` の `("transcript_path", Json::string(""))`。
 - 観測事実 / 確認: 固定した両ソースを読み、hook stdin のフィールドが空文字になることを確認。外部 hook の障害を再現した結果ではない。
 - 不明点・影響: `transcript_path` から履歴を読む既存 hook の互換性には制限がある。そのような hook の実行検証は未実施。実行時の不具合を確認したものではない。
