@@ -118,6 +118,45 @@ fn subagent_hook_completed_post_tool_snapshot(
 }
 
 ///|
+fn subagent_hook_over_limit_post_tool_engine(
+  post_tool_contexts : Array[String],
+) -> (Engine, Json) {
+  let engine = subagent_hook_engine()
+  let initial = subagent_checkpoint_success(
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", true),
+  )
+  ignore(success(engine.accept_subagent_prompt_hook(initial, [])))
+  let provider = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete(
+        id_of(provider),
+        calls_response([("child-read", "read", "{\"file_path\":\"a.txt\"}")]),
+      ),
+    ),
+  )
+  let read = engine.take_effects()[0]
+  match engine.inject_hook_contexts("hook-child", ["S"]) {
+    Ok(true) => ()
+    _ => abort("Could not queue child Start context for capacity test")
+  }
+  let failed = success(
+    engine.complete(
+      id_of(read),
+      object([
+        ("ok", boolean(true)),
+        ("content", Json::string("alpha")),
+        (
+          "additional_contexts",
+          Json::array(post_tool_contexts.map(context => Json::string(context))),
+        ),
+      ]),
+    ),
+  )
+  (engine, failed)
+}
+
+///|
 fn subagent_hook_forge_reordered_post_tool_message(
   snapshot : Json,
 ) -> Json raise EngineError {
@@ -1154,4 +1193,44 @@ test "restore enforces combined late Start and child PostTool UTF-16 length" {
   let before = destination.snapshot()
   assert_true(destination.restore(one_unit_over) is Err(_))
   assert_eq(destination.snapshot(), before)
+}
+
+///|
+test "over-limit child PostTool prompt checkpoints terminate with restorable abandonment" {
+  let over_count = subagent_hook_over_limit_post_tool_engine(
+    Array::make(32, "A"),
+  )
+  assert_eq(get_status(over_count.1), "failed")
+  assert_eq(
+    event_type_count(over_count.1, "hook/subagent-post-tool-prompt-abandoned"),
+    1,
+  )
+  assert_true(
+    array_value(
+      required_field(over_count.1, "messages"),
+      "count-limited child messages",
+      16,
+    ).any(message => {
+      required_string(message, "role") == "tool" &&
+      required_string(message, "content") == "alpha"
+    }),
+  )
+  let count_restore = Engine::new(test_tools())
+  assert_eq(count_restore.restore(over_count.0.snapshot()), Ok(()))
+  assert_eq(get_session_for(count_restore, "hook-child"), over_count.1)
+
+  let over_length = subagent_hook_over_limit_post_tool_engine([
+    "a".repeat(4096),
+    "b".repeat(4096),
+    "c".repeat(4096),
+    "d".repeat(4096),
+  ])
+  assert_eq(get_status(over_length.1), "failed")
+  assert_eq(
+    event_type_count(over_length.1, "hook/subagent-post-tool-prompt-abandoned"),
+    1,
+  )
+  let length_restore = Engine::new(test_tools())
+  assert_eq(length_restore.restore(over_length.0.snapshot()), Ok(()))
+  assert_eq(get_session_for(length_restore, "hook-child"), over_length.1)
 }

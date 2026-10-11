@@ -808,8 +808,6 @@ fn Engine::start_step(
     ignore(engine_validate_hook_contexts(child_contexts)) catch {
       Invalid(error) => {
         session.pending_hook_contexts.clear()
-        session.pending_subagent_post_tool_messages.clear()
-        session.pending_subagent_post_tool_contexts.clear()
         self.terminate(session, Failed, "session_capacity", error)
         return
       }
