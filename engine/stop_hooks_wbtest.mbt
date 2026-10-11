@@ -249,6 +249,7 @@ test "late SubagentStart context continues past Stop without clearing max-token 
   )
   let continued = success(engine.finish_stop_hook(first_checkpoint))
   assert_eq(get_status(continued), "running")
+  assert_eq(event_type_count(continued, "hook/stop-settled"), 1)
   let next = engine.take_typed_effects()
   assert_eq(next.length(), 1)
   let messages = array_value(
@@ -282,6 +283,9 @@ test "late SubagentStart context continues past Stop without clearing max-token 
       required_string(required_field(event, "data"), "reason") == "max_tokens"
     }),
   )
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session(restored), ended)
 }
 
 ///|

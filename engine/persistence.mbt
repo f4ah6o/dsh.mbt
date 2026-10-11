@@ -221,6 +221,7 @@ fn restore_session(
   let mut late_subagent_context_admission = false
   let mut late_subagent_context_count = 0
   let mut late_subagent_context_length = 0
+  let mut stop_settled_pending_boundary = false
   let mut stop_continuation_reason_seen = false
   let mut stop_continuation_rejected = false
   let pending_post_tool_contexts : Array[(String, Json)] = []
@@ -239,6 +240,12 @@ fn restore_session(
     let step = int_value(required_field(raw, "step"), "event step", 0, 64)
     let data = required_field(raw, "data")
     ignore(fields(data))
+    if stop_settled_pending_boundary &&
+      kind != "hook/subagent-start-context" &&
+      kind != "turn/end" &&
+      kind != "session/interrupted" {
+      raise Invalid("Stop settlement is not followed by its input boundary")
+    }
     if late_subagent_context_admission &&
       kind != "user/message" &&
       kind != "step/start" {
@@ -1235,6 +1242,27 @@ fn restore_session(
           stop_continuation_reason_seen = false
           stop_continuation_rejected = false
         }
+        "hook/stop-settled" => {
+          if fields(data).length() != 0 ||
+            !open_turn ||
+            session.open_step ||
+            !assistant_recorded ||
+            session.active_effect is Some(_) ||
+            session.active_tool_effect_count() > 0 ||
+            session.approval is Some(_) ||
+            session.pending_retry_id is Some(_) ||
+            !session.stop_hook_pending ||
+            session.stop_continuation_text is Some(_) ||
+            session.stop_continuation_admitted ||
+            stop_continuation_reason_seen ||
+            stop_continuation_rejected {
+            raise Invalid("Invalid allowed Stop-hook settlement")
+          }
+          session.clear_stop_continuation_state()
+          stop_settled_pending_boundary = true
+          stop_continuation_reason_seen = false
+          stop_continuation_rejected = false
+        }
         "hook/subagent-start-context" => {
           let context_count = int_value(
             required_field(data, "context_count"),
@@ -1273,6 +1301,7 @@ fn restore_session(
               "SubagentStart context is outside the Stop continuation input order",
             )
           }
+          stop_settled_pending_boundary = false
           expected_subagent_context = Some((context_count, context_length))
         }
         "hook/stop-continuation-pending" => {
@@ -1347,6 +1376,15 @@ fn restore_session(
             raise Invalid("Turn ended with unsettled work")
           }
           let reason = required_string(data, "reason", max=64)
+          if stop_settled_pending_boundary &&
+            reason != "blocked" &&
+            reason != "cancelled" &&
+            reason != "max_steps" &&
+            reason != "effect_limit" &&
+            reason != "session_capacity" &&
+            reason != "interrupted" {
+            raise Invalid("Stop settlement ended without settling its input")
+          }
           if session.stop_hook_pending {
             let has_staged_continuation = session.stop_continuation_text
               is Some(_)
@@ -1392,6 +1430,7 @@ fn restore_session(
             _ => raise Invalid("Unknown turn ending")
           }
           session.clear_stop_hook_state()
+          stop_settled_pending_boundary = false
           stop_continuation_reason_seen = false
           stop_continuation_rejected = false
           open_turn = false
@@ -1464,7 +1503,8 @@ fn restore_session(
     session.active_effect is None &&
     session.active_tool_effect_count() == 0 &&
     session.approval is None &&
-    !session.stop_hook_pending {
+    !session.stop_hook_pending &&
+    !stop_settled_pending_boundary {
     raise Invalid("Snapshot captured an impossible in-between transition")
   }
   if open_turn && session.events.length() + 40 > 32768 {

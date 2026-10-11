@@ -354,6 +354,166 @@ test "Stop continuation batches earlier Start input before reason and prompt con
 }
 
 ///|
+test "allowed Stop settles before queued Start admission and replays once" {
+  let engine = subagent_hook_engine()
+  let initial = subagent_checkpoint_success(
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", true),
+  )
+  ignore(success(engine.accept_subagent_prompt_hook(initial, [])))
+  let first = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete_effect_with_stop_hook(
+        subagent_stop_effect_id(first),
+        stop_response("answer before allowed Stop"),
+      ),
+    ),
+  )
+  let session_id = SessionId::new("hook-child").unwrap()
+  let stop = engine.pending_stop_hook(session_id).unwrap()
+  assert_eq(
+    engine.inject_hook_contexts("hook-child", ["Start queued during Stop"]),
+    Ok(true),
+  )
+  let settled = success(engine.finish_stop_hook(stop))
+  assert_eq(event_type_count(settled, "hook/stop-settled"), 1)
+  let checkpoint = engine.pending_subagent_prompt_hook("hook-child").unwrap()
+  assert_false(checkpoint.is_initial())
+  assert_eq(checkpoint.contexts(), ["Start queued during Stop"])
+
+  let interrupted = Engine::new(test_tools())
+  assert_eq(interrupted.restore(engine.snapshot()), Ok(()))
+  let interrupted_session = get_session_for(interrupted, "hook-child")
+  assert_eq(get_status(interrupted_session), "failed")
+  assert_eq(engine.take_effects().length(), 0)
+
+  ignore(
+    success(
+      engine.accept_subagent_prompt_hook(checkpoint, ["prompt policy context"]),
+    ),
+  )
+  let next = engine.take_effects()[0]
+  let messages = subagent_hook_all_messages(next)
+  assert_true(
+    messages.any(message => {
+      required_string(message, "role") == "assistant" &&
+      subagent_hook_message_text(message) == "answer before allowed Stop"
+    }),
+  )
+  assert_true(
+    messages.any(message => {
+      required_string(message, "role") == "user" &&
+      subagent_hook_message_text(message) == "Start queued during Stop"
+    }),
+  )
+  assert_true(
+    messages.any(message => {
+      required_string(message, "role") == "user" &&
+      subagent_hook_message_text(message) == "prompt policy context"
+    }),
+  )
+  let completed = success(
+    engine.complete(id_of(next), stop_response("answer after queued Start")),
+  )
+  assert_eq(get_status(completed), "completed")
+  let snapshot = engine.snapshot()
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(snapshot), Ok(()))
+  assert_eq(get_session_for(restored, "hook-child"), completed)
+
+  let reordered = json_copy(snapshot)
+  let sessions = array_value(
+    required_field(reordered, "sessions"),
+    "sessions",
+    32,
+  )
+  let session = sessions[0]
+  let events = array_value(required_field(session, "events"), "events", 32768)
+  let mut settled_index = -1
+  let mut start_index = -1
+  for index, event in events {
+    let kind = required_string(event, "type")
+    if kind == "hook/stop-settled" {
+      settled_index = index
+    } else if kind == "hook/subagent-start-context" {
+      start_index = index
+    }
+  }
+  assert_true(settled_index >= 0 && start_index > settled_index)
+  let settled_event = events[settled_index]
+  let start_event = events[start_index]
+  let reordered_events : Array[Json] = []
+  for index, event in events {
+    let replacement = if index == settled_index {
+      json_copy(start_event)
+    } else if index == start_index {
+      json_copy(settled_event)
+    } else {
+      json_copy(event)
+    }
+    fields(replacement).set("seq", integer(index))
+    reordered_events.push(replacement)
+  }
+  fields(session).set("events", Json::array(reordered_events))
+  let rejected = Engine::new(test_tools())
+  let rejected_before = rejected.snapshot()
+  assert_true(rejected.restore(reordered) is Err(_))
+  assert_eq(rejected.snapshot(), rejected_before)
+}
+
+///|
+test "allowed Stop settlement preserves the answer when Start admission is denied" {
+  let engine = subagent_hook_engine()
+  let initial = subagent_checkpoint_success(
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", true),
+  )
+  ignore(success(engine.accept_subagent_prompt_hook(initial, [])))
+  let first = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete_effect_with_stop_hook(
+        subagent_stop_effect_id(first),
+        stop_response("answer retained after Start denial"),
+      ),
+    ),
+  )
+  let stop = engine
+    .pending_stop_hook(SessionId::new("hook-child").unwrap())
+    .unwrap()
+  assert_eq(
+    engine.inject_hook_contexts("hook-child", ["rejected Start context"]),
+    Ok(true),
+  )
+  ignore(success(engine.finish_stop_hook(stop)))
+  let checkpoint = engine.pending_subagent_prompt_hook("hook-child").unwrap()
+  let blocked = success(
+    engine.block_subagent_prompt_hook(checkpoint, "prompt policy denied"),
+  )
+  assert_eq(get_status(blocked), "failed")
+  assert_eq(event_type_count(blocked, "hook/stop-settled"), 1)
+  let transcript = array_value(
+    required_field(blocked, "messages"),
+    "messages",
+    16,
+  )
+  assert_true(
+    transcript.any(message => {
+      subagent_hook_message_text(message) ==
+      "answer retained after Start denial"
+    }),
+  )
+  assert_false(
+    transcript.any(message => {
+      subagent_hook_message_text(message) == "rejected Start context"
+    }),
+  )
+  assert_eq(event_type_count(blocked, "hook/subagent-start-context"), 0)
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session_for(restored, "hook-child"), blocked)
+}
+
+///|
 test "Stop prompt denial sees earlier Start input but commits neither message" {
   let engine = subagent_hook_engine()
   let initial = subagent_checkpoint_success(

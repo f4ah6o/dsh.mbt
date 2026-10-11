@@ -113,6 +113,7 @@ pub(all) enum EngineEventKind {
   ToolResultPruned
   TodoWrite
   SubagentStartContext
+  StopHookSettled
   UpstreamHeader
   UpstreamEvent
   Other(String)
