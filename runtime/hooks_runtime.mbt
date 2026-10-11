@@ -69,6 +69,102 @@ fn NativeHooks::has_stop(self : NativeHooks) -> Bool {
 }
 
 ///|
+fn NativeHooks::has_subagent_start(self : NativeHooks) -> Bool {
+  !self.subagent_start.is_empty()
+}
+
+///|
+fn NativeHooks::has_subagent_stop(self : NativeHooks) -> Bool {
+  !self.subagent_stop.is_empty()
+}
+
+///|
+fn native_subagent_hook_payload(
+  event : String,
+  project_dir : String,
+  child_session_id : String,
+) -> Result[String, String] {
+  let fields = Map::from_array([
+    ("session_id", Json::string(child_session_id)),
+    ("transcript_path", Json::string("")),
+    ("cwd", Json::string(project_dir)),
+    ("hook_event_name", Json::string(event)),
+    ("agent_id", Json::string(child_session_id)),
+    ("agent_type", Json::string("general-purpose")),
+  ])
+  if event == "SubagentStop" {
+    fields.set("stop_hook_active", Json::boolean(false))
+  }
+  let text = Json::object(fields).stringify() + "\n"
+  if @utf8.encode(text).length() > NATIVE_HOOK_STDIN_LIMIT {
+    Err("hooks stdin exceeds the 64 KiB limit")
+  } else {
+    Ok(text)
+  }
+}
+
+///|
+/// Run matching Start commands as lifecycle work. Only matching-event
+/// additionalContext is returned; hook decisions never admit or deny a child.
+async fn NativeHooks::before_subagent_start(
+  self : NativeHooks,
+  tools : NativeTools,
+  child_session_id : String,
+) -> Array[String] {
+  let payload = match
+    native_subagent_hook_payload(
+      "SubagentStart",
+      self.project_dir,
+      child_session_id,
+    ) {
+    Ok(value) => value
+    Err(_) => return []
+  }
+  let contexts : Array[String] = []
+  for group in self.subagent_start {
+    if !native_hook_matches(group.matcher, "general-purpose") {
+      continue
+    }
+    for hook in group.commands {
+      let capture = match native_run_hook_command(tools, hook, payload) {
+        Ok(value) => value
+        Err(_) => continue
+      }
+      for context in native_hook_subagent_start_context(capture) {
+        ignore(native_hook_add_context(contexts, context))
+      }
+    }
+  }
+  contexts
+}
+
+///|
+/// Run matching Stop commands after child settlement and discard all output.
+async fn NativeHooks::after_subagent_stop(
+  self : NativeHooks,
+  tools : NativeTools,
+  child_session_id : String,
+) -> Unit {
+  let payload = match
+    native_subagent_hook_payload(
+      "SubagentStop",
+      self.project_dir,
+      child_session_id,
+    ) {
+    Ok(value) => value
+    Err(_) => return
+  }
+  for group in self.subagent_stop {
+    if !native_hook_matches(group.matcher, "general-purpose") {
+      continue
+    }
+    for hook in group.commands {
+      ignore(native_run_hook_command(tools, hook, payload))
+    }
+  }
+}
+
+///|
 fn native_hook_prompt_input(input : Json, contexts : Array[String]) -> Json {
   let fields = match input {
     Json::Object(value) => value.copy()

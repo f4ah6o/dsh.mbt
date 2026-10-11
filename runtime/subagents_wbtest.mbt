@@ -768,6 +768,14 @@ async test "native parent cancellation reaches a blocked child provider and rest
     let workspace = fixture + "/workspace"
     @fs.mkdir(workspace)
     @fs.write_file(workspace + "/target.txt", "child data")
+    let hooks_path = fixture + "/hooks.json"
+    let stop_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/cancel-stop-payloads.jsonl\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"observation only\"}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(
+        native_hook_test_config("SubagentStop", "general-purpose", stop_command),
+      ),
+    )
     let address = @socket.Addr::parse("127.0.0.1:0")
     let server = @http.Server::Server(address, reuse_addr=false)
     group.add_defer(() => server.close())
@@ -819,6 +827,7 @@ async test "native parent cancellation reaches a blocked child provider and rest
         model_override="fixture-model",
         base_url_override=base_url,
         max_retries=0,
+        hooks_config_path=Some(hooks_path),
         enable_subagents=true,
       ) {
       Ok(value) => value
@@ -899,6 +908,21 @@ async test "native parent cancellation reaches a blocked child provider and rest
     ignore(job.wait()) catch {
       _ => ()
     }
+    let stop_payloads = @fs.read_file(workspace + "/cancel-stop-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array()
+    assert_eq(stop_payloads.length(), 1)
+    let stop_payload = @json.parse(stop_payloads[0])
+    assert_eq(
+      string_field(stop_payload, "hook_event_name"),
+      Some("SubagentStop"),
+    )
+    assert_eq(
+      object_field(stop_payload, "stop_hook_active"),
+      Some(Json::boolean(false)),
+    )
     assert_eq(
       string_field(
         runtime.find_receipt(send_id, identity).unwrap().unwrap(),
@@ -927,6 +951,7 @@ async test "native parent cancellation reaches a blocked child provider and rest
       model_override="fixture-model",
       base_url_override=base_url,
       max_retries=0,
+      hooks_config_path=Some(hooks_path),
       enable_subagents=true,
     ).unwrap()
     group.add_defer(() => {
@@ -1302,6 +1327,14 @@ async test "native subagent provider failure on the final step preserves its ter
     let workspace = fixture + "/workspace"
     @fs.mkdir(workspace)
     @fs.write_file(workspace + "/target.txt", "child data")
+    let hooks_path = fixture + "/hooks.json"
+    let stop_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/failure-stop-payloads.jsonl\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"observation only\"}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(
+        native_hook_test_config("SubagentStop", "general-purpose", stop_command),
+      ),
+    )
     let address = @socket.Addr::parse("127.0.0.1:0")
     let server = @http.Server::Server(address, reuse_addr=false)
     group.add_defer(() => server.close())
@@ -1338,6 +1371,7 @@ async test "native subagent provider failure on the final step preserves its ter
         model_override="fixture-model",
         base_url_override="http://127.0.0.1:" + server.addr.port().to_string(),
         max_retries=0,
+        hooks_config_path=Some(hooks_path),
         enable_subagents=true,
       ) {
       Ok(value) => value
@@ -1355,6 +1389,18 @@ async test "native subagent provider failure on the final step preserves its ter
     serving.wait()
     assert_true(auth_ok.val)
     assert_eq(bodies.val.length(), 3)
+    let stop_payloads = @fs.read_file(
+        workspace + "/failure-stop-payloads.jsonl",
+      )
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array()
+    assert_eq(stop_payloads.length(), 1)
+    assert_eq(
+      string_field(@json.parse(stop_payloads[0]), "hook_event_name"),
+      Some("SubagentStop"),
+    )
     let session = runtime
       .invoke("session_get", {
         "session_id": "native-subagent-provider-failure",
@@ -1502,6 +1548,14 @@ async test "native subagent timeout cancels a child waiting on its provider" {
     })
     let workspace = fixture + "/workspace"
     @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let stop_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/timeout-stop-payloads.jsonl\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"observation only\"}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(
+        native_hook_test_config("SubagentStop", "general-purpose", stop_command),
+      ),
+    )
     let address = @socket.Addr::parse("127.0.0.1:0")
     let server = @http.Server::Server(address, reuse_addr=false)
     group.add_defer(() => server.close())
@@ -1542,6 +1596,7 @@ async test "native subagent timeout cancels a child waiting on its provider" {
         model_override="fixture-model",
         base_url_override="http://127.0.0.1:" + server.addr.port().to_string(),
         max_retries=0,
+        hooks_config_path=Some(hooks_path),
         enable_subagents=true,
       ) {
       Ok(value) => value
@@ -1584,6 +1639,18 @@ async test "native subagent timeout cancels a child waiting on its provider" {
       Some("child run exceeded 500 ms"),
     )
     assert_eq(int_field(envelope, "steps"), Some(1))
+    let stop_payloads = @fs.read_file(
+        workspace + "/timeout-stop-payloads.jsonl",
+      )
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array()
+    assert_eq(stop_payloads.length(), 1)
+    assert_eq(
+      string_field(@json.parse(stop_payloads[0]), "hook_event_name"),
+      Some("SubagentStop"),
+    )
     release_sent.val = true
     release.release()
     serving.wait()
@@ -1780,6 +1847,280 @@ async test "native foreground child applies prompt context and Stop continuation
     )
     assert_eq(string_field(envelope, "status"), Some("completed"))
     assert_eq(int_field(envelope, "steps"), Some(2))
+  }
+}
+
+///|
+async test "native SubagentStart remains detached, injects context, and Stop only observes" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-subagent-start-stop-hooks")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let canonical_workspace = @fs.realpath(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let start_release_path = workspace + "/start-release"
+    let start_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/subagent-start-payloads.jsonl\"; : > \"${CLAUDE_PROJECT_DIR}/start-started\"; while [ ! -e \"${CLAUDE_PROJECT_DIR}/start-release\" ]; do /bin/sleep 0.01; done; printf '%s' '{\"decision\":\"block\",\"reason\":\"ignored start denial\",\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStart\",\"additionalContext\":\"late child context\"}}'; : > \"${CLAUDE_PROJECT_DIR}/start-done\"; /bin/sleep 0.1"
+    let unmatched_start_command = ": > \"${CLAUDE_PROJECT_DIR}/unmatched-start-fired\""
+    let stop_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/subagent-stop-payloads.jsonl\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"ignored stop denial\"}'"
+    let config = Json::object({
+      "SubagentStart": Json::array([
+        Json::object({
+          "matcher": Json::string("general-purpose"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(start_command) }),
+          ]),
+        }),
+        Json::object({
+          "matcher": Json::string("code-review"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(unmatched_start_command) }),
+          ]),
+        }),
+      ]),
+      "SubagentStop": Json::array([
+        Json::object({
+          "matcher": Json::string("general-purpose"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(stop_command) }),
+          ]),
+        }),
+      ]),
+    })
+    @fs.write_file(hooks_path, @utf8.encode(config.stringify()))
+    let address = @socket.Addr::parse("127.0.0.1:0")
+    let server = @http.Server::Server(address, reuse_addr=false)
+    group.add_defer(() => server.close())
+    let release = @async.Semaphore::Semaphore(1, initial_value=0)
+    let release_sent = Ref(false)
+    group.add_defer(() => {
+      @async.protect_from_cancel(async fn() {
+        if !release_sent.val {
+          release_sent.val = true
+          release.release()
+        }
+        if !@fs.exists(start_release_path) {
+          @fs.write_file(start_release_path, @utf8.encode("release"))
+        }
+      })
+    })
+    let bodies = Ref([])
+    let auth_ok = Ref(true)
+    let serving = group.spawn(no_wait=true, async fn() {
+      native_subagent_provider_server_gated_index(
+        server,
+        [
+          native_subagent_http_response(
+            native_subagent_openai_text_stream_with_reason(
+              "First child answer before context delivery.", "stop",
+            ),
+          ),
+          native_subagent_http_response(
+            native_subagent_openai_text_stream_with_reason(
+              "Final child answer after context delivery.", "stop",
+            ),
+          ),
+        ],
+        bodies,
+        auth_ok,
+        0,
+        release,
+      )
+    })
+    let base_url = "http://127.0.0.1:" + server.addr.port().to_string()
+    let runtime = match
+      NativeRuntime::open(
+        fixture + "/data",
+        workspace,
+        false,
+        false,
+        mode_override="openai",
+        model_override="fixture-model",
+        base_url_override=base_url,
+        max_retries=0,
+        hooks_config_path=Some(hooks_path),
+        enable_subagents=true,
+      ) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    assert_true(runtime.hooks.has_subagent_start())
+    assert_true(runtime.hooks.has_subagent_stop())
+    let effect = native_subagent_parent_tool_effect(
+      runtime, "native-subagent-start-stop-hooks", "parent-start-stop-hook-call",
+      "Use a child to finish this task.",
+    )
+    let job = group.spawn(
+      async fn() { runtime.run_tool_effect(effect) },
+      no_wait=true,
+      allow_failure=true,
+    )
+    let mut lifecycle_and_provider_started = false
+    for _ in 0..<1000 {
+      if @fs.exists(workspace + "/start-started") && bodies.val.length() == 1 {
+        lifecycle_and_provider_started = true
+        break
+      }
+      @async.sleep(5)
+    }
+    if !@fs.exists(workspace + "/start-started") {
+      fail(
+        "SubagentStart command did not start; provider requests=" +
+        bodies.val.length().to_string(),
+      )
+    }
+    assert_true(lifecycle_and_provider_started)
+    assert_false(bodies.val[0].contains("late child context"))
+    @fs.write_file(start_release_path, @utf8.encode("release"))
+    let mut start_finished = false
+    for _ in 0..<1000 {
+      if @fs.exists(workspace + "/start-done") {
+        start_finished = true
+        break
+      }
+      @async.sleep(5)
+    }
+    assert_true(start_finished)
+    // The hook subprocess emits before it exits; let capture and the detached
+    // callback enqueue the context while the first provider request is gated.
+    @async.sleep(200)
+    release_sent.val = true
+    release.release()
+    let (_, follow_up) = match job.wait() {
+      Ok(value) => value
+      Err(_) => fail("native lifecycle hook task failed the child run")
+    }
+    assert_eq(follow_up.length(), 1)
+    assert_true(
+      @async.with_timeout_opt(5000, async fn() { serving.wait() }) is Some(_),
+    )
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 2)
+    assert_true(!bodies.val[0].contains("late child context"))
+    assert_true(bodies.val[1].contains("late child context"))
+    assert_false(@fs.exists(workspace + "/unmatched-start-fired"))
+
+    let start_lines = @fs.read_file(
+        workspace + "/subagent-start-payloads.jsonl",
+      )
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array()
+    let stop_lines = @fs.read_file(workspace + "/subagent-stop-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array()
+    assert_eq(start_lines.length(), 1)
+    assert_eq(stop_lines.length(), 1)
+    let start_payload = @json.parse(start_lines[0])
+    let stop_payload = @json.parse(stop_lines[0])
+    assert_eq(native_hook_test_fields(start_payload).length(), 6)
+    assert_eq(native_hook_test_fields(stop_payload).length(), 7)
+    let child_id = string_field(start_payload, "session_id").unwrap()
+    assert_eq(
+      string_field(start_payload, "hook_event_name"),
+      Some("SubagentStart"),
+    )
+    assert_eq(string_field(start_payload, "session_id"), Some(child_id))
+    assert_eq(string_field(start_payload, "agent_id"), Some(child_id))
+    assert_eq(
+      string_field(start_payload, "agent_type"),
+      Some("general-purpose"),
+    )
+    assert_eq(string_field(start_payload, "transcript_path"), Some(""))
+    assert_eq(string_field(start_payload, "cwd"), Some(canonical_workspace))
+    assert_true(object_field(start_payload, "stop_hook_active") is None)
+    assert_eq(
+      string_field(stop_payload, "hook_event_name"),
+      Some("SubagentStop"),
+    )
+    assert_eq(string_field(stop_payload, "session_id"), Some(child_id))
+    assert_eq(string_field(stop_payload, "agent_id"), Some(child_id))
+    assert_eq(string_field(stop_payload, "agent_type"), Some("general-purpose"))
+    assert_eq(string_field(stop_payload, "transcript_path"), Some(""))
+    assert_eq(string_field(stop_payload, "cwd"), Some(canonical_workspace))
+    assert_eq(
+      object_field(stop_payload, "stop_hook_active"),
+      Some(Json::boolean(false)),
+    )
+
+    let parent_session = runtime
+      .invoke("session_get", {
+        "session_id": "native-subagent-start-stop-hooks",
+      })
+      .unwrap().0
+    let envelope = native_subagent_result_for_call(
+      parent_session, "parent-start-stop-hook-call",
+    )
+    assert_eq(string_field(envelope, "status"), Some("completed"))
+    assert_eq(int_field(envelope, "steps"), Some(2))
+    assert_true(
+      native_subagent_result_messages(envelope).any(message => {
+        string_field(message, "content")
+        .unwrap_or("")
+        .contains("late child context")
+      }),
+    )
+    let (completed, trailing) = runtime
+      .complete(follow_up[0].id(), {
+        "ok": true,
+        "content": "Parent received the child answer.",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing.is_empty())
+    runtime.close().unwrap()
+    let reopened = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      false,
+      mode_override="openai",
+      model_override="fixture-model",
+      base_url_override=base_url,
+      max_retries=0,
+      hooks_config_path=Some(hooks_path),
+      enable_subagents=true,
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(reopened.close()))
+    })
+    let restored = reopened
+      .invoke("session_get", {
+        "session_id": "native-subagent-start-stop-hooks",
+      })
+      .unwrap().0
+    assert_eq(restored, completed)
+    assert_true(reopened.api.take_typed_effects().is_empty())
+    assert_eq(bodies.val.length(), 2)
+    assert_eq(
+      @fs.read_file(workspace + "/subagent-start-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .length(),
+      1,
+    )
+    assert_eq(
+      @fs.read_file(workspace + "/subagent-stop-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .length(),
+      1,
+    )
   }
 }
 

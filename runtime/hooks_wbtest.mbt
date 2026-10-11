@@ -227,6 +227,24 @@ test "native Claude hook config accepts Stop and rejects unsupported events and 
   )
   assert_true(native_hook_matches(Some(mcp_alias), mcp_alias))
   assert_false(native_hook_matches(Some(mcp_alias), "mcp__server_name__tool"))
+  let start = native_hook_parse_config(
+    @json.parse(
+      native_hook_test_config("SubagentStart", "general-purpose", "true"),
+    ),
+  ).unwrap()
+  assert_eq(start.4.length(), 1)
+  assert_eq(start.4[0].matcher, Some("general-purpose"))
+  let subagent_stop = native_hook_parse_config(
+    @json.parse(
+      native_hook_test_config("SubagentStop", "general-purpose", "true"),
+    ),
+  ).unwrap()
+  assert_eq(subagent_stop.5.length(), 1)
+  assert_eq(subagent_stop.5[0].matcher, Some("general-purpose"))
+  assert_true(
+    native_hook_parse_config(@json.parse("{\"SubagentNotification\":[]}"))
+    is Err(_),
+  )
   assert_true(
     native_hook_parse_config(
       @json.parse(
@@ -242,6 +260,49 @@ test "native Claude hook config accepts Stop and rejects unsupported events and 
       ),
     )
     is Err(_),
+  )
+}
+
+///|
+test "SubagentStart codec accepts only matching successful event context and ignores decisions" {
+  let accepted = native_hook_subagent_start_context({
+    exit_code: 0,
+    stdout: "{\"decision\":\"block\",\"reason\":\"ignored\",\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStart\",\"additionalContext\":\"child context\"}}",
+    stderr: "",
+    truncated: false,
+  })
+  assert_eq(accepted, ["child context"])
+  assert_true(
+    native_hook_subagent_start_context({
+      exit_code: 0,
+      stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStop\",\"additionalContext\":\"wrong event\"}}",
+      stderr: "",
+      truncated: false,
+    }).is_empty(),
+  )
+  assert_true(
+    native_hook_subagent_start_context({
+      exit_code: 0,
+      stdout: "{malformed",
+      stderr: "",
+      truncated: false,
+    }).is_empty(),
+  )
+  assert_true(
+    native_hook_subagent_start_context({
+      exit_code: 1,
+      stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStart\",\"additionalContext\":\"nonzero\"}}",
+      stderr: "failed",
+      truncated: false,
+    }).is_empty(),
+  )
+  assert_true(
+    native_hook_subagent_start_context({
+      exit_code: 0,
+      stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStart\",\"additionalContext\":\"truncated\"}}",
+      stderr: "",
+      truncated: true,
+    }).is_empty(),
   )
 }
 

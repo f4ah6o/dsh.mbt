@@ -20,6 +20,9 @@ const NATIVE_SUBAGENT_MAX_CHILD_TOOL_CALLS : Int = 8
 const NATIVE_SUBAGENT_MAX_RUN_MS : Int = 90000
 
 ///|
+const NATIVE_SUBAGENT_STOP_HOOK_TIMEOUT_MS : Int = 1000
+
+///|
 priv struct NativeSubagentProviderBinding {
   selection : NativeProviderSelection
   api_key : String?
@@ -832,7 +835,33 @@ async fn NativeRuntime::run_subagent_tool(
     Int::min(run_timeout_ms, NATIVE_SUBAGENT_MAX_RUN_MS),
   )
   let outcome = @async.with_timeout_opt(timeout_ms, async fn() {
-    self.start_and_drive_subagent(child, child_id, prompt, binding, control~)
+    @async.with_task_group() <| group => {
+      if self.hooks.has_subagent_stop() {
+        group.add_defer(() => {
+          @async.protect_from_cancel(async fn() {
+            ignore(
+              @async.with_timeout_opt(NATIVE_SUBAGENT_STOP_HOOK_TIMEOUT_MS, async fn() {
+                self.hooks.after_subagent_stop(self.tools, child_id)
+              }),
+            )
+          })
+        })
+      }
+      if self.hooks.has_subagent_start() {
+        ignore(
+          group.spawn(no_wait=true, allow_failure=true, async fn() {
+            let contexts = self.hooks.before_subagent_start(
+              self.tools,
+              child_id,
+            )
+            if !contexts.is_empty() {
+              ignore(child.inject_hook_contexts(child_id, contexts))
+            }
+          }),
+        )
+      }
+      self.start_and_drive_subagent(child, child_id, prompt, binding, control~)
+    }
   })
   let (session, terminal_status, failure_reason) = match outcome {
     Some(Ok(value)) =>
