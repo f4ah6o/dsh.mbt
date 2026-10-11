@@ -270,25 +270,29 @@ fn native_hook_stop_result_decision(
     let reason = capture.stderr.trim().to_owned()
     return {
       rank: 3,
-      reason: if reason.is_empty() { None } else { Some(reason) },
+      reason: if reason.is_empty() {
+        None
+      } else {
+        Some(reason)
+      },
     }
   }
   if capture.truncated {
-    return { rank: 0, reason: None }
+    return { rank: 0, reason: None, }
   }
   if capture.exit_code != 0 {
-    return { rank: 0, reason: None }
+    return { rank: 0, reason: None, }
   }
   let stdout = capture.stdout.trim().to_owned()
   if stdout.is_empty() || !stdout.has_prefix("{") {
-    return { rank: 0, reason: None }
+    return { rank: 0, reason: None, }
   }
   let document = @json.parse(stdout) catch {
-    _ => return { rank: 0, reason: None }
+    _ => return { rank: 0, reason: None, }
   }
   let fields = match native_hook_object(document) {
     Some(value) => value
-    None => return { rank: 0, reason: None }
+    None => return { rank: 0, reason: None, }
   }
   let mut rank = match fields.get("decision") {
     Some(Json::String("approve")) => 1

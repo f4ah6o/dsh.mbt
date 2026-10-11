@@ -2770,7 +2770,8 @@ async fn NativeRuntime::run_stop_hook_controlled(
         task.wait()
       }
     catch {
-      @async.WaitedTaskAlreadyCancelled => Err("Stop hook process was cancelled")
+      @async.WaitedTaskAlreadyCancelled =>
+        Err("Stop hook process was cancelled")
       _ => Err("Stop hook task failed")
     }
   })
@@ -2811,9 +2812,8 @@ async fn NativeRuntime::stage_stop_continuation(
   match self.checkpoint_locked() {
     Err(error) => Err(error)
     Ok(_) => {
-      let session_id = match @engine.SessionId::new(
-        string_field(session, "id").unwrap_or(""),
-      ) {
+      let session_id = match
+        @engine.SessionId::new(string_field(session, "id").unwrap_or("")) {
         Ok(value) => value
         Err(error) => return Err(error)
       }
@@ -2904,13 +2904,13 @@ async fn NativeRuntime::complete_provider_result(
       if control.cancelled.val {
         return Err("native command was cancelled")
       }
-      let stop_outcome = match
-        self.run_stop_hook_controlled(session_id) {
+      let stop_outcome = match self.run_stop_hook_controlled(session_id) {
         Ok(value) => value
         Err(_) if control.cancelled.val || @async.is_being_cancelled() =>
           return Err("native command was cancelled")
         // Stop spawn, timeout, and malformed-output failures are nonblocking.
-        Err(_) => { action: NativeHookAction::Continue, additional_contexts: [], }
+        Err(_) =>
+          { action: NativeHookAction::Continue, additional_contexts: [], }
       }
       let settled = match stop_outcome.action {
         NativeHookAction::Continue =>
@@ -2939,7 +2939,10 @@ async fn NativeRuntime::complete_provider_result(
               let prompt_outcome = if self.hooks.has_user_prompt_submit() {
                 match
                   self.run_user_prompt_hook_controlled(
-                    control, session_id, text, attach_task=false,
+                    control,
+                    session_id,
+                    text,
+                    attach_task=false,
                   ) {
                   Ok(value) => Ok(value)
                   Err(_) if control.cancelled.val || @async.is_being_cancelled() =>
@@ -2950,7 +2953,10 @@ async fn NativeRuntime::complete_provider_result(
                   Err(error) => Err(error)
                 }
               } else {
-                Ok({ action: NativeHookAction::Continue, additional_contexts: [], })
+                Ok({
+                  action: NativeHookAction::Continue,
+                  additional_contexts: [],
+                })
               }
               match prompt_outcome {
                 Ok({ action: NativeHookAction::Continue, additional_contexts, }) =>

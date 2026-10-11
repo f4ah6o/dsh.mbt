@@ -295,7 +295,13 @@ async fn NativeHooks::load(
 ) -> Result[NativeHooks, String] {
   match path {
     None =>
-      Ok({ pre_tool: [], post_tool: [], user_prompt_submit: [], stop: [], project_dir, })
+      Ok({
+        pre_tool: [],
+        post_tool: [],
+        user_prompt_submit: [],
+        stop: [],
+        project_dir,
+      })
     Some(path) => {
       let text = match native_hook_read_config(path) {
         Ok(value) => value
