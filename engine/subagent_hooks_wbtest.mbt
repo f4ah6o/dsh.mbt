@@ -152,13 +152,31 @@ fn subagent_hook_forge_start_contexts(
     "context_length",
     integer(engine_subagent_hook_context_length(contexts)),
   )
+  let message_data = required_field(message_event, "data")
+  let old_projection = transcript_user_message(message_data)
+  let forged_message_data = json_copy(message_data)
   let content : Array[Json] = contexts.map(context => {
     object([("type", Json::string("text")), ("text", Json::string(context))])
   })
-  fields(required_field(message_event, "data")).set(
-    "content",
-    Json::array(content),
-  )
+  fields(forged_message_data).set("content", Json::array(content))
+  let messages = array_value(
+    required_field(session, "messages"),
+    "messages",
+    32768,
+  ).copy()
+  let mut projection_index = -1
+  for index, message in messages {
+    if message == old_projection {
+      projection_index = index
+      break
+    }
+  }
+  if projection_index < 0 {
+    abort("Start context message is missing from the transcript projection")
+  }
+  messages[projection_index] = transcript_user_message(forged_message_data)
+  fields(session).set("messages", Json::array(messages))
+  fields(message_event).set("data", forged_message_data)
   forged
 }
 
