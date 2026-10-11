@@ -11,6 +11,12 @@ priv struct NativeHookOutcome {
 }
 
 ///|
+priv struct NativeStopHookResult {
+  rank : Int
+  reason : String?
+}
+
+///|
 const NATIVE_HOOK_CONTEXT_ITEM_LIMIT : Int = 4096
 
 ///|
@@ -251,6 +257,65 @@ fn native_hook_result_decision(
     }
   }
   Ok({ action, additional_contexts, })
+}
+
+///|
+/// Decode only the Stop bridge's control fields. This intentionally treats
+/// malformed JSON, unknown fields, wrong field types, and non-blocking process
+/// failures as neutral outcomes, matching the pinned hook-protocol codec.
+fn native_hook_stop_result_decision(
+  capture : NativeHookCapture,
+) -> NativeStopHookResult {
+  if capture.truncated {
+    return { rank: 0, reason: None }
+  }
+  if capture.exit_code == 2 {
+    let reason = capture.stderr.trim().to_owned()
+    return {
+      rank: 3,
+      reason: if reason.is_empty() { None } else { Some(reason) },
+    }
+  }
+  if capture.exit_code != 0 {
+    return { rank: 0, reason: None }
+  }
+  let stdout = capture.stdout.trim().to_owned()
+  if stdout.is_empty() || !stdout.has_prefix("{") {
+    return { rank: 0, reason: None }
+  }
+  let document = @json.parse(stdout) catch {
+    _ => return { rank: 0, reason: None }
+  }
+  let fields = match native_hook_object(document) {
+    Some(value) => value
+    None => return { rank: 0, reason: None }
+  }
+  let mut rank = match fields.get("decision") {
+    Some(Json::String("approve")) => 1
+    Some(Json::String("block")) => 3
+    _ => 0
+  }
+  let mut reason = match fields.get("reason") {
+    Some(Json::String(value)) => Some(value)
+    _ => None
+  }
+  match fields.get("hookSpecificOutput") {
+    Some(Json::Object(specific)) if specific.get("hookEventName") ==
+      Some(Json::string("Stop")) => {
+      match specific.get("permissionDecision") {
+        Some(Json::String("allow")) => rank = 1
+        Some(Json::String("ask")) => rank = 2
+        Some(Json::String("deny")) => rank = 3
+        _ => ()
+      }
+      match specific.get("permissionDecisionReason") {
+        Some(Json::String(value)) => reason = Some(value)
+        _ => ()
+      }
+    }
+    _ => ()
+  }
+  { rank, reason, }
 }
 
 ///|

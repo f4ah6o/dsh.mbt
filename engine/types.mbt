@@ -13,6 +13,16 @@ pub struct Engine {
 }
 
 ///|
+/// Opaque checkpoint for a native Stop-hook decision. The token is issued only
+/// after a provider completion has durably entered the stopping boundary and
+/// cannot be constructed or edited by callers.
+pub struct NativeStopHookCheckpoint {
+  priv session_id : String
+  priv turn_id : Int
+  priv event_seq : Int
+}
+
+///|
 priv enum Status {
   Idle
   Running
@@ -127,6 +137,16 @@ priv struct Session {
   mut retry_initial_delay_ms : Int?
   mut retry_max_delay_ms : Int?
   mut pending_retry_id : String?
+  /// Sticky max-token ending retained across same-turn Stop-hook continuations.
+  mut sticky_max_tokens : Bool
+  /// A completed provider step is paused while the native Stop hook runs.
+  mut stop_hook_pending : Bool
+  mut stop_hook_event_seq : Int?
+  /// The next-step message is staged before UserPromptSubmit runs.
+  mut stop_continuation_text : String?
+  mut stop_continuation_admitted : Bool
+  mut stop_prompt_context_count : Int
+  mut stop_prompt_context_length : Int
 }
 
 ///|
@@ -225,5 +245,12 @@ fn fresh_session(
     retry_initial_delay_ms: None,
     retry_max_delay_ms: None,
     pending_retry_id: None,
+    sticky_max_tokens: false,
+    stop_hook_pending: false,
+    stop_hook_event_seq: None,
+    stop_continuation_text: None,
+    stop_continuation_admitted: false,
+    stop_prompt_context_count: 0,
+    stop_prompt_context_length: 0,
   }
 }

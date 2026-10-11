@@ -191,8 +191,23 @@ fn native_hook_tool_result(session : Json, call_id : String) -> Json? {
 }
 
 ///|
-test "native Claude hook config rejects unsupported events and matcher syntax" {
-  assert_true(native_hook_parse_config(@json.parse("{\"Stop\":[]}")) is Err(_))
+test "native Claude hook config accepts Stop and rejects unsupported events and matcher syntax" {
+  assert_true(
+    native_hook_parse_config(@json.parse("{\"SessionStart\":[]}")) is Err(_),
+  )
+  let stop = native_hook_parse_config(
+    @json.parse(
+      native_hook_test_config("Stop", "matcher-that-must-not-filter", "true"),
+    ),
+  ).unwrap()
+  assert_eq(stop.3.length(), 1)
+  assert_eq(stop.3[0].matcher, None)
+  let ignored_stop_matcher = native_hook_parse_config(
+    @json.parse(
+      "{\"Stop\":[{\"matcher\":false,\"hooks\":[{\"command\":\"true\"}]}]}",
+    ),
+  ).unwrap()
+  assert_eq(ignored_stop_matcher.3.length(), 1)
   assert_true(
     native_hook_parse_config(
       @json.parse(
@@ -228,6 +243,70 @@ test "native Claude hook config rejects unsupported events and matcher syntax" {
     )
     is Err(_),
   )
+}
+
+///|
+test "Stop codec is lenient and matching permission decisions override top-level control" {
+  let blocked = native_hook_stop_result_decision({
+    exit_code: 0,
+    stdout: "{\"decision\":\"block\",\"reason\":\"top block\"}",
+    stderr: "",
+    truncated: false,
+  })
+  assert_eq(blocked.rank, 3)
+  assert_eq(blocked.reason, Some("top block"))
+
+  let overridden = native_hook_stop_result_decision({
+    exit_code: 0,
+    stdout: "{\"decision\":\"block\",\"reason\":\"top block\",\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"allow reason\",\"additionalContext\":\"ignored\"},\"unknown\":true}",
+    stderr: "",
+    truncated: false,
+  })
+  assert_eq(overridden.rank, 1)
+  assert_eq(overridden.reason, Some("allow reason"))
+
+  let ask = native_hook_stop_result_decision({
+    exit_code: 0,
+    stdout: "{\"decision\":\"block\",\"reason\":\"top block\",\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"permissionDecision\":\"ask\"}}",
+    stderr: "",
+    truncated: false,
+  })
+  assert_eq(ask.rank, 2)
+  assert_eq(ask.reason, Some("top block"))
+
+  let mismatch = native_hook_stop_result_decision({
+    exit_code: 0,
+    stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"wrong point\"}}",
+    stderr: "",
+    truncated: false,
+  })
+  assert_eq(mismatch.rank, 0)
+
+  let empty_reason = native_hook_stop_result_decision({
+    exit_code: 0,
+    stdout: "{\"decision\":\"block\",\"reason\":\"top block\",\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"permissionDecisionReason\":\"\"}}",
+    stderr: "",
+    truncated: false,
+  })
+  assert_eq(empty_reason.rank, 3)
+  assert_eq(empty_reason.reason, Some(""))
+  let exit_two = native_hook_stop_result_decision({
+    exit_code: 2,
+    stdout: "{\"decision\":\"approve\"}",
+    stderr: " stderr denial ",
+    truncated: false,
+  })
+  assert_eq(exit_two.rank, 3)
+  assert_eq(exit_two.reason, Some("stderr denial"))
+  for capture in [
+    { exit_code: 1, stdout: "{}", stderr: "", truncated: false },
+    { exit_code: 0, stdout: "{malformed", stderr: "", truncated: false },
+    { exit_code: 0, stdout: "{\"decision\":false}", stderr: "", truncated: false },
+    { exit_code: 0, stdout: "{\"decision\":\"deny\"}", stderr: "", truncated: false },
+    { exit_code: 0, stdout: "{}", stderr: "", truncated: true },
+  ] {
+    assert_eq(native_hook_stop_result_decision(capture).rank, 0)
+  }
 }
 
 ///|

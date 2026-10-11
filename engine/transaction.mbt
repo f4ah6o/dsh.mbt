@@ -85,6 +85,13 @@ fn Session::copy_state(self : Session) -> Session {
     retry_initial_delay_ms: self.retry_initial_delay_ms,
     retry_max_delay_ms: self.retry_max_delay_ms,
     pending_retry_id: self.pending_retry_id,
+    sticky_max_tokens: self.sticky_max_tokens,
+    stop_hook_pending: self.stop_hook_pending,
+    stop_hook_event_seq: self.stop_hook_event_seq,
+    stop_continuation_text: self.stop_continuation_text,
+    stop_continuation_admitted: self.stop_continuation_admitted,
+    stop_prompt_context_count: self.stop_prompt_context_count,
+    stop_prompt_context_length: self.stop_prompt_context_length,
   }
 }
 
@@ -266,7 +273,7 @@ pub fn Engine::complete(
   result : Json,
 ) -> Result[Json, String] {
   let candidate = self.copy_state()
-  match candidate.complete_impl(effect_id, result) {
+  match candidate.complete_impl(effect_id, result, false) {
     Err(error) => Err(error)
     Ok(value) =>
       if candidate.within_capacity() {
@@ -280,6 +287,29 @@ pub fn Engine::complete(
         self.terminate(session, Failed, "session_capacity", CAPACITY_ERROR)
         Ok(session.json())
       }
+  }
+}
+
+///|
+/// Settle a provider effect at the durable native Stop-hook boundary. Native
+/// runtimes call this only when Stop hooks are configured; the public
+/// compatibility completion path keeps its historical no-hook behavior.
+pub fn Engine::complete_effect_with_stop_hook(
+  self : Engine,
+  effect_id : EffectId,
+  result : Json,
+) -> Result[Json, String] {
+  let id = effect_id.as_string()
+  let candidate = self.copy_state()
+  match candidate.complete_impl(id, result, true) {
+    Err(error) => Err(error)
+    Ok(_) => {
+      let session_id = match self.effects.get(id) {
+        Some(effect) => effect.session_id
+        None => return Err("Unknown or settled effect: " + id)
+      }
+      Ok(self.settle_stop_candidate(candidate, session_id))
+    }
   }
 }
 

@@ -217,6 +217,8 @@ fn restore_session(
   let mut pending_todo_call : String? = None
   let mut prompt_context_count = 0
   let mut prompt_context_length = 0
+  let mut stop_continuation_reason_seen = false
+  let mut stop_continuation_rejected = false
   let pending_post_tool_contexts : Array[(String, Json)] = []
   for index, raw in events {
     let seq = int_value(required_field(raw, "seq"), "event seq", 0, 32768)
@@ -266,6 +268,7 @@ fn restore_session(
       session.step = 0
       session.status = Running
       session.todos = None
+      session.clear_stop_hook_state()
       open_turn = true
       admitted_user = false
       assistant_recorded = false
@@ -275,10 +278,16 @@ fn restore_session(
       if !open_turn ||
         !admitted_user ||
         session.open_step ||
+        (session.stop_hook_pending && !session.stop_continuation_admitted) ||
         turn_id != session.turn_id ||
         step != session.step + 1 ||
         step > max_steps {
         raise Invalid("Invalid step boundary in snapshot")
+      }
+      if session.stop_hook_pending {
+        session.clear_stop_continuation_state()
+        stop_continuation_reason_seen = false
+        stop_continuation_rejected = false
       }
       session.step = step
       session.open_step = true
@@ -321,21 +330,56 @@ fn restore_session(
                   admitted_user = true
                 }
                 Some(source) => {
-                  if !open_turn ||
-                    !admitted_user ||
-                    session.step != 0 ||
-                    session.open_step ||
-                    assistant_recorded ||
-                    required_string(data, "role", max=16) != "user" {
-                    raise Invalid("Prompt context outside prompt admission")
-                  }
-                  let (context_count, context_length) = validate_hook_prompt_context(
-                    data, source,
-                  )
-                  prompt_context_count += context_count
-                  prompt_context_length += context_length
-                  if prompt_context_count > 32 || prompt_context_length > 16384 {
-                    raise Invalid("Prompt contexts exceed the configured limit")
+                  if session.stop_hook_pending &&
+                    session.stop_continuation_text is Some(_) &&
+                    !session.stop_continuation_admitted {
+                    if !open_turn ||
+                      !admitted_user ||
+                      session.open_step ||
+                      !assistant_recorded ||
+                      required_string(data, "role", max=16) != "user" {
+                      raise Invalid(
+                        "Stop continuation context outside its pending boundary",
+                      )
+                    }
+                    if !stop_continuation_reason_seen {
+                      let reason = session.stop_continuation_text.unwrap()
+                      if data != hook_context_message([reason]) {
+                        raise Invalid(
+                          "Stop continuation message differs from its staged reason",
+                        )
+                      }
+                      stop_continuation_reason_seen = true
+                    } else {
+                      let (context_count, context_length) = validate_hook_prompt_context(
+                        data, source,
+                      )
+                      session.stop_prompt_context_count += context_count
+                      session.stop_prompt_context_length += context_length
+                      if session.stop_prompt_context_count > 32 ||
+                        session.stop_prompt_context_length > 16384 {
+                        raise Invalid(
+                          "Stop continuation contexts exceed the configured limit",
+                        )
+                      }
+                    }
+                  } else {
+                    if !open_turn ||
+                      !admitted_user ||
+                      session.step != 0 ||
+                      session.open_step ||
+                      assistant_recorded ||
+                      required_string(data, "role", max=16) != "user" {
+                      raise Invalid("Prompt context outside prompt admission")
+                    }
+                    let (context_count, context_length) = validate_hook_prompt_context(
+                      data, source,
+                    )
+                    prompt_context_count += context_count
+                    prompt_context_length += context_length
+                    if prompt_context_count > 32 || prompt_context_length > 16384 {
+                      raise Invalid("Prompt contexts exceed the configured limit")
+                    }
                   }
                 }
               }
@@ -1093,6 +1137,88 @@ fn restore_session(
           session.parallel_group = false
           session.open_step = false
         }
+        "hook/stop-pending" => {
+          let reason = required_string(data, "reason", max=32)
+          if !open_turn ||
+            session.open_step ||
+            !assistant_recorded ||
+            session.active_effect is Some(_) ||
+            session.active_tool_effect_count() > 0 ||
+            session.approval is Some(_) ||
+            session.pending_retry_id is Some(_) ||
+            session.stop_hook_pending ||
+            (reason != "completed" && reason != "max_tokens") {
+            raise Invalid("Stop hook is pending outside a final provider outcome")
+          }
+          session.sticky_max_tokens = session.sticky_max_tokens ||
+            reason == "max_tokens"
+          session.stop_hook_pending = true
+          session.stop_hook_event_seq = Some(seq)
+          session.stop_continuation_text = None
+          session.stop_continuation_admitted = false
+          session.stop_prompt_context_count = 0
+          session.stop_prompt_context_length = 0
+          stop_continuation_reason_seen = false
+          stop_continuation_rejected = false
+        }
+        "hook/stop-continuation-pending" => {
+          let text = required_string(
+            data,
+            "text",
+            max=STOP_HOOK_MERGED_REASON_MAX_UNITS,
+          )
+          if !session.stop_hook_pending ||
+            session.stop_continuation_text is Some(_) ||
+            text.is_empty() ||
+            stop_hook_utf16_units(text) > STOP_HOOK_MERGED_REASON_MAX_UNITS {
+            raise Invalid("Invalid staged Stop continuation")
+          }
+          session.stop_continuation_text = Some(text)
+          session.stop_prompt_context_count = 0
+          session.stop_prompt_context_length = 0
+          session.stop_continuation_admitted = false
+          stop_continuation_reason_seen = false
+          stop_continuation_rejected = false
+        }
+        "hook/stop-continuation-admitted" => {
+          if !session.stop_hook_pending ||
+            session.stop_continuation_text is None ||
+            session.stop_continuation_admitted ||
+            !stop_continuation_reason_seen {
+            raise Invalid("Stop continuation admission lacks its staged reason")
+          }
+          let context_count = int_value(
+            required_field(data, "context_count"),
+            "Stop context count",
+            0,
+            32,
+          )
+          let context_length = int_value(
+            required_field(data, "context_length"),
+            "Stop context length",
+            0,
+            16384,
+          )
+          if context_count != session.stop_prompt_context_count ||
+            context_length != session.stop_prompt_context_length {
+            raise Invalid("Stop continuation admission differs from its messages")
+          }
+          session.stop_continuation_admitted = true
+        }
+        "hook/stop-continuation-rejected" => {
+          let error = required_string(data, "error", max=8192)
+          if !session.stop_hook_pending ||
+            session.stop_continuation_text is None ||
+            stop_continuation_reason_seen ||
+            session.stop_continuation_admitted ||
+            !error.has_prefix("UserPromptSubmit hook blocked the Stop continuation") {
+            raise Invalid("Invalid blocked Stop continuation")
+          }
+          session.stop_continuation_text = None
+          session.stop_prompt_context_count = 0
+          session.stop_prompt_context_length = 0
+          stop_continuation_rejected = true
+        }
         "turn/end" => {
           if !open_turn ||
             session.open_step ||
@@ -1102,7 +1228,31 @@ fn restore_session(
             session.pending_retry_id is Some(_) {
             raise Invalid("Turn ended with unsettled work")
           }
-          session.status = match required_string(data, "reason", max=64) {
+          let reason = required_string(data, "reason", max=64)
+          if session.stop_hook_pending {
+            let has_staged_continuation = session.stop_continuation_text is Some(_)
+            let allowed_stop_end = if stop_continuation_rejected {
+              reason == "blocked" && !has_staged_continuation
+            } else if has_staged_continuation {
+              reason == "cancelled" ||
+              reason == "session_capacity" ||
+              reason == "max_steps" ||
+              reason == "effect_limit" ||
+              reason == "interrupted"
+            } else if session.sticky_max_tokens {
+              reason == "max_tokens" || reason == "cancelled" ||
+              reason == "session_capacity" || reason == "interrupted"
+            } else {
+              reason == "completed" || reason == "cancelled" ||
+              reason == "session_capacity" || reason == "interrupted"
+            }
+            if !allowed_stop_end {
+              raise Invalid("Turn ended without settling its Stop-hook boundary")
+            }
+          } else if stop_continuation_rejected {
+            raise Invalid("Blocked Stop continuation is missing its pending boundary")
+          }
+          session.status = match reason {
             "completed" => Completed
             "cancelled" => Cancelled
             "provider_error"
@@ -1110,9 +1260,13 @@ fn restore_session(
             | "max_tokens"
             | "effect_limit"
             | "session_capacity"
-            | "interrupted" => Failed
+            | "interrupted"
+            | "blocked" => Failed
             _ => raise Invalid("Unknown turn ending")
           }
+          session.clear_stop_hook_state()
+          stop_continuation_reason_seen = false
+          stop_continuation_rejected = false
           open_turn = false
         }
         "session/cancelled" => {
@@ -1179,7 +1333,8 @@ fn restore_session(
   if open_turn &&
     session.active_effect is None &&
     session.active_tool_effect_count() == 0 &&
-    session.approval is None {
+    session.approval is None &&
+    !session.stop_hook_pending {
     raise Invalid("Snapshot captured an impossible in-between transition")
   }
   if open_turn && session.events.length() + 40 > 32768 {
