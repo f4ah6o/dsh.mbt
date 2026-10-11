@@ -1794,6 +1794,76 @@ async test "SessionStart context is claimed before UserPromptSubmit and prompt c
 }
 
 ///|
+async test "SessionStart uses resume for sessions restored when the runtime opens" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-session-start-resume")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let data_dir = fixture + "/data"
+    let session_id = "session-start-resume"
+    let initial = NativeRuntime::open(data_dir, workspace, false, true).unwrap()
+    ignore(
+      initial
+      .invoke("session_create", {
+        "id": session_id.to_json(),
+        "title": "SessionStart resume",
+      })
+      .unwrap(),
+    )
+    assert_true(initial.close() is Ok(_))
+
+    let hooks_path = fixture + "/hooks.json"
+    let command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/session-start-payloads.jsonl\"; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"resumed context\"}}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(
+        native_hook_test_config("SessionStart", "startup|resume", command),
+      ),
+    )
+    let runtime = NativeRuntime::open(
+      data_dir,
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    assert_false(@fs.exists(workspace + "/session-start-payloads.jsonl"))
+    let (_, effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id.to_json(),
+        "prompt": "Continue the restored session.",
+      })
+      .unwrap()
+    assert_eq(effects.length(), 1)
+    let payload = @json.parse(
+      @fs.read_file(workspace + "/session-start-payloads.jsonl").text().trim(),
+    )
+    assert_eq(string_field(payload, "source"), Some("resume"))
+    let messages = native_hook_test_array(
+      native_hook_test_required_field(effects[0].request(), "messages"),
+      "resume provider messages",
+    )
+    assert_eq(messages.length(), 2)
+    assert_eq(
+      native_hook_test_array(
+        native_hook_test_required_field(messages[0], "content"),
+        "resume SessionStart message content",
+      ).map(block => native_hook_test_required_string(block, "text")),
+      ["resumed context"],
+    )
+    assert_eq(
+      string_field(messages[1], "content"),
+      Some("Continue the restored session."),
+    )
+    assert_true(runtime.close() is Ok(_))
+  }
+}
+
+///|
 async test "UserPromptSubmit injects grouped source context before provider admission and replay skips hooks" {
   let fixture = @fs.tmpdir(prefix="dsh-native-prompt-hook-context")
   @async.with_task_group() <| group => {

@@ -2774,6 +2774,167 @@ async test "native child prompt hook stays inside the total deadline and is drai
 }
 
 ///|
+async test "child SessionStart is awaited and shares the aggregate child deadline" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-subagent-session-start-deadline")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let session_start_command = "payload=$(cat); case \"$payload\" in *\"subagent-\"*) /bin/sleep 0.30 ;; esac; printf 'session-start\\n' >> \"${CLAUDE_PROJECT_DIR}/hook-order.txt\"; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"child startup context\"}}'"
+    let subagent_start_command = "printf 'subagent-start\\n' >> \"${CLAUDE_PROJECT_DIR}/hook-order.txt\"; printf '{}'"
+    let prompt_command = "payload=$(cat); printf '%s' \"$payload\" > \"${CLAUDE_PROJECT_DIR}/child-prompt-payload.json\"; printf '{}'"
+    let hooks = Json::object({
+      "SessionStart": Json::array([
+        Json::object({
+          "matcher": Json::string("startup"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(session_start_command) }),
+          ]),
+        }),
+      ]),
+      "SubagentStart": Json::array([
+        Json::object({
+          "matcher": Json::string("general-purpose"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(subagent_start_command) }),
+          ]),
+        }),
+      ]),
+      "UserPromptSubmit": Json::array([
+        Json::object({
+          "matcher": Json::string("ignored"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(prompt_command) }),
+          ]),
+        }),
+      ]),
+    })
+    @fs.write_file(hooks_path, @utf8.encode(hooks.stringify()))
+    let address = @socket.Addr::parse("127.0.0.1:0")
+    let server = @http.Server::Server(address, reuse_addr=false)
+    group.add_defer(() => server.close())
+    let release = @async.Semaphore::Semaphore(1, initial_value=0)
+    let release_sent = Ref(false)
+    group.add_defer(() => {
+      if !release_sent.val {
+        release_sent.val = true
+        release.release()
+      }
+    })
+    let bodies = Ref([])
+    let auth_ok = Ref(true)
+    let response_errors = Ref([])
+    let serving = group.spawn(no_wait=true, async fn() {
+      native_subagent_provider_server_gated_index(
+        server,
+        [
+          native_subagent_http_response(
+            native_subagent_openai_text_stream_with_reason(
+              "The child provider remains gated until its deadline.", "stop",
+            ),
+          ),
+        ],
+        bodies,
+        auth_ok,
+        0,
+        release,
+        response_errors=Some(response_errors),
+      )
+    })
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      false,
+      mode_override="openai",
+      model_override="fixture-model",
+      base_url_override="http://127.0.0.1:" + server.addr.port().to_string(),
+      max_retries=0,
+      hooks_config_path=Some(hooks_path),
+      enable_subagents=true,
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let effect = native_subagent_parent_tool_effect(
+      runtime, "deadline-parent", "parent-session-start-deadline-call", "Ask a child to wait within the shared deadline.",
+    )
+    let job = group.spawn(
+      async fn() { runtime.run_tool_effect(effect, subagent_timeout_ms=450) },
+      no_wait=true,
+      allow_failure=true,
+    )
+    let mut request_started = false
+    for _ in 0..<200 {
+      if bodies.val.length() == 1 {
+        request_started = true
+        break
+      }
+      @async.sleep(5)
+    }
+    assert_true(request_started)
+    assert_eq(
+      @fs.read_file(workspace + "/hook-order.txt")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array(),
+      ["session-start", "session-start", "subagent-start"],
+    )
+    let child_prompt_payload = @json.parse(
+      @fs.read_file(workspace + "/child-prompt-payload.json").text(),
+    )
+    assert_eq(
+      string_field(child_prompt_payload, "prompt"),
+      Some("child startup contextComplete the fixture child task."),
+    )
+    assert_true(bodies.val[0].contains("child startup context"))
+    let job_result = match
+      @async.with_timeout_opt(650, async fn() { job.wait() }) {
+      Some(value) => value
+      None => fail("SessionStart extended the child run deadline")
+    }
+    let (_, follow_up) = match job_result {
+      Ok(value) => value
+      Err(_) => fail("child deadline did not settle the parent tool")
+    }
+    assert_eq(follow_up.length(), 1)
+    let (completed, trailing) = runtime
+      .complete(follow_up[0].id(), {
+        "ok": true,
+        "content": "Parent received the child timeout.",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing.is_empty())
+    let envelope = native_subagent_result_for_call(
+      completed, "parent-session-start-deadline-call",
+    )
+    assert_eq(string_field(envelope, "status"), Some("timed_out"))
+    assert_eq(
+      string_field(envelope, "failure_reason"),
+      Some(
+        "child run exceeded the aggregate 450 ms SessionStart and child-run budget",
+      ),
+    )
+    assert_eq(int_field(envelope, "steps"), Some(1))
+    release_sent.val = true
+    release.release()
+    serving.wait()
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 1)
+  }
+}
+
+///|
 async test "native parent cancellation drains a running child prompt hook and frees the session" {
   let fixture = @fs.tmpdir(prefix="dsh-native-subagent-prompt-hook-cancel")
   @async.with_task_group() <| group => {
