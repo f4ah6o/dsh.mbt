@@ -2794,7 +2794,7 @@ async fn NativeRuntime::complete_tool_with_prompt_hook(
   match boundary {
     Err(error) => Err(error)
     Ok((completion, queued, None)) => Ok((completion, queued))
-    Ok((completion, queued, Some(checkpoint))) => {
+    Ok((_, _, Some(checkpoint))) => {
       if control is Some(value) && value.cancelled.val {
         return Err("native command was cancelled")
       }
@@ -2824,11 +2824,15 @@ async fn NativeRuntime::complete_tool_with_prompt_hook(
             control~,
           )
         Ok({ action: NativeHookAction::Deny(reason), .. }) => {
-          let reason = native_hook_limit_reason(reason)
+          let prefix = "UserPromptSubmit hook rejected the PostToolUse context: "
+          let reason = native_hook_prefix_utf16(
+            native_hook_limit_reason(reason),
+            8192 - prefix.length(),
+          )
           self.settle_post_tool_prompt_hook(
             checkpoint,
             None,
-            "UserPromptSubmit hook rejected the PostToolUse context: " + reason,
+            prefix + reason,
             control~,
           )
         }

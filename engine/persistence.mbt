@@ -252,6 +252,7 @@ fn restore_session(
     }
     if late_subagent_context_admission &&
       kind != "user/message" &&
+      kind != "hook/subagent-post-tool-prompt-admitted" &&
       kind != "step/start" {
       raise Invalid("Late SubagentStart admission is not followed by a step")
     }
@@ -280,7 +281,11 @@ fn restore_session(
       kind != "hook/post-tool-prompt-pending" &&
       kind != "hook/post-tool-prompt-rejected" &&
       kind != "hook/post-tool-prompt-abandoned" &&
-      !(session.post_tool_prompt_hook_admission && kind == "step/end") {
+      kind != "hook/subagent-post-tool-prompt-pending" &&
+      kind != "hook/subagent-post-tool-prompt-admitted" &&
+      kind != "hook/subagent-post-tool-prompt-rejected" &&
+      kind != "hook/subagent-post-tool-prompt-abandoned" &&
+      kind != "step/end" {
       if kind != "user/message" || data != expected {
         raise Invalid(
           "PostToolUse context is missing, reordered, or differs from its completion",
@@ -367,7 +372,7 @@ fn restore_session(
             ()
           } else {
             match expected_post_tool_context {
-              Some(_) => {
+              Some(_) if expected_subagent_context is None => {
                 if !open_turn ||
                   !session.open_step ||
                   session.cursor != session.calls.length() ||
@@ -380,7 +385,7 @@ fn restore_session(
                   raise Invalid("Invalid PostToolUse context role")
                 }
               }
-              None =>
+              _ =>
                 match fields(data).get("source") {
                   None => {
                     if !open_turn || session.step != 0 || admitted_user {
@@ -1345,6 +1350,70 @@ fn restore_session(
           session.post_tool_prompt_hook_contexts = contexts
           session.post_tool_prompt_hook_messages = messages
         }
+        "hook/subagent-post-tool-prompt-pending" => {
+          if session.post_tool_prompt_hook_active ||
+            pending_post_tool_contexts.is_empty() ||
+            !open_turn ||
+            !admitted_user ||
+            !assistant_recorded ||
+            session.open_step ||
+            session.active_effect is Some(_) ||
+            session.active_tool_effect_count() > 0 ||
+            session.approval is Some(_) ||
+            session.pending_retry_id is Some(_) ||
+            session.stop_hook_pending {
+            raise Invalid(
+              "Child PostToolUse prompt hook is outside its next-step boundary",
+            )
+          }
+          if fields(data).length() != 3 {
+            raise Invalid(
+              "Child PostToolUse prompt checkpoint has an invalid shape",
+            )
+          }
+          let expected_count = int_value(
+            required_field(data, "context_count"),
+            "Child PostToolUse context count",
+            1,
+            512,
+          )
+          let expected_length = int_value(
+            required_field(data, "context_length"),
+            "Child PostToolUse context length",
+            1,
+            262144,
+          )
+          let expected_message_count = int_value(
+            required_field(data, "message_count"),
+            "Child PostToolUse message count",
+            1,
+            16,
+          )
+          if expected_message_count != pending_post_tool_contexts.length() {
+            raise Invalid(
+              "Child PostToolUse prompt checkpoint differs from its result batch",
+            )
+          }
+          let contexts : Array[String] = []
+          let messages : Array[Json] = []
+          for (_, message) in pending_post_tool_contexts {
+            messages.push(message)
+            for context in restore_hook_prompt_contexts(message) {
+              contexts.push(context)
+            }
+          }
+          if contexts.length() != expected_count ||
+            engine_subagent_hook_context_length(contexts) != expected_length {
+            raise Invalid(
+              "Child PostToolUse prompt checkpoint counts differ from its contexts",
+            )
+          }
+          session.post_tool_prompt_hook_active = true
+          session.post_tool_prompt_hook_generation += 1
+          session.post_tool_prompt_hook_event_seq = Some(seq)
+          session.post_tool_prompt_hook_contexts = contexts
+          session.post_tool_prompt_hook_messages = messages
+        }
         "hook/post-tool-prompt-admitted" => {
           if !session.post_tool_prompt_hook_active ||
             pending_post_tool_contexts.is_empty() ||
@@ -1399,6 +1468,89 @@ fn restore_session(
             )
           }
           pending_post_tool_contexts.clear()
+        }
+        "hook/subagent-post-tool-prompt-admitted" => {
+          if !session.post_tool_prompt_hook_active ||
+            pending_post_tool_contexts.is_empty() ||
+            !expected_admitted_post_tool_messages.is_empty() {
+            raise Invalid(
+              "Child PostToolUse prompt admission lacks its checkpoint",
+            )
+          }
+          let raw_contexts = array_value(
+            required_field(data, "additional_contexts"),
+            "Child PostToolUse prompt additional contexts",
+            32,
+          )
+          let additional_contexts : Array[String] = raw_contexts.map(raw => {
+            let context = string_value(
+              raw,
+              "Child PostToolUse prompt additional context",
+              max=4096,
+            )
+            if context.is_empty() {
+              raise Invalid(
+                "Child PostToolUse prompt additional context is empty",
+              )
+            }
+            context
+          })
+          let all_contexts = session.post_tool_prompt_hook_contexts.copy()
+          for context in additional_contexts {
+            all_contexts.push(context)
+          }
+          let context_length = engine_validate_hook_contexts(all_contexts)
+          if int_value(
+              required_field(data, "context_count"),
+              "Child PostToolUse admitted context count",
+              1,
+              32,
+            ) !=
+            all_contexts.length() ||
+            int_value(
+              required_field(data, "context_length"),
+              "Child PostToolUse admitted context length",
+              1,
+              16384,
+            ) !=
+            context_length {
+            raise Invalid(
+              "Child PostToolUse prompt admission differs from its messages",
+            )
+          }
+          for (_, message) in pending_post_tool_contexts {
+            expected_admitted_post_tool_messages.push(message)
+          }
+          if !additional_contexts.is_empty() {
+            expected_admitted_post_tool_messages.push(
+              hook_context_message(additional_contexts),
+            )
+          }
+          pending_post_tool_contexts.clear()
+          session.clear_post_tool_prompt_hook()
+        }
+        "hook/subagent-post-tool-prompt-rejected" => {
+          ignore(required_string(data, "error", max=8192))
+          if !session.post_tool_prompt_hook_active ||
+            pending_post_tool_contexts.is_empty() ||
+            !expected_admitted_post_tool_messages.is_empty() {
+            raise Invalid(
+              "Child PostToolUse prompt rejection lacks an unadmitted batch",
+            )
+          }
+          pending_post_tool_contexts.clear()
+          session.clear_post_tool_prompt_hook()
+        }
+        "hook/subagent-post-tool-prompt-abandoned" => {
+          ignore(required_string(data, "reason", max=64))
+          if pending_post_tool_contexts.is_empty() ||
+            !expected_admitted_post_tool_messages.is_empty() {
+            raise Invalid(
+              "Child PostToolUse prompt abandonment lacks an unadmitted batch",
+            )
+          }
+          pending_post_tool_contexts.clear()
+          session.clear_post_tool_prompt_hook()
         }
         "hook/post-tool-prompt-rejected" => {
           ignore(required_string(data, "error", max=8192))

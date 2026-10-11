@@ -1861,6 +1861,198 @@ async test "PostToolUse context runs UserPromptSubmit before root follow-up and 
 }
 
 ///|
+async test "astral PostToolUse prompt denial is bounded, durable, and reusable" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-posttool-astral-denial")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    @fs.write_file(workspace + "/target.txt", "read this fixture")
+    let hooks_path = fixture + "/hooks.json"
+    let prompt_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/prompt-payloads.jsonl\"; printf u >> \"${CLAUDE_PROJECT_DIR}/prompt-count.txt\"; case \"$payload\" in *\"from PostToolUse\"*) i=0; while [ \"$i\" -lt 4096 ]; do printf '😀' >&2; i=$((i + 1)); done; exit 2 ;; *) printf '{}' ;; esac"
+    let post_command = "cat >/dev/null; printf p >> \"${CLAUDE_PROJECT_DIR}/post-count.txt\"; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"from PostToolUse\"}}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(
+        Json::object({
+          "UserPromptSubmit": native_hook_test_required_field(
+            @json.parse(
+              native_hook_test_config(
+                "UserPromptSubmit", "ignored", prompt_command,
+              ),
+            ),
+            "UserPromptSubmit",
+          ),
+          "PostToolUse": native_hook_test_required_field(
+            @json.parse(
+              native_hook_test_config("PostToolUse", "read", post_command),
+            ),
+            "PostToolUse",
+          ),
+        }).stringify(),
+      ),
+    )
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "posttool-astral-denial"
+    ignore(
+      runtime
+      .invoke("session_create", {
+        "id": session_id.to_json(),
+        "title": "PostToolUse astral denial",
+      })
+      .unwrap(),
+    )
+    let (_, initial_effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id.to_json(),
+        "prompt": "Read target.txt and report its contents.".to_json(),
+      })
+      .unwrap()
+    let initial_provider = native_effect_by_kind(
+      initial_effects,
+      @engine.EffectType::Provider,
+    ).unwrap()
+    let (_, tool_effects) = runtime
+      .complete(initial_provider.id(), {
+        "ok": true,
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "posttool-astral-read",
+            "name": "read",
+            "arguments": "{\"file_path\":\"target.txt\",\"offset\":1,\"limit\":10}",
+          },
+        ],
+        "finish_reason": "tool_calls",
+      })
+      .unwrap()
+    let (_, followup_effects) = runtime
+      .run_tool_effect(tool_effects[0])
+      .unwrap()
+    assert_true(followup_effects.is_empty())
+    assert_eq(@fs.read_file(workspace + "/prompt-count.txt").text(), "uu")
+    assert_eq(@fs.read_file(workspace + "/post-count.txt").text(), "p")
+
+    let (blocked, _) = runtime
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(string_field(blocked, "status"), Some("failed"))
+    assert_eq(int_field(blocked, "turn_id"), Some(1))
+    let events = native_hook_test_array(
+      native_hook_test_required_field(blocked, "events"),
+      "PostToolUse denial events",
+    )
+    assert_eq(
+      events
+      .filter(event => {
+        string_field(event, "type") == Some("hook/post-tool-prompt-pending")
+      })
+      .length(),
+      1,
+    )
+    assert_eq(
+      events
+      .filter(event => {
+        string_field(event, "type") == Some("hook/post-tool-prompt-admitted")
+      })
+      .length(),
+      0,
+    )
+    assert_true(
+      events.any(event => {
+        if string_field(event, "type") != Some("hook/post-tool-prompt-rejected") {
+          false
+        } else {
+          let error = native_hook_test_required_string(
+            native_hook_test_required_field(event, "data"),
+            "error",
+          )
+          native_provider_utf16_units(error) <= 8192
+        }
+      }),
+    )
+    assert_true(
+      events.any(event => {
+        string_field(event, "type") == Some("turn/end") &&
+        string_field(native_hook_test_required_field(event, "data"), "reason") ==
+        Some("blocked")
+      }),
+    )
+    let durable_tool_result = match
+      native_hook_tool_result(blocked, "posttool-astral-read") {
+      Some(value) => value
+      None => fail("PostToolUse denial dropped its completed tool result")
+    }
+    assert_true(
+      native_hook_test_required_string(durable_tool_result, "content").contains(
+        "read this fixture",
+      ),
+    )
+    let blocked_sourced = native_hook_test_array(
+      native_hook_test_required_field(blocked, "messages"),
+      "blocked transcript",
+    ).filter(message => {
+      native_hook_test_fields(message).get("source") is Some(_)
+    })
+    assert_true(blocked_sourced.is_empty())
+    let prompt_lines = @fs.read_file(workspace + "/prompt-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array()
+    assert_eq(prompt_lines.length(), 2)
+
+    assert_true(runtime.close() is Ok(_))
+    let reopened = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(reopened.close()))
+    })
+    let (restored, restored_effects) = reopened
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(string_field(restored, "status"), Some("failed"))
+    assert_true(restored_effects.is_empty())
+    assert_eq(
+      @fs.read_file(workspace + "/prompt-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array()
+      .length(),
+      2,
+    )
+    let (_, fresh_effects) = reopened
+      .invoke("session_send", {
+        "session_id": session_id.to_json(),
+        "prompt": "Fresh prompt after the PostToolUse denial".to_json(),
+      })
+      .unwrap()
+    assert_eq(fresh_effects.length(), 1)
+    assert_true(fresh_effects[0].kind() == @engine.EffectType::Provider)
+    let (cancelled, cancel_effects) = reopened
+      .invoke("session_cancel", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(string_field(cancelled, "status"), Some("cancelled"))
+    assert_true(cancel_effects.is_empty())
+  }
+}
+
+///|
 async test "UserPromptSubmit trusted context reaches direct and MCP session_send" {
   let fixture = @fs.tmpdir(prefix="dsh-native-prompt-hook-surfaces")
   @async.with_task_group() <| group => {

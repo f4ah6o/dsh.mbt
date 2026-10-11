@@ -70,6 +70,71 @@ fn subagent_hook_message_text(message : Json) -> String raise EngineError {
 }
 
 ///|
+fn subagent_hook_post_tool_pending_engine() -> Engine {
+  let engine = subagent_hook_engine()
+  let initial = subagent_checkpoint_success(
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", true),
+  )
+  ignore(success(engine.accept_subagent_prompt_hook(initial, [])))
+  let provider = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete(
+        id_of(provider),
+        calls_response([("child-read", "read", "{\"file_path\":\"a.txt\"}")]),
+      ),
+    ),
+  )
+  let read = engine.take_effects()[0]
+  match engine.inject_hook_contexts("hook-child", ["start context"]) {
+    Ok(true) => ()
+    _ => abort("Could not queue child Start context for PostToolUse replay")
+  }
+  ignore(
+    success(
+      engine.complete(
+        id_of(read),
+        fixture(
+          "{\"ok\":true,\"content\":\"alpha\",\"additional_contexts\":[\"A\"]}",
+        ),
+      ),
+    ),
+  )
+  engine
+}
+
+///|
+fn subagent_hook_forge_reordered_post_tool_message(
+  snapshot : Json,
+) -> Json raise EngineError {
+  let forged = json_copy(snapshot)
+  let session = array_value(required_field(forged, "sessions"), "sessions", 32)[0]
+  let events = array_value(required_field(session, "events"), "events", 32768)
+  let mut admission_index = -1
+  for index, event in events {
+    if required_string(event, "type") ==
+      "hook/subagent-post-tool-prompt-admitted" {
+      admission_index = index
+      break
+    }
+  }
+  if admission_index < 0 || admission_index + 2 >= events.length() {
+    abort("Child PostToolUse snapshot is missing its admission messages")
+  }
+  let first_message = events[admission_index + 1]
+  let second_message = events[admission_index + 2]
+  if required_string(first_message, "type") != "user/message" ||
+    required_string(second_message, "type") != "user/message" {
+    abort("Child PostToolUse admission marker is not followed by its messages")
+  }
+  let first_data = required_field(first_message, "data")
+  let second_data = required_field(second_message, "data")
+  fields(first_message).set("data", second_data)
+  fields(second_message).set("data", first_data)
+  forged
+}
+
+///|
 fn subagent_hook_completed_initial_snapshot(
   start_contexts : Array[String],
   prompt_contexts : Array[String],
@@ -878,4 +943,135 @@ test "child PostToolUse inbox passes through the next UserPromptSubmit checkpoin
     required_field(messages[4], "source"),
     Json::object({ "kind": "hooks-claude-code" }),
   )
+}
+
+///|
+test "settled child PostToolUse admission restores and rejects reordered source messages" {
+  let engine = subagent_hook_post_tool_pending_engine()
+  let checkpoint = engine.pending_subagent_prompt_hook("hook-child").unwrap()
+  assert_eq(checkpoint.contexts(), ["start context", "A"])
+  ignore(success(engine.accept_subagent_prompt_hook(checkpoint, ["U"])))
+  let next_provider = engine.take_effects()[0]
+  let sourced = subagent_hook_all_messages(next_provider).filter(message => {
+    fields(message).get("source") is Some(_)
+  })
+  assert_eq(sourced.map(subagent_hook_message_text), ["start context", "A", "U"])
+  let completed = success(
+    engine.complete(id_of(next_provider), stop_response("done")),
+  )
+  let snapshot = engine.snapshot()
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(snapshot), Ok(()))
+  assert_eq(get_session_for(restored, "hook-child"), completed)
+
+  let forged = subagent_hook_forge_reordered_post_tool_message(snapshot)
+  let untouched = Engine::new(test_tools())
+  let before = untouched.snapshot()
+  assert_true(untouched.restore(forged) is Err(_))
+  assert_eq(untouched.snapshot(), before)
+}
+
+///|
+test "denied child PostToolUse prompt admission restores without its context messages" {
+  let engine = subagent_hook_post_tool_pending_engine()
+  let checkpoint = engine.pending_subagent_prompt_hook("hook-child").unwrap()
+  let blocked = success(
+    engine.block_subagent_prompt_hook(checkpoint, "review denied"),
+  )
+  assert_eq(get_status(blocked), "failed")
+  assert_eq(
+    event_type_count(blocked, "hook/subagent-post-tool-prompt-rejected"),
+    1,
+  )
+  assert_true(
+    array_value(required_field(blocked, "messages"), "messages", 16).all(message => {
+      let text = subagent_hook_message_text(message)
+      text != "start context" && text != "A"
+    }),
+  )
+  assert_true(engine.take_effects().is_empty())
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session_for(restored, "hook-child"), blocked)
+}
+
+///|
+test "unresolved child PostToolUse prompt admission restores interrupted without replay" {
+  let engine = subagent_hook_post_tool_pending_engine()
+  let snapshot = engine.snapshot()
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(snapshot), Ok(()))
+  let interrupted = get_session_for(restored, "hook-child")
+  assert_eq(get_status(interrupted), "failed")
+  assert_eq(
+    event_type_count(interrupted, "hook/subagent-post-tool-prompt-pending"),
+    1,
+  )
+  assert_eq(event_type_count(interrupted, "hook/post-tool-prompt-abandoned"), 1)
+  assert_true(restored.take_effects().is_empty())
+  let replay = Engine::new(test_tools())
+  assert_eq(replay.restore(restored.snapshot()), Ok(()))
+  assert_eq(get_session_for(replay, "hook-child"), interrupted)
+}
+
+///|
+test "child cancellation abandons known PostToolUse context while a sibling is still active" {
+  let engine = subagent_hook_engine()
+  let initial = subagent_checkpoint_success(
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", true),
+  )
+  ignore(success(engine.accept_subagent_prompt_hook(initial, [])))
+  let provider = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete(
+        id_of(provider),
+        calls_response([
+          ("child-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("child-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let reads = engine.take_effects()
+  assert_eq(reads.length(), 2)
+  ignore(
+    success(
+      engine.complete(
+        id_of(reads[0]),
+        fixture(
+          "{\"ok\":true,\"content\":\"alpha\",\"additional_contexts\":[\"A\"]}",
+        ),
+      ),
+    ),
+  )
+  let cancelled = success(
+    engine.invoke("session_cancel", fixture("{\"session_id\":\"hook-child\"}")),
+  )
+  assert_eq(get_status(cancelled), "cancelled")
+  assert_eq(
+    event_type_count(cancelled, "hook/subagent-post-tool-prompt-abandoned"),
+    1,
+  )
+  let messages = array_value(
+    required_field(cancelled, "messages"),
+    "child cancellation messages",
+    16,
+  )
+  assert_true(
+    messages.any(message => {
+      required_string(message, "role") == "tool" &&
+      required_string(message, "content") == "alpha"
+    }),
+  )
+  assert_false(
+    messages.any(message => {
+      fields(message).get("source") is Some(_) &&
+      subagent_hook_message_text(message) == "A"
+    }),
+  )
+  assert_true(engine.take_effects().is_empty())
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session_for(restored, "hook-child"), cancelled)
 }

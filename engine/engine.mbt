@@ -820,6 +820,29 @@ fn Engine::start_step(
     session.subagent_prompt_hook_start_contexts = session.pending_hook_contexts.copy()
     session.subagent_prompt_hook_post_tool_messages = session.pending_subagent_post_tool_messages.copy()
     session.subagent_prompt_hook_contexts = child_contexts
+    if !session.subagent_prompt_hook_post_tool_messages.is_empty() {
+      session.append(
+        "hook/subagent-post-tool-prompt-pending",
+        object([
+          (
+            "context_count",
+            integer(session.pending_subagent_post_tool_contexts.length()),
+          ),
+          (
+            "context_length",
+            integer(
+              engine_subagent_hook_context_length(
+                session.pending_subagent_post_tool_contexts,
+              ),
+            ),
+          ),
+          (
+            "message_count",
+            integer(session.pending_subagent_post_tool_messages.length()),
+          ),
+        ]),
+      )
+    }
     session.pending_hook_contexts.clear()
     session.pending_subagent_post_tool_messages.clear()
     session.pending_subagent_post_tool_contexts.clear()
@@ -946,6 +969,8 @@ fn Engine::terminate(
   reason : String,
   error : String,
 ) -> Unit {
+  let abandon_subagent_post_tool = !session.pending_subagent_post_tool_messages.is_empty() ||
+    !session.subagent_prompt_hook_post_tool_messages.is_empty()
   if session.active_kind == Some(Llm) {
     session.append(
       "assistant/attempt",
@@ -1004,6 +1029,14 @@ fn Engine::terminate(
     session.clear_post_tool_prompt_hook()
   } else {
     session.post_tool_prompt_hook_admission = false
+  }
+  if abandon_subagent_post_tool ||
+    !session.pending_subagent_post_tool_messages.is_empty() ||
+    !session.pending_subagent_post_tool_contexts.is_empty() {
+    session.append(
+      "hook/subagent-post-tool-prompt-abandoned",
+      object([("reason", Json::string(reason))]),
+    )
   }
   session.calls.clear()
   session.cursor = 0

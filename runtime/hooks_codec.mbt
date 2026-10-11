@@ -86,6 +86,21 @@ fn native_hook_limit_reason(value : String) -> String {
 }
 
 ///|
+fn native_hook_prefix_utf16(value : String, maximum : Int) -> String {
+  let output = StringBuilder()
+  let mut units = 0
+  for character in value {
+    let width = if character.to_int() > 0xFFFF { 2 } else { 1 }
+    if units + width > maximum {
+      break
+    }
+    output.write_char(character)
+    units += width
+  }
+  output.to_string()
+}
+
+///|
 fn native_hook_json_string(
   value : Json?,
   field : String,
