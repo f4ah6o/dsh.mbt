@@ -1035,6 +1035,75 @@ test "child PostToolUse inbox passes through the next UserPromptSubmit checkpoin
 }
 
 ///|
+test "pending child UserPromptSubmit blocks prompt admission and denial" {
+  let accepting = subagent_hook_post_tool_pending_engine()
+  let accept_checkpoint = accepting
+    .pending_subagent_prompt_hook("hook-child")
+    .unwrap()
+  let accept_invocation = accepting
+    .record_native_hook_invoked(
+      "hook-child",
+      "UserPromptSubmit",
+      "claude-code:UserPromptSubmit:81",
+      None,
+    )
+    .unwrap()
+  let accept_before = accepting.snapshot()
+  assert_true(
+    accepting.accept_subagent_prompt_hook(accept_checkpoint, ["next"]) is Err(_),
+  )
+  assert_eq(accepting.snapshot(), accept_before)
+  assert_true(accepting.take_effects().is_empty())
+  ignore(
+    accepting.record_native_hook_result(
+      accept_invocation,
+      "pass",
+      Some(0),
+      None,
+      1,
+    ),
+  )
+  assert_true(
+    accepting.accept_subagent_prompt_hook(accept_checkpoint, ["next"]) is Ok(_),
+  )
+  assert_eq(accepting.take_effects().length(), 1)
+  assert_eq(Engine::new(test_tools()).restore(accepting.snapshot()), Ok(()))
+
+  let blocking = subagent_hook_post_tool_pending_engine()
+  let block_checkpoint = blocking
+    .pending_subagent_prompt_hook("hook-child")
+    .unwrap()
+  let block_invocation = blocking
+    .record_native_hook_invoked(
+      "hook-child",
+      "UserPromptSubmit",
+      "claude-code:UserPromptSubmit:82",
+      None,
+    )
+    .unwrap()
+  let block_before = blocking.snapshot()
+  assert_true(
+    blocking.block_subagent_prompt_hook(block_checkpoint, "denied") is Err(_),
+  )
+  assert_eq(blocking.snapshot(), block_before)
+  assert_true(blocking.take_effects().is_empty())
+  ignore(
+    blocking.record_native_hook_result(
+      block_invocation,
+      "deny",
+      Some(0),
+      None,
+      1,
+    ),
+  )
+  assert_true(
+    blocking.block_subagent_prompt_hook(block_checkpoint, "denied") is Ok(_),
+  )
+  assert_true(blocking.take_effects().is_empty())
+  assert_eq(Engine::new(test_tools()).restore(blocking.snapshot()), Ok(()))
+}
+
+///|
 test "settled child PostToolUse admission restores and rejects reordered source messages" {
   let engine = subagent_hook_post_tool_pending_engine()
   let checkpoint = engine.pending_subagent_prompt_hook("hook-child").unwrap()
