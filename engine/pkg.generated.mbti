@@ -32,6 +32,7 @@ pub fn Engine::complete_effect_with_stop_hook(Self, EffectId, Json) -> Result[Js
 pub fn Engine::continue_stop_hook(Self, NativeStopHookCheckpoint, Array[String]) -> Result[Json, String]
 pub fn Engine::event_log(Self, SessionId) -> Result[Array[EngineEvent], String]
 pub fn Engine::finish_stop_hook(Self, NativeStopHookCheckpoint) -> Result[Json, String]
+pub fn Engine::inject_hook_contexts(Self, String, Array[String]) -> Result[Bool, String]
 pub fn Engine::invoke(Self, String, Json) -> Result[Json, String]
 pub fn Engine::new(Array[Json]) -> Self
 pub fn Engine::pending_stop_hook(Self, SessionId) -> NativeStopHookCheckpoint?
@@ -106,6 +107,7 @@ pub(all) enum EngineEventKind {
   ToolResult
   ToolResultPruned
   TodoWrite
+  SubagentStartContext
   UpstreamHeader
   UpstreamEvent
   Other(String)

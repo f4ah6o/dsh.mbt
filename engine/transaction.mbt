@@ -92,6 +92,7 @@ fn Session::copy_state(self : Session) -> Session {
     stop_continuation_admitted: self.stop_continuation_admitted,
     stop_prompt_context_count: self.stop_prompt_context_count,
     stop_prompt_context_length: self.stop_prompt_context_length,
+    pending_hook_contexts: self.pending_hook_contexts.copy(),
   }
 }
 
@@ -207,6 +208,75 @@ pub fn Engine::invoke(
   match EngineCommand::from_json(operation, input) {
     Err(error) => Err(error)
     Ok(command) => self.apply(command)
+  }
+}
+
+///|
+fn engine_hook_context_utf16_units(value : String) -> Int {
+  let mut units = 0
+  for character in value {
+    units += if character.to_int() > 0xFFFF { 2 } else { 1 }
+  }
+  units
+}
+
+///|
+/// Queue ephemeral SubagentStart context for the child's next provider step.
+/// An in-flight request is immutable; queued context becomes a source-tagged
+/// user message when the engine admits its next step. This is intentionally an
+/// Engine-only seam and is not an operation in the durable command protocol.
+pub fn Engine::inject_hook_contexts(
+  self : Engine,
+  session_id : String,
+  contexts : Array[String],
+) -> Result[Bool, String] {
+  if contexts.is_empty() {
+    return Ok(true)
+  }
+  let candidate = self.copy_state()
+  let changed = try {
+    let session = candidate.lookup(session_id)
+    if session.imported {
+      raise Invalid("Imported Session v4 histories cannot receive hook context")
+    }
+    if session.status != Idle && session.status != Running {
+      return Ok(false)
+    }
+    if session.pending_hook_contexts.length() + contexts.length() > 32 {
+      raise Invalid("hook contexts exceed the 32-item limit")
+    }
+    let mut total_length = 0
+    for context in session.pending_hook_contexts {
+      total_length += engine_hook_context_utf16_units(context)
+    }
+    for context in contexts {
+      let units = engine_hook_context_utf16_units(context)
+      if context.is_empty() || units > 4096 {
+        raise Invalid("hook context must contain 1 to 4096 UTF-16 code units")
+      }
+      total_length += units
+      if total_length > 16384 {
+        raise Invalid("hook contexts exceed the aggregate length limit")
+      }
+    }
+    for context in contexts {
+      session.pending_hook_contexts.push(context)
+    }
+    Ok(true)
+  } catch {
+    Invalid(message) => Err(message)
+  }
+  match changed {
+    Err(message) => Err(message)
+    Ok(accepted) =>
+      if !accepted {
+        Ok(false)
+      } else if candidate.within_capacity() {
+        self.adopt(candidate)
+        Ok(true)
+      } else {
+        Err(CAPACITY_ERROR)
+      }
   }
 }
 

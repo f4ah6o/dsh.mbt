@@ -169,7 +169,10 @@ pub fn Engine::finish_stop_hook(
     if session.stop_continuation_text is Some(_) {
       raise Invalid("Cannot finish Stop while a continuation is staged")
     }
-    if session.sticky_max_tokens {
+    if !session.pending_hook_contexts.is_empty() {
+      session.clear_stop_continuation_state()
+      candidate.start_step(session)
+    } else if session.sticky_max_tokens {
       candidate.terminate(
         session,
         Failed,

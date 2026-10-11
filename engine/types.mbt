@@ -147,6 +147,8 @@ priv struct Session {
   mut stop_continuation_admitted : Bool
   mut stop_prompt_context_count : Int
   mut stop_prompt_context_length : Int
+  /// Ephemeral SubagentStart context waiting for the next provider request.
+  pending_hook_contexts : Array[String]
 }
 
 ///|
@@ -252,5 +254,6 @@ fn fresh_session(
     stop_continuation_admitted: false,
     stop_prompt_context_count: 0,
     stop_prompt_context_length: 0,
+    pending_hook_contexts: [],
   }
 }

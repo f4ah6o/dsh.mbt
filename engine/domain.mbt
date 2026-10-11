@@ -340,6 +340,7 @@ pub(all) enum EngineEventKind {
   ToolResult
   ToolResultPruned
   TodoWrite
+  SubagentStartContext
   UpstreamHeader
   UpstreamEvent
   Other(String)
@@ -374,6 +375,7 @@ pub fn EngineEventKind::from_wire(value : String) -> EngineEventKind {
     "tool/result" => ToolResult
     "tool/result/pruned" => ToolResultPruned
     "todo/write" => TodoWrite
+    "hook/subagent-start-context" => SubagentStartContext
     "upstream/header" => UpstreamHeader
     "upstream/event" => UpstreamEvent
     other => Other(other)
@@ -406,6 +408,7 @@ pub fn EngineEventKind::wire(self : EngineEventKind) -> String {
     ToolResult => "tool/result"
     ToolResultPruned => "tool/result/pruned"
     TodoWrite => "todo/write"
+    SubagentStartContext => "hook/subagent-start-context"
     UpstreamHeader => "upstream/header"
     UpstreamEvent => "upstream/event"
     Other(value) => value

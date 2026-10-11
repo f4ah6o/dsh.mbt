@@ -232,6 +232,59 @@ test "max-token ending stays sticky across an admitted same-turn continuation" {
 }
 
 ///|
+test "late SubagentStart context continues past Stop without clearing max-token failure" {
+  let (engine, provider) = started_engine(max_steps=4)
+  ignore(
+    success(
+      engine.complete_effect_with_stop_hook(
+        stop_hook_completion_id(provider),
+        max_tokens_response("Partial child answer"),
+      ),
+    ),
+  )
+  let first_checkpoint = stop_hook_checkpoint(engine)
+  assert_eq(
+    engine.inject_hook_contexts("test", ["late start context"]),
+    Ok(true),
+  )
+  let continued = success(engine.finish_stop_hook(first_checkpoint))
+  assert_eq(get_status(continued), "running")
+  let next = engine.take_typed_effects()
+  assert_eq(next.length(), 1)
+  let messages = array_value(
+    required_field(next[0].request(), "messages"),
+    "provider messages",
+    8,
+  )
+  assert_eq(
+    required_field(messages[2], "source"),
+    Json::object({ "kind": Json::string("hooks-claude-code") }),
+  )
+  assert_eq(
+    array_value(required_field(messages[2], "content"), "content", 8).map(block => {
+      required_string(block, "text")
+    }),
+    ["late start context"],
+  )
+  ignore(
+    success(
+      engine.complete_effect_with_stop_hook(
+        next[0].id(),
+        stop_response("Answer after injected context"),
+      ),
+    ),
+  )
+  let ended = success(engine.finish_stop_hook(stop_hook_checkpoint(engine)))
+  assert_eq(get_status(ended), "failed")
+  assert_true(
+    array_value(required_field(ended, "events"), "events", 100).any(event => {
+      required_string(event, "type") == "turn/end" &&
+      required_string(required_field(event, "data"), "reason") == "max_tokens"
+    }),
+  )
+}
+
+///|
 test "oversized Stop reason closes the pending boundary without dispatch" {
   let (engine, provider) = started_engine()
   ignore(
