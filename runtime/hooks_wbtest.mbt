@@ -191,8 +191,23 @@ fn native_hook_tool_result(session : Json, call_id : String) -> Json? {
 }
 
 ///|
-test "native Claude hook config rejects unsupported events and matcher syntax" {
-  assert_true(native_hook_parse_config(@json.parse("{\"Stop\":[]}")) is Err(_))
+test "native Claude hook config accepts Stop and rejects unsupported events and matcher syntax" {
+  assert_true(
+    native_hook_parse_config(@json.parse("{\"SessionStart\":[]}")) is Err(_),
+  )
+  let stop = native_hook_parse_config(
+    @json.parse(
+      native_hook_test_config("Stop", "matcher-that-must-not-filter", "true"),
+    ),
+  ).unwrap()
+  assert_eq(stop.3.length(), 1)
+  assert_eq(stop.3[0].matcher, None)
+  let ignored_stop_matcher = native_hook_parse_config(
+    @json.parse(
+      "{\"Stop\":[{\"matcher\":false,\"hooks\":[{\"command\":\"true\"}]}]}",
+    ),
+  ).unwrap()
+  assert_eq(ignored_stop_matcher.3.length(), 1)
   assert_true(
     native_hook_parse_config(
       @json.parse(
@@ -228,6 +243,134 @@ test "native Claude hook config rejects unsupported events and matcher syntax" {
     )
     is Err(_),
   )
+}
+
+///|
+test "Stop codec is lenient and matching permission decisions override top-level control" {
+  let blocked = native_hook_stop_result_decision({
+    exit_code: 0,
+    stdout: "{\"decision\":\"block\",\"reason\":\"top block\"}",
+    stderr: "",
+    truncated: false,
+  })
+  assert_eq(blocked.rank, 3)
+  assert_eq(blocked.reason, Some("top block"))
+
+  let overridden = native_hook_stop_result_decision({
+    exit_code: 0,
+    stdout: "{\"decision\":\"block\",\"reason\":\"top block\",\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"permissionDecision\":\"allow\",\"permissionDecisionReason\":\"allow reason\",\"additionalContext\":\"ignored\"},\"unknown\":true}",
+    stderr: "",
+    truncated: false,
+  })
+  assert_eq(overridden.rank, 1)
+  assert_eq(overridden.reason, Some("allow reason"))
+
+  let ask = native_hook_stop_result_decision({
+    exit_code: 0,
+    stdout: "{\"decision\":\"block\",\"reason\":\"top block\",\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"permissionDecision\":\"ask\"}}",
+    stderr: "",
+    truncated: false,
+  })
+  assert_eq(ask.rank, 2)
+  assert_eq(ask.reason, Some("top block"))
+
+  let mismatch = native_hook_stop_result_decision({
+    exit_code: 0,
+    stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"wrong point\"}}",
+    stderr: "",
+    truncated: false,
+  })
+  assert_eq(mismatch.rank, 0)
+
+  let empty_reason = native_hook_stop_result_decision({
+    exit_code: 0,
+    stdout: "{\"decision\":\"block\",\"reason\":\"top block\",\"hookSpecificOutput\":{\"hookEventName\":\"Stop\",\"permissionDecisionReason\":\"\"}}",
+    stderr: "",
+    truncated: false,
+  })
+  assert_eq(empty_reason.rank, 3)
+  assert_eq(empty_reason.reason, Some(""))
+  let exit_two = native_hook_stop_result_decision({
+    exit_code: 2,
+    stdout: "{\"decision\":\"approve\"}",
+    stderr: " stderr denial ",
+    truncated: false,
+  })
+  assert_eq(exit_two.rank, 3)
+  assert_eq(exit_two.reason, Some("stderr denial"))
+  let truncated_exit_two = native_hook_stop_result_decision({
+    exit_code: 2,
+    stdout: "",
+    stderr: "bounded stderr denial",
+    truncated: true,
+  })
+  assert_eq(truncated_exit_two.rank, 3)
+  assert_eq(truncated_exit_two.reason, Some("bounded stderr denial"))
+  let undecodable_exit_two = native_hook_stop_result_decision({
+    exit_code: 2,
+    stdout: "",
+    stderr: "",
+    truncated: true,
+  })
+  assert_eq(undecodable_exit_two.rank, 3)
+  assert_eq(undecodable_exit_two.reason, None)
+  for
+    capture in [
+      { exit_code: 1, stdout: "{}", stderr: "", truncated: false, },
+      { exit_code: 0, stdout: "{malformed", stderr: "", truncated: false, },
+      {
+        exit_code: 0,
+        stdout: "{\"decision\":false}",
+        stderr: "",
+        truncated: false,
+      },
+      {
+        exit_code: 0,
+        stdout: "{\"decision\":\"deny\"}",
+        stderr: "",
+        truncated: false,
+      },
+      { exit_code: 0, stdout: "{}", stderr: "", truncated: true, },
+    ] {
+    assert_eq(native_hook_stop_result_decision(capture).rank, 0)
+  }
+}
+
+///|
+async test "Stop preserves exit-two denial when stderr overflows or is invalid UTF-8" {
+  let fixture = @fs.tmpdir(prefix="dsh-stop-exit-two-output")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let tools = native_hook_test_tools(workspace)
+    group.add_defer(() => tools.root.close())
+
+    let overflow = native_run_hook_command(
+      tools,
+      {
+        command: "i=0; while [ \"$i\" -lt 16385 ]; do printf x >&2; i=$((i + 1)); done; exit 2",
+        timeout_ms: 10000,
+      },
+      "{}\n",
+    ).unwrap()
+    assert_eq(overflow.exit_code, 2)
+    assert_true(overflow.truncated)
+    let overflow_denial = native_hook_stop_result_decision(overflow)
+    assert_eq(overflow_denial.rank, 3)
+    assert_eq(overflow_denial.reason.unwrap().length(), 16384)
+
+    let invalid_utf8 = native_run_hook_command(
+      tools,
+      { command: "printf '\\377' >&2; exit 2", timeout_ms: 5000, },
+      "{}\n",
+    ).unwrap()
+    assert_eq(invalid_utf8.exit_code, 2)
+    assert_true(invalid_utf8.truncated)
+    let fallback_denial = native_hook_stop_result_decision(invalid_utf8)
+    assert_eq(fallback_denial.rank, 3)
+    assert_eq(fallback_denial.reason, None)
+  }
 }
 
 ///|
@@ -3006,5 +3149,435 @@ async test "native oversized known outcome closes before PostToolUse runs" {
         Some("effect-known"),
       ),
     )
+  }
+}
+
+///|
+async test "Stop denial stages a same-turn UserPromptSubmit continuation before dispatch" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-stop-continuation")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let stop_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/stop-payloads.jsonl\"; if [ ! -e \"${CLAUDE_PROJECT_DIR}/first-stop\" ]; then : > \"${CLAUDE_PROJECT_DIR}/first-stop\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"continue after review\"}'; else printf '{}'; fi"
+    let prompt_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/prompt-payloads.jsonl\"; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"review context\"}}'"
+    let config = Json::object({
+      "Stop": Json::array([
+        Json::object({
+          "matcher": Json::boolean(false),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(stop_command) }),
+          ]),
+        }),
+      ]),
+      "UserPromptSubmit": Json::array([
+        Json::object({
+          "matcher": Json::string("matcher is ignored"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(prompt_command) }),
+          ]),
+        }),
+      ]),
+    })
+    @fs.write_file(hooks_path, @utf8.encode(config.stringify()))
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+
+    let session_id = "stop-direct-continuation"
+    let tool = native_hook_prepare_approved_demo_write(runtime, session_id)
+    let (_, provider_effects) = runtime.run_tool_effect(tool).unwrap()
+    assert_eq(provider_effects.length(), 1)
+    let command_id = native_command_id().unwrap()
+    assert_true(runtime.run_effects(provider_effects, command_id, 1) is Ok(_))
+
+    let (session, _) = runtime
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(string_field(session, "status"), Some("completed"))
+    assert_eq(int_field(session, "turn_id"), Some(1))
+    let events = native_hook_test_array(
+      native_hook_test_required_field(session, "events"),
+      "events",
+    )
+    assert_eq(
+      events
+      .filter(event => string_field(event, "type") == Some("hook/stop-pending"))
+      .length(),
+      2,
+    )
+    assert_eq(
+      events
+      .filter(event => {
+        string_field(event, "type") == Some("hook/stop-continuation-admitted")
+      })
+      .length(),
+      1,
+    )
+    assert_eq(int_field(session, "step"), Some(3))
+    let sourced_messages = events.filter(event => {
+      if string_field(event, "type") != Some("user/message") {
+        false
+      } else {
+        object_field(native_hook_test_required_field(event, "data"), "source")
+        is Some(_)
+      }
+    })
+    assert_eq(sourced_messages.length(), 3)
+    assert_true(
+      native_hook_test_array(
+        native_hook_test_required_field(session, "messages"),
+        "messages",
+      ).any(message => {
+        object_field(message, "source") ==
+        Some(Json::object({ "kind": Json::string("hooks-claude-code") })) &&
+        native_hook_test_required_string(message, "content") ==
+        "continue after review"
+      }),
+    )
+    let stop_payloads = @fs.read_file(workspace + "/stop-payloads.jsonl").text()
+    assert_eq(
+      stop_payloads.split("\n").filter(line => !line.is_empty()).length(),
+      2,
+    )
+    for line in stop_payloads.split("\n") {
+      if !line.is_empty() {
+        let payload = @json.parse(line)
+        let fields = native_hook_test_fields(payload)
+        assert_eq(fields.length(), 5)
+        assert_eq(
+          native_hook_test_required_string(payload, "hook_event_name"),
+          "Stop",
+        )
+        assert_eq(
+          native_hook_test_required_string(payload, "transcript_path"),
+          "",
+        )
+        assert_eq(
+          object_field(payload, "stop_hook_active"),
+          Some(Json::boolean(false)),
+        )
+        assert_eq(
+          native_hook_test_required_string(payload, "session_id"),
+          session_id,
+        )
+      }
+    }
+    let prompt_payloads = @fs.read_file(workspace + "/prompt-payloads.jsonl").text()
+    assert_eq(
+      prompt_payloads.split("\n").filter(line => !line.is_empty()).length(),
+      2,
+    )
+    assert_true(prompt_payloads.contains("continue after review"))
+  }
+}
+
+///|
+async test "Stop children preserve the provider job owner through cancellation and reuse" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-stop-cancel-owner")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let stop_command = "if [ ! -e \"${CLAUDE_PROJECT_DIR}/first-stop\" ]; then : > \"${CLAUDE_PROJECT_DIR}/first-stop\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"continue after review\"}'; else printf '{}'; fi"
+    let prompt_command = "cat >/dev/null; printf x >> \"${CLAUDE_PROJECT_DIR}/prompt-hook-count\"; printf '%s' '{}'"
+    let hooks_config = Json::object({
+      "Stop": Json::array([
+        Json::object({
+          "matcher": Json::string("ignored"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(stop_command) }),
+          ]),
+        }),
+      ]),
+      "UserPromptSubmit": Json::array([
+        Json::object({
+          "matcher": Json::string("ignored"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(prompt_command) }),
+          ]),
+        }),
+      ]),
+    })
+    @fs.write_file(hooks_path, @utf8.encode(hooks_config.stringify()))
+    let address = @socket.Addr::parse("127.0.0.1:0")
+    let server = @http.Server::Server(address, reuse_addr=false)
+    group.add_defer(() => server.close())
+    let bodies = Ref([])
+    let auth_ok = Ref(true)
+    let second_response = @async.Semaphore::Semaphore(1, initial_value=0)
+    let second_release_sent = Ref(false)
+    group.add_defer(() => {
+      if !second_release_sent.val {
+        second_release_sent.val = true
+        second_response.release()
+      }
+    })
+    let response_errors = Ref([])
+    let responses = [
+      {
+        code: 200,
+        reason: "OK",
+        body: native_fixture_openai_text_stream("first provider answer"),
+        retry_after: None,
+      },
+      {
+        code: 200,
+        reason: "OK",
+        body: native_fixture_openai_text_stream("second provider answer"),
+        retry_after: None,
+      },
+    ]
+    let serving = group.spawn(no_wait=true, async fn() {
+      let mut response_index = 0
+      let mut ignored_connections = 0
+      while response_index < responses.length() {
+        let (connection, _) = server.accept()
+        let release = if response_index == 1 {
+          Some(second_response)
+        } else {
+          None
+        }
+        let handled = native_fixture_handle_provider_request(
+          connection,
+          bodies,
+          auth_ok,
+          responses[response_index],
+          release,
+          Some(Ref(0)),
+          None,
+          Some(response_errors),
+        )
+        if handled {
+          response_index += 1
+          ignored_connections = 0
+        } else {
+          ignored_connections += 1
+          if ignored_connections > NATIVE_FIXTURE_MAX_EMPTY_PROVIDER_CONNECTIONS {
+            raise NativeFixtureProviderFailure(
+              "provider fixture ignored too many empty TCP connections",
+            )
+          }
+        }
+      }
+    })
+    let base_url = "http://127.0.0.1:" + server.addr.port().to_string()
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      false,
+      mode_override="openai",
+      model_override="fixture-model",
+      base_url_override=base_url,
+      max_retries=0,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "stop-owner-cancel-session"
+    ignore(
+      runtime
+      .invoke("session_create", { "id": session_id, "title": "Stop cancel" })
+      .unwrap(),
+    )
+    let (_, provider_effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id.to_json(),
+        "prompt": "Complete, then continue after a Stop denial.",
+      })
+      .unwrap()
+    assert_eq(provider_effects.length(), 1)
+    let command_id = native_command_id().unwrap()
+    let run_result : Ref[Result[Unit, String]?] = Ref(None)
+    let run_done = Ref(false)
+    let runner = group.spawn(no_wait=true, allow_failure=true, async fn() -> Result[
+      Unit,
+      String,
+    ] {
+      run_result.val = Some(
+        runtime.run_effects(provider_effects, command_id, 1),
+      )
+      run_done.val = true
+      Ok(())
+    })
+
+    let mut second_provider_started = false
+    for _ in 0..<600 {
+      if bodies.val.length() >= 2 {
+        second_provider_started = true
+        break
+      }
+      @async.sleep(5)
+    }
+    assert_true(second_provider_started)
+    assert_true(@fs.exists(workspace + "/first-stop"))
+    assert_eq(@fs.read_file(workspace + "/prompt-hook-count").text(), "xx")
+    assert_false(run_done.val)
+    let (_, cancel_effects) = runtime
+      .invoke("session_cancel", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_true(cancel_effects.is_empty())
+    let fresh = runtime.scheduler
+      .begin(session_id, "stop-owner-follow-up", 100)
+      .unwrap()
+    let mut owner_drained = false
+    for _ in 0..<100 {
+      if run_done.val {
+        owner_drained = true
+        break
+      }
+      @async.sleep(5)
+    }
+    assert_true(owner_drained)
+    assert_true(run_result.val is Some(Err(_)))
+    runtime.scheduler.finish(fresh)
+    second_release_sent.val = true
+    second_response.release()
+    serving.wait()
+    ignore(runner.wait())
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 2)
+    assert_true(response_errors.val.all(error => !error.is_empty()))
+  }
+}
+
+///|
+async test "oversized astral UserPromptSubmit denial closes the continuation and permits a fresh turn" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-stop-long-denial")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    let stop_command = "payload=$(cat); if [ ! -e \"${CLAUDE_PROJECT_DIR}/first-stop\" ]; then : > \"${CLAUDE_PROJECT_DIR}/first-stop\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"continue after review\"}'; else printf '{}'; fi"
+    let prompt_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/prompt-payloads.jsonl\"; case \"$payload\" in *\"continue after review\"*) i=0; while [ \"$i\" -lt 4096 ]; do printf '😀' >&2; i=$((i + 1)); done; exit 2 ;; *) printf '%s' '{}' ;; esac"
+    let config = Json::object({
+      "Stop": Json::array([
+        Json::object({
+          "matcher": Json::string("ignored"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(stop_command) }),
+          ]),
+        }),
+      ]),
+      "UserPromptSubmit": Json::array([
+        Json::object({
+          "matcher": Json::string("also ignored"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(prompt_command) }),
+          ]),
+        }),
+      ]),
+    })
+    @fs.write_file(hooks_path, @utf8.encode(config.stringify()))
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "stop-long-denial-session"
+    let tool = native_hook_prepare_approved_demo_write(runtime, session_id)
+    let (_, provider_effects) = runtime.run_tool_effect(tool).unwrap()
+    assert_eq(provider_effects.length(), 1)
+    let command_id = native_command_id().unwrap()
+    assert_true(runtime.run_effects(provider_effects, command_id, 1) is Ok(_))
+
+    let (blocked, _) = runtime
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(string_field(blocked, "status"), Some("failed"))
+    assert_eq(int_field(blocked, "turn_id"), Some(1))
+    let events = native_hook_test_array(
+      native_hook_test_required_field(blocked, "events"),
+      "events",
+    )
+    assert_eq(
+      events
+      .filter(event => {
+        string_field(event, "type") == Some("hook/stop-continuation-pending")
+      })
+      .length(),
+      1,
+    )
+    assert_eq(
+      events
+      .filter(event => {
+        string_field(event, "type") == Some("hook/stop-continuation-admitted")
+      })
+      .length(),
+      0,
+    )
+    assert_true(
+      events.any(event => {
+        string_field(event, "type") == Some("hook/stop-continuation-rejected") &&
+        native_provider_utf16_units(
+          native_hook_test_required_string(
+            native_hook_test_required_field(event, "data"),
+            "error",
+          ),
+        ) <=
+        8192
+      }),
+    )
+    assert_true(
+      events.any(event => {
+        string_field(event, "type") == Some("turn/end") &&
+        string_field(native_hook_test_required_field(event, "data"), "reason") ==
+        Some("blocked")
+      }),
+    )
+    assert_true(
+      native_hook_test_array(
+        native_hook_test_required_field(blocked, "messages"),
+        "messages",
+      ).any(message => {
+        string_field(message, "role") == Some("assistant") &&
+        string_field(message, "content") ==
+        Some("Offline demo finished after the approved workspace write.")
+      }),
+    )
+    assert_eq(
+      @fs.read_file(workspace + "/prompt-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .length(),
+      2,
+    )
+
+    let (_, fresh_effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id.to_json(),
+        "prompt": "Fresh prompt after the blocked continuation",
+      })
+      .unwrap()
+    assert_eq(fresh_effects.length(), 1)
+    let (cancelled, cancel_effects) = runtime
+      .invoke("session_cancel", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(string_field(cancelled, "status"), Some("cancelled"))
+    assert_true(cancel_effects.is_empty())
   }
 }

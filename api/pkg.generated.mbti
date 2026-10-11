@@ -14,10 +14,14 @@ import {
 pub struct HarnessApi {
   // private fields
 }
+pub fn HarnessApi::block_stop_continuation(Self, @engine.NativeStopHookCheckpoint, String) -> Result[Json, String]
 pub fn HarnessApi::close(Self) -> Unit
 pub fn HarnessApi::complete(Self, String, Json) -> Result[Json, String]
 pub fn HarnessApi::complete_effect(Self, @engine.EffectId, Json) -> Result[Json, String]
+pub fn HarnessApi::complete_effect_with_stop_hook(Self, @engine.EffectId, Json) -> Result[Json, String]
+pub fn HarnessApi::continue_stop_hook(Self, @engine.NativeStopHookCheckpoint, Array[String]) -> Result[Json, String]
 pub fn HarnessApi::event_log(Self, @engine.SessionId) -> Result[Array[@engine.EngineEvent], String]
+pub fn HarnessApi::finish_stop_hook(Self, @engine.NativeStopHookCheckpoint) -> Result[Json, String]
 pub fn HarnessApi::gui_binding(Self, String) -> @capability.GuiBinding[Json, Json]?
 pub fn HarnessApi::invoke(Self, String, Json, origin? : @capability.InvocationOrigin) -> Result[Json, String]
 pub fn HarnessApi::invoke_session_send_with_prompt_contexts(Self, Json, Array[String]) -> Result[Json, String]
@@ -25,6 +29,8 @@ pub fn HarnessApi::manifest(Self) -> String
 pub fn HarnessApi::mcp_handle(Self, String) -> String?
 pub fn HarnessApi::mcp_handle_with_prompt_contexts(Self, String, Array[String]) -> String?
 pub fn HarnessApi::new(external_mcp_tools? : Array[Json], skill_tool? : Json?, lsp_tool? : Json?, subagent_tool? : Json?) -> Result[Self, String]
+pub fn HarnessApi::pending_stop_hook(Self, @engine.SessionId) -> @engine.NativeStopHookCheckpoint?
+pub fn HarnessApi::prepare_stop_continuation(Self, @engine.NativeStopHookCheckpoint, String) -> Result[Json, String]
 pub fn HarnessApi::preview_mcp_handle(Self, String) -> String?
 pub fn HarnessApi::preview_session_send(Self, Json) -> Result[Json, String]
 pub fn HarnessApi::project_effect_stream(Self, @engine.EffectId, String, String) -> Result[Json, String]

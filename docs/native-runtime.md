@@ -541,8 +541,8 @@ commands themselves run with the selected workspace as their working
 directory.
 
 The config may contain a top-level `hooks` object, or put these events at the
-root. Only command-based `PreToolUse`, `PostToolUse`, and `UserPromptSubmit`
-groups are supported:
+root. Only command-based `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, and
+`Stop` groups are supported:
 
 ```json
 {
@@ -568,6 +568,11 @@ groups are supported:
     "UserPromptSubmit": [
       {
         "hooks": [{ "command": "/absolute/path/to/check-prompt" }]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [{ "command": "/absolute/path/to/check-stop" }]
       }
     ]
   }
@@ -625,6 +630,57 @@ The pinned Claude Code bridge also leaves several prompt controls unapplied:
 `stopReason` has no run-level effect, and `updatedInput` / `systemMessage` are
 logged but ignored. This native path likewise does not apply those fields.
 
+`Stop` groups also have no matcher subject, so any `matcher` field is ignored
+and every configured command runs in config order at a terminal provider step,
+including a max-token step. The payload contains exactly `session_id`, an empty
+`transcript_path`, canonical workspace `cwd`, `hook_event_name: "Stop"`, and
+`stop_hook_active: false`. The empty transcript path and fixed false marker
+follow the pinned bridge payload; the native host has no transcript artifact
+path or Stop recursion marker.
+
+The Stop adapter consumes top-level `approve` / `block` plus `reason`, and
+`hookSpecificOutput` only when `hookEventName` is exactly `Stop`. Matching
+`permissionDecision` values `allow`, `deny`, and `ask` override that hook's
+top-level decision; `permissionDecisionReason` overrides its reason when it is
+a string. Across commands, `deny` outranks `ask`, which outranks `allow`; only
+nonempty reasons for the winning rank are joined in config order with a blank
+line. Exit status 2 also denies and uses trimmed stderr. If no nonempty reason
+survives, native continuation text is `continue: blocked by Stop hook`.
+Malformed JSON, unknown fields, wrong field types, other nonzero exit codes,
+spawn failures, and timeout are neutral. A known exit-2 denial remains a denial
+when stderr is truncated or invalid UTF-8; its reason is bounded by the captured
+16 KiB stream, and unreadable stderr uses the fallback. Truncated non-exit-2
+output is neutral for Stop.
+The Stop listener consumes the merged decision and denial reason only;
+additional context, `continue: false`, `stopReason`, and `updatedInput`
+do not control the run in the pinned bridge and are not applied here.
+
+A Stop denial steers a source-tagged user message into the same turn. Before a
+provider request for that continuation, native runs `UserPromptSubmit` with the
+steer text. If that hook denies or cannot run, the previous assistant answer
+stays in the transcript and the turn ends `failed` with reason `blocked`; the
+ACP carrier reports `stopReason: "refusal"`. A successful prompt hook may add
+its bounded context to the continuation. UserPromptSubmit also runs for a new
+valid user `session_send`, but this native integration does not run it on other
+ordinary internal tool-follow-up steps as upstream's `agent/pre-step` hook can.
+The foreground subagent child loop also bypasses the parent runtime's Stop
+dispatch; this is a native host integration gap.
+
+Stop is opt-in with hooks config and its external commands run only after the
+terminal provider result has been checkpointed. Cancellation kills and drains
+the hook process before the scheduler can reuse the session; restore closes an
+unsettled Stop boundary as interrupted without rerunning hooks or provider
+work. Max-token completion still invokes Stop, and the `max_tokens` terminal
+reason stays sticky if a later continuation is allowed. The engine's existing
+`max_steps` remains the bound; neither upstream nor native adds a separate
+consecutive-Stop limit. The native decoder caps the aggregate joined Stop
+reason at 524,350 UTF-16 units. Existing 64 KiB hook-stdin and 262,144
+UTF-16-unit serialized-session limits apply separately; a candidate that
+exceeds session capacity closes with `session_capacity` without dispatching
+the provider effect. A denial in the continuation's UserPromptSubmit hook is
+clipped on a Unicode scalar boundary to the existing 8,192 UTF-16-unit
+event-error limit so the turn always settles.
+
 PreToolUse and PostToolUse payloads include `session_id`, an empty
 `transcript_path`, the canonical workspace `cwd`, `hook_event_name`,
 `tool_name`, `tool_input`, and `tool_use_id`; PostToolUse also includes the
@@ -674,8 +730,9 @@ The config parser rejects unknown fields, unsupported events, and malformed
 groups. PreToolUse and PostToolUse also use strict structured-result validation;
 for those events a wrong-type `additionalContext` is rejected, whereas
 upstream ignores it. UserPromptSubmit follows the upstream lenient output
-decoder described above. Truncated output and native context-limit overflow
-reject the request instead of being silently truncated. Native session
+decoder described above. For non-Stop hooks, truncated output and native
+context-limit overflow reject the request instead of being silently truncated;
+Stop keeps exit-2 control when its captured stderr truncates. Native session
 capacity and provider-shape checks remain stricter. Restore, Session v4 import,
 receipt replay, and retries do not rerun hooks. Arbitrary async hooks and
 prompt-hook types other than command-based UserPromptSubmit,
@@ -693,9 +750,10 @@ known tool outcome without repeating host work.
 Stores containing PostToolUse `additional_contexts` completion metadata or
 structured `hooks-claude-code` user messages from PostToolUse require dsh
 0.1.12 or later. UserPromptSubmit context messages require dsh 0.1.13 or later.
-Do not rewrite either kind of store with an older reader. dsh 0.1.12 continues
-to read context-free dsh 0.1.11 native stores; the engine replay tests cover
-the legacy completion shape without `additional_contexts`.
+Stores containing Stop boundary or continuation events require dsh 0.1.14 or
+later. Do not rewrite any of these stores with an older reader. dsh 0.1.12
+continues to read context-free dsh 0.1.11 native stores; the engine replay
+tests cover the legacy completion shape without `additional_contexts`.
 
 `--approve-call` and `--deny-call` act on a session that is already waiting for approval, for example one started from the browser or MCP carrier. Pass its current `approval_revision` and `pending_approval.call_id`; stale or mismatched decisions are rejected:
 

@@ -64,6 +64,11 @@ fn NativeHooks::has_user_prompt_submit(self : NativeHooks) -> Bool {
 }
 
 ///|
+fn NativeHooks::has_stop(self : NativeHooks) -> Bool {
+  !self.stop.is_empty()
+}
+
+///|
 fn native_hook_prompt_input(input : Json, contexts : Array[String]) -> Json {
   let fields = match input {
     Json::Object(value) => value.copy()
@@ -201,6 +206,69 @@ async fn NativeHooks::before_user_prompt(
     Json::string(prompt),
     None,
   )
+}
+
+///|
+fn native_stop_payload(
+  project_dir : String,
+  session_id : String,
+) -> Result[String, String] {
+  let text = Json::object({
+      "session_id": Json::string(session_id),
+      "transcript_path": Json::string(""),
+      "cwd": Json::string(project_dir),
+      "hook_event_name": Json::string("Stop"),
+      "stop_hook_active": Json::boolean(false),
+    }).stringify() +
+    "\n"
+  if @utf8.encode(text).length() > NATIVE_HOOK_STDIN_LIMIT {
+    Err("hooks stdin exceeds the 64 KiB limit")
+  } else {
+    Ok(text)
+  }
+}
+
+///|
+/// Run every configured Stop command in configuration order. Stop matchers
+/// have no subject in the pinned bridge and are deliberately ignored.
+async fn NativeHooks::before_stop(
+  self : NativeHooks,
+  tools : NativeTools,
+  session_id : String,
+) -> Result[NativeHookOutcome, String] {
+  let payload = match native_stop_payload(self.project_dir, session_id) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let mut winning_rank = 0
+  let reasons : Array[String] = []
+  for group in self.stop {
+    for hook in group.commands {
+      let capture = match native_run_hook_command(tools, hook, payload) {
+        Ok(value) => value
+        Err(_) => continue
+      }
+      let outcome = native_hook_stop_result_decision(capture)
+      if outcome.rank > winning_rank {
+        winning_rank = outcome.rank
+        reasons.clear()
+      }
+      if outcome.rank == winning_rank && outcome.rank >= 2 {
+        match outcome.reason {
+          Some(reason) if !reason.is_empty() => reasons.push(reason)
+          _ => ()
+        }
+      }
+    }
+  }
+  if winning_rank == 3 {
+    Ok({
+      action: NativeHookAction::Deny(reasons.join("\n\n")),
+      additional_contexts: [],
+    })
+  } else {
+    Ok({ action: NativeHookAction::Continue, additional_contexts: [], })
+  }
 }
 
 ///|

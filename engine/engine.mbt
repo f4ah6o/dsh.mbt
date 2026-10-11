@@ -147,6 +147,13 @@ fn Engine::send_prompt(
   session.schedule_cursor = 0
   session.parallel_group = false
   session.active_tool_effects.clear()
+  session.sticky_max_tokens = false
+  session.stop_hook_pending = false
+  session.stop_hook_event_seq = None
+  session.stop_continuation_text = None
+  session.stop_continuation_admitted = false
+  session.stop_prompt_context_count = 0
+  session.stop_prompt_context_length = 0
   session.todos = None
   session.append("turn/start", object([]))
   session.append(
@@ -807,6 +814,7 @@ fn Engine::terminate(
     "turn/end",
     object([("reason", Json::string(reason)), ("error", Json::string(error))]),
   )
+  session.clear_stop_hook_state()
 }
 
 ///|
@@ -857,6 +865,7 @@ fn Engine::complete_impl(
   self : Engine,
   effect_id : String,
   result : Json,
+  defer_stop_hook : Bool,
 ) -> Result[Json, String] {
   try {
     let effect = match self.effects.get(effect_id) {
@@ -941,23 +950,36 @@ fn Engine::complete_impl(
             session.calls.push(call)
           }
           if completion.finish_reason == "length" {
-            self.terminate(
-              session,
-              Failed,
-              "max_tokens",
-              "Model output reached its token limit",
-            )
+            if defer_stop_hook && completion.calls.is_empty() {
+              session.append(
+                "step/end",
+                object([("reason", Json::string("max_tokens"))]),
+              )
+              session.open_step = false
+              session.mark_stop_hook_pending("max_tokens")
+            } else {
+              self.terminate(
+                session,
+                Failed,
+                "max_tokens",
+                "Model output reached its token limit",
+              )
+            }
           } else if completion.calls.is_empty() {
             session.append(
               "step/end",
               object([("reason", Json::string("stop"))]),
             )
             session.open_step = false
-            session.status = Completed
-            session.append(
-              "turn/end",
-              object([("reason", Json::string("completed"))]),
-            )
+            if defer_stop_hook {
+              session.mark_stop_hook_pending("completed")
+            } else {
+              session.status = Completed
+              session.append(
+                "turn/end",
+                object([("reason", Json::string("completed"))]),
+              )
+            }
           } else {
             self.advance_tools(session)
           }

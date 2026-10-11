@@ -819,6 +819,10 @@ fn native_acp_stop_reason(session : Json) -> Result[String, String] {
       match string_field(data, "reason") {
         Some("max_tokens") => return Ok("max_tokens")
         Some("refusal") => return Ok("refusal")
+        // A UserPromptSubmit hook can reject a Stop continuation after an
+        // answer has already been committed. Surface that policy rejection as
+        // ACP's refusal outcome instead of hiding it as a provider failure.
+        Some("blocked") => return Ok("refusal")
         _ if string_field(session, "status") == Some("failed") =>
           return Err("native provider turn failed")
         _ => return Ok("end_turn")

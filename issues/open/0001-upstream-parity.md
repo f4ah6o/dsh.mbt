@@ -3,8 +3,8 @@
 Status: open
 Model: gpt-6-luna
 Created: 2026-10-05
-Updated: 2026-10-10
-Branch: feat/20261010-hook-user-prompt
+Updated: 2026-10-11
+Branch: feat/20261011-hook-stop
 upstream baseline は `5badb15009ae1756c3afe0ae0cef1faafc290ccc`。
 
 ## 概要
@@ -57,6 +57,7 @@ Bounded native subset と upstream package の名称が近いため、互換範�
 - 2026-10-10: Native ACP fatal-path defect: `runtime/main.mbt` used `abort` after ACP argument/startup/carrier/shutdown failures, and the native panic diagnostic could be written to stdout, corrupting JSON-RPC framing. Fixed with bounded stderr diagnostics and nonzero exit; checkpoint conflict stdio regression verifies an RPC error, no config update/effect, later request fencing, and JSON-only stdout through EOF. This is a native carrier issue, not an upstream parity defect.
 - 2026-10-10: ACP v1 persistent list / resume slice を追加し、workspace provenance、pagination、restart continuation、no-replay と multi-workspace / MCP 差分を記録。
 - 2026-10-10: bounded foreground subagent slice とその recovery / hook limits を section 3 に追加。upstream subagent lifecycle parity は未完了。
+- 2026-10-11: pinned [hooks-claude-code/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts)、[hook-protocol/codec.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/codec.ts)、[hook-protocol/merge.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/merge.ts)、[core/agent-loop/agent.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/core/agent-loop/src/agent.ts) の Stop lifecycle を参照し、native shared runtime の command Stop slice を追加。terminal result の durable checkpoint 後に matcher を無視して hook を実行し、deny は source-tagged user steer と同一 turn の continuation へつなぐ。continuation 前の UserPromptSubmit、winner-rank の reason merge、exit-2 denial、sticky max-token completion、checkpoint / restore no-replay、process cancellation を keyless fixtures で確認した。Native host の max-step bound、UTF-16 aggregate reason / session capacity、blocked-status mapping は仕様差として記録。native は通常 internal tool-follow-up step の UserPromptSubmit を呼ばず、foreground subagent child completion は parent Stop dispatch を経由しない。Stop payload の empty transcript path / false active marker と、pinned bridge でも適用しない additional controls を維持し、本 umbrella issue は open のまま。
 
 ## 注記
 
@@ -192,6 +193,33 @@ hook command は設定した利用者の trusted shell code として動き、ch
 新しい `effect-known` event source を含む store は dsh 0.1.5 以降で開いてください。以前の native snapshot は
 0.1.5 で開けます。この additional durable content も既存 session capacity 上限を消費します。
 全 upstream lifecycle / event coverage は未実装のため、本 issue は open のままです。
+
+Stop command hooks の bounded native slice（2026-10-11）: pinned
+[hooks-claude-code/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts)
+の agent/turn-stopping と stopPayload、[hook-protocol/codec.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/codec.ts)、
+[hook-protocol/merge.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/merge.ts)、
+[core/agent-loop/agent.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/core/agent-loop/src/agent.ts)
+を照合しました。native の run / web / mcp / acp / desktop shared runtime は terminal
+provider result を durable checkpoint した後に Stop command を実行します。Stop は matcher を無視し、
+payload は pinned bridge と同じ five fields（空 transcript_path、stop_hook_active: false を含む）です。
+exit 2 / top-level block / Stop-specific deny を decode し、deny > ask > allow の rank と winning-rank の
+nonempty reason を config order で merge します。deny は source-tagged user message として同じ turn に steer
+し、次 provider step の前に UserPromptSubmit を実行します。UserPromptSubmit rejection は既存 answer を保って
+Failed / blocked とし、ACP では refusal として返します。Max-token terminal result も Stop を呼び、許可後も
+max_tokens reason は sticky のままです。restore は unsettled boundary を interrupted として閉じ、hook / provider
+を再実行しません。Hook process cancellation は drain 後に scheduler owner を解放します。確認済み regression として、
+continuation child が provider job owner を奪う問題、長い astral denial が pending turn を残す問題、truncated /
+invalid UTF-8 stderr が既知 exit-2 deny を neutralize する問題を修正し fixture で保護しました。
+
+Native の制約は別途維持します。最大 32 command と 16 KiB output capture を元に Stop reason 合計を 524,350 UTF-16
+units へ制限し、既存 64 KiB stdin / 262,144 UTF-16 units session capacity を適用します。容量超過候補は provider effect を
+publish せず terminal session_capacity で閉じます。engine の既存 max_steps が上限で、dedicated
+consecutive-Stop cap はありません。pinned bridge が Stop で利用しない additionalContext、continue:false、
+stopReason、updatedInput 等は拡張せず、native も適用しません。upstream の agent/pre-step は各 step で
+呼ばれますが native UserPromptSubmit は通常 internal tool-follow-up に未接続です。foreground subagent child の
+complete_effect は parent NativeRuntime Stop dispatcher を経由しません。これらの差分と確認範囲は
+[native runtime guide](../../docs/native-runtime.md#native-command-hooks) と
+本 issue の残件として記録し、本 issue は open のままです。
 
 ACP の部分対応（2026-10-10）: pinned upstream `packages/acp` の automation-agent 方向を参照し、native `dsh acp` stdio
 service を追加しました。ACP v1 の initialize / authenticate、session new / list / resume / set_config_option / prompt / cancel / close、ordered

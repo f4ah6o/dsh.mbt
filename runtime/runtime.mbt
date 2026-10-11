@@ -566,6 +566,7 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
   control : NativeJobControl,
   session_id : String,
   prompt : String,
+  attach_task? : Bool = true,
 ) -> Result[NativeHookOutcome, String] {
   let outcome : Ref[Result[NativeHookOutcome, String]?] = Ref(None)
   let task_result = @async.handle_cancellation(async fn() {
@@ -580,7 +581,13 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
           outcome.val = Some(result)
           result.map(_ => ())
         })
-        self.scheduler.attach_task(control, task)
+        // Initial prompt admission owns this scheduler slot directly. A
+        // UserPromptSubmit command nested inside an active provider job must
+        // leave the outer job task attached so cancellation waits for all of
+        // its structured children, including a later provider request.
+        if attach_task {
+          self.scheduler.attach_task(control, task)
+        }
         task.wait()
       }
     catch {
@@ -2416,9 +2423,13 @@ async fn NativeRuntime::project_provider_delta(
 async fn NativeRuntime::run_provider_effect(
   self : NativeRuntime,
   effect : @engine.EngineEffect,
+  control? : NativeJobControl? = None,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
   if effect.kind() != @engine.EffectType::Provider {
     return Err("effect is not a provider request")
+  }
+  if self.hooks.has_stop() && control is None {
+    return Err("Stop-hook dispatch requires a controlled native job")
   }
   let request = effect.request()
   let mut final_result : Json? = None
@@ -2569,7 +2580,11 @@ async fn NativeRuntime::run_provider_effect(
       }
     }
   }
-  self.complete(effect.id(), final_result.unwrap())
+  match control {
+    Some(value) =>
+      self.complete_provider_result(effect, final_result.unwrap(), value)
+    None => self.complete(effect.id(), final_result.unwrap())
+  }
 }
 
 ///|
@@ -2624,7 +2639,7 @@ async fn NativeRuntime::run_effects_in_control(
                   @engine.EffectType::Tool =>
                     self.run_tool_effect(effect, control=Some(control))
                   @engine.EffectType::Provider =>
-                    self.run_provider_effect(effect)
+                    self.run_provider_effect(effect, control=Some(control))
                 }
               })
             }) {
@@ -2732,6 +2747,251 @@ async fn NativeRuntime::complete(
   match self.checkpoint_locked() {
     Err(error) => Err(error)
     Ok(_) => Ok((completion, self.api.take_typed_effects()))
+  }
+}
+
+///|
+async fn NativeRuntime::run_stop_hook_controlled(
+  self : NativeRuntime,
+  session_id : String,
+) -> Result[NativeHookOutcome, String] {
+  let outcome : Ref[Result[NativeHookOutcome, String]?] = Ref(None)
+  let task_result = @async.handle_cancellation(async fn() {
+    try
+      @async.with_task_group() <| workers => {
+        let task = workers.spawn(no_wait=true, allow_failure=true, async fn() {
+          let result = self.hooks.before_stop(self.tools, session_id)
+          outcome.val = Some(result)
+          result.map(_ => ())
+        })
+        // This is a structured child of the provider job. Keep the scheduler's
+        // owner task attached; cancelling that owner cancels and drains this
+        // process group through the enclosing task group.
+        task.wait()
+      }
+    catch {
+      @async.WaitedTaskAlreadyCancelled =>
+        Err("Stop hook process was cancelled")
+      _ => Err("Stop hook task failed")
+    }
+  })
+  match task_result {
+    None => Err("native command was cancelled")
+    Some(Err(error)) => Err(error)
+    Some(Ok(_)) =>
+      match outcome.val {
+        Some(Ok(value)) => Ok(value)
+        Some(Err(error)) => Err(error)
+        None => Err("Stop hook did not return an outcome")
+      }
+  }
+}
+
+///|
+priv enum NativeStopSettlement {
+  Finish
+  Continue(Array[String])
+  Block(String)
+}
+
+///|
+async fn NativeRuntime::stage_stop_continuation(
+  self : NativeRuntime,
+  checkpoint : @engine.NativeStopHookCheckpoint,
+  text : String,
+) -> Result[(@engine.NativeStopHookCheckpoint?, Json), String] {
+  self.gate.acquire()
+  defer self.gate.release()
+  if self.stopped || self.closed {
+    return Err("native runtime is stopped")
+  }
+  let session = match self.api.prepare_stop_continuation(checkpoint, text) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  match self.checkpoint_locked() {
+    Err(error) => Err(error)
+    Ok(_) => {
+      let session_id = match
+        @engine.SessionId::new(string_field(session, "id").unwrap_or("")) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+      Ok((self.api.pending_stop_hook(session_id), session))
+    }
+  }
+}
+
+///|
+async fn NativeRuntime::settle_stop_hook(
+  self : NativeRuntime,
+  checkpoint : @engine.NativeStopHookCheckpoint,
+  settlement : NativeStopSettlement,
+  control : NativeJobControl,
+) -> Result[(Json, Array[@engine.EngineEffect]), String] {
+  self.gate.acquire()
+  defer self.gate.release()
+  if self.stopped || self.closed {
+    return Err("native runtime is stopped")
+  }
+  if control.cancelled.val {
+    return Err("native command was cancelled")
+  }
+  let completion = match settlement {
+    NativeStopSettlement::Finish => self.api.finish_stop_hook(checkpoint)
+    NativeStopSettlement::Continue(contexts) =>
+      self.api.continue_stop_hook(checkpoint, contexts)
+    NativeStopSettlement::Block(reason) =>
+      self.api.block_stop_continuation(checkpoint, reason)
+  }
+  let completion = match completion {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  match self.checkpoint_locked() {
+    Err(error) => Err(error)
+    Ok(_) => Ok((completion, self.api.take_typed_effects()))
+  }
+}
+
+///|
+/// Complete a provider result at the shared runtime boundary. Stop and the
+/// following UserPromptSubmit command finish before any same-turn provider
+/// effects are drained by the scheduler.
+async fn NativeRuntime::complete_provider_result(
+  self : NativeRuntime,
+  effect : @engine.EngineEffect,
+  result : Json,
+  control : NativeJobControl,
+) -> Result[(Json, Array[@engine.EngineEffect]), String] {
+  if !self.hooks.has_stop() {
+    return self.complete(effect.id(), result)
+  }
+  let session_id = effect.session_id().as_string()
+  let typed_session_id = match @engine.SessionId::new(session_id) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  self.gate.acquire()
+  let boundary = @async.protect_from_cancel() <| () => {
+    defer self.gate.release()
+    if self.stopped || self.closed {
+      return Err("native runtime is stopped")
+    }
+    if control.cancelled.val {
+      return Err("native command was cancelled")
+    }
+    let completion = match
+      self.api.complete_effect_with_stop_hook(effect.id(), result) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    match self.checkpoint_locked() {
+      Err(error) => Err(error)
+      Ok(_) => {
+        let checkpoint = self.api.pending_stop_hook(typed_session_id)
+        Ok((completion, self.api.take_typed_effects(), checkpoint))
+      }
+    }
+  }
+  if @async.is_being_cancelled() {
+    @async.pause()
+  }
+  match boundary {
+    Err(error) => Err(error)
+    Ok((completion, queued, None)) => Ok((completion, queued))
+    Ok((completion, queued, Some(checkpoint))) => {
+      if control.cancelled.val {
+        return Err("native command was cancelled")
+      }
+      let stop_outcome = match self.run_stop_hook_controlled(session_id) {
+        Ok(value) => value
+        Err(_) if control.cancelled.val || @async.is_being_cancelled() =>
+          return Err("native command was cancelled")
+        // Stop spawn, timeout, and malformed-output failures are nonblocking.
+        Err(_) =>
+          { action: NativeHookAction::Continue, additional_contexts: [], }
+      }
+      let settled = match stop_outcome.action {
+        NativeHookAction::Continue =>
+          self.settle_stop_hook(
+            checkpoint,
+            NativeStopSettlement::Finish,
+            control,
+          )
+        NativeHookAction::Deny(reason) => {
+          let text = if reason.is_empty() {
+            "continue: blocked by Stop hook"
+          } else {
+            reason
+          }
+          let (pending, staged) = match
+            self.stage_stop_continuation(checkpoint, text) {
+            Ok(value) => value
+            Err(error) => return Err(error)
+          }
+          match pending {
+            None => Ok((staged, []))
+            Some(checkpoint) => {
+              if control.cancelled.val {
+                return Err("native command was cancelled")
+              }
+              let prompt_outcome = if self.hooks.has_user_prompt_submit() {
+                match
+                  self.run_user_prompt_hook_controlled(
+                    control,
+                    session_id,
+                    text,
+                    attach_task=false,
+                  ) {
+                  Ok(value) => Ok(value)
+                  Err(_) if control.cancelled.val || @async.is_being_cancelled() =>
+                    return Err("native command was cancelled")
+                  // This runtime rejects an initial prompt when its hook cannot
+                  // run. Close the staged continuation explicitly by the same
+                  // Failed/blocked session contract instead of leaving it busy.
+                  Err(error) => Err(error)
+                }
+              } else {
+                Ok({
+                  action: NativeHookAction::Continue,
+                  additional_contexts: [],
+                })
+              }
+              match prompt_outcome {
+                Ok({ action: NativeHookAction::Continue, additional_contexts, }) =>
+                  self.settle_stop_hook(
+                    checkpoint,
+                    NativeStopSettlement::Continue(additional_contexts),
+                    control,
+                  )
+                Ok({ action: NativeHookAction::Deny(reason), .. }) =>
+                  self.settle_stop_hook(
+                    checkpoint,
+                    NativeStopSettlement::Block(
+                      native_hook_limit_reason(reason),
+                    ),
+                    control,
+                  )
+                Err(error) =>
+                  self.settle_stop_hook(
+                    checkpoint,
+                    NativeStopSettlement::Block(
+                      "UserPromptSubmit hook could not run: " + error,
+                    ),
+                    control,
+                  )
+              }
+            }
+          }
+        }
+      }
+      match settled {
+        Ok((_, effects)) =>
+          Ok((completion, native_prepend_effects(queued, effects)))
+        Err(error) => Err(error)
+      }
+    }
   }
 }
 

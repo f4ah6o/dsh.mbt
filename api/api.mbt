@@ -570,6 +570,89 @@ pub fn HarnessApi::complete_effect(
 }
 
 ///|
+/// Native-runtime completion that pauses a final provider outcome for the
+/// configured Stop-hook command before it may finish or continue the turn.
+pub fn HarnessApi::complete_effect_with_stop_hook(
+  self : HarnessApi,
+  id : @engine.EffectId,
+  result : Json,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.complete", () => {
+    self.engine.complete_effect_with_stop_hook(id, result)
+  })
+}
+
+///|
+pub fn HarnessApi::pending_stop_hook(
+  self : HarnessApi,
+  session_id : @engine.SessionId,
+) -> @engine.NativeStopHookCheckpoint? {
+  if self.registry.is_alive() {
+    self.engine.pending_stop_hook(session_id)
+  } else {
+    None
+  }
+}
+
+///|
+pub fn HarnessApi::prepare_stop_continuation(
+  self : HarnessApi,
+  checkpoint : @engine.NativeStopHookCheckpoint,
+  text : String,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.stop_hook_prepare", () => {
+    self.engine.prepare_stop_continuation(checkpoint, text)
+  })
+}
+
+///|
+pub fn HarnessApi::finish_stop_hook(
+  self : HarnessApi,
+  checkpoint : @engine.NativeStopHookCheckpoint,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.stop_hook_finish", () => {
+    self.engine.finish_stop_hook(checkpoint)
+  })
+}
+
+///|
+pub fn HarnessApi::continue_stop_hook(
+  self : HarnessApi,
+  checkpoint : @engine.NativeStopHookCheckpoint,
+  contexts : Array[String],
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.stop_hook_continue", () => {
+    self.engine.continue_stop_hook(checkpoint, contexts)
+  })
+}
+
+///|
+pub fn HarnessApi::block_stop_continuation(
+  self : HarnessApi,
+  checkpoint : @engine.NativeStopHookCheckpoint,
+  denial_reason : String,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.profiler.measure("engine.stop_hook_block", () => {
+    self.engine.block_stop_continuation(checkpoint, denial_reason)
+  })
+}
+
+///|
 /// Record a known host tool outcome without retiring its effect. Native hosts
 /// use this to protect completed side effects while they run post-tool hooks.
 pub fn HarnessApi::record_effect_outcome(

@@ -192,6 +192,23 @@ test "ACP distinguishes provider failure from a completed max-token turn" {
     }),
     Ok("max_tokens"),
   )
+  assert_eq(
+    native_acp_stop_reason({
+      "status": "failed",
+      "turn_id": 3,
+      "events": [
+        {
+          "type": "turn/end",
+          "turn_id": 3,
+          "data": {
+            "reason": "blocked",
+            "error": "UserPromptSubmit hook blocked the Stop continuation: policy",
+          },
+        },
+      ],
+    }),
+    Ok("refusal"),
+  )
 }
 
 ///|
