@@ -213,7 +213,7 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 - **DEBT-006**: [`runtime/hooks_runtime.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/hooks_runtime.mbt#L212-L229) の Stop stdin は共通 payload と同じく空の `transcript_path` を渡す。Claude Code transcript 互換 artifact を提供しない原典制約を継続している。
 - **DEBT-008 / 018**: Stop output の適用範囲と upstream の制約は次項を参照。native adapter 固有の decoder 制限は原典 bridge の制限と分けて記録する。
 
-この snapshot で報告された core native check (`engine/api/runtime`) は PASS、hotpath warning は 3 件。engine `*Stop*` は 3 / 3、runtime `*Stop*` は 2 / 2（codec と ACP mapping）、diff check は clean。review copy の engine 87 / 87 は既存 80 + feature 5 + reviewer 追加 2 件の内訳であり、PR production suite の結果として扱わない。これらは機能担当・独立 reviewer から受けた個別結果で、最終 CI は未実行。
+この snapshot で報告された core native check (`engine/api/runtime`) は PASS、hotpath warning は 3 件。engine `*Stop*` は 3 / 3、runtime `*Stop*` は 2 / 2（codec と ACP mapping）、diff check は clean。review copy の engine 87 / 87 は既存 80 + feature 5 + reviewer 追加 2 件、reviewer isolated copy の engine/api `--target all` は Wasm / Wasm GC / JS / native 各 96 / 96 PASS（追加 probe 2 件を含む）。いずれも PR production suite の結果として扱わない。これらは機能担当・独立 reviewer から受けた個別結果で、最終 CI は未実行。
 
 #### DEBT-018: Stop hook の payload と output control に制約がある
 
@@ -245,13 +245,23 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 - 是正 / 完了条件: prefix を含めた UTF-16 unit 上限を admission 前に検証するか、長い理由で pending boundary を必ず terminal に settle する。4096 ASCII / astral Unicode 文字、最大 stream、prefix 込み上限の前後で blocked turn の終了と no effect を検証する。
 - 修正 / 検証: 修正 commit の結果は未報告。別の oversized-context atomicity probe は snapshot unchanged を確認しており、この項目の再現とは別の成功結果として維持する。
 
+#### DEBT-021: truncated capture が既知の Stop exit-2 veto を中立化する
+
+- 起点・種類・優先度・状態: `PORT / bug, correctness, compatibility`、優先度高（独立 review の major finding）、`reproduced`（isolated native decoder probe）。upstream の不備ではなく、既知の process exit control を capture metadata が消す移植固有の bug。
+- upstream baseline / path: [`5badb150` の hook-protocol codec](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/codec.ts#L65-L69) は exit code 2 を常に `block` とし、stderr は任意の reason として扱う。共通 merge は block を rank 3 / `deny` にする（[`merge.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/merge.ts#L34-L50)）。Claude Code の Stop listener は deny を steering にして次の model step を促す（[`index.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts#L273-L282)）。
+- port baseline / path: [`8250c9e` の Stop decoder](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/hooks_codec.mbt#L266-L280) は `capture.truncated` を先に判定して rank 0 を返し、その後に exit code 2 の rank 3 判定を置く。child output decode は invalid UTF-8 時も process exit code を保持して `truncated: true` を返す（[`hooks_process.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/hooks_process.mbt#L126-L149)）。
+- 再現 / 影響: 独立 reviewer の native isolated capture probe で `exit_code=2`, `truncated=true`, `stderr="keep working"` を与えると decoder が rank 0 を返すことを再現した。この probe は isolated decoder の再現で、full runtime / agent turn の完了までは実行していない。upstream 固定 source の keyless codec / merge probe は通常 reason、16,385 ASCII 文字、空 stderr の 3 assertion すべてで deny となった。固定 source の経路から、大きすぎる出力または invalid UTF-8 の truncation が既知の exit-2 veto を中立化し、この hook が continuation を強制しなくなる影響を推論する。reviewer isolated copy の engine/api `--target all` 各 backend 96 / 96 には reviewer probe を含み、PR production test count ではない。
+- 不明点・仮説: exit-0 の truncated structured output は従来どおり中立に扱う。これはこの reproduction の対象外で、修正後も維持すべき境界。
+- 是正 / 完了条件: exit-2 blocking decision を truncation 判定より優先し、reason だけを bounded / optional にする。stdout / stderr overflow と invalid UTF-8 の各 capture で exit-2 は blocking を保ち、空 stderr でも block、exit-0 truncated JSON は neutral のまま、Stop continuation が terminal に settle することを検証する。
+- 修正 / 検証: `8250c9e` は不具合を含む固定レビュー snapshot。後続の修正 commit と fixed-head regression は未記録。最終 CI は未実行。
+
 ### UserPromptSubmit increment の最終確認
 
 - 修正先: [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)、version 0.1.13、固定 source head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/tree/982f2b6f4b5fd364ebf0500a032bb210b753db9a)。実装は `gpt-6-luna / max`、独立レビューは `gpt-6.1-sol / xhigh`。
 - [CI run 38043639573](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573): native-without-node 329 / 329、portable Wasm / Wasm GC / JS / native 各 163 / 163、browser/app 17 / 17、native runtime 156 / 156、web 7 / 7 PASS。ACP stdio、checkout 外の CLI source install / embedded assets、strict-CSP real Chromium smoke、checkpoint / approval / tool / context / durable reload demo も PASS。
 - [配布物検証 run 38043639550](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639550): macOS arm64 / Linux x86_64 / Linux arm64 の build / package smoke と macOS app extraction validation が PASS。PR 上の publish job は skipped。
 - Local format / native typecheck / diff check / browser asset generation は PASS、project-owned warnings 0。local behavioral test は ENOSPC で完走できず、hosted results と区別する。
-- DEBT-007 と今回の DEBT-009–017 は修正済み。非不具合の DEBT-001–006 / 008 / 018 は維持する改善候補として残す。DEBT-019 は scheduler isolated probe で再現したが full-runtime effect probe は未実施。DEBT-020 は isolated engine probe で再現し、修正・full-runtime 再確認待ち。この docs-only PR と full upstream parity issue は open を維持し、後続 increment の記録を積む。
+- DEBT-007 と今回の DEBT-009–017 は修正済み。非不具合の DEBT-001–006 / 008 は維持する改善候補として残す。この docs-only PR と full upstream parity issue は open を維持し、後続 increment の記録を積む。
 
 ### 後続追記テンプレート
 
@@ -303,6 +313,8 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 
 - 2026-10-10: 最終 source head `982f2b6` の 3 パス独立レビューと全 hosted gates の成功を記録。DEBT-009–017 を fixed に更新し、初回の再現・静的観測・証拠訂正の履歴は保持。
 - 2026-10-11: Stop command hooks の固定 snapshot `8250c9e` に対し、Json event / String error / state copy の既存根拠を追記。原典制約と native adapter scope を DEBT-018 に分け、scheduler の isolated reproduction を DEBT-019、engine isolated reproduction を DEBT-020 に登録。最終 CI と full-runtime probes は未完了として明記。
+
+- 2026-10-11: `8250c9e` の Stop truncated-capture / exit-2 経路と upstream codec 契約を照合し、native isolated decoder probe で rank 0 を再現した DEBT-021 を登録。review-only test counts と production suite を区別。UserPromptSubmit の最終確認欄を `982f2b6` 時点の記録に戻し、Stop 現況を Stop increment 内に保持。
 
 ## 注記
 
