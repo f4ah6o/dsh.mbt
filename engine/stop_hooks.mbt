@@ -14,6 +14,21 @@ fn stop_hook_utf16_units(value : String) -> Int {
 }
 
 ///|
+fn stop_hook_prefix_utf16(value : String, maximum : Int) -> String {
+  let output = StringBuilder()
+  let mut units = 0
+  for character in value {
+    let character_units = if character.to_int() > 0xFFFF { 2 } else { 1 }
+    if units + character_units > maximum {
+      break
+    }
+    output.write_char(character)
+    units += character_units
+  }
+  output.to_string()
+}
+
+///|
 fn Session::clear_stop_continuation_state(self : Session) -> Unit {
   self.stop_hook_pending = false
   self.stop_hook_event_seq = None
@@ -270,13 +285,16 @@ pub fn Engine::block_stop_continuation(
       session.stop_prompt_context_length != 0 {
       raise Invalid("Cannot block an unstaged or already admitted continuation")
     }
+    let prefix = "UserPromptSubmit hook blocked the Stop continuation"
     let error = if denial_reason.is_empty() {
-      "UserPromptSubmit hook blocked the Stop continuation"
+      prefix
     } else {
-      "UserPromptSubmit hook blocked the Stop continuation: " + denial_reason
-    }
-    if error.length() > 8192 {
-      raise Invalid("UserPromptSubmit denial reason exceeds the length limit")
+      let separator = ": "
+      let remaining = Int::max(
+        0,
+        8192 - stop_hook_utf16_units(prefix + separator),
+      )
+      prefix + separator + stop_hook_prefix_utf16(denial_reason, remaining)
     }
     session.append(
       "hook/stop-continuation-rejected",

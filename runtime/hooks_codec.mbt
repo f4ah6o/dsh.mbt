@@ -266,15 +266,15 @@ fn native_hook_result_decision(
 fn native_hook_stop_result_decision(
   capture : NativeHookCapture,
 ) -> NativeStopHookResult {
-  if capture.truncated {
-    return { rank: 0, reason: None }
-  }
   if capture.exit_code == 2 {
     let reason = capture.stderr.trim().to_owned()
     return {
       rank: 3,
       reason: if reason.is_empty() { None } else { Some(reason) },
     }
+  }
+  if capture.truncated {
+    return { rank: 0, reason: None }
   }
   if capture.exit_code != 0 {
     return { rank: 0, reason: None }

@@ -133,6 +133,51 @@ test "UserPromptSubmit rejection preserves the answer and ends with an explicit 
 }
 
 ///|
+test "long astral UserPromptSubmit denial closes pending state within the error bound" {
+  let (engine, provider) = started_engine()
+  ignore(
+    success(
+      engine.complete_effect_with_stop_hook(
+        stop_hook_completion_id(provider),
+        stop_response("Answer retained before the blocked continuation"),
+      ),
+    ),
+  )
+  let checkpoint = stop_hook_checkpoint(engine)
+  ignore(success(engine.prepare_stop_continuation(checkpoint, "continue")))
+  let blocked = success(
+    engine.block_stop_continuation(
+      checkpoint,
+      "😀"[:].repeat(4096).to_owned(),
+    ),
+  )
+  let events = array_value(required_field(blocked, "events"), "events", 100)
+  let mut rejection : Json? = None
+  for event in events {
+    if required_string(event, "type") == "hook/stop-continuation-rejected" {
+      rejection = Some(event)
+    }
+  }
+  let rejection = rejection.unwrap()
+  let error = required_string(required_field(rejection, "data"), "error")
+  assert_true(stop_hook_utf16_units(error) <= 8192)
+  assert_true(stop_hook_utf16_units(error) >= 8000)
+  assert_eq(get_status(blocked), "failed")
+  assert_eq(event_type_count(blocked, "hook/stop-continuation-pending"), 1)
+  assert_eq(event_type_count(blocked, "turn/end"), 1)
+  assert_true(
+    array_value(required_field(blocked, "messages"), "messages", 16).any(message => {
+      required_string(message, "content") ==
+      "Answer retained before the blocked continuation"
+    }),
+  )
+  assert_true(engine.take_effects().is_empty())
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session(restored), blocked)
+}
+
+///|
 test "max-token ending stays sticky across an admitted same-turn continuation" {
   let (engine, provider) = started_engine(max_steps=4)
   ignore(

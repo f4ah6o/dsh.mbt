@@ -566,6 +566,7 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
   control : NativeJobControl,
   session_id : String,
   prompt : String,
+  attach_task? : Bool = true,
 ) -> Result[NativeHookOutcome, String] {
   let outcome : Ref[Result[NativeHookOutcome, String]?] = Ref(None)
   let task_result = @async.handle_cancellation(async fn() {
@@ -580,7 +581,13 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
           outcome.val = Some(result)
           result.map(_ => ())
         })
-        self.scheduler.attach_task(control, task)
+        // Initial prompt admission owns this scheduler slot directly. A
+        // UserPromptSubmit command nested inside an active provider job must
+        // leave the outer job task attached so cancellation waits for all of
+        // its structured children, including a later provider request.
+        if attach_task {
+          self.scheduler.attach_task(control, task)
+        }
         task.wait()
       }
     catch {
@@ -2746,7 +2753,6 @@ async fn NativeRuntime::complete(
 ///|
 async fn NativeRuntime::run_stop_hook_controlled(
   self : NativeRuntime,
-  control : NativeJobControl,
   session_id : String,
 ) -> Result[NativeHookOutcome, String] {
   let outcome : Ref[Result[NativeHookOutcome, String]?] = Ref(None)
@@ -2758,7 +2764,9 @@ async fn NativeRuntime::run_stop_hook_controlled(
           outcome.val = Some(result)
           result.map(_ => ())
         })
-        self.scheduler.attach_task(control, task)
+        // This is a structured child of the provider job. Keep the scheduler's
+        // owner task attached; cancelling that owner cancels and drains this
+        // process group through the enclosing task group.
         task.wait()
       }
     catch {
@@ -2897,7 +2905,7 @@ async fn NativeRuntime::complete_provider_result(
         return Err("native command was cancelled")
       }
       let stop_outcome = match
-        self.run_stop_hook_controlled(control, session_id) {
+        self.run_stop_hook_controlled(session_id) {
         Ok(value) => value
         Err(_) if control.cancelled.val || @async.is_being_cancelled() =>
           return Err("native command was cancelled")
@@ -2931,7 +2939,7 @@ async fn NativeRuntime::complete_provider_result(
               let prompt_outcome = if self.hooks.has_user_prompt_submit() {
                 match
                   self.run_user_prompt_hook_controlled(
-                    control, session_id, text,
+                    control, session_id, text, attach_task=false,
                   ) {
                   Ok(value) => Ok(value)
                   Err(_) if control.cancelled.val || @async.is_being_cancelled() =>
