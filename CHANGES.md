@@ -39,7 +39,7 @@
 
 ### Migration
 
-- Stores with the optional `post_tool_prompt_hook` completion field or new root / child PostToolUse prompt-admission markers require dsh 0.1.17 or later. Version 0.1.17 continues to read older completion events without that field.
+- Stores with the optional `post_tool_prompt_hook` (root) or `subagent_post_tool_prompt_hook` (child) field on effect-backed `tool/completed` events, or new root / child PostToolUse prompt-admission markers, require dsh 0.1.17 or later. Version 0.1.17 continues to read legacy completion events without either field.
 
 ## 0.1.16 - 2026-10-11
 

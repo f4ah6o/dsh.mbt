@@ -871,15 +871,19 @@ boundary. If a snapshot ends here while prompt admission is unresolved,
 restore marks the work interrupted and does not replay the hook or provider
 effect. Do not reopen either event with an older reader.
 
-Snapshots containing the optional `post_tool_prompt_hook` field on a completed
-tool event or the additive `hook/post-tool-prompt-*` and
-`hook/subagent-post-tool-prompt-*` events require dsh 0.1.17 or later. Version
-0.1.17 continues to read older tool-completion events without the optional
-field. The root markers record deferred PostToolUse admission; child markers
-also make public child Engine snapshots self-validating across admission,
-rejection, and interruption. Native subagent sessions remain ephemeral and
-are not persisted as root sessions. Do not reopen these snapshots with an
-older reader.
+Snapshots containing the optional `post_tool_prompt_hook` (root) or
+`subagent_post_tool_prompt_hook` (child) field on an effect-backed
+`tool/completed` event, or the additive `hook/post-tool-prompt-*` and
+`hook/subagent-post-tool-prompt-*` events, require dsh 0.1.17 or later. The
+child field is emitted as `true` while child prompt admission is enabled; it
+restores that deferral mode before replay closes an interrupted child result
+batch. The fields are true-only, valid only on effect-backed completions, and
+mutually exclusive. Version 0.1.17 continues to read legacy completion events
+without either optional field. The root markers record deferred PostToolUse
+admission; child markers also make public child Engine snapshots
+self-validating across admission, rejection, and interruption. Native
+subagent sessions remain ephemeral and are not persisted as root sessions.
+Do not reopen these snapshots with an older reader.
 
 `--approve-call` and `--deny-call` act on a session that is already waiting for approval, for example one started from the browser or MCP carrier. Pass its current `approval_revision` and `pending_approval.call_id`; stale or mismatched decisions are rejected:
 
