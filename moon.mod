@@ -1,6 +1,6 @@
 name = "f4ah6o/dsh"
 
-version = "0.1.15"
+version = "0.1.16"
 
 source = "."
 

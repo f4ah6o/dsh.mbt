@@ -1,5 +1,32 @@
 # Changes
 
+## 0.1.16 - 2026-10-11
+
+### Added
+
+- Add native `SubagentStart` and `SubagentStop` command hooks across the shared runtime entrypoints. Start uses the `general-purpose` matcher and may inject matching `additionalContext` into a later child step; Start decisions and all Stop output remain observational. See the [native runtime guide](docs/native-runtime.md#native-command-hooks), [port status](docs/port-status.md), and [remaining parity work](issues/open/0001-upstream-parity.md).
+
+### Changed
+
+- Record an additive `hook/subagent-start-context` Engine marker with the count and length of an admitted Start batch; the following source-tagged user message carries the context. The child runs configured `UserPromptSubmit` for Start batches claimed at the initial or a later input boundary, including a Stop continuation, preserving claimed-batch order and leaving arrivals during the hook for a later step. The remaining PostToolUse-to-UserPromptSubmit gap is documented in the [native runtime guide](docs/native-runtime.md#native-command-hooks).
+- Native child lifecycle work cancels and drains a pending Start callback at child settlement. SubagentStop gets one protected aggregate 1-second command-execution grace after the child drive outcome; process-group cleanup and drain may add wall time, but Stop cannot change the child outcome.
+
+### Fixed
+
+- Keep a completed child result when observational SubagentStop cleanup outlasts the child drive deadline.
+- Restore accepted Start context batches that are staged with a Stop continuation, and reject malformed marker/reason order.
+- Reject empty or oversized child prompts before the Engine claims the pending Start context batch.
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
+- Engine snapshots containing `hook/subagent-start-context` require dsh 0.1.16 or later. Native subagent child engines are ephemeral and are not saved as root sessions.
+
 ## Unreleased
 
 ### Added
