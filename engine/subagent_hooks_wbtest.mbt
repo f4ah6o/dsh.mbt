@@ -462,6 +462,53 @@ test "allowed Stop settles before queued Start admission and replays once" {
 }
 
 ///|
+test "allowed Stop settlement replays when context budget drops queued Start input" {
+  let engine = subagent_hook_engine()
+  let initial_contexts = Array::make(32, "initial Start context")
+  assert_eq(
+    engine.inject_hook_contexts("hook-child", initial_contexts),
+    Ok(true),
+  )
+  let initial = subagent_checkpoint_success(
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", false),
+  )
+  ignore(success(engine.accept_subagent_prompt_hook(initial, [])))
+  let first = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete_effect_with_stop_hook(
+        subagent_stop_effect_id(first),
+        stop_response("answer before exhausted context budget"),
+      ),
+    ),
+  )
+  let stop = engine
+    .pending_stop_hook(SessionId::new("hook-child").unwrap())
+    .unwrap()
+  assert_eq(
+    engine.inject_hook_contexts("hook-child", ["dropped late Start context"]),
+    Ok(true),
+  )
+  let continued = success(engine.finish_stop_hook(stop))
+  assert_eq(get_status(continued), "running")
+  assert_eq(event_type_count(continued, "hook/stop-settled"), 1)
+  assert_eq(event_type_count(continued, "hook/subagent-start-context"), 1)
+  let next = engine.take_effects()[0]
+  assert_false(
+    subagent_hook_all_messages(next).any(message => {
+      subagent_hook_message_text(message) == "dropped late Start context"
+    }),
+  )
+  let completed = success(
+    engine.complete(id_of(next), stop_response("answer after exhausted budget")),
+  )
+  assert_eq(get_status(completed), "completed")
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session_for(restored, "hook-child"), completed)
+}
+
+///|
 test "allowed Stop settlement preserves the answer when Start admission is denied" {
   let engine = subagent_hook_engine()
   let initial = subagent_checkpoint_success(

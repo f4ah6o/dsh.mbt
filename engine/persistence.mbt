@@ -242,6 +242,7 @@ fn restore_session(
     ignore(fields(data))
     if stop_settled_pending_boundary &&
       kind != "hook/subagent-start-context" &&
+      kind != "step/start" &&
       kind != "turn/end" &&
       kind != "session/interrupted" {
       raise Invalid("Stop settlement is not followed by its input boundary")
@@ -315,6 +316,7 @@ fn restore_session(
       }
       session.step = step
       session.open_step = true
+      stop_settled_pending_boundary = false
       late_subagent_context_admission = false
       late_subagent_context_count = 0
       late_subagent_context_length = 0
