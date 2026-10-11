@@ -227,6 +227,7 @@ fn restore_session(
   let mut stop_continuation_reason_seen = false
   let mut stop_continuation_rejected = false
   let pending_post_tool_contexts : Array[(String, Json)] = []
+  let expected_admitted_post_tool_messages : Array[Json] = []
   for index, raw in events {
     let seq = int_value(required_field(raw, "seq"), "event seq", 0, 32768)
     if seq != index {
@@ -251,6 +252,7 @@ fn restore_session(
     }
     if late_subagent_context_admission &&
       kind != "user/message" &&
+      kind != "hook/subagent-post-tool-prompt-admitted" &&
       kind != "step/start" {
       raise Invalid("Late SubagentStart admission is not followed by a step")
     }
@@ -259,8 +261,31 @@ fn restore_session(
         "SubagentStart context marker is not followed by its message",
       )
     }
+    let is_admitted_post_tool_message = !expected_admitted_post_tool_messages.is_empty() &&
+      kind == "user/message"
+    if !expected_admitted_post_tool_messages.is_empty() {
+      let expected = expected_admitted_post_tool_messages[0]
+      if kind != "user/message" || data != expected {
+        raise Invalid(
+          "Admitted PostToolUse messages are missing, reordered, or differ from their checkpoint",
+        )
+      }
+      ignore(expected_admitted_post_tool_messages.remove(0))
+      if expected_admitted_post_tool_messages.is_empty() {
+        session.clear_post_tool_prompt_hook()
+      }
+    }
     let expected_post_tool_context = pending_post_tool_contexts.get(0)
-    if expected_post_tool_context is Some((call_id, expected)) {
+    if expected_post_tool_context is Some((call_id, expected)) &&
+      !session.post_tool_prompt_hook_active &&
+      kind != "hook/post-tool-prompt-pending" &&
+      kind != "hook/post-tool-prompt-rejected" &&
+      kind != "hook/post-tool-prompt-abandoned" &&
+      kind != "hook/subagent-post-tool-prompt-pending" &&
+      kind != "hook/subagent-post-tool-prompt-admitted" &&
+      kind != "hook/subagent-post-tool-prompt-rejected" &&
+      kind != "hook/subagent-post-tool-prompt-abandoned" &&
+      kind != "step/end" {
       if kind != "user/message" || data != expected {
         raise Invalid(
           "PostToolUse context is missing, reordered, or differs from its completion",
@@ -293,6 +318,7 @@ fn restore_session(
       session.status = Running
       session.todos = None
       session.clear_stop_hook_state()
+      session.clear_post_tool_prompt_hook()
       open_turn = true
       admitted_user = false
       assistant_recorded = false
@@ -320,6 +346,10 @@ fn restore_session(
       }
       session.step = step
       session.open_step = true
+      if !session.post_tool_prompt_hook_active &&
+        pending_post_tool_contexts.is_empty() {
+        session.post_tool_prompt_hook_admission = false
+      }
       stop_settled_pending_boundary = false
       stop_subagent_context_count = 0
       stop_subagent_context_length = 0
@@ -338,111 +368,67 @@ fn restore_session(
       }
       match kind {
         "user/message" =>
-          match expected_post_tool_context {
-            Some(_) => {
-              if !open_turn ||
-                !session.open_step ||
-                session.cursor != session.calls.length() ||
-                !assistant_recorded {
-                raise Invalid(
-                  "PostToolUse context outside completed tool results",
-                )
-              }
-              if required_string(data, "role", max=16) != "user" {
-                raise Invalid("Invalid PostToolUse context role")
-              }
-            }
-            None =>
-              match fields(data).get("source") {
-                None => {
-                  if !open_turn || session.step != 0 || admitted_user {
-                    raise Invalid("User message outside turn admission")
-                  }
-                  if required_string(data, "role", max=16) != "user" ||
-                    required_string(data, "content", max=16384).length() == 0 {
-                    raise Invalid("Invalid user message")
-                  }
-                  admitted_user = true
+          if is_admitted_post_tool_message {
+            ()
+          } else {
+            match expected_post_tool_context {
+              Some(_) if expected_subagent_context is None => {
+                if !open_turn ||
+                  !session.open_step ||
+                  session.cursor != session.calls.length() ||
+                  !assistant_recorded {
+                  raise Invalid(
+                    "PostToolUse context outside completed tool results",
+                  )
                 }
-                Some(source) =>
-                  match expected_subagent_context {
-                    Some((expected_count, expected_length)) => {
-                      if required_string(data, "role", max=16) != "user" {
-                        raise Invalid("Invalid SubagentStart context role")
-                      }
-                      let (actual_count, actual_length) = validate_hook_prompt_context(
-                        data, source,
-                      )
-                      if actual_count != expected_count ||
-                        actual_length != expected_length {
-                        raise Invalid(
-                          "SubagentStart context differs from its admission marker",
-                        )
-                      }
-                      expected_subagent_context = None
-                      if session.step == 0 &&
-                        !admitted_user &&
-                        !assistant_recorded {
-                        prompt_context_count += actual_count
-                        prompt_context_length += actual_length
-                        if prompt_context_count > 32 ||
-                          prompt_context_length > 16384 {
-                          raise Invalid(
-                            "Prompt contexts exceed the configured limit",
-                          )
-                        }
-                      } else if session.stop_hook_pending &&
-                        session.stop_continuation_text is Some(_) &&
-                        !session.stop_continuation_admitted {
-                        stop_subagent_context_count += actual_count
-                        stop_subagent_context_length += actual_length
-                        if stop_subagent_context_count +
-                          session.stop_prompt_context_count >
-                          32 ||
-                          stop_subagent_context_length +
-                          session.stop_prompt_context_length >
-                          16384 {
-                          raise Invalid(
-                            "Stop continuation contexts exceed the configured limit",
-                          )
-                        }
-                      }
-                      if session.step > 0 &&
-                        assistant_recorded &&
-                        !(session.stop_hook_pending &&
-                        session.stop_continuation_text is Some(_)) {
-                        late_subagent_context_admission = true
-                        late_subagent_context_count = actual_count
-                        late_subagent_context_length = actual_length
-                      }
+                if required_string(data, "role", max=16) != "user" {
+                  raise Invalid("Invalid PostToolUse context role")
+                }
+              }
+              _ =>
+                match fields(data).get("source") {
+                  None => {
+                    if !open_turn || session.step != 0 || admitted_user {
+                      raise Invalid("User message outside turn admission")
                     }
-                    None =>
-                      if session.stop_hook_pending &&
-                        session.stop_continuation_text is Some(_) &&
-                        !session.stop_continuation_admitted {
-                        if !open_turn ||
-                          !admitted_user ||
-                          session.open_step ||
-                          !assistant_recorded ||
-                          required_string(data, "role", max=16) != "user" {
+                    if required_string(data, "role", max=16) != "user" ||
+                      required_string(data, "content", max=16384).length() == 0 {
+                      raise Invalid("Invalid user message")
+                    }
+                    admitted_user = true
+                  }
+                  Some(source) =>
+                    match expected_subagent_context {
+                      Some((expected_count, expected_length)) => {
+                        if required_string(data, "role", max=16) != "user" {
+                          raise Invalid("Invalid SubagentStart context role")
+                        }
+                        let (actual_count, actual_length) = validate_hook_prompt_context(
+                          data, source,
+                        )
+                        if actual_count != expected_count ||
+                          actual_length != expected_length {
                           raise Invalid(
-                            "Stop continuation context outside its pending boundary",
+                            "SubagentStart context differs from its admission marker",
                           )
                         }
-                        if !stop_continuation_reason_seen {
-                          let reason = session.stop_continuation_text.unwrap()
-                          if data != hook_context_message([reason]) {
+                        expected_subagent_context = None
+                        if session.step == 0 &&
+                          !admitted_user &&
+                          !assistant_recorded {
+                          prompt_context_count += actual_count
+                          prompt_context_length += actual_length
+                          if prompt_context_count > 32 ||
+                            prompt_context_length > 16384 {
                             raise Invalid(
-                              "Stop continuation message differs from its staged reason",
+                              "Prompt contexts exceed the configured limit",
                             )
                           }
-                          stop_continuation_reason_seen = true
-                        } else {
-                          let (context_count, context_length) = validate_hook_prompt_context(
-                            data, source,
-                          )
-                          session.stop_prompt_context_count += context_count
-                          session.stop_prompt_context_length += context_length
+                        } else if session.stop_hook_pending &&
+                          session.stop_continuation_text is Some(_) &&
+                          !session.stop_continuation_admitted {
+                          stop_subagent_context_count += actual_count
+                          stop_subagent_context_length += actual_length
                           if stop_subagent_context_count +
                             session.stop_prompt_context_count >
                             32 ||
@@ -454,53 +440,101 @@ fn restore_session(
                             )
                           }
                         }
-                      } else if late_subagent_context_admission {
-                        if !open_turn ||
-                          !admitted_user ||
-                          session.step == 0 ||
-                          !assistant_recorded ||
-                          session.open_step ||
-                          required_string(data, "role", max=16) != "user" {
-                          raise Invalid(
-                            "Late SubagentStart context outside its admission boundary",
-                          )
-                        }
-                        let (context_count, context_length) = validate_hook_prompt_context(
-                          data, source,
-                        )
-                        late_subagent_context_count += context_count
-                        late_subagent_context_length += context_length
-                        if late_subagent_context_count > 32 ||
-                          late_subagent_context_length > 16384 {
-                          raise Invalid(
-                            "Late SubagentStart prompt contexts exceed the configured limit",
-                          )
-                        }
-                      } else {
-                        if !open_turn ||
-                          !admitted_user ||
-                          session.step != 0 ||
-                          session.open_step ||
-                          assistant_recorded ||
-                          required_string(data, "role", max=16) != "user" {
-                          raise Invalid(
-                            "Prompt context outside prompt admission",
-                          )
-                        }
-                        let (context_count, context_length) = validate_hook_prompt_context(
-                          data, source,
-                        )
-                        prompt_context_count += context_count
-                        prompt_context_length += context_length
-                        if prompt_context_count > 32 ||
-                          prompt_context_length > 16384 {
-                          raise Invalid(
-                            "Prompt contexts exceed the configured limit",
-                          )
+                        if session.step > 0 &&
+                          assistant_recorded &&
+                          !(session.stop_hook_pending &&
+                          session.stop_continuation_text is Some(_)) {
+                          late_subagent_context_admission = true
+                          late_subagent_context_count = actual_count
+                          late_subagent_context_length = actual_length
                         }
                       }
-                  }
-              }
+                      None =>
+                        if session.stop_hook_pending &&
+                          session.stop_continuation_text is Some(_) &&
+                          !session.stop_continuation_admitted {
+                          if !open_turn ||
+                            !admitted_user ||
+                            session.open_step ||
+                            !assistant_recorded ||
+                            required_string(data, "role", max=16) != "user" {
+                            raise Invalid(
+                              "Stop continuation context outside its pending boundary",
+                            )
+                          }
+                          if !stop_continuation_reason_seen {
+                            let reason = session.stop_continuation_text.unwrap()
+                            if data != hook_context_message([reason]) {
+                              raise Invalid(
+                                "Stop continuation message differs from its staged reason",
+                              )
+                            }
+                            stop_continuation_reason_seen = true
+                          } else {
+                            let (context_count, context_length) = validate_hook_prompt_context(
+                              data, source,
+                            )
+                            session.stop_prompt_context_count += context_count
+                            session.stop_prompt_context_length += context_length
+                            if stop_subagent_context_count +
+                              session.stop_prompt_context_count >
+                              32 ||
+                              stop_subagent_context_length +
+                              session.stop_prompt_context_length >
+                              16384 {
+                              raise Invalid(
+                                "Stop continuation contexts exceed the configured limit",
+                              )
+                            }
+                          }
+                        } else if late_subagent_context_admission {
+                          if !open_turn ||
+                            !admitted_user ||
+                            session.step == 0 ||
+                            !assistant_recorded ||
+                            session.open_step ||
+                            required_string(data, "role", max=16) != "user" {
+                            raise Invalid(
+                              "Late SubagentStart context outside its admission boundary",
+                            )
+                          }
+                          let (context_count, context_length) = validate_hook_prompt_context(
+                            data, source,
+                          )
+                          late_subagent_context_count += context_count
+                          late_subagent_context_length += context_length
+                          if late_subagent_context_count > 32 ||
+                            late_subagent_context_length > 16384 {
+                            raise Invalid(
+                              "Late SubagentStart prompt contexts exceed the configured limit",
+                            )
+                          }
+                        } else {
+                          if !open_turn ||
+                            !admitted_user ||
+                            session.step != 0 ||
+                            session.open_step ||
+                            assistant_recorded ||
+                            required_string(data, "role", max=16) != "user" {
+                            raise Invalid(
+                              "Prompt context outside prompt admission",
+                            )
+                          }
+                          let (context_count, context_length) = validate_hook_prompt_context(
+                            data, source,
+                          )
+                          prompt_context_count += context_count
+                          prompt_context_length += context_length
+                          if prompt_context_count > 32 ||
+                            prompt_context_length > 16384 {
+                            raise Invalid(
+                              "Prompt contexts exceed the configured limit",
+                            )
+                          }
+                        }
+                    }
+                }
+            }
           }
         "llm/request" | "tool/request" => {
           if !session.open_step {
@@ -985,6 +1019,48 @@ fn restore_session(
               parsed
             }
           }
+          match
+            (
+              fields(data).get("post_tool_prompt_hook"),
+              fields(data).get("subagent_post_tool_prompt_hook"),
+            ) {
+            (Some(root_marker), Some(child_marker)) if bool_value(
+                root_marker, "post_tool_prompt_hook",
+              ) &&
+              bool_value(child_marker, "subagent_post_tool_prompt_hook") =>
+              raise Invalid(
+                "Tool completion cannot defer both root and child PostToolUse prompt admission",
+              )
+            _ => ()
+          }
+          match fields(data).get("post_tool_prompt_hook") {
+            Some(value) if bool_value(value, "post_tool_prompt_hook") =>
+              if source != "effect" {
+                raise Invalid(
+                  "Only completed host results may defer PostToolUse prompt admission",
+                )
+              } else {
+                session.post_tool_prompt_hook_admission = true
+              }
+            Some(_) =>
+              raise Invalid("Invalid PostToolUse prompt-hook admission marker")
+            None => ()
+          }
+          match fields(data).get("subagent_post_tool_prompt_hook") {
+            Some(value) if bool_value(value, "subagent_post_tool_prompt_hook") =>
+              if source != "effect" {
+                raise Invalid(
+                  "Only completed host results may defer child PostToolUse prompt admission",
+                )
+              } else {
+                session.subagent_prompt_hook_admission = true
+              }
+            Some(_) =>
+              raise Invalid(
+                "Invalid child PostToolUse prompt-hook admission marker",
+              )
+            None => ()
+          }
           match source {
             "effect" => {
               if replay_is_session_tool(tools, call) {
@@ -1238,6 +1314,313 @@ fn restore_session(
           }
         }
         "tool/result/pruned" => session.validate_tool_result_prune(data)
+        "hook/post-tool-prompt-pending" => {
+          if session.post_tool_prompt_hook_active ||
+            !session.post_tool_prompt_hook_admission ||
+            pending_post_tool_contexts.is_empty() ||
+            !open_turn ||
+            !admitted_user ||
+            !assistant_recorded ||
+            session.open_step ||
+            session.active_effect is Some(_) ||
+            session.active_tool_effect_count() > 0 ||
+            session.approval is Some(_) ||
+            session.pending_retry_id is Some(_) ||
+            session.stop_hook_pending {
+            raise Invalid(
+              "PostToolUse prompt hook is outside its next-step boundary",
+            )
+          }
+          if fields(data).length() != 3 {
+            raise Invalid(
+              "PostToolUse prompt-hook checkpoint has an invalid shape",
+            )
+          }
+          let expected_count = int_value(
+            required_field(data, "context_count"),
+            "PostToolUse context count",
+            1,
+            512,
+          )
+          let expected_length = int_value(
+            required_field(data, "context_length"),
+            "PostToolUse context length",
+            1,
+            262144,
+          )
+          let expected_message_count = int_value(
+            required_field(data, "message_count"),
+            "PostToolUse message count",
+            1,
+            16,
+          )
+          if expected_message_count != pending_post_tool_contexts.length() {
+            raise Invalid(
+              "PostToolUse prompt checkpoint differs from its result batch",
+            )
+          }
+          let contexts : Array[String] = []
+          let messages : Array[Json] = []
+          for (_, message) in pending_post_tool_contexts {
+            messages.push(message)
+            for context in restore_hook_prompt_contexts(message) {
+              contexts.push(context)
+            }
+          }
+          if contexts.length() != expected_count ||
+            engine_subagent_hook_context_length(contexts) != expected_length {
+            raise Invalid(
+              "PostToolUse prompt checkpoint counts differ from its contexts",
+            )
+          }
+          session.post_tool_prompt_hook_active = true
+          session.post_tool_prompt_hook_generation += 1
+          session.post_tool_prompt_hook_event_seq = Some(seq)
+          session.post_tool_prompt_hook_contexts = contexts
+          session.post_tool_prompt_hook_messages = messages
+        }
+        "hook/subagent-post-tool-prompt-pending" => {
+          if session.post_tool_prompt_hook_active ||
+            pending_post_tool_contexts.is_empty() ||
+            !open_turn ||
+            !admitted_user ||
+            !assistant_recorded ||
+            session.open_step ||
+            session.active_effect is Some(_) ||
+            session.active_tool_effect_count() > 0 ||
+            session.approval is Some(_) ||
+            session.pending_retry_id is Some(_) ||
+            session.stop_hook_pending {
+            raise Invalid(
+              "Child PostToolUse prompt hook is outside its next-step boundary",
+            )
+          }
+          if fields(data).length() != 3 {
+            raise Invalid(
+              "Child PostToolUse prompt checkpoint has an invalid shape",
+            )
+          }
+          let expected_count = int_value(
+            required_field(data, "context_count"),
+            "Child PostToolUse context count",
+            1,
+            512,
+          )
+          let expected_length = int_value(
+            required_field(data, "context_length"),
+            "Child PostToolUse context length",
+            1,
+            262144,
+          )
+          let expected_message_count = int_value(
+            required_field(data, "message_count"),
+            "Child PostToolUse message count",
+            1,
+            16,
+          )
+          if expected_message_count != pending_post_tool_contexts.length() {
+            raise Invalid(
+              "Child PostToolUse prompt checkpoint differs from its result batch",
+            )
+          }
+          let contexts : Array[String] = []
+          let messages : Array[Json] = []
+          for (_, message) in pending_post_tool_contexts {
+            messages.push(message)
+            for context in restore_hook_prompt_contexts(message) {
+              contexts.push(context)
+            }
+          }
+          if contexts.length() != expected_count ||
+            engine_subagent_hook_context_length(contexts) != expected_length {
+            raise Invalid(
+              "Child PostToolUse prompt checkpoint counts differ from its contexts",
+            )
+          }
+          session.post_tool_prompt_hook_active = true
+          session.post_tool_prompt_hook_generation += 1
+          session.post_tool_prompt_hook_event_seq = Some(seq)
+          session.post_tool_prompt_hook_contexts = contexts
+          session.post_tool_prompt_hook_messages = messages
+        }
+        "hook/post-tool-prompt-admitted" => {
+          if !session.post_tool_prompt_hook_active ||
+            pending_post_tool_contexts.is_empty() ||
+            !expected_admitted_post_tool_messages.is_empty() {
+            raise Invalid("PostToolUse prompt admission lacks its checkpoint")
+          }
+          let raw_contexts = array_value(
+            required_field(data, "additional_contexts"),
+            "PostToolUse prompt additional contexts",
+            32,
+          )
+          let additional_contexts : Array[String] = raw_contexts.map(raw => {
+            let context = string_value(
+              raw,
+              "PostToolUse prompt additional context",
+              max=4096,
+            )
+            if context.is_empty() {
+              raise Invalid("PostToolUse prompt additional context is empty")
+            }
+            context
+          })
+          let all_contexts = session.post_tool_prompt_hook_contexts.copy()
+          for context in additional_contexts {
+            all_contexts.push(context)
+          }
+          let context_length = engine_validate_hook_contexts(all_contexts)
+          if int_value(
+              required_field(data, "context_count"),
+              "PostToolUse admitted context count",
+              1,
+              32,
+            ) !=
+            all_contexts.length() ||
+            int_value(
+              required_field(data, "context_length"),
+              "PostToolUse admitted context length",
+              1,
+              16384,
+            ) !=
+            context_length {
+            raise Invalid(
+              "PostToolUse prompt admission differs from its messages",
+            )
+          }
+          for (_, message) in pending_post_tool_contexts {
+            expected_admitted_post_tool_messages.push(message)
+          }
+          if !additional_contexts.is_empty() {
+            expected_admitted_post_tool_messages.push(
+              hook_context_message(additional_contexts),
+            )
+          }
+          pending_post_tool_contexts.clear()
+        }
+        "hook/subagent-post-tool-prompt-admitted" => {
+          if !session.post_tool_prompt_hook_active ||
+            pending_post_tool_contexts.is_empty() ||
+            !expected_admitted_post_tool_messages.is_empty() {
+            raise Invalid(
+              "Child PostToolUse prompt admission lacks its checkpoint",
+            )
+          }
+          let raw_contexts = array_value(
+            required_field(data, "additional_contexts"),
+            "Child PostToolUse prompt additional contexts",
+            32,
+          )
+          let additional_contexts : Array[String] = raw_contexts.map(raw => {
+            let context = string_value(
+              raw,
+              "Child PostToolUse prompt additional context",
+              max=4096,
+            )
+            if context.is_empty() {
+              raise Invalid(
+                "Child PostToolUse prompt additional context is empty",
+              )
+            }
+            context
+          })
+          let all_contexts = session.post_tool_prompt_hook_contexts.copy()
+          for context in additional_contexts {
+            all_contexts.push(context)
+          }
+          let context_length = engine_validate_hook_contexts(all_contexts)
+          if late_subagent_context_count + all_contexts.length() > 32 ||
+            late_subagent_context_length + context_length > 16384 {
+            raise Invalid(
+              "Combined late SubagentStart and child PostToolUse contexts exceed the configured limit",
+            )
+          }
+          if int_value(
+              required_field(data, "context_count"),
+              "Child PostToolUse admitted context count",
+              1,
+              32,
+            ) !=
+            all_contexts.length() ||
+            int_value(
+              required_field(data, "context_length"),
+              "Child PostToolUse admitted context length",
+              1,
+              16384,
+            ) !=
+            context_length {
+            raise Invalid(
+              "Child PostToolUse prompt admission differs from its messages",
+            )
+          }
+          for (_, message) in pending_post_tool_contexts {
+            expected_admitted_post_tool_messages.push(message)
+          }
+          if !additional_contexts.is_empty() {
+            expected_admitted_post_tool_messages.push(
+              hook_context_message(additional_contexts),
+            )
+          }
+          pending_post_tool_contexts.clear()
+          session.clear_post_tool_prompt_hook()
+        }
+        "hook/subagent-post-tool-prompt-rejected" => {
+          ignore(required_string(data, "error", max=8192))
+          if !session.post_tool_prompt_hook_active ||
+            pending_post_tool_contexts.is_empty() ||
+            !expected_admitted_post_tool_messages.is_empty() {
+            raise Invalid(
+              "Child PostToolUse prompt rejection lacks an unadmitted batch",
+            )
+          }
+          pending_post_tool_contexts.clear()
+          session.clear_post_tool_prompt_hook()
+        }
+        "hook/subagent-post-tool-prompt-abandoned" => {
+          ignore(required_string(data, "reason", max=64))
+          if pending_post_tool_contexts.is_empty() ||
+            !expected_admitted_post_tool_messages.is_empty() {
+            raise Invalid(
+              "Child PostToolUse prompt abandonment lacks an unadmitted batch",
+            )
+          }
+          pending_post_tool_contexts.clear()
+          session.clear_post_tool_prompt_hook()
+        }
+        "hook/post-tool-prompt-rejected" => {
+          ignore(required_string(data, "error", max=8192))
+          let pending_boundary = session.post_tool_prompt_hook_active ||
+            (
+              session.post_tool_prompt_hook_admission &&
+              !pending_post_tool_contexts.is_empty()
+            )
+          if !pending_boundary ||
+            pending_post_tool_contexts.is_empty() ||
+            !expected_admitted_post_tool_messages.is_empty() {
+            raise Invalid(
+              "PostToolUse prompt rejection lacks an unadmitted batch",
+            )
+          }
+          pending_post_tool_contexts.clear()
+          session.clear_post_tool_prompt_hook()
+        }
+        "hook/post-tool-prompt-abandoned" => {
+          ignore(required_string(data, "reason", max=64))
+          let pending_boundary = session.post_tool_prompt_hook_active ||
+            (
+              session.post_tool_prompt_hook_admission &&
+              !pending_post_tool_contexts.is_empty()
+            )
+          if !pending_boundary ||
+            pending_post_tool_contexts.is_empty() ||
+            !expected_admitted_post_tool_messages.is_empty() {
+            raise Invalid(
+              "PostToolUse prompt abandonment lacks an unadmitted batch",
+            )
+          }
+          pending_post_tool_contexts.clear()
+          session.clear_post_tool_prompt_hook()
+        }
         "step/end" => {
           if !session.open_step ||
             !assistant_recorded ||
@@ -1509,7 +1892,12 @@ fn restore_session(
     raise Invalid("Snapshot ends before the todo write tool result")
   }
   if !pending_post_tool_contexts.is_empty() {
-    raise Invalid("Snapshot ends before all PostToolUse context messages")
+    if !session.post_tool_prompt_hook_active {
+      raise Invalid("Snapshot ends before all PostToolUse context messages")
+    }
+  }
+  if !expected_admitted_post_tool_messages.is_empty() {
+    raise Invalid("Snapshot ends before all admitted PostToolUse messages")
   }
   if expected_subagent_context is Some(_) {
     raise Invalid("Snapshot ends before its SubagentStart context message")
@@ -1549,7 +1937,8 @@ fn restore_session(
     session.active_tool_effect_count() == 0 &&
     session.approval is None &&
     !session.stop_hook_pending &&
-    !stop_settled_pending_boundary {
+    !stop_settled_pending_boundary &&
+    !session.post_tool_prompt_hook_active {
     raise Invalid("Snapshot captured an impossible in-between transition")
   }
   if open_turn && session.events.length() + 40 > 32768 {
@@ -1594,4 +1983,17 @@ fn validate_hook_prompt_context(
     raise Invalid("Hook prompt context exceeds the aggregate length limit")
   }
   (blocks.length(), total_length)
+}
+
+///|
+fn restore_hook_prompt_contexts(
+  message : Json,
+) -> Array[String] raise EngineError {
+  ignore(
+    validate_hook_prompt_context(message, required_field(message, "source")),
+  )
+  array_value(required_field(message, "content"), "hook context content", 32).map(block => {
+      required_string(block, "text", max=4096)
+    },
+  )
 }

@@ -103,6 +103,8 @@ pub fn Engine::begin_subagent_prompt_hook(
     session.subagent_prompt_hook_active = true
     session.subagent_prompt_hook_initial = true
     session.subagent_prompt_hook_generation += 1
+    session.subagent_prompt_hook_start_contexts = session.pending_hook_contexts.copy()
+    session.subagent_prompt_hook_post_tool_messages.clear()
     session.subagent_prompt_hook_contexts = session.pending_hook_contexts.copy()
     session.pending_hook_contexts.clear()
     session.subagent_prompt_hook_prompt = Some(prompt)
@@ -168,6 +170,8 @@ fn Session::clear_subagent_prompt_hook(self : Session) -> Unit {
   self.subagent_prompt_hook_active = false
   self.subagent_prompt_hook_initial = false
   self.subagent_prompt_hook_contexts.clear()
+  self.subagent_prompt_hook_start_contexts.clear()
+  self.subagent_prompt_hook_post_tool_messages.clear()
   self.subagent_prompt_hook_prompt = None
 }
 
@@ -214,19 +218,19 @@ pub fn Engine::accept_subagent_prompt_hook(
       session.stop_prompt_context_length = 0
       session.todos = None
       session.append("turn/start", object([]))
-      if !session.subagent_prompt_hook_contexts.is_empty() {
+      if !session.subagent_prompt_hook_start_contexts.is_empty() {
         session.append(
           "hook/subagent-start-context",
           object([
             (
               "context_count",
-              integer(session.subagent_prompt_hook_contexts.length()),
+              integer(session.subagent_prompt_hook_start_contexts.length()),
             ),
             (
               "context_length",
               integer(
                 engine_subagent_hook_context_length(
-                  session.subagent_prompt_hook_contexts,
+                  session.subagent_prompt_hook_start_contexts,
                 ),
               ),
             ),
@@ -234,7 +238,7 @@ pub fn Engine::accept_subagent_prompt_hook(
         )
         session.append(
           "user/message",
-          hook_context_message(session.subagent_prompt_hook_contexts),
+          hook_context_message(session.subagent_prompt_hook_start_contexts),
         )
       }
       session.append(
@@ -248,24 +252,55 @@ pub fn Engine::accept_subagent_prompt_hook(
         session.append("user/message", hook_context_message(contexts))
       }
     } else {
-      if !session.subagent_prompt_hook_contexts.is_empty() {
+      if !session.subagent_prompt_hook_start_contexts.is_empty() {
         let context_length = engine_subagent_hook_context_length(
-          session.subagent_prompt_hook_contexts,
+          session.subagent_prompt_hook_start_contexts,
         )
         session.append(
           "hook/subagent-start-context",
           object([
             (
               "context_count",
-              integer(session.subagent_prompt_hook_contexts.length()),
+              integer(session.subagent_prompt_hook_start_contexts.length()),
             ),
             ("context_length", integer(context_length)),
           ]),
         )
         session.append(
           "user/message",
-          hook_context_message(session.subagent_prompt_hook_contexts),
+          hook_context_message(session.subagent_prompt_hook_start_contexts),
         )
+      }
+      if !session.subagent_prompt_hook_post_tool_messages.is_empty() {
+        // This marker records only the PostToolUse slice. Any SubagentStart
+        // context was admitted immediately above and remains independently
+        // ordered before the tool-result messages.
+        let post_tool_contexts : Array[String] = []
+        for post_tool_message in session.subagent_prompt_hook_post_tool_messages {
+          for context in restore_hook_prompt_contexts(post_tool_message) {
+            post_tool_contexts.push(context)
+          }
+        }
+        for context in contexts {
+          post_tool_contexts.push(context)
+        }
+        let post_tool_context_length = engine_validate_hook_contexts(
+          post_tool_contexts,
+        )
+        session.append(
+          "hook/subagent-post-tool-prompt-admitted",
+          object([
+            ("context_count", integer(post_tool_contexts.length())),
+            ("context_length", integer(post_tool_context_length)),
+            (
+              "additional_contexts",
+              Json::array(contexts.map(context => Json::string(context))),
+            ),
+          ]),
+        )
+      }
+      for message in session.subagent_prompt_hook_post_tool_messages {
+        session.append("user/message", message)
       }
       if !contexts.is_empty() {
         session.append("user/message", hook_context_message(contexts))
@@ -302,23 +337,34 @@ pub fn Engine::block_subagent_prompt_hook(
   let changed = try {
     let session = candidate.lookup(checkpoint.session_id)
     session.validate_subagent_prompt_hook(checkpoint)
+    let has_post_tool_contexts = !session.subagent_prompt_hook_post_tool_messages.is_empty()
+    let prefix = if has_post_tool_contexts {
+      "UserPromptSubmit hook rejected the PostToolUse context"
+    } else {
+      "UserPromptSubmit hook blocked the SubagentStart context"
+    }
+    let separator = ": "
+    let remaining = Int::max(
+      0,
+      8192 - engine_hook_context_utf16_units(prefix + separator),
+    )
+    let bounded = native_engine_hook_prefix(reason, remaining)
+    let error = if bounded.is_empty() {
+      prefix
+    } else {
+      prefix + separator + bounded
+    }
+    if has_post_tool_contexts {
+      session.append(
+        "hook/subagent-post-tool-prompt-rejected",
+        object([("error", Json::string(error))]),
+      )
+    }
     session.clear_subagent_prompt_hook()
     session.pending_hook_contexts.clear()
     if checkpoint.initial {
       Ok(session.json())
     } else {
-      let prefix = "UserPromptSubmit hook blocked the SubagentStart context"
-      let separator = ": "
-      let remaining = Int::max(
-        0,
-        8192 - engine_hook_context_utf16_units(prefix + separator),
-      )
-      let bounded = native_engine_hook_prefix(reason, remaining)
-      let error = if bounded.is_empty() {
-        prefix
-      } else {
-        prefix + separator + bounded
-      }
       candidate.terminate(session, Failed, "blocked", error)
       Ok(session.json())
     }

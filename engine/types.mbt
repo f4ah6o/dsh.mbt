@@ -36,6 +36,18 @@ pub struct NativeSubagentPromptHookCheckpoint {
 }
 
 ///|
+/// Opaque checkpoint for admitting a committed PostToolUse context batch
+/// through the next UserPromptSubmit hook before the following provider step.
+pub struct NativePostToolPromptHookCheckpoint {
+  priv session_id : String
+  priv turn_id : Int
+  priv step : Int
+  priv generation : Int
+  priv event_seq : Int
+  priv contexts : Array[String]
+}
+
+///|
 priv enum Status {
   Idle
   Running
@@ -172,6 +184,19 @@ priv struct Session {
   mut subagent_prompt_hook_generation : Int
   mut subagent_prompt_hook_contexts : Array[String]
   mut subagent_prompt_hook_prompt : String?
+  /// Root tool completions opt into deferred PostToolUse prompt admission.
+  mut post_tool_prompt_hook_admission : Bool
+  /// PostToolUse contexts claimed at the next root pre-step boundary.
+  mut post_tool_prompt_hook_active : Bool
+  mut post_tool_prompt_hook_generation : Int
+  mut post_tool_prompt_hook_event_seq : Int?
+  mut post_tool_prompt_hook_contexts : Array[String]
+  mut post_tool_prompt_hook_messages : Array[Json]
+  /// Ephemeral child PostToolUse inbox messages retain one message per call.
+  pending_subagent_post_tool_contexts : Array[String]
+  pending_subagent_post_tool_messages : Array[Json]
+  mut subagent_prompt_hook_start_contexts : Array[String]
+  mut subagent_prompt_hook_post_tool_messages : Array[Json]
 }
 
 ///|
@@ -285,5 +310,15 @@ fn fresh_session(
     subagent_prompt_hook_generation: 0,
     subagent_prompt_hook_contexts: [],
     subagent_prompt_hook_prompt: None,
+    post_tool_prompt_hook_admission: false,
+    post_tool_prompt_hook_active: false,
+    post_tool_prompt_hook_generation: 0,
+    post_tool_prompt_hook_event_seq: None,
+    post_tool_prompt_hook_contexts: [],
+    post_tool_prompt_hook_messages: [],
+    pending_subagent_post_tool_messages: [],
+    pending_subagent_post_tool_contexts: [],
+    subagent_prompt_hook_start_contexts: [],
+    subagent_prompt_hook_post_tool_messages: [],
   }
 }

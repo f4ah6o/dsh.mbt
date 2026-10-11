@@ -1,5 +1,46 @@
 # Changes
 
+## Unreleased
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
+## 0.1.17 - 2026-10-11
+
+### Added
+
+- Run configured `UserPromptSubmit` for nonempty PostToolUse `additionalContext` batches before the next root or child provider request, preserving tool-call order and skipping empty tool-result inboxes. See the [native runtime guide](docs/native-runtime.md#native-command-hooks), [port status](docs/port-status.md), and [remaining parity work](issues/open/0001-upstream-parity.md).
+
+### Changed
+
+- Record additive root and child PostToolUse admission checkpoints. Restore validates marker order and the combined 32-item / 16,384 UTF-16-unit context bound, including child Start context; accepted history places prompt-hook output after the claimed PostToolUse messages.
+
+### Fixed
+
+- Bound the prefixed denial reason to 8,192 UTF-16 units and settle with known tool results when PostToolUse context is rejected.
+- Restore accepted, rejected, cap-rejected, and interrupted child PostToolUse admission snapshots; cancellation discards unclaimed child context so reusing an Engine does not run its hook or provider again.
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
+- Stores with the optional `post_tool_prompt_hook` (root) or `subagent_post_tool_prompt_hook` (child) field on effect-backed `tool/completed` events, or new root / child PostToolUse prompt-admission markers, require dsh 0.1.17 or later. Version 0.1.17 continues to read legacy completion events without either field.
+
 ## 0.1.16 - 2026-10-11
 
 ### Added
@@ -30,22 +71,6 @@
 ### Migration
 
 - Engine snapshots containing `hook/subagent-start-context` or `hook/stop-settled` require dsh 0.1.16 or later. Native subagent child engines are ephemeral and are not saved as root sessions; the shared Stop engine may record `hook/stop-settled` in a root snapshot when queued hook input advances to the next step.
-
-## Unreleased
-
-### Added
-
-### Changed
-
-### Fixed
-
-### Deprecated
-
-### Removed
-
-### Security
-
-### Migration
 
 ## 0.1.15 - 2026-10-11
 

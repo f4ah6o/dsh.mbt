@@ -725,12 +725,14 @@ shared budget is dropped; the next step still advances and its snapshot
 replays from the ordinary `step/start` event after Stop settlement.
 
 This admission path covers Start batches combined with the initial prompt,
-Start-only input batches at later steps, and Start batches combined with a Stop
-continuation. The upstream bridge also runs `UserPromptSubmit` for any
-nonempty next-step inbox, including `PostToolUse` additional context; native
-PostToolUse context keeps its existing direct Engine admission and does not
-pass through `UserPromptSubmit` in this increment. Ordinary tool-result-only
-follow-up steps have an empty inbox and skip the upstream command hook too.
+Start-only input batches at later steps, Start batches combined with a Stop
+continuation, and nonempty PostToolUse context batches. When configured,
+`UserPromptSubmit` runs on the next root or child input boundary before another
+provider request. The tool results are committed first. Accepted history keeps
+the PostToolUse source messages in tool-call order, then appends the prompt
+hook's context; a child Start batch remains earlier in the same claimed input.
+As in the pinned bridge, ordinary tool-result-only follow-up steps have an
+empty inbox and skip the command hook.
 
 `SubagentStop` is observational: all output, including deny decisions and
 additional context, is discarded and it never changes the child's result or
@@ -774,7 +776,9 @@ UTF-16-unit serialized-session limits apply separately; a candidate that
 exceeds session capacity closes with `session_capacity` without dispatching
 the provider effect. A denial in the continuation's UserPromptSubmit hook is
 clipped on a Unicode scalar boundary to the existing 8,192 UTF-16-unit
-event-error limit so the turn always settles.
+event-error limit so the turn always settles. For PostToolUse admission, the
+rejection prefix is included in that same limit, so a long Unicode reason does
+not leave the known tool results unsettled.
 
 PreToolUse and PostToolUse payloads include `session_id`, an empty
 `transcript_path`, the canonical workspace `cwd`, `hook_event_name`,
@@ -807,7 +811,13 @@ contexts in one separate `user/message` event with source
 parallel calls, every correlated tool result is committed before context
 messages are appended in tool-call order. The next provider request therefore
 retains the upstream ordering without weakening the provider's adjacent-result
-validation.
+validation. When `UserPromptSubmit` is configured, the next root or child input
+boundary claims a nonempty batch before the next provider request. The shared
+32-item / 16,384 UTF-16-unit context limit covers the claimed batch, including
+returned prompt-hook contexts and any child Start contexts in that batch. On
+denial or limit rejection, the already committed tool outcomes remain, rejected
+context is not admitted, and no next provider request starts. Cancellation or
+restore abandons unresolved admission without rerunning the hook or provider.
 
 An empty context array is omitted from the completion event. A PostToolUse
 block still returns the native tool-error result, while any valid contexts from
@@ -860,6 +870,20 @@ sticky max-token completion; a following Start marker must come after this
 boundary. If a snapshot ends here while prompt admission is unresolved,
 restore marks the work interrupted and does not replay the hook or provider
 effect. Do not reopen either event with an older reader.
+
+Snapshots containing the optional `post_tool_prompt_hook` (root) or
+`subagent_post_tool_prompt_hook` (child) field on an effect-backed
+`tool/completed` event, or the additive `hook/post-tool-prompt-*` and
+`hook/subagent-post-tool-prompt-*` events, require dsh 0.1.17 or later. The
+child field is emitted as `true` while child prompt admission is enabled; it
+restores that deferral mode before replay closes an interrupted child result
+batch. The fields are true-only, valid only on effect-backed completions, and
+mutually exclusive. Version 0.1.17 continues to read legacy completion events
+without either optional field. The root markers record deferred PostToolUse
+admission; child markers also make public child Engine snapshots
+self-validating across admission, rejection, and interruption. Native
+subagent sessions remain ephemeral and are not persisted as root sessions.
+Do not reopen these snapshots with an older reader.
 
 `--approve-call` and `--deny-call` act on a session that is already waiting for approval, for example one started from the browser or MCP carrier. Pass its current `approval_revision` and `pending_approval.call_id`; stale or mismatched decisions are rejected:
 

@@ -687,6 +687,291 @@ test "PostToolUse contexts stay structured after every result and reject forged 
 }
 
 ///|
+fn post_tool_effect_id(value : Json) -> EffectId {
+  match EffectId::new(id_of(value)) {
+    Ok(effect_id) => effect_id
+    Err(error) => abort(error)
+  }
+}
+
+///|
+test "PostToolUse inbox waits for every parallel result before next-step admission" {
+  let (engine, llm) = started_engine(max_steps=4)
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([
+          ("post-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("post-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let reads = engine.take_effects()
+  ignore(
+    success(
+      engine.complete_effect_with_post_tool_prompt_hook(
+        post_tool_effect_id(reads[1]),
+        fixture("{\"ok\":true,\"content\":\"beta\"}"),
+      ),
+    ),
+  )
+  assert_true(
+    engine.pending_post_tool_prompt_hook(SessionId::new("test").unwrap())
+    is None,
+  )
+  assert_true(engine.take_effects().is_empty())
+  ignore(
+    success(
+      engine.complete_effect_with_post_tool_prompt_hook(
+        post_tool_effect_id(reads[0]),
+        fixture(
+          "{\"ok\":true,\"content\":\"alpha\",\"additional_contexts\":[\"A1\",\"A2\"]}",
+        ),
+      ),
+    ),
+  )
+  let checkpoint = engine
+    .pending_post_tool_prompt_hook(SessionId::new("test").unwrap())
+    .unwrap()
+  assert_eq(checkpoint.prompt(), "A1A2")
+  assert_eq(checkpoint.contexts(), ["A1", "A2"])
+  assert_true(engine.take_effects().is_empty())
+  let pending = get_session(engine)
+  assert_eq(
+    array_value(required_field(pending, "messages"), "messages", 32).length(),
+    4,
+  )
+  let admitted = success(
+    engine.accept_post_tool_prompt_hook(checkpoint, ["U1", "U2"]),
+  )
+  let provider = engine.take_effects()[0]
+  let request_messages = array_value(
+    required_field(required_field(provider, "request"), "messages"),
+    "messages",
+    32,
+  )
+  assert_eq(request_messages.length(), 6)
+  assert_eq(
+    array_value(required_field(request_messages[4], "content"), "content", 8).map(block => {
+        required_string(block, "text")
+      },
+    ),
+    ["A1", "A2"],
+  )
+  assert_eq(
+    required_field(request_messages[4], "source"),
+    Json::object({ "kind": "hooks-claude-code" }),
+  )
+  assert_eq(
+    array_value(required_field(request_messages[5], "content"), "content", 8).map(block => {
+        required_string(block, "text")
+      },
+    ),
+    ["U1", "U2"],
+  )
+  assert_eq(get_status(admitted), "running")
+  ignore(success(engine.complete(id_of(provider), stop_response("done"))))
+  let snapshot = engine.snapshot()
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(snapshot), Ok(()))
+  assert_eq(get_session(restored), get_session(engine))
+}
+
+///|
+test "PostToolUse prompt denial and restore do not replay or admit claimed contexts" {
+  let (engine, llm) = started_engine(max_steps=4)
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([("post-a", "read", "{\"file_path\":\"a.txt\"}")]),
+      ),
+    ),
+  )
+  let read = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete_effect_with_post_tool_prompt_hook(
+        post_tool_effect_id(read),
+        fixture(
+          "{\"ok\":false,\"error\":\"blocked tool result\",\"additional_contexts\":[\"denied input\"]}",
+        ),
+      ),
+    ),
+  )
+  let checkpoint = engine
+    .pending_post_tool_prompt_hook(SessionId::new("test").unwrap())
+    .unwrap()
+  let before = get_session(engine)
+  assert_eq(
+    array_value(required_field(before, "messages"), "messages", 16).length(),
+    3,
+  )
+  assert_true(engine.take_effects().is_empty())
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_status(get_session(restored)), "failed")
+  assert_true(
+    restored.pending_post_tool_prompt_hook(SessionId::new("test").unwrap())
+    is None,
+  )
+  assert_eq(
+    event_type_count(get_session(restored), "hook/post-tool-prompt-abandoned"),
+    1,
+  )
+  assert_eq(
+    array_value(
+      required_field(get_session(restored), "messages"),
+      "messages",
+      16,
+    ).length(),
+    3,
+  )
+  assert_true(engine.block_post_tool_prompt_hook(checkpoint, "denied") is Ok(_))
+  assert_eq(get_status(get_session(engine)), "failed")
+  assert_eq(
+    event_type_count(get_session(engine), "hook/post-tool-prompt-rejected"),
+    1,
+  )
+  assert_eq(
+    array_value(required_field(get_session(engine), "messages"), "messages", 16).length(),
+    3,
+  )
+  let reopened = Engine::new(test_tools())
+  assert_eq(reopened.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session(reopened), get_session(engine))
+}
+
+///|
+test "PostToolUse prompt context caps close the turn without invoking a checkpoint" {
+  let (engine, llm) = started_engine(max_steps=4)
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([
+          ("post-a", "read", "{\"file_path\":\"a.txt\"}"),
+          ("post-b", "read", "{\"file_path\":\"b.txt\"}"),
+        ]),
+      ),
+    ),
+  )
+  let reads = engine.take_effects()
+  let contexts = Array::make(20, "context")
+  let result = object([
+    ("ok", boolean(true)),
+    ("content", Json::string("alpha")),
+    ("additional_contexts", Json::array(contexts.map(Json::string))),
+  ])
+  ignore(
+    success(
+      engine.complete_effect_with_post_tool_prompt_hook(
+        post_tool_effect_id(reads[0]),
+        result,
+      ),
+    ),
+  )
+  let other = object([
+    ("ok", boolean(true)),
+    ("content", Json::string("beta")),
+    ("additional_contexts", Json::array(contexts.map(Json::string))),
+  ])
+  let closed = success(
+    engine.complete_effect_with_post_tool_prompt_hook(
+      post_tool_effect_id(reads[1]),
+      other,
+    ),
+  )
+  assert_eq(get_status(closed), "failed")
+  assert_true(
+    engine.pending_post_tool_prompt_hook(SessionId::new("test").unwrap())
+    is None,
+  )
+  assert_true(engine.take_effects().is_empty())
+  assert_eq(event_type_count(closed, "hook/post-tool-prompt-rejected"), 1)
+  assert_eq(
+    array_value(required_field(closed, "messages"), "messages", 32).length(),
+    4,
+  )
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session(restored), closed)
+}
+
+///|
+test "PostToolUse prompt hook applies exact combined UTF-16 context cap atomically" {
+  let (engine, llm) = started_engine(max_steps=4)
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([("post-a", "read", "{\"file_path\":\"a.txt\"}")]),
+      ),
+    ),
+  )
+  let read = engine.take_effects()[0]
+  let base_context = "😀".repeat(2048)
+  assert_eq(base_context.length(), 4096)
+  assert_eq(engine_hook_context_utf16_units(base_context), 4096)
+  ignore(
+    success(
+      engine.complete_effect_with_post_tool_prompt_hook(
+        post_tool_effect_id(read),
+        object([
+          ("ok", boolean(true)),
+          ("content", Json::string("alpha")),
+          ("additional_contexts", Json::array([Json::string(base_context)])),
+        ]),
+      ),
+    ),
+  )
+  let checkpoint = engine
+    .pending_post_tool_prompt_hook(SessionId::new("test").unwrap())
+    .unwrap()
+  let too_many = Array::make(4, "😀".repeat(2048))
+  let before_rejection = engine.snapshot()
+  assert_true(
+    engine.accept_post_tool_prompt_hook(checkpoint, too_many) is Err(_),
+  )
+  assert_eq(engine.snapshot(), before_rejection)
+
+  let exact = Array::make(3, "😀".repeat(2048))
+  let admitted = success(engine.accept_post_tool_prompt_hook(checkpoint, exact))
+  assert_eq(get_status(admitted), "running")
+  let provider = engine.take_effects()[0]
+  let messages = array_value(
+    required_field(required_field(provider, "request"), "messages"),
+    "messages",
+    8,
+  )
+  assert_eq(messages.length(), 5)
+  assert_eq(
+    required_field(messages[3], "source"),
+    Json::object({ "kind": Json::string("hooks-claude-code") }),
+  )
+  assert_eq(
+    required_string(
+      array_value(required_field(messages[3], "content"), "content", 8)[0],
+      "text",
+    ),
+    base_context,
+  )
+  assert_eq(
+    array_value(required_field(messages[4], "content"), "content", 8).map(block => {
+      required_string(block, "text")
+    }),
+    exact,
+  )
+  ignore(success(engine.complete(id_of(provider), stop_response("done"))))
+  let finished = get_session(engine)
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session(restored), finished)
+}
+
+///|
 test "known host outcome stays behind earlier reads and finalizes before restore" {
   let (engine, llm) = started_engine()
   ignore(

@@ -1671,6 +1671,183 @@ async test "native subagent timeout cancels a child waiting on its provider" {
 }
 
 ///|
+async test "native child PostToolUse context passes through UserPromptSubmit before follow-up" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-child-posttool-prompt-hook")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    @fs.write_file(workspace + "/target.txt", "child fixture contents")
+    let hooks_path = fixture + "/hooks.json"
+    let prompt_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/prompt-payloads.jsonl\"; printf u >> \"${CLAUDE_PROJECT_DIR}/prompt-count.txt\"; case \"$payload\" in *\"Read target.txt and return its contents.\"*) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"child initial prompt context\"}}' ;; *\"child PostToolUse context\"*) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"child follow-up prompt context\"}}' ;; *) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"parent prompt context\"}}' ;; esac"
+    let post_command = "cat >/dev/null; printf p >> \"${CLAUDE_PROJECT_DIR}/post-count.txt\"; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"child PostToolUse context\"}}'"
+    let post_config = @json.parse(
+      native_hook_test_config("PostToolUse", "read", post_command),
+    )
+    let prompt_config = @json.parse(
+      native_hook_test_config("UserPromptSubmit", "ignored", prompt_command),
+    )
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(
+        Json::object({
+          "PostToolUse": native_hook_test_required_field(
+            post_config, "PostToolUse",
+          ),
+          "UserPromptSubmit": native_hook_test_required_field(
+            prompt_config, "UserPromptSubmit",
+          ),
+        }).stringify(),
+      ),
+    )
+    let address = @socket.Addr::parse("127.0.0.1:0")
+    let server = @http.Server::Server(address, reuse_addr=false)
+    group.add_defer(() => server.close())
+    let bodies = Ref([])
+    let auth_ok = Ref(true)
+    let serving = group.spawn(no_wait=true, async fn() {
+      native_fixture_provider_server(
+        server,
+        [
+          native_subagent_http_response(
+            native_fixture_openai_calls_stream([
+              (
+                "child-read-call",
+                "read",
+                { "file_path": "target.txt", "offset": 1, "limit": 10 },
+              ),
+            ]),
+          ),
+          native_subagent_http_response(
+            native_fixture_openai_text_stream("The child read the target file."),
+          ),
+        ],
+        bodies,
+        auth_ok,
+        None,
+      )
+    })
+    let runtime = match
+      NativeRuntime::open(
+        fixture + "/data",
+        workspace,
+        false,
+        false,
+        mode_override="openai",
+        model_override="fixture-model",
+        base_url_override="http://127.0.0.1:" + server.addr.port().to_string(),
+        max_retries=0,
+        hooks_config_path=Some(hooks_path),
+        enable_subagents=true,
+      ) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let parent_tool = native_subagent_parent_tool_effect(
+      runtime,
+      "native-child-posttool-prompt-hook",
+      "parent-child-hook-call",
+      "Use a child to read target.txt.",
+      child_prompt="Read target.txt and return its contents.",
+    )
+    let (_, follow_up) = runtime.run_tool_effect(parent_tool).unwrap()
+    assert_eq(follow_up.length(), 1)
+    assert_true(
+      @async.with_timeout_opt(5000, async fn() { serving.wait() }) is Some(_),
+    )
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 2)
+    assert_eq(@fs.read_file(workspace + "/prompt-count.txt").text(), "uuu")
+    assert_eq(@fs.read_file(workspace + "/post-count.txt").text(), "p")
+
+    let prompt_lines = @fs.read_file(workspace + "/prompt-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array()
+    assert_eq(prompt_lines.length(), 3)
+    let prompts = prompt_lines.map(line => @json.parse(line))
+    assert_eq(
+      native_hook_test_required_string(prompts[0], "prompt"),
+      "Use a child to read target.txt.",
+    )
+    assert_eq(
+      native_hook_test_required_string(prompts[1], "prompt"),
+      "Read target.txt and return its contents.",
+    )
+    assert_eq(
+      native_hook_test_required_string(prompts[2], "prompt"),
+      "child PostToolUse context",
+    )
+    let parent_session = runtime
+      .invoke("session_get", {
+        "session_id": "native-child-posttool-prompt-hook",
+      })
+      .unwrap().0
+    let envelope = native_subagent_result_for_call(
+      parent_session, "parent-child-hook-call",
+    )
+    assert_eq(string_field(envelope, "status"), Some("completed"))
+    let child_id = native_hook_test_required_string(envelope, "child_id")
+    assert_eq(
+      string_field(prompts[0], "session_id"),
+      Some("native-child-posttool-prompt-hook"),
+    )
+    assert_eq(string_field(prompts[1], "session_id"), Some(child_id))
+    assert_eq(string_field(prompts[2], "session_id"), Some(child_id))
+
+    let second_request = @json.parse(bodies.val[1])
+    let request_messages = native_hook_test_array(
+      native_hook_test_required_field(second_request, "messages"),
+      "child follow-up provider messages",
+    )
+    let followup_text = request_messages
+      .map(native_hook_test_message_text)
+      .join("\n")
+    let initial_split = followup_text
+      .split("child initial prompt context")
+      .to_array()
+    assert_eq(initial_split.length(), 2)
+    let post_tool_split = initial_split[1]
+      .split("child PostToolUse context")
+      .to_array()
+    assert_eq(post_tool_split.length(), 2)
+    assert_eq(
+      post_tool_split[1]
+      .split("child follow-up prompt context")
+      .to_array()
+      .length(),
+      2,
+    )
+    let (completed, trailing) = runtime
+      .complete(follow_up[0].id(), {
+        "ok": true,
+        "content": "The child finished reading.",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing.is_empty())
+    assert_eq(
+      string_field(
+        native_subagent_result_for_call(completed, "parent-child-hook-call"),
+        "status",
+      ),
+      Some("completed"),
+    )
+  }
+}
+
+///|
 async test "native foreground child applies prompt context and Stop continuation hooks" {
   let fixture = @fs.tmpdir(prefix="dsh-native-subagent-lifecycle-hooks")
   @async.with_task_group() <| group => {

@@ -100,6 +100,22 @@ fn Session::copy_state(self : Session) -> Session {
     subagent_prompt_hook_generation: self.subagent_prompt_hook_generation,
     subagent_prompt_hook_contexts: self.subagent_prompt_hook_contexts.copy(),
     subagent_prompt_hook_prompt: self.subagent_prompt_hook_prompt,
+    post_tool_prompt_hook_admission: self.post_tool_prompt_hook_admission,
+    post_tool_prompt_hook_active: self.post_tool_prompt_hook_active,
+    post_tool_prompt_hook_generation: self.post_tool_prompt_hook_generation,
+    post_tool_prompt_hook_event_seq: self.post_tool_prompt_hook_event_seq,
+    post_tool_prompt_hook_contexts: self.post_tool_prompt_hook_contexts.copy(),
+    post_tool_prompt_hook_messages: self.post_tool_prompt_hook_messages.map(
+      detached,
+    ),
+    pending_subagent_post_tool_messages: self.pending_subagent_post_tool_messages.map(
+      detached,
+    ),
+    pending_subagent_post_tool_contexts: self.pending_subagent_post_tool_contexts.copy(),
+    subagent_prompt_hook_start_contexts: self.subagent_prompt_hook_start_contexts.copy(),
+    subagent_prompt_hook_post_tool_messages: self.subagent_prompt_hook_post_tool_messages.map(
+      detached,
+    ),
   }
 }
 
@@ -345,7 +361,7 @@ pub fn Engine::complete(
   result : Json,
 ) -> Result[Json, String] {
   let candidate = self.copy_state()
-  match candidate.complete_impl(effect_id, result, false) {
+  match candidate.complete_impl(effect_id, result, false, false) {
     Err(error) => Err(error)
     Ok(value) =>
       if candidate.within_capacity() {
@@ -373,7 +389,7 @@ pub fn Engine::complete_effect_with_stop_hook(
 ) -> Result[Json, String] {
   let id = effect_id.as_string()
   let candidate = self.copy_state()
-  match candidate.complete_impl(id, result, true) {
+  match candidate.complete_impl(id, result, true, false) {
     Err(error) => Err(error)
     Ok(_) => {
       let session_id = match self.effects.get(id) {
@@ -382,6 +398,31 @@ pub fn Engine::complete_effect_with_stop_hook(
       }
       Ok(self.settle_stop_candidate(candidate, session_id))
     }
+  }
+}
+
+///|
+/// Native-runtime tool settlement that defers committed PostToolUse contexts
+/// to the next-step UserPromptSubmit boundary.
+pub fn Engine::complete_effect_with_post_tool_prompt_hook(
+  self : Engine,
+  effect_id : EffectId,
+  result : Json,
+) -> Result[Json, String] {
+  let id = effect_id.as_string()
+  let candidate = self.copy_state()
+  match candidate.complete_impl(id, result, false, true) {
+    Err(error) => Err(error)
+    Ok(value) =>
+      if candidate.within_capacity() {
+        self.adopt(candidate)
+        Ok(value)
+      } else {
+        let effect = self.effects.get(id).unwrap()
+        let session = self.sessions.get(effect.session_id).unwrap()
+        self.terminate(session, Failed, "session_capacity", CAPACITY_ERROR)
+        Ok(session.json())
+      }
   }
 }
 
