@@ -1,9 +1,9 @@
 # 0004: 移植元の不備と MoonBit 移植負債を記録し、後続の独立した改修でまとめて整理する
 
 Status: open
-Model: unknown
+Model: gpt-6-luna
 Created: 2026-10-10
-Updated: 2026-10-10
+Updated: 2026-10-11
 Branch: docs/20261010-porting-debt-register
 Upstream baseline: [DeepSeek Harness 5badb15009ae1756c3afe0ae0cef1faafc290ccc](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc)
 Port snapshot: [dsh.mbt 82b8a985341105bb0197e3dc8c6b4f9f34b53500](https://github.com/f4ah6o/dsh.mbt/tree/82b8a985341105bb0197e3dc8c6b4f9f34b53500)
@@ -203,13 +203,55 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 - 是正 / 完了条件: owner / control cancellation を hook result より先に判定し、MCP と remote durable receipt の理由を揃える。未 admission、process cleanup、receipt replay、次の送信を回帰検証する。
 - 修正 / 検証: [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で MCP / remote settlement の cancellation を hook result より先に判定。remote explicit session_cancel の rejected receipt / replay / 未 admission / process cleanup / fresh send の regression も追加。 [最終 CI](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573) の固定 head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/commit/982f2b6f4b5fd364ebf0500a032bb210b753db9a) で native-without-node 329 / 329、portable 各 163 / 163、native runtime 156 / 156 PASS。local behavioral run は ENOSPC で完走していない。修正先は [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)。
 
+### Stop command hooks の初回移植
+
+機能の最初の reviewable snapshot は [`8250c9e`](https://github.com/f4ah6o/dsh.mbt/tree/8250c9edd512009805f317b2943bea891083deeb)。この記録は追加 runtime integration / docs と最終 CI の前の固定 source 照合であり、機能全体の最終受入ではない。
+
+- **DEBT-001**: [`engine/types.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/engine/types.mbt#L99-L105) の `Event.data` は引き続き汎用 `Json`。Stop pending / continuation の durable event も [`engine/stop_hooks.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/engine/stop_hooks.mbt#L33-L45) で `object(...)` として組み立てる。既存 wire / replay codec を拡張した構造上の根拠であり、payload mismatch の実害は確認していない。
+- **DEBT-003**: [`engine/stop_hooks.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/engine/stop_hooks.mbt#L111-L147) の公開 engine 操作は `Result[Json, String]` を返し、内部の `Invalid(message)` を文字列 error に変換する。native Stop の成功 outcome は [`runtime/hooks_codec.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/hooks_codec.mbt#L262-L319) の `NativeStopHookResult` に分ける。文字列エラー境界を維持した証拠であり、分類の不足や挙動不具合を確認したものではない。
+- **DEBT-004**: [`engine/transaction.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/engine/transaction.mbt#L87-L95) の `Session::copy_state` は Stop pending、event sequence、staged continuation、admission、context count / length を個別に複製する。Stop hook の pending / continuation / restore fixture は engine Stop suite 3 / 3 PASS。copy omission や性能劣化を確認したものではない。
+- **DEBT-006**: [`runtime/hooks_runtime.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/hooks_runtime.mbt#L212-L229) の Stop stdin は共通 payload と同じく空の `transcript_path` を渡す。Claude Code transcript 互換 artifact を提供しない原典制約を継続している。
+- **DEBT-008 / 018**: Stop output の適用範囲と upstream の制約は次項を参照。native adapter 固有の decoder 制限は原典 bridge の制限と分けて記録する。
+
+この snapshot で報告された core native check (`engine/api/runtime`) は PASS、hotpath warning は 3 件。engine `*Stop*` は 3 / 3、runtime `*Stop*` は 2 / 2（codec と ACP mapping）、diff check は clean。review copy の engine 87 / 87 は既存 80 + feature 5 + reviewer 追加 2 件の内訳であり、PR production suite の結果として扱わない。これらは機能担当・独立 reviewer から受けた個別結果で、最終 CI は未実行。
+
+#### DEBT-018: Stop hook の payload と output control に制約がある
+
+- 起点・種類・優先度・状態: `UPSTREAM, PORT / compatibility, design, docs`、優先度未査定、`observed`。原典仕様上の未対応と native adapter の対応範囲を記録する。確認済み動作不具合ではない。
+- upstream baseline / path: [`5badb150` の hooks-claude-code/src/index.ts](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts#L273-L283) の Stop listener / loop guard、同ファイルの [`base` / `stopPayload`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts#L327-L352)、[README の Stop / common fields limitations](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/README.md#L179-L180)。共通 merge は `continue:false` を `stop` として記録する ([`merge.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hook-protocol/src/merge.ts#L62-L99))。
+- port baseline / path: [`8250c9e` の Stop payload](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/hooks_runtime.mbt#L212-L229)、[native Stop output decoder](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/hooks_codec.mbt#L262-L319)、[native Stop settlement](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/runtime.mbt#L2900-L2923)、[generic per-turn step bound](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/engine/stop_hooks.mbt#L214-L220)。空 `transcript_path` は DEBT-006 に分類する。
+- 観測事実 / 確認: upstream Stop payload は `stop_hook_active: false` 固定で、`last_assistant_message` / `background_tasks` / `session_crons` を省く。原典 Stop listener は `decision === deny` の reason を steering にして次の step を促すが、`continue:false` による `merged.stop` には run-level halt mechanism が必要という TODO があり、`stopReason` / `additionalContext` / `systemMessages` も listener から適用しない。README は専用 consecutive-block cap 未実装と記し、無条件 blocking hook は self-limit がなければ毎 step force-continue と説明する。port payload は同じ固定値と欠落フィールドを持つ。native Stop decoder は `decision` / `reason` と matching `hookSpecificOutput` の permission decision / reason を読み、`continue` / `stopReason` / `systemMessage` / Stop `additionalContext` を outcome に渡さない。`ask` は rank 2 に集約されるが、native Stop dispatcher は rank 3 の block のみ continuation にする。これらは固定 source の静的照合であり、当該 control に依存する hook の個別実行不具合を再現したものではない。
+- 原典制約と native adapter 制約: 上記 payload 欠落、固定 `stop_hook_active`、専用 loop cap / run-level halt の TODO は upstream に明記された制約。出力項目のうち native adapter が decode しない範囲は port の bridge boundary として別に追跡する。port は連続 Stop continuation を既存 `max_steps` で終了させるが、これは Stop 専用 cap の実装ではない。
+- 影響・互換性判断: loop state や assistant 最終文を参照する hook は必要な入力を得られない。Stop output control に依存する既存 hook は停止、追加 context、system message の反映を期待できない。既知の source 制約と adapter scope を維持する方針で記録し、特定の hook 障害・移植実装 bug とは断定しない。
+- 後続改修 / 完了条件: payload source、run-level halt、Stop 固有の連続 block cap、output controls を独立に設計する。必要な場合は cap 到達、複数 hook の優先順位、cancel、再開、provider 未 dispatch、durable reopen / no replay を検証する。未対応を維持する判断は公開契約と理由を記録して `wontfix` とする。
+- 修正 PR / close 判定: 未着手。DEBT-006 / 008 と合わせ、確認済み動作不具合とは別に open で追跡する。
+
+#### DEBT-019: Stop hook 内の child task 登録が owner task を置き換える
+
+- 起点・種類・優先度・状態: `PORT / bug, correctness`、優先度高（独立 review の major finding）、`reproduced`（scheduler isolated probe）。full runtime で provider I/O が残るところまでは再現していない。
+- upstream baseline / path: N/A。native scheduler と Stop integration の移植固有経路。
+- port baseline / path: [`8250c9e` の NativeJobControl](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/scheduler.mbt#L13-L19)、[begin](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/scheduler.mbt#L54-L103)、[await_idle](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/scheduler.mbt#L122-L163)、[attach_task と cancel_through](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/scheduler.mbt#L167-L208)、[outer effects task registration](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/runtime.mbt#L2608-L2649)、[Stop child registration](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/runtime.mbt#L2747-L2763)。同じ `control` に対する UserPromptSubmit child 登録も [`runtime/runtime.mbt`](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/runtime.mbt#L563-L585) にある。
+- 静的経路: outer effects job が `control.task` に登録された後、Stop child が同じ slot を置き換える。cancel は `control.task` の child を cancel し、`await_idle` / `begin` はその登録済み task の終了だけを待つ。この経路では outer owner / 後続 effect の lifetime が child task より長い場合の待ち合わせが不足する。
+- 再現 / 影響: 独立 reviewer の isolated scheduler probe (`/private/tmp/dsh-stop-head-8250c9e.emgyHY/runtime/review_stop_scheduler_wbtest.mbt`) で、outer task → 完了済み Stop child の attach → `cancel_through` → `begin` の順に実行し、`await_idle` が child のみを待って old outer task が未 cancel / 未終了のまま新しい control を発行することを再現。review copy の engine suite 87 / 87 は既存 80 + feature 5 + reviewer 追加 2 件の結果であり、PR production suite ではない。これは scheduler isolated reproduction で、Stop hook 後の second provider I/O と `session_cancel` を含む full-runtime reproduction ではない。外部 provider I/O が継続するという影響は固定 source からの推論として分ける。
+- 是正 / 完了条件: owner job の lifetime を child hook の lifetime から独立して保持・drain する。Stop hook の continuation が second provider I/O を開始した後に cancel し、全 child と provider I/O が settle するまで `await_idle` / new send が再 admission しないこと、slot が早期解放されないことを full-runtime fixture で確認する。
+- 修正 / 検証: 修正 commit と full-runtime reproduction の結果は未報告。独立 scheduler reproduction は上記範囲に限る。
+
+#### DEBT-020: Stop continuation 拒否の prefix が上限検証を超える
+
+- 起点・種類・優先度・状態: `PORT / bug, correctness`、優先度高（独立 review の major finding）、`reproduced`。upstream の不備ではない。
+- upstream baseline / path: N/A。既存の reason cap helper が新しい Stop continuation close 経路で表面化した移植固有の不整合。
+- port baseline / path: [`native_hook_limit_reason`](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/hooks_codec.mbt#L74-L85)、[`UserPromptSubmit` exit-2 reason decode](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/hooks_codec.mbt#L321-L339)、[Stop continuation denial settlement](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/runtime/runtime.mbt#L2947-L2969)、[`block_stop_continuation`](https://github.com/f4ah6o/dsh.mbt/blob/8250c9edd512009805f317b2943bea891083deeb/engine/stop_hooks.mbt#L257-L291)。
+- 再現 / 影響: native helper は理由を最大 4096 code points に切り詰める。16 KiB stream 上限内の exit-2 stderr に `😀` を 4096 個含めると、Stop hook の追加 prefix を含む denial error は engine の 8192 上限を超える。独立レビューの isolated engine probe で `block_stop_continuation` が `Err` を返し、状態が `Running` のまま `pending_stop_hook` が `Some`、effect なしとなることを再現した。full runtime command / receipt の uncertain 状態や scheduler slot の影響は実行再現しておらず、source 経路からの推論と区別する。
+- 是正 / 完了条件: prefix を含めた UTF-16 unit 上限を admission 前に検証するか、長い理由で pending boundary を必ず terminal に settle する。4096 ASCII / astral Unicode 文字、最大 stream、prefix 込み上限の前後で blocked turn の終了と no effect を検証する。
+- 修正 / 検証: 修正 commit の結果は未報告。別の oversized-context atomicity probe は snapshot unchanged を確認しており、この項目の再現とは別の成功結果として維持する。
+
 ### UserPromptSubmit increment の最終確認
 
 - 修正先: [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)、version 0.1.13、固定 source head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/tree/982f2b6f4b5fd364ebf0500a032bb210b753db9a)。実装は `gpt-6-luna / max`、独立レビューは `gpt-6.1-sol / xhigh`。
 - [CI run 38043639573](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639573): native-without-node 329 / 329、portable Wasm / Wasm GC / JS / native 各 163 / 163、browser/app 17 / 17、native runtime 156 / 156、web 7 / 7 PASS。ACP stdio、checkout 外の CLI source install / embedded assets、strict-CSP real Chromium smoke、checkpoint / approval / tool / context / durable reload demo も PASS。
 - [配布物検証 run 38043639550](https://github.com/f4ah6o/dsh.mbt/actions/runs/38043639550): macOS arm64 / Linux x86_64 / Linux arm64 の build / package smoke と macOS app extraction validation が PASS。PR 上の publish job は skipped。
 - Local format / native typecheck / diff check / browser asset generation は PASS、project-owned warnings 0。local behavioral test は ENOSPC で完走できず、hosted results と区別する。
-- DEBT-007 と今回の DEBT-009–017 は修正済み。非不具合の DEBT-001–006 / 008 は維持する改善候補として残す。この docs-only PR と full upstream parity issue は open を維持し、後続 increment の記録を積む。
+- DEBT-007 と今回の DEBT-009–017 は修正済み。非不具合の DEBT-001–006 / 008 / 018 は維持する改善候補として残す。DEBT-019 は scheduler isolated probe で再現したが full-runtime effect probe は未実施。DEBT-020 は isolated engine probe で再現し、修正・full-runtime 再確認待ち。この docs-only PR と full upstream parity issue は open を維持し、後続 increment の記録を積む。
 
 ### 後続追記テンプレート
 
@@ -260,7 +302,8 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 - 2026-10-10: 二回目の CI で判明した fixture の prompt 判定誤りを DEBT-016、explicit cancellation の理由分類を DEBT-017 として登録。実装とテストの不具合を区別し、公開前に修正する。
 
 - 2026-10-10: 最終 source head `982f2b6` の 3 パス独立レビューと全 hosted gates の成功を記録。DEBT-009–017 を fixed に更新し、初回の再現・静的観測・証拠訂正の履歴は保持。
+- 2026-10-11: Stop command hooks の固定 snapshot `8250c9e` に対し、Json event / String error / state copy の既存根拠を追記。原典制約と native adapter scope を DEBT-018 に分け、scheduler の isolated reproduction を DEBT-019、engine isolated reproduction を DEBT-020 に登録。最終 CI と full-runtime probes は未完了として明記。
 
 ## 注記
 
-- 2026-10-10: 正確な編集モデル識別子を取得できないため、今回の文書編集の `Model` は `unknown` と記録する。機能実装とレビューの指定モデルは各 PR の検証記録に残す。
+- 2026-10-10: 以前の文書編集では正確な実行モデル識別子を確認できず `Model: unknown` と記録した。2026-10-11 の編集では指定された `gpt-6-luna` を記録する。
