@@ -25,6 +25,8 @@ priv struct NativeHooks {
   post_tool : Array[NativeHookGroup]
   user_prompt_submit : Array[NativeHookGroup]
   stop : Array[NativeHookGroup]
+  subagent_start : Array[NativeHookGroup]
+  subagent_stop : Array[NativeHookGroup]
   project_dir : String
 }
 
@@ -191,6 +193,8 @@ fn native_hook_parse_config(
     Array[NativeHookGroup],
     Array[NativeHookGroup],
     Array[NativeHookGroup],
+    Array[NativeHookGroup],
+    Array[NativeHookGroup],
   ),
   String,
 ] {
@@ -214,7 +218,10 @@ fn native_hook_parse_config(
   match
     native_hook_exact_fields(
       hook_map,
-      ["PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop"],
+      [
+        "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SubagentStart",
+        "SubagentStop",
+      ],
       "hook event",
     ) {
     Ok(_) => ()
@@ -242,13 +249,29 @@ fn native_hook_parse_config(
     Ok(value) => value
     Err(error) => return Err(error)
   }
+  let subagent_start = match
+    native_hook_parse_groups(hook_map.get("SubagentStart"), "SubagentStart") {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let subagent_stop = match
+    native_hook_parse_groups(hook_map.get("SubagentStop"), "SubagentStop") {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
   if pre_tool.is_empty() &&
     post_tool.is_empty() &&
     user_prompt_submit.is_empty() &&
-    stop.is_empty() {
+    stop.is_empty() &&
+    subagent_start.is_empty() &&
+    subagent_stop.is_empty() {
     return Err("hooks config must define at least one supported command hook")
   }
-  Ok((pre_tool, post_tool, user_prompt_submit, stop))
+  Ok(
+    (
+      pre_tool, post_tool, user_prompt_submit, stop, subagent_start, subagent_stop,
+    ),
+  )
 }
 
 ///|
@@ -300,6 +323,8 @@ async fn NativeHooks::load(
         post_tool: [],
         user_prompt_submit: [],
         stop: [],
+        subagent_start: [],
+        subagent_stop: [],
         project_dir,
       })
     Some(path) => {
@@ -311,8 +336,25 @@ async fn NativeHooks::load(
         _ => return Err("hooks config is not valid JSON")
       }
       match native_hook_parse_config(document) {
-        Ok((pre_tool, post_tool, user_prompt_submit, stop)) =>
-          Ok({ pre_tool, post_tool, user_prompt_submit, stop, project_dir, })
+        Ok(
+          (
+            pre_tool,
+            post_tool,
+            user_prompt_submit,
+            stop,
+            subagent_start,
+            subagent_stop,
+          )
+        ) =>
+          Ok({
+            pre_tool,
+            post_tool,
+            user_prompt_submit,
+            stop,
+            subagent_start,
+            subagent_stop,
+            project_dir,
+          })
         Err(error) => Err(error)
       }
     }

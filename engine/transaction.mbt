@@ -89,9 +89,17 @@ fn Session::copy_state(self : Session) -> Session {
     stop_hook_pending: self.stop_hook_pending,
     stop_hook_event_seq: self.stop_hook_event_seq,
     stop_continuation_text: self.stop_continuation_text,
+    stop_continuation_hook_contexts: self.stop_continuation_hook_contexts.copy(),
     stop_continuation_admitted: self.stop_continuation_admitted,
     stop_prompt_context_count: self.stop_prompt_context_count,
     stop_prompt_context_length: self.stop_prompt_context_length,
+    pending_hook_contexts: self.pending_hook_contexts.copy(),
+    subagent_prompt_hook_admission: self.subagent_prompt_hook_admission,
+    subagent_prompt_hook_active: self.subagent_prompt_hook_active,
+    subagent_prompt_hook_initial: self.subagent_prompt_hook_initial,
+    subagent_prompt_hook_generation: self.subagent_prompt_hook_generation,
+    subagent_prompt_hook_contexts: self.subagent_prompt_hook_contexts.copy(),
+    subagent_prompt_hook_prompt: self.subagent_prompt_hook_prompt,
   }
 }
 
@@ -207,6 +215,70 @@ pub fn Engine::invoke(
   match EngineCommand::from_json(operation, input) {
     Err(error) => Err(error)
     Ok(command) => self.apply(command)
+  }
+}
+
+///|
+fn engine_hook_context_utf16_units(value : String) -> Int {
+  let mut units = 0
+  for character in value {
+    units += if character.to_int() > 0xFFFF { 2 } else { 1 }
+  }
+  units
+}
+
+///|
+/// Queue ephemeral SubagentStart context for the child's next provider step.
+/// An in-flight request is immutable; queued context becomes a source-tagged
+/// user message when the engine admits its next step. This is intentionally an
+/// Engine-only seam and is not an operation in the durable command protocol.
+pub fn Engine::inject_hook_contexts(
+  self : Engine,
+  session_id : String,
+  contexts : Array[String],
+) -> Result[Bool, String] {
+  if contexts.is_empty() {
+    return Ok(true)
+  }
+  let candidate = self.copy_state()
+  let changed = try {
+    let session = candidate.lookup(session_id)
+    if session.imported {
+      raise Invalid("Imported Session v4 histories cannot receive hook context")
+    }
+    if session.status != Idle && session.status != Running {
+      return Ok(false)
+    }
+    let held_contexts = session.pending_hook_contexts.copy()
+    for context in session.subagent_prompt_hook_contexts {
+      held_contexts.push(context)
+    }
+    for context in session.stop_continuation_hook_contexts {
+      held_contexts.push(context)
+    }
+    let all_contexts = held_contexts.copy()
+    for context in contexts {
+      all_contexts.push(context)
+    }
+    ignore(engine_validate_hook_contexts(all_contexts))
+    for context in contexts {
+      session.pending_hook_contexts.push(context)
+    }
+    Ok(true)
+  } catch {
+    Invalid(message) => Err(message)
+  }
+  match changed {
+    Err(message) => Err(message)
+    Ok(accepted) =>
+      if !accepted {
+        Ok(false)
+      } else if candidate.within_capacity() {
+        self.adopt(candidate)
+        Ok(true)
+      } else {
+        Err(CAPACITY_ERROR)
+      }
   }
 }
 

@@ -980,6 +980,13 @@ async test "ACP approved native turns preserve approval and isolate close across
     // Prompts are rejected while that placeholder is installed, and close can
     // cancel the in-flight resume without losing the persisted session.
     reopened.gate.acquire()
+    let gate_held = Ref(true)
+    group.add_defer(() => {
+      if gate_held.val {
+        reopened.gate.release()
+        gate_held.val = false
+      }
+    })
     let resume_a_result : Ref[Result[Json, NativeAcpRpcError]?] = Ref(None)
     let resume_a_task = group.spawn(async fn() {
       resume_a_result.val = Some(
@@ -990,8 +997,19 @@ async test "ACP approved native turns preserve approval and isolate close across
         }),
       )
     })
-    @async.sleep(10)
-    assert_true(resumed_service.sessions.get(session_a).unwrap().resuming)
+    let mut resume_polls = 0
+    let mut resume_visible = false
+    while !resume_visible && resume_a_result.val is None && resume_polls < 200 {
+      @async.sleep(5)
+      resume_visible = match resumed_service.sessions.get(session_a) {
+        Some(session) => session.resuming
+        None => false
+      }
+      resume_polls += 1
+    }
+    if !resume_visible {
+      fail("ACP resume placeholder was not visible before completion")
+    }
     assert_true(
       resumed_service.prepare_prompt({
         "sessionId": session_a,
@@ -1005,9 +1023,21 @@ async test "ACP approved native turns preserve approval and isolate close across
         resumed_service.close_session({ "sessionId": session_a }),
       )
     })
-    @async.sleep(10)
-    assert_true(resumed_service.sessions.get(session_a).unwrap().closing)
+    let mut close_polls = 0
+    let mut close_visible = false
+    while !close_visible && close_a_result.val is None && close_polls < 200 {
+      @async.sleep(5)
+      close_visible = match resumed_service.sessions.get(session_a) {
+        Some(session) => session.closing
+        None => false
+      }
+      close_polls += 1
+    }
+    if !close_visible {
+      fail("ACP closing placeholder was not visible before completion")
+    }
     reopened.gate.release()
+    gate_held.val = false
     let mut resume_polls = 0
     while (resume_a_result.val is None || close_a_result.val is None) &&
           resume_polls < 200 {

@@ -33,15 +33,16 @@ fn native_hook_add_context(
   if value.is_empty() {
     return Ok(())
   }
-  if value.length() > NATIVE_HOOK_CONTEXT_ITEM_LIMIT {
-    return Err("hook additionalContext exceeds the 4096-character limit")
+  let value_units = native_provider_utf16_units(value)
+  if value_units > NATIVE_HOOK_CONTEXT_ITEM_LIMIT {
+    return Err("hook additionalContext exceeds the 4096-UTF-16-code-unit limit")
   }
   if contexts.length() >= NATIVE_HOOK_CONTEXT_COUNT_LIMIT {
     return Err("hook additionalContext exceeds the 32-item limit")
   }
-  let mut total_length = value.length()
+  let mut total_length = value_units
   for context in contexts {
-    total_length += context.length()
+    total_length += native_provider_utf16_units(context)
   }
   if total_length > NATIVE_HOOK_CONTEXT_TOTAL_LENGTH_LIMIT {
     return Err(
@@ -320,6 +321,40 @@ fn native_hook_stop_result_decision(
     _ => ()
   }
   { rank, reason, }
+}
+
+///|
+/// The pinned SubagentStart bridge only consumes matching-event additionalContext.
+/// Decisions and all other output fields are observationally ignored by the
+/// lifecycle listener, so malformed output remains a neutral empty result.
+fn native_hook_subagent_start_context(
+  capture : NativeHookCapture,
+) -> Array[String] {
+  if capture.truncated || capture.exit_code != 0 {
+    return []
+  }
+  let stdout = capture.stdout.trim().to_owned()
+  if !stdout.has_prefix("{") {
+    return []
+  }
+  let document = @json.parse(stdout) catch { _ => return [] }
+  let fields = match native_hook_object(document) {
+    Some(value) => value
+    None => return []
+  }
+  let specific = match fields.get("hookSpecificOutput") {
+    Some(Json::Object(value)) => value
+    _ => return []
+  }
+  if specific.get("hookEventName") != Some(Json::string("SubagentStart")) {
+    return []
+  }
+  match specific.get("additionalContext") {
+    Some(Json::String(value)) if !value.is_empty() &&
+      native_provider_utf16_units(value) <= NATIVE_HOOK_CONTEXT_ITEM_LIMIT =>
+      [value]
+    _ => []
+  }
 }
 
 ///|

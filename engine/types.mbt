@@ -23,6 +23,19 @@ pub struct NativeStopHookCheckpoint {
 }
 
 ///|
+/// Opaque checkpoint for admitting a native child prompt and its claimed
+/// SubagentStart inbox batch through UserPromptSubmit.
+pub struct NativeSubagentPromptHookCheckpoint {
+  priv session_id : String
+  priv turn_id : Int
+  priv step : Int
+  priv generation : Int
+  priv initial : Bool
+  priv prompt : String
+  priv contexts : Array[String]
+}
+
+///|
 priv enum Status {
   Idle
   Running
@@ -144,9 +157,21 @@ priv struct Session {
   mut stop_hook_event_seq : Int?
   /// The next-step message is staged before UserPromptSubmit runs.
   mut stop_continuation_text : String?
+  /// Start inbox claimed together with a staged Stop continuation.
+  mut stop_continuation_hook_contexts : Array[String]
   mut stop_continuation_admitted : Bool
   mut stop_prompt_context_count : Int
   mut stop_prompt_context_length : Int
+  /// Ephemeral SubagentStart context waiting for the next provider request.
+  pending_hook_contexts : Array[String]
+  /// The child runtime opts in so Start input pauses at the next pre-step hook.
+  mut subagent_prompt_hook_admission : Bool
+  /// One claimed batch is immutable while its UserPromptSubmit command runs.
+  mut subagent_prompt_hook_active : Bool
+  mut subagent_prompt_hook_initial : Bool
+  mut subagent_prompt_hook_generation : Int
+  mut subagent_prompt_hook_contexts : Array[String]
+  mut subagent_prompt_hook_prompt : String?
 }
 
 ///|
@@ -249,8 +274,16 @@ fn fresh_session(
     stop_hook_pending: false,
     stop_hook_event_seq: None,
     stop_continuation_text: None,
+    stop_continuation_hook_contexts: [],
     stop_continuation_admitted: false,
     stop_prompt_context_count: 0,
     stop_prompt_context_length: 0,
+    pending_hook_contexts: [],
+    subagent_prompt_hook_admission: false,
+    subagent_prompt_hook_active: false,
+    subagent_prompt_hook_initial: false,
+    subagent_prompt_hook_generation: 0,
+    subagent_prompt_hook_contexts: [],
+    subagent_prompt_hook_prompt: None,
   }
 }

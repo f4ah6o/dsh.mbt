@@ -149,10 +149,13 @@ inside the parent tool's `ok: false` result; it does not introduce a distinct
 child refusal status. Configured Stop hooks run after an accepted terminal
 child provider result and use the child's own Stop checkpoint. A Stop
 denial passes through `UserPromptSubmit` before the next child provider request.
-The initial prompt, hook work, provider retries, tools, and continuations share
-the child's 90-second deadline, and parent cancellation still owns and drains
-nested hook processes. Child state remains ephemeral and the parent tool result
-is the no-replay boundary.
+The initial prompt, UserPromptSubmit work, provider retries, tools, and
+continuations share the child's 90-second drive deadline. SubagentStart runs
+alongside the driver. SubagentStop has a 1-second aggregate command-execution
+grace after the drive settles, plus process-group cleanup and drain time. Parent
+cancellation owns and drains nested hook processes.
+Child state remains ephemeral and the parent tool result is the no-replay
+boundary.
 
 The settled JSON result is stored in the parent session's ordinary tool result.
 Reopen a store containing subagent calls with `--enable-subagents`; the engine
@@ -555,8 +558,8 @@ commands themselves run with the selected workspace as their working
 directory.
 
 The config may contain a top-level `hooks` object, or put these events at the
-root. Only command-based `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, and
-`Stop` groups are supported:
+root. Only command-based `PreToolUse`, `PostToolUse`, `UserPromptSubmit`,
+`Stop`, `SubagentStart`, and `SubagentStop` groups are supported:
 
 ```json
 {
@@ -587,6 +590,18 @@ root. Only command-based `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, and
     "Stop": [
       {
         "hooks": [{ "command": "/absolute/path/to/check-stop" }]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "general-purpose",
+        "hooks": [{ "command": "/absolute/path/to/record-child-start" }]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "general-purpose",
+        "hooks": [{ "command": "/absolute/path/to/record-child-stop" }]
       }
     ]
   }
@@ -668,6 +683,70 @@ output is neutral for Stop.
 The Stop listener consumes the merged decision and denial reason only;
 additional context, `continue: false`, `stopReason`, and `updatedInput`
 do not control the run in the pinned bridge and are not applied here.
+
+`SubagentStart` and `SubagentStop` run for a child after its session has been
+created. Both use the literal `general-purpose` matcher subject, matching the
+pinned bridge's generic subagent type; an exact `general-purpose` matcher or
+`*` matches, while a matcher for a specific agent kind does not. Commands run
+sequentially in configured group order. Their payload contains exactly
+`session_id`, an empty `transcript_path`, canonical workspace `cwd`,
+`hook_event_name`, `agent_id`, and `agent_type: "general-purpose"`;
+`SubagentStop` also has `stop_hook_active: false`.
+
+`SubagentStart` runs as a sibling of the child driver, so it does not delay the
+initial provider request or reject the child. Only a successful command's
+matching `hookSpecificOutput.additionalContext` is used. Top-level decisions,
+permission decisions, malformed output, mismatched events, nonzero exits, and
+truncated output are ignored for lifecycle control. At each child input
+boundary, native claims the currently queued Start batch and runs
+`UserPromptSubmit` before the next provider request. On the initial boundary,
+the hook sees the Start context and original child prompt; a later Start batch
+is checked as the next-step input; a Stop continuation claims the current
+Start batch together with the Stop reason. Hook input concatenates text without
+adding separators. On acceptance, initial history order is Start context,
+original prompt, then `UserPromptSubmit` additional context; late-batch order
+is Start context then prompt-hook context; Stop-continuation order is claimed
+Start context, Stop reason, then prompt-hook context. If a Start callback
+finishes while `UserPromptSubmit` is running, its context stays queued for a
+later step and is admitted through the prompt hook at that boundary. Denial or
+failure of a late-batch admission preserves the previously committed assistant
+answer and does not append rejected context. The initial prompt is still
+subject to the existing three-step and child deadline limits. A callback that
+finishes after the child becomes terminal cannot add context.
+
+The direct-admission fallback counts initial Start source-message text once
+toward the shared 32-item / 16,384 UTF-16-unit hook-context budget. The native
+bridge invokes one Start callback per child; Engine callers may queue later
+batches, which use the remaining budget on this fallback path. With
+`UserPromptSubmit` checkpoint admission enabled, each currently claimed batch
+is validated against the same per-batch bounds instead of cumulative turn
+statistics. In the direct-admission fallback, queued text that exceeds the
+shared budget is dropped; the next step still advances and its snapshot
+replays from the ordinary `step/start` event after Stop settlement.
+
+This admission path covers Start batches combined with the initial prompt,
+Start-only input batches at later steps, and Start batches combined with a Stop
+continuation. The upstream bridge also runs `UserPromptSubmit` for any
+nonempty next-step inbox, including `PostToolUse` additional context; native
+PostToolUse context keeps its existing direct Engine admission and does not
+pass through `UserPromptSubmit` in this increment. Ordinary tool-result-only
+follow-up steps have an empty inbox and skip the upstream command hook too.
+
+`SubagentStop` is observational: all output, including deny decisions and
+additional context, is discarded and it never changes the child's result or
+forces a continuation. It runs once when a created child settles, including
+provider failure, prompt denial, timeout, and parent cancellation. Start tasks
+are cancelled and drained when the native child lifecycle ends; the pinned
+bridge instead keeps detached lifecycle hook tasks until bridge disposal.
+This child-scoped lifetime can cancel a delayed Start hook before its context
+is applied. Native Stop cleanup is protected from cancellation and has one
+aggregate 1-second command-execution grace across all configured commands. It
+runs after the child drive outcome, so it can truncate a command with a longer
+configured timeout and delay the parent tool result. Cancellation, process-group
+cleanup, reaping, and output draining can add wall-clock time beyond that grace,
+but Stop cannot change the child outcome. This is a native lifecycle bound, not
+an upstream timeout contract. No lifecycle hook runs when child validation,
+provider binding, or session creation fails before publication.
 
 A Stop denial steers a source-tagged user message into the same turn. Before a
 provider request for that continuation, native runs `UserPromptSubmit` with the
@@ -770,6 +849,17 @@ Stores containing Stop boundary or continuation events require dsh 0.1.14 or
 later. Do not rewrite any of these stores with an older reader. dsh 0.1.12
 continues to read context-free dsh 0.1.11 native stores; the engine replay
 tests cover the legacy completion shape without `additional_contexts`.
+Engine snapshots containing the additive `hook/subagent-start-context` event
+or `hook/stop-settled` event require dsh 0.1.16 or later. The former is a
+SubagentStart admission marker in a child Engine, and native subagent child
+snapshots are not persisted as root sessions. The latter is an empty-data
+boundary emitted when Stop completes without a staged continuation and queued
+hook input advances to the next step. It may appear in root Engine snapshots
+too. Replay clears only the completed Stop continuation state and preserves
+sticky max-token completion; a following Start marker must come after this
+boundary. If a snapshot ends here while prompt admission is unresolved,
+restore marks the work interrupted and does not replay the hook or provider
+effect. Do not reopen either event with an older reader.
 
 `--approve-call` and `--deny-call` act on a session that is already waiting for approval, for example one started from the browser or MCP carrier. Pass its current `approval_revision` and `pending_approval.call_id`; stale or mismatched decisions are rejected:
 

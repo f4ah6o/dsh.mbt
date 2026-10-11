@@ -436,6 +436,164 @@ test "UserPromptSubmit contexts are one source-tagged message after the prompt" 
 }
 
 ///|
+test "SubagentStart context queues before child start and invalid batches are atomic" {
+  let engine = Engine::new(test_tools())
+  let session_id = SessionId::new("queued-hook-context-session").unwrap()
+  ignore(
+    success(
+      engine.invoke("session_create", {
+        "id": Json::string(session_id.as_string()),
+        "title": Json::string("Queued hook context"),
+      }),
+    ),
+  )
+  let before = engine.snapshot()
+  assert_eq(
+    engine.inject_hook_contexts(session_id.as_string(), ["first context"]),
+    Ok(true),
+  )
+  assert_eq(engine.snapshot(), before)
+  let too_many = Array::make(32, "extra context")
+  assert_true(
+    engine.inject_hook_contexts(session_id.as_string(), too_many) is Err(_),
+  )
+  assert_true(
+    engine.inject_hook_contexts(session_id.as_string(), ["😀".repeat(2049)])
+    is Err(_),
+  )
+  assert_eq(engine.snapshot(), before)
+  let sent = success(
+    engine.invoke("session_send", {
+      "session_id": Json::string(session_id.as_string()),
+      "prompt": Json::string("child prompt"),
+    }),
+  )
+  let provider = engine.take_effects()[0]
+  let messages = array_value(
+    required_field(required_field(provider, "request"), "messages"),
+    "provider messages",
+    8,
+  )
+  assert_eq(messages.length(), 2)
+  assert_eq(required_string(messages[0], "content"), "child prompt")
+  assert_eq(
+    required_field(messages[1], "source"),
+    Json::object({ "kind": Json::string("hooks-claude-code") }),
+  )
+  assert_eq(
+    array_value(required_field(messages[1], "content"), "content", 8).map(block => {
+      required_string(block, "text")
+    }),
+    ["first context"],
+  )
+  assert_eq(
+    array_value(required_field(sent, "events"), "events", 16)
+    .filter(event => required_string(event, "type") == "user/message")
+    .length(),
+    2,
+  )
+}
+
+///|
+test "late SubagentStart context leaves the in-flight request unchanged and replays once" {
+  let (engine, provider) = started_engine()
+  let original_request = required_field(provider, "request")
+  assert_eq(
+    engine.inject_hook_contexts("test", ["late child context"]),
+    Ok(true),
+  )
+  assert_eq(required_field(provider, "request"), original_request)
+  assert_true(engine.take_effects().is_empty())
+  ignore(
+    success(engine.complete(id_of(provider), stop_response("first answer"))),
+  )
+  let follow_up = engine.take_effects()
+  assert_eq(follow_up.length(), 1)
+  let messages = array_value(
+    required_field(required_field(follow_up[0], "request"), "messages"),
+    "provider messages",
+    8,
+  )
+  assert_eq(messages.length(), 3)
+  assert_eq(required_string(messages[1], "content"), "first answer")
+  assert_eq(
+    required_field(messages[2], "source"),
+    Json::object({ "kind": Json::string("hooks-claude-code") }),
+  )
+  assert_eq(
+    array_value(required_field(messages[2], "content"), "content", 8).map(block => {
+      required_string(block, "text")
+    }),
+    ["late child context"],
+  )
+  let completed = success(
+    engine.complete(id_of(follow_up[0]), stop_response("final answer")),
+  )
+  assert_eq(get_status(completed), "completed")
+  let replayed = Engine::new(test_tools())
+  assert_eq(replayed.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session(replayed), completed)
+  assert_eq(replayed.take_effects().length(), 0)
+  assert_eq(engine.inject_hook_contexts("test", ["too late"]), Ok(false))
+}
+
+///|
+test "initial SubagentStart contexts count once against late admission limits" {
+  let engine = Engine::new(test_tools())
+  ignore(
+    success(
+      engine.invoke("session_create", {
+        "id": Json::string("hook-child"),
+        "title": Json::string("Context budget child"),
+      }),
+    ),
+  )
+  let initial_contexts = Array::make(16, "initial Start context")
+  assert_eq(
+    engine.inject_hook_contexts("hook-child", initial_contexts),
+    Ok(true),
+  )
+  let checkpoint = match
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", false) {
+    Ok(value) => value
+    Err(error) => abort(error)
+  }
+  ignore(success(engine.accept_subagent_prompt_hook(checkpoint, [])))
+  let first = engine.take_effects()[0]
+  assert_eq(
+    engine.inject_hook_contexts("hook-child", ["late context"]),
+    Ok(true),
+  )
+  ignore(success(engine.complete(id_of(first), stop_response("first answer"))))
+  let follow_up = engine.take_effects()
+  assert_eq(follow_up.length(), 1)
+  let messages = array_value(
+    required_field(required_field(follow_up[0], "request"), "messages"),
+    "provider messages",
+    32,
+  )
+  assert_true(
+    messages.any(message => {
+      required_string(message, "role") == "user" &&
+      subagent_hook_message_text(message) == "late context"
+    }),
+  )
+  assert_true(
+    messages.any(message => {
+      required_string(message, "role") == "assistant" &&
+      subagent_hook_message_text(message) == "first answer"
+    }),
+  )
+  let completed = success(
+    engine.complete(id_of(follow_up[0]), stop_response("final answer")),
+  )
+  assert_eq(get_status(completed), "completed")
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session_for(restored, "hook-child"), completed)
+}
+
+///|
 test "PostToolUse contexts stay structured after every result and reject forged restore" {
   let (engine, llm) = started_engine()
   ignore(

@@ -66,6 +66,10 @@ fn Engine::apply_command_impl(
           self.terminate(session, Cancelled, "cancelled", "Cancelled by user")
         } else if session.status == Idle {
           session.status = Cancelled
+          session.pending_hook_contexts.clear()
+          session.subagent_prompt_hook_contexts.clear()
+          session.clear_subagent_prompt_hook()
+          session.stop_continuation_hook_contexts.clear()
           session.append("session/cancelled", object([]))
         }
         session.json()
@@ -128,6 +132,9 @@ fn Engine::send_prompt(
       "Imported Session v4 histories are read-only and cannot be continued",
     )
   }
+  if session.subagent_prompt_hook_active {
+    raise Invalid("Subagent prompt hook checkpoint is active")
+  }
   if session.is_busy() {
     raise Invalid("Session is busy")
   }
@@ -151,6 +158,7 @@ fn Engine::send_prompt(
   session.stop_hook_pending = false
   session.stop_hook_event_seq = None
   session.stop_continuation_text = None
+  session.stop_continuation_hook_contexts.clear()
   session.stop_continuation_admitted = false
   session.stop_prompt_context_count = 0
   session.stop_prompt_context_length = 0
@@ -657,7 +665,79 @@ fn Engine::emit_effect(
 }
 
 ///|
-fn Engine::start_step(self : Engine, session : Session) -> Unit {
+fn Session::hook_context_admission_stats(self : Session) -> (Int, Int) {
+  let mut count = 0
+  let mut total_length = 0
+  for event in self.events {
+    if event.turn_id != self.turn_id {
+      continue
+    }
+    match event.kind {
+      UserMessage if event.step == 0 => {
+        let source_kind = match event.data {
+          Json::Object(data) =>
+            match data.get("source") {
+              Some(Json::Object(source)) =>
+                match source.get("kind") {
+                  Some(Json::String(value)) => Some(value)
+                  _ => None
+                }
+              _ => None
+            }
+          _ => None
+        }
+        if source_kind == Some("hooks-claude-code") {
+          match event.data {
+            Json::Object(data) =>
+              match data.get("content") {
+                Some(Json::Array(blocks)) =>
+                  for block in blocks {
+                    match block {
+                      Json::Object(fields) =>
+                        match fields.get("text") {
+                          Some(Json::String(value)) => {
+                            count += 1
+                            total_length += engine_hook_context_utf16_units(
+                              value,
+                            )
+                          }
+                          _ => ()
+                        }
+                      _ => ()
+                    }
+                  }
+                _ => ()
+              }
+            _ => ()
+          }
+        }
+      }
+      SubagentStartContext if event.step > 0 =>
+        match event.data {
+          Json::Object(data) => {
+            match data.get("context_count") {
+              Some(Json::Number(value, ..)) => count += value.to_int()
+              _ => ()
+            }
+            match data.get("context_length") {
+              Some(Json::Number(value, ..)) => total_length += value.to_int()
+              _ => ()
+            }
+          }
+          _ => ()
+        }
+      _ => ()
+    }
+  }
+  (count, total_length)
+}
+
+///|
+fn Engine::start_step(
+  self : Engine,
+  session : Session,
+  skip_pending_hook_contexts? : Bool = false,
+) -> Unit {
   if session.step >= session.max_steps {
     self.terminate(session, Failed, "max_steps", "Maximum model steps reached")
     return
@@ -670,6 +750,46 @@ fn Engine::start_step(self : Engine, session : Session) -> Unit {
       "Effect identifier limit reached",
     )
     return
+  }
+  if !skip_pending_hook_contexts &&
+    session.subagent_prompt_hook_admission &&
+    !session.pending_hook_contexts.is_empty() {
+    session.subagent_prompt_hook_active = true
+    session.subagent_prompt_hook_initial = false
+    session.subagent_prompt_hook_generation += 1
+    session.subagent_prompt_hook_contexts = session.pending_hook_contexts.copy()
+    session.pending_hook_contexts.clear()
+    session.subagent_prompt_hook_prompt = None
+    return
+  }
+  if !skip_pending_hook_contexts && !session.pending_hook_contexts.is_empty() {
+    let (initial_context_count, initial_context_length) = session.hook_context_admission_stats()
+    let mut context_count = initial_context_count
+    let mut context_length = initial_context_length
+    let contexts : Array[String] = []
+    let mut added_length = 0
+    for context in session.pending_hook_contexts {
+      let context_units = engine_hook_context_utf16_units(context)
+      if context_count < 32 && context_length + context_units <= 16384 {
+        contexts.push(context)
+        context_count += 1
+        context_length += context_units
+        added_length += context_units
+      }
+    }
+    session.pending_hook_contexts.clear()
+    if !contexts.is_empty() {
+      if session.step > 0 {
+        session.append(
+          "hook/subagent-start-context",
+          object([
+            ("context_count", integer(contexts.length())),
+            ("context_length", integer(added_length)),
+          ]),
+        )
+      }
+      session.append("user/message", hook_context_message(contexts))
+    }
   }
   session.step += 1
   session.open_step = true
@@ -771,6 +891,12 @@ fn Engine::terminate(
   self.retire_effect(session)
   self.retire_tool_effects(session)
   session.pending_retry_id = None
+  session.pending_hook_contexts.clear()
+  session.subagent_prompt_hook_contexts.clear()
+  session.subagent_prompt_hook_active = false
+  session.subagent_prompt_hook_initial = false
+  session.subagent_prompt_hook_prompt = None
+  session.stop_continuation_hook_contexts.clear()
   session.approval = None
   while session.cursor < session.calls.length() {
     let call = session.calls[session.cursor]
@@ -950,7 +1076,16 @@ fn Engine::complete_impl(
             session.calls.push(call)
           }
           if completion.finish_reason == "length" {
-            if defer_stop_hook && completion.calls.is_empty() {
+            if completion.calls.is_empty() &&
+              !session.pending_hook_contexts.is_empty() {
+              session.sticky_max_tokens = true
+              session.append(
+                "step/end",
+                object([("reason", Json::string("max_tokens"))]),
+              )
+              session.open_step = false
+              self.start_step(session)
+            } else if defer_stop_hook && completion.calls.is_empty() {
               session.append(
                 "step/end",
                 object([("reason", Json::string("max_tokens"))]),
@@ -971,8 +1106,23 @@ fn Engine::complete_impl(
               object([("reason", Json::string("stop"))]),
             )
             session.open_step = false
-            if defer_stop_hook {
-              session.mark_stop_hook_pending("completed")
+            if !session.pending_hook_contexts.is_empty() {
+              self.start_step(session)
+            } else if defer_stop_hook {
+              session.mark_stop_hook_pending(
+                if session.sticky_max_tokens {
+                  "max_tokens"
+                } else {
+                  "completed"
+                },
+              )
+            } else if session.sticky_max_tokens {
+              self.terminate(
+                session,
+                Failed,
+                "max_tokens",
+                "Model output reached its token limit",
+              )
             } else {
               session.status = Completed
               session.append(
