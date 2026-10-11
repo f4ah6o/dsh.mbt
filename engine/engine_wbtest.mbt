@@ -538,6 +538,62 @@ test "late SubagentStart context leaves the in-flight request unchanged and repl
 }
 
 ///|
+test "initial SubagentStart contexts count once against late admission limits" {
+  let engine = Engine::new(test_tools())
+  ignore(
+    success(
+      engine.invoke("session_create", {
+        "id": Json::string("hook-child"),
+        "title": Json::string("Context budget child"),
+      }),
+    ),
+  )
+  let initial_contexts = Array::make(16, "initial Start context")
+  assert_eq(
+    engine.inject_hook_contexts("hook-child", initial_contexts),
+    Ok(true),
+  )
+  let checkpoint = match
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", false) {
+    Ok(value) => value
+    Err(error) => abort(error)
+  }
+  ignore(success(engine.accept_subagent_prompt_hook(checkpoint, [])))
+  let first = engine.take_effects()[0]
+  assert_eq(
+    engine.inject_hook_contexts("hook-child", ["late context"]),
+    Ok(true),
+  )
+  ignore(success(engine.complete(id_of(first), stop_response("first answer"))))
+  let follow_up = engine.take_effects()
+  assert_eq(follow_up.length(), 1)
+  let messages = array_value(
+    required_field(required_field(follow_up[0], "request"), "messages"),
+    "provider messages",
+    32,
+  )
+  assert_true(
+    messages.any(message => {
+      required_string(message, "role") == "user" &&
+      subagent_hook_message_text(message) == "late context"
+    }),
+  )
+  assert_true(
+    messages.any(message => {
+      required_string(message, "role") == "assistant" &&
+      subagent_hook_message_text(message) == "first answer"
+    }),
+  )
+  let completed = success(
+    engine.complete(id_of(follow_up[0]), stop_response("final answer")),
+  )
+  assert_eq(get_status(completed), "completed")
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_eq(get_session_for(restored, "hook-child"), completed)
+}
+
+///|
 test "PostToolUse contexts stay structured after every result and reject forged restore" {
   let (engine, llm) = started_engine()
   ignore(

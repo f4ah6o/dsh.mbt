@@ -712,7 +712,7 @@ fn Session::hook_context_admission_stats(self : Session) -> (Int, Int) {
           }
         }
       }
-      SubagentStartContext =>
+      SubagentStartContext if event.step > 0 =>
         match event.data {
           Json::Object(data) => {
             match data.get("context_count") {
