@@ -986,10 +986,12 @@ async fn NativeRuntime::run_subagent_tool(
         Some(
           if phase.val == "SessionStart" {
             "subagent timed out during SessionStart hook"
-          } else {
+          } else if self.hooks.has_session_start() {
             "child run exceeded the aggregate " +
             timeout_ms.to_string() +
             " ms SessionStart and child-run budget"
+          } else {
+            "child run exceeded " + timeout_ms.to_string() + " ms"
           },
         ),
       )
