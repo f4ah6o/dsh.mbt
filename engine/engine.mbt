@@ -66,6 +66,10 @@ fn Engine::apply_command_impl(
           self.terminate(session, Cancelled, "cancelled", "Cancelled by user")
         } else if session.status == Idle {
           session.status = Cancelled
+          session.pending_hook_contexts.clear()
+          session.subagent_prompt_hook_contexts.clear()
+          session.clear_subagent_prompt_hook()
+          session.stop_continuation_hook_contexts.clear()
           session.append("session/cancelled", object([]))
         }
         session.json()
@@ -128,6 +132,9 @@ fn Engine::send_prompt(
       "Imported Session v4 histories are read-only and cannot be continued",
     )
   }
+  if session.subagent_prompt_hook_active {
+    raise Invalid("Subagent prompt hook checkpoint is active")
+  }
   if session.is_busy() {
     raise Invalid("Session is busy")
   }
@@ -151,6 +158,7 @@ fn Engine::send_prompt(
   session.stop_hook_pending = false
   session.stop_hook_event_seq = None
   session.stop_continuation_text = None
+  session.stop_continuation_hook_contexts.clear()
   session.stop_continuation_admitted = false
   session.stop_prompt_context_count = 0
   session.stop_prompt_context_length = 0
@@ -725,7 +733,11 @@ fn Session::hook_context_admission_stats(self : Session) -> (Int, Int) {
 }
 
 ///|
-fn Engine::start_step(self : Engine, session : Session) -> Unit {
+fn Engine::start_step(
+  self : Engine,
+  session : Session,
+  skip_pending_hook_contexts? : Bool = false,
+) -> Unit {
   if session.step >= session.max_steps {
     self.terminate(session, Failed, "max_steps", "Maximum model steps reached")
     return
@@ -739,7 +751,18 @@ fn Engine::start_step(self : Engine, session : Session) -> Unit {
     )
     return
   }
-  if !session.pending_hook_contexts.is_empty() {
+  if !skip_pending_hook_contexts &&
+    session.subagent_prompt_hook_admission &&
+    !session.pending_hook_contexts.is_empty() {
+    session.subagent_prompt_hook_active = true
+    session.subagent_prompt_hook_initial = false
+    session.subagent_prompt_hook_generation += 1
+    session.subagent_prompt_hook_contexts = session.pending_hook_contexts.copy()
+    session.pending_hook_contexts.clear()
+    session.subagent_prompt_hook_prompt = None
+    return
+  }
+  if !skip_pending_hook_contexts && !session.pending_hook_contexts.is_empty() {
     let (initial_context_count, initial_context_length) = session.hook_context_admission_stats()
     let mut context_count = initial_context_count
     let mut context_length = initial_context_length
@@ -869,6 +892,11 @@ fn Engine::terminate(
   self.retire_tool_effects(session)
   session.pending_retry_id = None
   session.pending_hook_contexts.clear()
+  session.subagent_prompt_hook_contexts.clear()
+  session.subagent_prompt_hook_active = false
+  session.subagent_prompt_hook_initial = false
+  session.subagent_prompt_hook_prompt = None
+  session.stop_continuation_hook_contexts.clear()
   session.approval = None
   while session.cursor < session.calls.length() {
     let call = session.calls[session.cursor]

@@ -89,10 +89,17 @@ fn Session::copy_state(self : Session) -> Session {
     stop_hook_pending: self.stop_hook_pending,
     stop_hook_event_seq: self.stop_hook_event_seq,
     stop_continuation_text: self.stop_continuation_text,
+    stop_continuation_hook_contexts: self.stop_continuation_hook_contexts.copy(),
     stop_continuation_admitted: self.stop_continuation_admitted,
     stop_prompt_context_count: self.stop_prompt_context_count,
     stop_prompt_context_length: self.stop_prompt_context_length,
     pending_hook_contexts: self.pending_hook_contexts.copy(),
+    subagent_prompt_hook_admission: self.subagent_prompt_hook_admission,
+    subagent_prompt_hook_active: self.subagent_prompt_hook_active,
+    subagent_prompt_hook_initial: self.subagent_prompt_hook_initial,
+    subagent_prompt_hook_generation: self.subagent_prompt_hook_generation,
+    subagent_prompt_hook_contexts: self.subagent_prompt_hook_contexts.copy(),
+    subagent_prompt_hook_prompt: self.subagent_prompt_hook_prompt,
   }
 }
 
@@ -242,23 +249,18 @@ pub fn Engine::inject_hook_contexts(
     if session.status != Idle && session.status != Running {
       return Ok(false)
     }
-    if session.pending_hook_contexts.length() + contexts.length() > 32 {
-      raise Invalid("hook contexts exceed the 32-item limit")
+    let held_contexts = session.pending_hook_contexts.copy()
+    for context in session.subagent_prompt_hook_contexts {
+      held_contexts.push(context)
     }
-    let mut total_length = 0
-    for context in session.pending_hook_contexts {
-      total_length += engine_hook_context_utf16_units(context)
+    for context in session.stop_continuation_hook_contexts {
+      held_contexts.push(context)
     }
+    let all_contexts = held_contexts.copy()
     for context in contexts {
-      let units = engine_hook_context_utf16_units(context)
-      if context.is_empty() || units > 4096 {
-        raise Invalid("hook context must contain 1 to 4096 UTF-16 code units")
-      }
-      total_length += units
-      if total_length > 16384 {
-        raise Invalid("hook contexts exceed the aggregate length limit")
-      }
+      all_contexts.push(context)
     }
+    ignore(engine_validate_hook_contexts(all_contexts))
     for context in contexts {
       session.pending_hook_contexts.push(context)
     }

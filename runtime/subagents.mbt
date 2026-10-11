@@ -521,9 +521,14 @@ async fn NativeRuntime::complete_subagent_provider_result(
                       if control is Some(value) && value.cancelled.val {
                         return Err("native command was cancelled")
                       }
+                      let prompt_text = match
+                        child.stop_continuation_prompt(continuation_checkpoint) {
+                        Ok(value) => value
+                        Err(error) => return Err(error)
+                      }
                       let prompt_result = if self.hooks.has_user_prompt_submit() {
                         self.run_subagent_prompt_hook(
-                          control, child_id, continuation,
+                          control, child_id, prompt_text,
                         )
                       } else {
                         Ok({
@@ -587,36 +592,74 @@ async fn NativeRuntime::start_and_drive_subagent(
   if control is Some(value) && value.cancelled.val {
     return Err("native command was cancelled")
   }
+  let checkpoint = match
+    child.begin_subagent_prompt_hook(
+      child_id,
+      prompt,
+      self.hooks.has_user_prompt_submit(),
+    ) {
+    Ok(value) => value
+    Err(error) => return Err("cannot stage child prompt: " + error)
+  }
+  match
+    self.resolve_subagent_prompt_hook(child, child_id, checkpoint, control~) {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  self.drive_subagent(child, child_id, binding, control~)
+}
+
+///|
+async fn NativeRuntime::resolve_subagent_prompt_hook(
+  self : NativeRuntime,
+  child : @engine.Engine,
+  child_id : String,
+  checkpoint : @engine.NativeSubagentPromptHookCheckpoint,
+  control? : NativeJobControl? = None,
+) -> Result[Json, String] {
+  if control is Some(value) && value.cancelled.val {
+    return Err("native command was cancelled")
+  }
   let prompt_outcome = if self.hooks.has_user_prompt_submit() {
-    self.run_subagent_prompt_hook(control, child_id, prompt)
+    self.run_subagent_prompt_hook(control, child_id, checkpoint.prompt())
   } else {
     Ok({ action: NativeHookAction::Continue, additional_contexts: [], })
-  }
-  let contexts = match prompt_outcome {
-    Err(error) => return Err("UserPromptSubmit hook could not run: " + error)
-    Ok({ action: NativeHookAction::Deny(reason), .. }) =>
-      return Err(
-        "UserPromptSubmit hook rejected the child prompt: " +
-        native_hook_limit_reason(reason),
-      )
-    Ok({ action: NativeHookAction::Continue, additional_contexts, }) =>
-      additional_contexts
   }
   if control is Some(value) && value.cancelled.val {
     return Err("native command was cancelled")
   }
-  let _sent = match
-    child.invoke("session_send", {
-      "session_id": child_id,
-      "prompt": prompt,
-      "additional_contexts": Json::array(
-        contexts.map(context => Json::string(context)),
-      ),
-    }) {
-    Ok(value) => value
-    Err(error) => return Err("cannot start child turn: " + error)
+  match prompt_outcome {
+    Err(error) => {
+      let reason = "UserPromptSubmit hook could not run: " + error
+      match child.block_subagent_prompt_hook(checkpoint, reason) {
+        Err(block_error) => Err(block_error)
+        Ok(_) if checkpoint.is_initial() => Err(reason)
+        Ok(value) => Ok(value)
+      }
+    }
+    Ok({ action: NativeHookAction::Deny(reason), .. }) => {
+      let reason = native_hook_limit_reason(reason)
+      match child.block_subagent_prompt_hook(checkpoint, reason) {
+        Err(error) => Err(error)
+        Ok(_) if checkpoint.is_initial() =>
+          Err("UserPromptSubmit hook rejected the child prompt: " + reason)
+        Ok(value) => Ok(value)
+      }
+    }
+    Ok({ action: NativeHookAction::Continue, additional_contexts, }) =>
+      match child.accept_subagent_prompt_hook(checkpoint, additional_contexts) {
+        Ok(value) => Ok(value)
+        Err(error) => {
+          let reason = "UserPromptSubmit hook could not admit child input: " +
+            error
+          match child.block_subagent_prompt_hook(checkpoint, reason) {
+            Ok(value) if !checkpoint.is_initial() => Ok(value)
+            Ok(_) => Err(reason)
+            Err(block_error) => Err(block_error)
+          }
+        }
+      }
   }
-  self.drive_subagent(child, child_id, binding, control~)
 }
 
 ///|
@@ -712,6 +755,20 @@ async fn NativeRuntime::drive_subagent(
     let status = string_field(session, "status").unwrap_or("failed")
     if status != "running" {
       return Ok(session)
+    }
+    match child.pending_subagent_prompt_hook(child_id) {
+      Some(checkpoint) =>
+        match
+          self.resolve_subagent_prompt_hook(
+            child,
+            child_id,
+            checkpoint,
+            control~,
+          ) {
+          Ok(_) => continue
+          Err(error) => return Err(error)
+        }
+      None => ()
     }
     let effects = child.take_typed_effects()
     if effects.is_empty() {

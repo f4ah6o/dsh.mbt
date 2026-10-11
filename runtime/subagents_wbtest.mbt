@@ -1866,9 +1866,12 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
     let canonical_workspace = @fs.realpath(workspace)
     let hooks_path = fixture + "/hooks.json"
     let start_release_path = workspace + "/start-release"
+    let prompt_release_path = workspace + "/prompt-release"
+    let prompt_started_path = workspace + "/prompt-started"
     let start_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/subagent-start-payloads.jsonl\"; : > \"${CLAUDE_PROJECT_DIR}/start-started\"; while [ ! -e \"${CLAUDE_PROJECT_DIR}/start-release\" ]; do /bin/sleep 0.01; done; printf '%s' '{\"decision\":\"block\",\"reason\":\"ignored start denial\",\"hookSpecificOutput\":{\"hookEventName\":\"SubagentStart\",\"additionalContext\":\"late child context\"}}'; : > \"${CLAUDE_PROJECT_DIR}/start-done\"; /bin/sleep 0.1"
     let unmatched_start_command = ": > \"${CLAUDE_PROJECT_DIR}/unmatched-start-fired\""
     let stop_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/subagent-stop-payloads.jsonl\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"ignored stop denial\"}'"
+    let prompt_command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/subagent-prompt-payloads.jsonl\"; case \"$payload\" in *\"Complete the fixture child task.\"*) : > \"${CLAUDE_PROJECT_DIR}/prompt-started\"; while [ ! -e \"${CLAUDE_PROJECT_DIR}/prompt-release\" ]; do /bin/sleep 0.01; done; printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"initial prompt admission\"}}' ;; *\"late child context\"*) printf '%s' '{\"hookSpecificOutput\":{\"hookEventName\":\"UserPromptSubmit\",\"additionalContext\":\"late prompt admission\"}}' ;; *) printf '{}' ;; esac"
     let config = Json::object({
       "SubagentStart": Json::array([
         Json::object({
@@ -1892,6 +1895,14 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
           ]),
         }),
       ]),
+      "UserPromptSubmit": Json::array([
+        Json::object({
+          "matcher": Json::string("ignored prompt matcher"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(prompt_command) }),
+          ]),
+        }),
+      ]),
     })
     @fs.write_file(hooks_path, @utf8.encode(config.stringify()))
     let address = @socket.Addr::parse("127.0.0.1:0")
@@ -1907,6 +1918,9 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
         }
         if !@fs.exists(start_release_path) {
           @fs.write_file(start_release_path, @utf8.encode("release"))
+        }
+        if !@fs.exists(prompt_release_path) {
+          @fs.write_file(prompt_release_path, @utf8.encode("release"))
         }
       })
     })
@@ -1964,10 +1978,11 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
       no_wait=true,
       allow_failure=true,
     )
-    let mut lifecycle_and_provider_started = false
+    let mut lifecycle_and_prompt_started = false
     for _ in 0..<1000 {
-      if @fs.exists(workspace + "/start-started") && bodies.val.length() == 1 {
-        lifecycle_and_provider_started = true
+      if @fs.exists(workspace + "/start-started") &&
+        @fs.exists(prompt_started_path) {
+        lifecycle_and_prompt_started = true
         break
       }
       @async.sleep(5)
@@ -1978,8 +1993,8 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
         bodies.val.length().to_string(),
       )
     }
-    assert_true(lifecycle_and_provider_started)
-    assert_false(bodies.val[0].contains("late child context"))
+    assert_true(lifecycle_and_prompt_started)
+    assert_true(bodies.val.is_empty())
     @fs.write_file(start_release_path, @utf8.encode("release"))
     let mut start_finished = false
     for _ in 0..<1000 {
@@ -1990,9 +2005,21 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
       @async.sleep(5)
     }
     assert_true(start_finished)
-    // The hook subprocess emits before it exits; let capture and the detached
-    // callback enqueue the context while the first provider request is gated.
+    // The hook subprocess emits before it exits; let its detached callback
+    // enqueue input while the initial UserPromptSubmit command is still open.
     @async.sleep(200)
+    @fs.write_file(prompt_release_path, @utf8.encode("release"))
+    let mut first_provider_started = false
+    for _ in 0..<1000 {
+      if bodies.val.length() == 1 {
+        first_provider_started = true
+        break
+      }
+      @async.sleep(5)
+    }
+    assert_true(first_provider_started)
+    assert_false(bodies.val[0].contains("late child context"))
+    assert_true(bodies.val[0].contains("initial prompt admission"))
     release_sent.val = true
     release.release()
     let (_, follow_up) = match job.wait() {
@@ -2007,6 +2034,7 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
     assert_eq(bodies.val.length(), 2)
     assert_true(!bodies.val[0].contains("late child context"))
     assert_true(bodies.val[1].contains("late child context"))
+    assert_true(bodies.val[1].contains("late prompt admission"))
     assert_false(@fs.exists(workspace + "/unmatched-start-fired"))
 
     let start_lines = @fs.read_file(
@@ -2028,6 +2056,29 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
     assert_eq(native_hook_test_fields(start_payload).length(), 6)
     assert_eq(native_hook_test_fields(stop_payload).length(), 7)
     let child_id = string_field(start_payload, "session_id").unwrap()
+    let prompt_lines = @fs.read_file(
+        workspace + "/subagent-prompt-payloads.jsonl",
+      )
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array()
+    let prompt_payloads : Array[Json] = []
+    for line in prompt_lines {
+      prompt_payloads.push(@json.parse(line))
+    }
+    let child_prompt_payloads = prompt_payloads.filter(payload => {
+      string_field(payload, "session_id") == Some(child_id)
+    })
+    assert_eq(child_prompt_payloads.length(), 2)
+    assert_eq(
+      string_field(child_prompt_payloads[0], "prompt"),
+      Some("Complete the fixture child task."),
+    )
+    assert_eq(
+      string_field(child_prompt_payloads[1], "prompt"),
+      Some("late child context"),
+    )
     assert_eq(
       string_field(start_payload, "hook_event_name"),
       Some("SubagentStart"),

@@ -218,6 +218,9 @@ fn restore_session(
   let mut prompt_context_count = 0
   let mut prompt_context_length = 0
   let mut expected_subagent_context : (Int, Int)? = None
+  let mut late_subagent_context_admission = false
+  let mut late_subagent_context_count = 0
+  let mut late_subagent_context_length = 0
   let mut stop_continuation_reason_seen = false
   let mut stop_continuation_rejected = false
   let pending_post_tool_contexts : Array[(String, Json)] = []
@@ -236,6 +239,11 @@ fn restore_session(
     let step = int_value(required_field(raw, "step"), "event step", 0, 64)
     let data = required_field(raw, "data")
     ignore(fields(data))
+    if late_subagent_context_admission &&
+      kind != "user/message" &&
+      kind != "step/start" {
+      raise Invalid("Late SubagentStart admission is not followed by a step")
+    }
     if expected_subagent_context is Some(_) && kind != "user/message" {
       raise Invalid(
         "SubagentStart context marker is not followed by its message",
@@ -280,6 +288,9 @@ fn restore_session(
       assistant_recorded = false
       prompt_context_count = 0
       prompt_context_length = 0
+      late_subagent_context_admission = false
+      late_subagent_context_count = 0
+      late_subagent_context_length = 0
     } else if kind == "step/start" {
       if !open_turn ||
         !admitted_user ||
@@ -297,6 +308,9 @@ fn restore_session(
       }
       session.step = step
       session.open_step = true
+      late_subagent_context_admission = false
+      late_subagent_context_count = 0
+      late_subagent_context_length = 0
       session.retry_count = 0
       session.retry_max_retries = None
       session.retry_initial_delay_ms = None
@@ -351,6 +365,11 @@ fn restore_session(
                         )
                       }
                       expected_subagent_context = None
+                      if session.step > 0 && assistant_recorded {
+                        late_subagent_context_admission = true
+                        late_subagent_context_count = actual_count
+                        late_subagent_context_length = actual_length
+                      }
                     }
                     None =>
                       if session.stop_hook_pending &&
@@ -385,6 +404,28 @@ fn restore_session(
                               "Stop continuation contexts exceed the configured limit",
                             )
                           }
+                        }
+                      } else if late_subagent_context_admission {
+                        if !open_turn ||
+                          !admitted_user ||
+                          session.step == 0 ||
+                          !assistant_recorded ||
+                          session.open_step ||
+                          required_string(data, "role", max=16) != "user" {
+                          raise Invalid(
+                            "Late SubagentStart context outside its admission boundary",
+                          )
+                        }
+                        let (context_count, context_length) = validate_hook_prompt_context(
+                          data, source,
+                        )
+                        late_subagent_context_count += context_count
+                        late_subagent_context_length += context_length
+                        if late_subagent_context_count > 32 ||
+                          late_subagent_context_length > 16384 {
+                          raise Invalid(
+                            "Late SubagentStart prompt contexts exceed the configured limit",
+                          )
                         }
                       } else {
                         if !open_turn ||
@@ -1205,9 +1246,7 @@ fn restore_session(
             16384,
           )
           if !open_turn ||
-            !admitted_user ||
             session.open_step ||
-            !assistant_recorded ||
             session.active_effect is Some(_) ||
             session.active_tool_effect_count() > 0 ||
             session.approval is Some(_) ||
@@ -1215,13 +1254,13 @@ fn restore_session(
             expected_subagent_context is Some(_) {
             raise Invalid("SubagentStart context outside a child step boundary")
           }
+          let initial_prompt_context = session.step == 0 &&
+            !admitted_user &&
+            !assistant_recorded
+          if !initial_prompt_context && (!admitted_user || !assistant_recorded) {
+            raise Invalid("SubagentStart context outside a child step boundary")
+          }
           if session.stop_hook_pending {
-            if session.stop_continuation_text is Some(_) &&
-              !session.stop_continuation_admitted {
-              raise Invalid(
-                "SubagentStart context preceded Stop continuation admission",
-              )
-            }
             if session.stop_continuation_text is None {
               session.clear_stop_continuation_state()
             }

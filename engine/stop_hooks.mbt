@@ -33,6 +33,7 @@ fn Session::clear_stop_continuation_state(self : Session) -> Unit {
   self.stop_hook_pending = false
   self.stop_hook_event_seq = None
   self.stop_continuation_text = None
+  self.stop_continuation_hook_contexts.clear()
   self.stop_continuation_admitted = false
   self.stop_prompt_context_count = 0
   self.stop_prompt_context_length = 0
@@ -50,6 +51,7 @@ fn Session::mark_stop_hook_pending(self : Session, reason : String) -> Unit {
   self.stop_hook_pending = true
   self.stop_hook_event_seq = Some(self.events.length())
   self.stop_continuation_text = None
+  self.stop_continuation_hook_contexts.clear()
   self.stop_continuation_admitted = false
   self.stop_prompt_context_count = 0
   self.stop_prompt_context_length = 0
@@ -138,6 +140,8 @@ pub fn Engine::prepare_stop_continuation(
       candidate.terminate(session, Failed, "session_capacity", CAPACITY_ERROR)
     } else {
       session.stop_continuation_text = Some(text)
+      session.stop_continuation_hook_contexts = session.pending_hook_contexts.copy()
+      session.pending_hook_contexts.clear()
       session.stop_prompt_context_count = 0
       session.stop_prompt_context_length = 0
       session.stop_continuation_admitted = false
@@ -153,6 +157,25 @@ pub fn Engine::prepare_stop_continuation(
   match changed {
     Err(message) => Err(message)
     Ok(_) => Ok(self.settle_stop_candidate(candidate, checkpoint.session_id))
+  }
+}
+
+///|
+/// Text presented to UserPromptSubmit for the exact claimed Stop inbox. Start
+/// messages already queued precede the newly steered Stop reason.
+pub fn Engine::stop_continuation_prompt(
+  self : Engine,
+  checkpoint : NativeStopHookCheckpoint,
+) -> Result[String, String] {
+  try {
+    let session = self.stop_hook_session(checkpoint)
+    let reason = match session.stop_continuation_text {
+      Some(value) => value
+      None => raise Invalid("Stop continuation was not staged")
+    }
+    Ok(session.stop_continuation_hook_contexts.join("") + reason)
+  } catch {
+    Invalid(message) => Err(message)
   }
 }
 
@@ -230,6 +253,14 @@ pub fn Engine::continue_stop_hook(
       stop_hook_utf16_units(reason) > STOP_HOOK_MERGED_REASON_MAX_UNITS {
       raise Invalid("Stop continuation exceeds its context limits")
     }
+    let all_contexts = session.stop_continuation_hook_contexts.copy()
+    for context in contexts {
+      all_contexts.push(context)
+    }
+    for context in session.pending_hook_contexts {
+      all_contexts.push(context)
+    }
+    ignore(engine_validate_hook_contexts(all_contexts))
     if session.step >= session.max_steps {
       candidate.terminate(
         session,
@@ -245,6 +276,20 @@ pub fn Engine::continue_stop_hook(
         "Effect identifier limit reached",
       )
     } else {
+      let start_contexts = session.stop_continuation_hook_contexts.copy()
+      if !start_contexts.is_empty() {
+        session.append(
+          "hook/subagent-start-context",
+          object([
+            ("context_count", integer(start_contexts.length())),
+            (
+              "context_length",
+              integer(engine_subagent_hook_context_length(start_contexts)),
+            ),
+          ]),
+        )
+        session.append("user/message", hook_context_message(start_contexts))
+      }
       session.append("user/message", hook_context_message([reason]))
       if !contexts.is_empty() {
         session.append("user/message", hook_context_message(contexts))
@@ -260,7 +305,7 @@ pub fn Engine::continue_stop_hook(
         ]),
       )
       session.clear_stop_continuation_state()
-      candidate.start_step(session)
+      candidate.start_step(session, skip_pending_hook_contexts=true)
     }
     Ok(session.json())
   } catch {

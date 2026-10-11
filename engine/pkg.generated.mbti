@@ -24,8 +24,11 @@ pub fn EffectType::not_equal(Self, Self) -> Bool
 pub struct Engine {
   // private fields
 }
+pub fn Engine::accept_subagent_prompt_hook(Self, NativeSubagentPromptHookCheckpoint, Array[String]) -> Result[Json, String]
 pub fn Engine::apply(Self, EngineCommand) -> Result[Json, String]
+pub fn Engine::begin_subagent_prompt_hook(Self, String, String, Bool) -> Result[NativeSubagentPromptHookCheckpoint, String]
 pub fn Engine::block_stop_continuation(Self, NativeStopHookCheckpoint, String) -> Result[Json, String]
+pub fn Engine::block_subagent_prompt_hook(Self, NativeSubagentPromptHookCheckpoint, String) -> Result[Json, String]
 pub fn Engine::complete(Self, String, Json) -> Result[Json, String]
 pub fn Engine::complete_effect(Self, EffectId, Json) -> Result[Json, String]
 pub fn Engine::complete_effect_with_stop_hook(Self, EffectId, Json) -> Result[Json, String]
@@ -36,6 +39,7 @@ pub fn Engine::inject_hook_contexts(Self, String, Array[String]) -> Result[Bool,
 pub fn Engine::invoke(Self, String, Json) -> Result[Json, String]
 pub fn Engine::new(Array[Json]) -> Self
 pub fn Engine::pending_stop_hook(Self, SessionId) -> NativeStopHookCheckpoint?
+pub fn Engine::pending_subagent_prompt_hook(Self, String) -> NativeSubagentPromptHookCheckpoint?
 pub fn Engine::prepare_stop_continuation(Self, NativeStopHookCheckpoint, String) -> Result[Json, String]
 pub fn Engine::preview(Self, EngineCommand) -> Result[Json, String]
 pub fn Engine::project_effect_stream(Self, EffectId, String, String) -> Result[Json, String]
@@ -47,6 +51,7 @@ pub fn Engine::schedule_retry(Self, String, Json) -> Result[Json, String]
 pub fn Engine::snapshot(Self) -> Json
 pub fn Engine::start_effect_retry(Self, EffectId, String) -> Result[Json, String]
 pub fn Engine::start_retry(Self, String, String) -> Result[Json, String]
+pub fn Engine::stop_continuation_prompt(Self, NativeStopHookCheckpoint) -> Result[String, String]
 pub fn Engine::take_effects(Self) -> Array[Json]
 pub fn Engine::take_typed_effects(Self) -> Array[EngineEffect]
 
@@ -120,6 +125,13 @@ pub fn EngineEventKind::wire(Self) -> String
 pub struct NativeStopHookCheckpoint {
   // private fields
 }
+
+pub struct NativeSubagentPromptHookCheckpoint {
+  // private fields
+}
+pub fn NativeSubagentPromptHookCheckpoint::contexts(Self) -> Array[String]
+pub fn NativeSubagentPromptHookCheckpoint::is_initial(Self) -> Bool
+pub fn NativeSubagentPromptHookCheckpoint::prompt(Self) -> String
 
 pub struct SessionId {
   // private fields
