@@ -4,6 +4,22 @@
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
+## 0.1.14 - 2026-10-11
+
+### Added
+
 - Add opt-in native Stop command hooks to run, web, MCP, ACP, and desktop. A denial steers the same turn through UserPromptSubmit before its next provider request; see the [native runtime guide](docs/native-runtime.md#native-command-hooks) and [remaining parity work](issues/open/0001-upstream-parity.md).
 
 ### Changed
