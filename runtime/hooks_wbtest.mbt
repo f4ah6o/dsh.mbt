@@ -314,13 +314,24 @@ test "Stop codec is lenient and matching permission decisions override top-level
   })
   assert_eq(undecodable_exit_two.rank, 3)
   assert_eq(undecodable_exit_two.reason, None)
-  for capture in [
-    { exit_code: 1, stdout: "{}", stderr: "", truncated: false },
-    { exit_code: 0, stdout: "{malformed", stderr: "", truncated: false },
-    { exit_code: 0, stdout: "{\"decision\":false}", stderr: "", truncated: false },
-    { exit_code: 0, stdout: "{\"decision\":\"deny\"}", stderr: "", truncated: false },
-    { exit_code: 0, stdout: "{}", stderr: "", truncated: true },
-  ] {
+  for
+    capture in [
+      { exit_code: 1, stdout: "{}", stderr: "", truncated: false, },
+      { exit_code: 0, stdout: "{malformed", stderr: "", truncated: false, },
+      {
+        exit_code: 0,
+        stdout: "{\"decision\":false}",
+        stderr: "",
+        truncated: false,
+      },
+      {
+        exit_code: 0,
+        stdout: "{\"decision\":\"deny\"}",
+        stderr: "",
+        truncated: false,
+      },
+      { exit_code: 0, stdout: "{}", stderr: "", truncated: true, },
+    ] {
     assert_eq(native_hook_stop_result_decision(capture).rank, 0)
   }
 }
@@ -351,7 +362,7 @@ async test "Stop preserves exit-two denial when stderr overflows or is invalid U
 
     let invalid_utf8 = native_run_hook_command(
       tools,
-      { command: "printf '\\377' >&2; exit 2", timeout_ms: 5000 },
+      { command: "printf '\\377' >&2; exit 2", timeout_ms: 5000, },
       "{}\n",
     ).unwrap()
     assert_eq(invalid_utf8.exit_code, 2)
@@ -3198,12 +3209,16 @@ async test "Stop denial stages a same-turn UserPromptSubmit continuation before 
       "events",
     )
     assert_eq(
-      events.filter(event => string_field(event, "type") == Some("hook/stop-pending"))
+      events
+      .filter(event => string_field(event, "type") == Some("hook/stop-pending"))
       .length(),
       2,
     )
     assert_eq(
-      events.filter(event => string_field(event, "type") == Some("hook/stop-continuation-admitted"))
+      events
+      .filter(event => {
+        string_field(event, "type") == Some("hook/stop-continuation-admitted")
+      })
       .length(),
       1,
     )
@@ -3212,10 +3227,7 @@ async test "Stop denial stages a same-turn UserPromptSubmit continuation before 
       if string_field(event, "type") != Some("user/message") {
         false
       } else {
-        object_field(
-          native_hook_test_required_field(event, "data"),
-          "source",
-        )
+        object_field(native_hook_test_required_field(event, "data"), "source")
         is Some(_)
       }
     })
@@ -3241,10 +3253,22 @@ async test "Stop denial stages a same-turn UserPromptSubmit continuation before 
         let payload = @json.parse(line)
         let fields = native_hook_test_fields(payload)
         assert_eq(fields.length(), 5)
-        assert_eq(native_hook_test_required_string(payload, "hook_event_name"), "Stop")
-        assert_eq(native_hook_test_required_string(payload, "transcript_path"), "")
-        assert_eq(object_field(payload, "stop_hook_active"), Some(Json::boolean(false)))
-        assert_eq(native_hook_test_required_string(payload, "session_id"), session_id)
+        assert_eq(
+          native_hook_test_required_string(payload, "hook_event_name"),
+          "Stop",
+        )
+        assert_eq(
+          native_hook_test_required_string(payload, "transcript_path"),
+          "",
+        )
+        assert_eq(
+          object_field(payload, "stop_hook_active"),
+          Some(Json::boolean(false)),
+        )
+        assert_eq(
+          native_hook_test_required_string(payload, "session_id"),
+          session_id,
+        )
       }
     }
     let prompt_payloads = @fs.read_file(workspace + "/prompt-payloads.jsonl").text()
@@ -3271,10 +3295,26 @@ async test "Stop children preserve the provider job owner through cancellation a
     @fs.mkdir(workspace)
     let hooks_path = fixture + "/hooks.json"
     let stop_command = "if [ ! -e \"${CLAUDE_PROJECT_DIR}/first-stop\" ]; then : > \"${CLAUDE_PROJECT_DIR}/first-stop\"; printf '%s' '{\"decision\":\"block\",\"reason\":\"continue after review\"}'; else printf '{}'; fi"
-    @fs.write_file(
-      hooks_path,
-      @utf8.encode(native_hook_test_config("Stop", "ignored", stop_command)),
-    )
+    let prompt_command = "cat >/dev/null; printf x >> \"${CLAUDE_PROJECT_DIR}/prompt-hook-count\"; printf '%s' '{}'"
+    let hooks_config = Json::object({
+      "Stop": Json::array([
+        Json::object({
+          "matcher": Json::string("ignored"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(stop_command) }),
+          ]),
+        }),
+      ]),
+      "UserPromptSubmit": Json::array([
+        Json::object({
+          "matcher": Json::string("ignored"),
+          "hooks": Json::array([
+            Json::object({ "command": Json::string(prompt_command) }),
+          ]),
+        }),
+      ]),
+    })
+    @fs.write_file(hooks_path, @utf8.encode(hooks_config.stringify()))
     let address = @socket.Addr::parse("127.0.0.1:0")
     let server = @http.Server::Server(address, reuse_addr=false)
     group.add_defer(() => server.close())
@@ -3367,8 +3407,13 @@ async test "Stop children preserve the provider job owner through cancellation a
     let command_id = native_command_id().unwrap()
     let run_result : Ref[Result[Unit, String]?] = Ref(None)
     let run_done = Ref(false)
-    let runner = group.spawn(no_wait=true, allow_failure=true, async fn() -> Result[Unit, String] {
-      run_result.val = Some(runtime.run_effects(provider_effects, command_id, 1))
+    let runner = group.spawn(no_wait=true, allow_failure=true, async fn() -> Result[
+      Unit,
+      String,
+    ] {
+      run_result.val = Some(
+        runtime.run_effects(provider_effects, command_id, 1),
+      )
       run_done.val = true
       Ok(())
     })
@@ -3383,12 +3428,15 @@ async test "Stop children preserve the provider job owner through cancellation a
     }
     assert_true(second_provider_started)
     assert_true(@fs.exists(workspace + "/first-stop"))
+    assert_eq(@fs.read_file(workspace + "/prompt-hook-count").text(), "xx")
     assert_false(run_done.val)
     let (_, cancel_effects) = runtime
       .invoke("session_cancel", { "session_id": session_id.to_json() })
       .unwrap()
     assert_true(cancel_effects.is_empty())
-    let fresh = runtime.scheduler.begin(session_id, "stop-owner-follow-up", 100).unwrap()
+    let fresh = runtime.scheduler
+      .begin(session_id, "stop-owner-follow-up", 100)
+      .unwrap()
     let mut owner_drained = false
     for _ in 0..<100 {
       if run_done.val {
@@ -3466,12 +3514,18 @@ async test "oversized astral UserPromptSubmit denial closes the continuation and
       "events",
     )
     assert_eq(
-      events.filter(event => string_field(event, "type") == Some("hook/stop-continuation-pending"))
+      events
+      .filter(event => {
+        string_field(event, "type") == Some("hook/stop-continuation-pending")
+      })
       .length(),
       1,
     )
     assert_eq(
-      events.filter(event => string_field(event, "type") == Some("hook/stop-continuation-admitted"))
+      events
+      .filter(event => {
+        string_field(event, "type") == Some("hook/stop-continuation-admitted")
+      })
       .length(),
       0,
     )
@@ -3483,7 +3537,8 @@ async test "oversized astral UserPromptSubmit denial closes the continuation and
             native_hook_test_required_field(event, "data"),
             "error",
           ),
-        ) <= 8192
+        ) <=
+        8192
       }),
     )
     assert_true(
@@ -3505,7 +3560,10 @@ async test "oversized astral UserPromptSubmit denial closes the continuation and
     )
     assert_eq(
       @fs.read_file(workspace + "/prompt-payloads.jsonl")
-        .text().split("\n").filter(line => !line.is_empty()).length(),
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .length(),
       2,
     )
 
