@@ -216,6 +216,49 @@ test "pending native hooks block Stop and PostTool closure until their result" {
 }
 
 ///|
+test "pending UserPromptSubmit result blocks PostTool prompt admission" {
+  let (engine, llm) = started_engine(max_steps=4)
+  ignore(
+    success(
+      engine.complete(
+        id_of(llm),
+        calls_response([("prompt-admit", "read", "{\"file_path\":\"a.txt\"}")]),
+      ),
+    ),
+  )
+  let tool = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete_effect_with_post_tool_prompt_hook(
+        post_tool_effect_id(tool),
+        fixture(
+          "{\"ok\":true,\"content\":\"read\",\"additional_contexts\":[\"context\"]}",
+        ),
+      ),
+    ),
+  )
+  let post = engine
+    .pending_post_tool_prompt_hook(SessionId::new("test").unwrap())
+    .unwrap()
+  let invocation = engine
+    .record_native_hook_invoked(
+      "test",
+      "UserPromptSubmit",
+      "claude-code:UserPromptSubmit:33",
+      None,
+    )
+    .unwrap()
+  let before = engine.snapshot()
+  assert_true(engine.accept_post_tool_prompt_hook(post, []) is Err(_))
+  assert_eq(engine.snapshot(), before)
+  assert_true(engine.take_effects().is_empty())
+  ignore(engine.record_native_hook_result(invocation, "pass", Some(0), None, 1))
+  assert_true(engine.accept_post_tool_prompt_hook(post, []) is Ok(_))
+  assert_eq(engine.take_effects().length(), 1)
+  assert_eq(Engine::new(test_tools()).restore(engine.snapshot()), Ok(()))
+}
+
+///|
 test "a pending hook cannot let the final tool close a max-steps turn" {
   let (engine, provider) = started_engine(max_steps=1)
   ignore(

@@ -106,6 +106,9 @@ pub fn Engine::accept_post_tool_prompt_hook(
   let candidate = self.copy_state()
   let changed = try {
     let session = candidate.post_tool_prompt_hook_session(checkpoint)
+    if !native_hook_pending_invocations(session).is_empty() {
+      raise Invalid("Cannot advance a turn with pending native hook results")
+    }
     let all_contexts = session.post_tool_prompt_hook_contexts.copy()
     for context in contexts {
       all_contexts.push(context)
