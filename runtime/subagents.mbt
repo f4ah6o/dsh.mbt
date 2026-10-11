@@ -380,12 +380,17 @@ async fn NativeRuntime::subagent_complete_provider(
   child : @engine.Engine,
   effect : @engine.EngineEffect,
   binding : NativeSubagentProviderBinding,
+  child_id : String,
+  control? : NativeJobControl? = None,
 ) -> Result[Unit, String] {
   if effect.kind() != @engine.EffectType::Provider {
     return Err("child effect is not a provider request")
   }
   let mut final_result : Json? = None
   while final_result is None {
+    if control is Some(value) && value.cancelled.val {
+      return Err("native command was cancelled")
+    }
     let response = if self.provider_config.demo_provider {
       Ok(native_demo_subagent_provider_response(effect.request()))
     } else {
@@ -423,10 +428,192 @@ async fn NativeRuntime::subagent_complete_provider(
     }
     final_result = Some(value)
   }
-  match child.complete_effect(effect.id(), final_result.unwrap()) {
-    Ok(_) => Ok(())
-    Err(error) => Err(error)
+  if control is Some(value) && value.cancelled.val {
+    return Err("native command was cancelled")
   }
+  self.complete_subagent_provider_result(
+    child,
+    effect,
+    final_result.unwrap(),
+    child_id,
+    control~,
+  )
+}
+
+///|
+async fn NativeRuntime::run_subagent_prompt_hook(
+  self : NativeRuntime,
+  control : NativeJobControl?,
+  child_id : String,
+  prompt : String,
+) -> Result[NativeHookOutcome, String] {
+  match control {
+    Some(value) =>
+      self.run_user_prompt_hook_controlled(
+        value,
+        child_id,
+        prompt,
+        attach_task=false,
+      )
+    None => self.hooks.before_user_prompt(self.tools, child_id, prompt)
+  }
+}
+
+///|
+async fn NativeRuntime::complete_subagent_provider_result(
+  self : NativeRuntime,
+  child : @engine.Engine,
+  effect : @engine.EngineEffect,
+  result : Json,
+  child_id : String,
+  control? : NativeJobControl? = None,
+) -> Result[Unit, String] {
+  if !self.hooks.has_stop() {
+    return child.complete_effect(effect.id(), result).map(_ => ())
+  }
+  if control is Some(value) && value.cancelled.val {
+    return Err("native command was cancelled")
+  }
+  match child.complete_effect_with_stop_hook(effect.id(), result) {
+    Err(error) => Err(error)
+    Ok(_) => {
+      let typed_session_id = match @engine.SessionId::new(child_id) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+      match child.pending_stop_hook(typed_session_id) {
+        None => Ok(())
+        Some(checkpoint) => {
+          if control is Some(value) && value.cancelled.val {
+            return Err("native command was cancelled")
+          }
+          let stop_outcome = match self.run_stop_hook_controlled(child_id) {
+            Ok(value) => value
+            Err(_) if control is Some(value) && value.cancelled.val =>
+              return Err("native command was cancelled")
+            Err(_) if @async.is_being_cancelled() =>
+              return Err("native command was cancelled")
+            // Hook process failures are advisory after an accepted answer.
+            Err(_) =>
+              match child.finish_stop_hook(checkpoint) {
+                Ok(_) => return Ok(())
+                Err(error) => return Err(error)
+              }
+          }
+          match stop_outcome.action {
+            NativeHookAction::Continue =>
+              child.finish_stop_hook(checkpoint).map(_ => ())
+            NativeHookAction::Deny(reason) => {
+              let continuation = if reason.is_empty() {
+                "continue: blocked by Stop hook"
+              } else {
+                reason
+              }
+              match child.prepare_stop_continuation(checkpoint, continuation) {
+                Err(error) => Err(error)
+                Ok(_) =>
+                  match child.pending_stop_hook(typed_session_id) {
+                    None => Ok(())
+                    Some(continuation_checkpoint) => {
+                      if control is Some(value) && value.cancelled.val {
+                        return Err("native command was cancelled")
+                      }
+                      let prompt_result = if self.hooks.has_user_prompt_submit() {
+                        self.run_subagent_prompt_hook(
+                          control, child_id, continuation,
+                        )
+                      } else {
+                        Ok({
+                          action: NativeHookAction::Continue,
+                          additional_contexts: [],
+                        })
+                      }
+                      let prompt_outcome = match prompt_result {
+                        Ok(value) => value
+                        Err(_) if control is Some(value) && value.cancelled.val =>
+                          return Err("native command was cancelled")
+                        Err(_) if @async.is_being_cancelled() =>
+                          return Err("native command was cancelled")
+                        Err(error) =>
+                          return child
+                            .block_stop_continuation(
+                              continuation_checkpoint,
+                              "UserPromptSubmit hook could not run: " + error,
+                            )
+                            .map(_ => ())
+                      }
+                      if control is Some(value) && value.cancelled.val {
+                        return Err("native command was cancelled")
+                      }
+                      match prompt_outcome.action {
+                        NativeHookAction::Continue =>
+                          child
+                          .continue_stop_hook(
+                            continuation_checkpoint,
+                            prompt_outcome.additional_contexts,
+                          )
+                          .map(_ => ())
+                        NativeHookAction::Deny(reason) =>
+                          child
+                          .block_stop_continuation(
+                            continuation_checkpoint,
+                            native_hook_limit_reason(reason),
+                          )
+                          .map(_ => ())
+                      }
+                    }
+                  }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+///|
+async fn NativeRuntime::start_and_drive_subagent(
+  self : NativeRuntime,
+  child : @engine.Engine,
+  child_id : String,
+  prompt : String,
+  binding : NativeSubagentProviderBinding,
+  control? : NativeJobControl? = None,
+) -> Result[Json, String] {
+  if control is Some(value) && value.cancelled.val {
+    return Err("native command was cancelled")
+  }
+  let prompt_outcome = if self.hooks.has_user_prompt_submit() {
+    self.run_subagent_prompt_hook(control, child_id, prompt)
+  } else {
+    Ok({ action: NativeHookAction::Continue, additional_contexts: [], })
+  }
+  let contexts = match prompt_outcome {
+    Err(error) => return Err("UserPromptSubmit hook could not run: " + error)
+    Ok({ action: NativeHookAction::Deny(reason), .. }) =>
+      return Err(
+        "UserPromptSubmit hook rejected the child prompt: " +
+        native_hook_limit_reason(reason),
+      )
+    Ok({ action: NativeHookAction::Continue, additional_contexts, }) =>
+      additional_contexts
+  }
+  if control is Some(value) && value.cancelled.val {
+    return Err("native command was cancelled")
+  }
+  let _sent = match
+    child.invoke("session_send", {
+      "session_id": child_id,
+      "prompt": prompt,
+      "additional_contexts": Json::array(
+        contexts.map(context => Json::string(context)),
+      ),
+    }) {
+    Ok(value) => value
+    Err(error) => return Err("cannot start child turn: " + error)
+  }
+  self.drive_subagent(child, child_id, binding, control~)
 }
 
 ///|
@@ -508,8 +695,12 @@ async fn NativeRuntime::drive_subagent(
   child : @engine.Engine,
   child_id : String,
   binding : NativeSubagentProviderBinding,
+  control? : NativeJobControl? = None,
 ) -> Result[Json, String] {
   for ;; {
+    if control is Some(value) && value.cancelled.val {
+      return Err("native command was cancelled")
+    }
     let session = match
       child.invoke("session_get", { "session_id": child_id }) {
       Ok(value) => value
@@ -531,7 +722,13 @@ async fn NativeRuntime::drive_subagent(
     for effect in effects {
       let result = match effect.kind() {
         @engine.EffectType::Provider =>
-          self.subagent_complete_provider(child, effect, binding)
+          self.subagent_complete_provider(
+            child,
+            effect,
+            binding,
+            child_id,
+            control~,
+          )
         @engine.EffectType::Tool =>
           self.subagent_complete_tool(child, effect, child_id)
       }
@@ -630,17 +827,12 @@ async fn NativeRuntime::run_subagent_tool(
     Err(error) => return tool_error("cannot create child session: " + error)
   }
   ignore(created)
-  let _sent = match
-    child.invoke("session_send", { "session_id": child_id, "prompt": prompt }) {
-    Ok(value) => value
-    Err(error) => return tool_error("cannot start child turn: " + error)
-  }
   let timeout_ms = Int::max(
     1,
     Int::min(run_timeout_ms, NATIVE_SUBAGENT_MAX_RUN_MS),
   )
   let outcome = @async.with_timeout_opt(timeout_ms, async fn() {
-    self.drive_subagent(child, child_id, binding)
+    self.start_and_drive_subagent(child, child_id, prompt, binding, control~)
   })
   let (session, terminal_status, failure_reason) = match outcome {
     Some(Ok(value)) =>

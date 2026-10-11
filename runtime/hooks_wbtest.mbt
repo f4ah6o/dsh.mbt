@@ -1567,6 +1567,102 @@ async test "UserPromptSubmit injects grouped source context before provider admi
 }
 
 ///|
+async test "UserPromptSubmit skips ordinary tool-result-only follow-up steps" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-prompt-hook-tool-followup")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    @fs.write_file(workspace + "/target.txt", "read this fixture")
+    let hooks_path = fixture + "/hooks.json"
+    let command = "payload=$(cat); printf '%s\\n' \"$payload\" >> \"${CLAUDE_PROJECT_DIR}/prompt-payloads.jsonl\"; printf x >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\"; printf '{}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(
+        native_hook_test_config("UserPromptSubmit", "ignored", command),
+      ),
+    )
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "prompt-hook-tool-followup"
+    ignore(
+      runtime
+      .invoke("session_create", {
+        "id": session_id,
+        "title": "Tool follow-up hook boundary",
+      })
+      .unwrap(),
+    )
+    let (_, initial_effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id,
+        "prompt": "Read target.txt and report its contents.",
+      })
+      .unwrap()
+    let initial_provider = native_effect_by_kind(
+      initial_effects,
+      @engine.EffectType::Provider,
+    ).unwrap()
+    let (_, tool_effects) = runtime
+      .complete(initial_provider.id(), {
+        "ok": true,
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "followup-read",
+            "name": "read",
+            "arguments": "{\"file_path\":\"target.txt\",\"offset\":1,\"limit\":10}",
+          },
+        ],
+        "finish_reason": "tool_calls",
+      })
+      .unwrap()
+    assert_eq(tool_effects.length(), 1)
+    let (_, followup_effects) = runtime
+      .run_tool_effect(tool_effects[0])
+      .unwrap()
+    assert_eq(followup_effects.length(), 1)
+    assert_true(followup_effects[0].kind() == @engine.EffectType::Provider)
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+
+    let (completed, trailing) = runtime
+      .complete(followup_effects[0].id(), {
+        "ok": true,
+        "content": "target.txt says read this fixture",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing.is_empty())
+    assert_eq(string_field(completed, "status"), Some("completed"))
+    assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+    let payload_lines = @fs.read_file(workspace + "/prompt-payloads.jsonl")
+      .text()
+      .split("\n")
+      .filter(line => !line.is_empty())
+      .to_array()
+    assert_eq(payload_lines.length(), 1)
+    let payload = @json.parse(payload_lines[0])
+    assert_eq(
+      string_field(payload, "prompt"),
+      Some("Read target.txt and report its contents."),
+    )
+    assert_eq(
+      string_field(payload, "hook_event_name"),
+      Some("UserPromptSubmit"),
+    )
+  }
+}
+
+///|
 async test "UserPromptSubmit trusted context reaches direct and MCP session_send" {
   let fixture = @fs.tmpdir(prefix="dsh-native-prompt-hook-surfaces")
   @async.with_task_group() <| group => {
