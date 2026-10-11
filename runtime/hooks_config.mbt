@@ -21,6 +21,7 @@ priv struct NativeHookGroup {
 
 ///|
 priv struct NativeHooks {
+  session_start : Array[NativeHookGroup]
   pre_tool : Array[NativeHookGroup]
   post_tool : Array[NativeHookGroup]
   user_prompt_submit : Array[NativeHookGroup]
@@ -195,6 +196,7 @@ fn native_hook_parse_config(
     Array[NativeHookGroup],
     Array[NativeHookGroup],
     Array[NativeHookGroup],
+    Array[NativeHookGroup],
   ),
   String,
 ] {
@@ -219,12 +221,17 @@ fn native_hook_parse_config(
     native_hook_exact_fields(
       hook_map,
       [
-        "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop", "SubagentStart",
-        "SubagentStop",
+        "SessionStart", "PreToolUse", "PostToolUse", "UserPromptSubmit", "Stop",
+        "SubagentStart", "SubagentStop",
       ],
       "hook event",
     ) {
     Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  let session_start = match
+    native_hook_parse_groups(hook_map.get("SessionStart"), "SessionStart") {
+    Ok(value) => value
     Err(error) => return Err(error)
   }
   let pre_tool = match
@@ -259,7 +266,8 @@ fn native_hook_parse_config(
     Ok(value) => value
     Err(error) => return Err(error)
   }
-  if pre_tool.is_empty() &&
+  if session_start.is_empty() &&
+    pre_tool.is_empty() &&
     post_tool.is_empty() &&
     user_prompt_submit.is_empty() &&
     stop.is_empty() &&
@@ -269,7 +277,8 @@ fn native_hook_parse_config(
   }
   Ok(
     (
-      pre_tool, post_tool, user_prompt_submit, stop, subagent_start, subagent_stop,
+      session_start, pre_tool, post_tool, user_prompt_submit, stop, subagent_start,
+      subagent_stop,
     ),
   )
 }
@@ -319,6 +328,7 @@ async fn NativeHooks::load(
   match path {
     None =>
       Ok({
+        session_start: [],
         pre_tool: [],
         post_tool: [],
         user_prompt_submit: [],
@@ -338,6 +348,7 @@ async fn NativeHooks::load(
       match native_hook_parse_config(document) {
         Ok(
           (
+            session_start,
             pre_tool,
             post_tool,
             user_prompt_submit,
@@ -347,6 +358,7 @@ async fn NativeHooks::load(
           )
         ) =>
           Ok({
+            session_start,
             pre_tool,
             post_tool,
             user_prompt_submit,

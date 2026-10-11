@@ -9,6 +9,7 @@ pub struct HarnessApi {
   priv operations : Map[String, @capability.TypedCapability[Json, Json]]
   priv profiler : @hotpath.Profiler
   priv native_prompt_contexts : Ref[Array[String]]
+  priv native_session_start_contexts : Ref[Array[String]]
   priv preview_session_send : Ref[Bool]
 }
 
@@ -202,6 +203,7 @@ fn create_api(
   let engine = @engine.Engine::new(plugins.tools())
   let profiler = @hotpath.Profiler::new()
   let native_prompt_contexts : Ref[Array[String]] = Ref([])
+  let native_session_start_contexts : Ref[Array[String]] = Ref([])
   let preview_session_send = Ref(false)
   let operations : Map[String, @capability.TypedCapability[Json, Json]] = Map([])
   for
@@ -298,25 +300,37 @@ fn create_api(
             "session_send" =>
               match @engine.EngineCommand::from_json("session_send", input) {
                 Ok(@engine.EngineCommand::SendPrompt(session_id, prompt)) => {
-                  let command = if native_prompt_contexts.val.is_empty() {
-                    @engine.EngineCommand::SendPrompt(session_id, prompt)
+                  let command_result = if !native_session_start_contexts.val.is_empty() {
+                    engine.apply_session_send_with_hook_contexts(
+                      session_id,
+                      prompt,
+                      native_session_start_contexts.val,
+                      native_prompt_contexts.val,
+                    )
+                  } else if native_prompt_contexts.val.is_empty() {
+                    let command = @engine.EngineCommand::SendPrompt(
+                      session_id, prompt,
+                    )
+                    if preview_session_send.val {
+                      engine.preview(command)
+                    } else {
+                      engine.apply(command)
+                    }
                   } else {
-                    @engine.EngineCommand::SendPromptWithContexts(
+                    let command = @engine.EngineCommand::SendPromptWithContexts(
                       session_id,
                       prompt,
                       native_prompt_contexts.val,
                     )
+                    if preview_session_send.val {
+                      engine.preview(command)
+                    } else {
+                      engine.apply(command)
+                    }
                   }
-                  if preview_session_send.val {
-                    match engine.preview(command) {
-                      Ok(value) => Ok(value)
-                      Err(error) => Err(domain_error(name, error))
-                    }
-                  } else {
-                    match engine.apply(command) {
-                      Ok(value) => Ok(value)
-                      Err(error) => Err(domain_error(name, error))
-                    }
+                  match command_result {
+                    Ok(value) => Ok(value)
+                    Err(error) => Err(domain_error(name, error))
                   }
                 }
                 Ok(command) =>
@@ -375,6 +389,7 @@ fn create_api(
     operations,
     profiler,
     native_prompt_contexts,
+    native_session_start_contexts,
     preview_session_send,
   }
 }
@@ -441,11 +456,14 @@ pub fn HarnessApi::preview_session_send(
 ) -> Result[Json, String] {
   let previous_preview = self.preview_session_send.val
   let previous_contexts = self.native_prompt_contexts.val
+  let previous_session_start_contexts = self.native_session_start_contexts.val
   self.preview_session_send.val = true
   self.native_prompt_contexts.val = []
+  self.native_session_start_contexts.val = []
   defer {
     self.preview_session_send.val = previous_preview
     self.native_prompt_contexts.val = previous_contexts
+    self.native_session_start_contexts.val = previous_session_start_contexts
   }
   self.invoke("session_send", input)
 }
@@ -458,10 +476,25 @@ pub fn HarnessApi::invoke_session_send_with_prompt_contexts(
   input : Json,
   contexts : Array[String],
 ) -> Result[Json, String] {
+  self.invoke_session_send_with_hook_contexts(input, [], contexts)
+}
+
+///|
+/// Dispatch a prompt with source-ordered native hook contexts while keeping
+/// the external session_send input schema closed.
+pub fn HarnessApi::invoke_session_send_with_hook_contexts(
+  self : HarnessApi,
+  input : Json,
+  session_start_contexts : Array[String],
+  prompt_contexts : Array[String],
+) -> Result[Json, String] {
   let previous = self.native_prompt_contexts.val
-  self.native_prompt_contexts.val = contexts
+  let previous_session_start = self.native_session_start_contexts.val
+  self.native_prompt_contexts.val = prompt_contexts
+  self.native_session_start_contexts.val = session_start_contexts
   defer {
     self.native_prompt_contexts.val = previous
+    self.native_session_start_contexts.val = previous_session_start
   }
   self.invoke("session_send", input)
 }
@@ -476,11 +509,14 @@ pub fn HarnessApi::preview_mcp_handle(
 ) -> String? {
   let previous_preview = self.preview_session_send.val
   let previous_contexts = self.native_prompt_contexts.val
+  let previous_session_start_contexts = self.native_session_start_contexts.val
   self.preview_session_send.val = true
   self.native_prompt_contexts.val = []
+  self.native_session_start_contexts.val = []
   defer {
     self.preview_session_send.val = previous_preview
     self.native_prompt_contexts.val = previous_contexts
+    self.native_session_start_contexts.val = previous_session_start_contexts
   }
   self.protocol.handle_line(line)
 }
@@ -493,10 +529,25 @@ pub fn HarnessApi::mcp_handle_with_prompt_contexts(
   line : String,
   contexts : Array[String],
 ) -> String? {
+  self.mcp_handle_with_hook_contexts(line, [], contexts)
+}
+
+///|
+/// Dispatch an unchanged MCP request with source-ordered native prompt hook
+/// contexts attached only inside the native session_send capability handler.
+pub fn HarnessApi::mcp_handle_with_hook_contexts(
+  self : HarnessApi,
+  line : String,
+  session_start_contexts : Array[String],
+  prompt_contexts : Array[String],
+) -> String? {
   let previous = self.native_prompt_contexts.val
-  self.native_prompt_contexts.val = contexts
+  let previous_session_start = self.native_session_start_contexts.val
+  self.native_prompt_contexts.val = prompt_contexts
+  self.native_session_start_contexts.val = session_start_contexts
   defer {
     self.native_prompt_contexts.val = previous
+    self.native_session_start_contexts.val = previous_session_start
   }
   self.protocol.handle_line(line)
 }

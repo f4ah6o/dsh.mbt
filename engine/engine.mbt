@@ -52,9 +52,9 @@ fn Engine::apply_command_impl(
       GetSession(id) => self.lookup(id.as_string()).json()
       ForkSession(id, child_id, title) =>
         self.fork_session(id.as_string(), child_id, title).json()
-      SendPrompt(id, prompt) => self.send_prompt(id, prompt, [])
+      SendPrompt(id, prompt) => self.send_prompt(id, prompt, [], [])
       SendPromptWithContexts(id, prompt, additional_contexts) =>
-        self.send_prompt(id, prompt, additional_contexts)
+        self.send_prompt(id, prompt, [], additional_contexts)
       CancelSession(id) => {
         let session = self.lookup(id.as_string())
         if session.imported {
@@ -124,6 +124,7 @@ fn Engine::send_prompt(
   self : Engine,
   id : SessionId,
   prompt : String,
+  initial_contexts : Array[String],
   additional_contexts : Array[String],
 ) -> Json raise EngineError {
   let session = self.lookup(id.as_string())
@@ -146,6 +147,11 @@ fn Engine::send_prompt(
   if session.events.length() + session.max_steps * 112 + 16 > 32768 {
     raise Invalid("Session event limit reached; create a new session")
   }
+  let all_contexts = initial_contexts.copy()
+  for context in additional_contexts {
+    all_contexts.push(context)
+  }
+  ignore(engine_validate_hook_contexts(all_contexts))
   session.turn_id += 1
   session.step = 0
   session.status = Running
@@ -164,6 +170,19 @@ fn Engine::send_prompt(
   session.stop_prompt_context_length = 0
   session.todos = None
   session.append("turn/start", object([]))
+  if !initial_contexts.is_empty() {
+    session.append(
+      "hook/subagent-start-context",
+      object([
+        ("context_count", integer(initial_contexts.length())),
+        (
+          "context_length",
+          integer(engine_subagent_hook_context_length(initial_contexts)),
+        ),
+      ]),
+    )
+    session.append("user/message", hook_context_message(initial_contexts))
+  }
   session.append(
     "user/message",
     object([("role", Json::string("user")), ("content", Json::string(prompt))]),

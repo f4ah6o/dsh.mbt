@@ -276,6 +276,40 @@ fn native_hook_result_decision(
 }
 
 ///|
+/// SessionStart is context-only in the pinned Claude bridge. Its upstream
+/// codec is lenient: plain output and malformed or mismatched event payloads
+/// add no context, while decision/control fields are ignored by the bridge.
+fn native_hook_session_start_context(capture : NativeHookCapture) -> String? {
+  if capture.truncated || capture.exit_code != 0 {
+    return None
+  }
+  let stdout = capture.stdout.trim().to_owned()
+  if !stdout.has_prefix("{") {
+    return None
+  }
+  let document = @json.parse(stdout) catch { _ => return None }
+  let fields = match native_hook_object(document) {
+    Some(value) => value
+    None => return None
+  }
+  let specific = match fields.get("hookSpecificOutput") {
+    Some(value) => native_hook_object(value)
+    None => None
+  }
+  let specific = match specific {
+    Some(value) => value
+    None => return None
+  }
+  if specific.get("hookEventName") != Some(Json::string("SessionStart")) {
+    return None
+  }
+  match specific.get("additionalContext") {
+    Some(Json::String(value)) => Some(value)
+    _ => None
+  }
+}
+
+///|
 /// Decode only the Stop bridge's control fields. This intentionally treats
 /// malformed JSON, unknown fields, wrong field types, and non-blocking process
 /// failures as neutral outcomes, matching the pinned hook-protocol codec.
