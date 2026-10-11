@@ -389,6 +389,15 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 - Local format / native typecheck / diff check / browser asset generation は PASS、project-owned warnings 0。local behavioral test は ENOSPC で完走できず、hosted results と区別する。
 - DEBT-007 と今回の DEBT-009–017 は修正済み。非不具合の DEBT-001–006 / 008 は維持する改善候補として残す。この docs-only PR と full upstream parity issue は open を維持し、後続 increment の記録を積む。
 
+### 0.1.17 PostToolUse context を次の UserPromptSubmit 境界で処理
+
+- 固定 port candidate: `63b8e2dd6fbab118c0483850625a963952bab307`（base `003e25b1113f0a252b6889f4e13f76f135d6a795`）。この記録時点で feature PR、独立 final review、fresh-worker runtime verification、hosted CI、merge、publication は pending。PR #44 は open のまま。
+- **固定 upstream 契約**: `5badb15009ae1756c3afe0ae0cef1faafc290ccc` の `packages/hooks/hooks-claude-code/src/index.ts:223-240` は、次の proposed step で claim した `messages` が非空の場合にだけ UserPromptSubmit を実行し、その context を enter decision に追加する。同じ file の `:255-269` は PostToolUse `additionalContext` を tool decision に付ける。`packages/core/agent-loop/src/tool-calls.ts:152-158` は model 順に commit する result の後でその context を受け取り、`agent.ts` の `preStep` は次の境界で inbox を claim する（`agent.ts:267-326, 534-537`）。したがって、PostToolUse context を claim した次の boundary では非空 input として UserPromptSubmit を通る。これは固定 source の静的照合であり、upstream の実行不具合を再現した記録ではない。
+- **port candidate の範囲**: `engine/tool_calls.mbt:138-173` は model-order の全 tool result を commit した後、root の PostToolUse message を次の prompt admission 用に保留し、child では既存の Subagent prompt checkpoint に call ごとの message を積む。`engine/post_tool_prompt_hooks.mbt:30-144` と `runtime/runtime.mbt:2753-2892` は root の claimed batch を checkpoint し、UserPromptSubmit の accept 時に元の PostToolUse message に続けて hook context を加えてから provider step を開始する。reject / capacity failure は context を admit せず、既知の tool result を巻き戻さない。child は既存の `engine/subagent_hooks.mbt:179-297` admission を使い、次の child prompt boundary の前に処理する。
+- **保存・復元境界**: `engine/engine.mbt:736-784` の pending marker と `engine/persistence.mbt:1283-1435, 1707-1714` の reader は `hook/post-tool-prompt-pending`, `...-admitted`, `...-rejected`, `...-abandoned` の順序・context と result message の対応を検証する。pending checkpoint 中の restore は未完了 boundary を閉じ、hook / provider effect を再実行しない。これは source の実装構造の観測であり、snapshot protocol 全体の独立検証完了を意味しない。
+- **既存 debt の扱い**: 新しい番号付き debt は追加しない。`DEBT-001` の Json event / message payload、`DEBT-003` の String error contract、`DEBT-004` の手動 state copy には新しい PostTool prompt checkpoint / pending arrays が増えるため、改善候補としてそのまま含める。`DEBT-006` の空 `transcript_path` と `DEBT-008` の未反映 hook controls はこの increment でも維持する。0.1.16 の「空 inbox の tool-result-only step は UserPromptSubmit を起動しない」という訂正は変わらない。ここで対象にするのは nonempty PostToolUse context が次の input batch に入る経路である。
+- **実装担当の確認**: `engine/engine_wbtest.mbt:597-946` は PostToolUse message shape、並列結果後の admission、拒否 / restore、combined context cap を扱い、`engine/subagent_hooks_wbtest.mbt:828-881` は child context の call order を確認する。`runtime/hooks_wbtest.mbt:1739` の実 hook test は root follow-up の前に UserPromptSubmit が走ることを扱う。Luna は exact candidate で `moon fmt --check` / `moon check` と集約 test 583 / 583 を報告し、test log footer は `/Volumes/devstorage/Developer/dsh-posttool-prompt-builds-20261011/test-frozen-candidate.log` に記録されている。この test 結果は実装担当の報告で、独立 review ではない。実行環境の worker injection が新規に固定・確認されておらず、fresh-worker full runtime PASS とは記録しない。独立レビュー / probes、hosted CI、merge、publication は後続確認待ち。
+
 ### 後続追記テンプレート
 
 #### DEBT-NNN: 短い見出し
@@ -471,3 +480,4 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 ## 注記
 
 - 2026-10-10: 以前の文書編集では正確な実行モデル識別子を確認できず `Model: unknown` と記録した。2026-10-11 の編集では指定された `gpt-6-luna` を記録する。
+- 2026-10-11: 0.1.17 PostToolUse → UserPromptSubmit increment の固定-source comparison、implementation snapshot、実装担当の aggregate test report を追記。独立 review、fresh-worker runtime、hosted CI、merge、publication は pending として記録。
