@@ -267,6 +267,14 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 - Annotated tag [`v0.1.14`](https://github.com/f4ah6o/dsh.mbt/releases/tag/v0.1.14) は merge commit `94e59f3` に push 済み。GitHub release workflow [run 38118994836](https://github.com/f4ah6o/dsh.mbt/actions/runs/38118994836) は全 4 jobs success（3 platform builds と publish）、release は 2026-10-11 06:50:10 UTC に published（draft / prerelease ではない）。4 assets (`dsh-darwin-aarch64`、`dsh-linux-aarch64`、`dsh-linux-x86_64`、`Dsh-macos-arm64.zip`) が upload 済み。
 - PR #47 の対象外として、ordinary internal tool-follow-up step では native UserPromptSubmit を実行せず、foreground subagent child completion は parent Stop dispatcher を通らない。これらは既存の native integration / parity gap であり upstream defect や DEBT-018 の原典制約ではない。feature guide / port status / umbrella [issue 0001](0001-upstream-parity.md) に分けて記録し、別 increment で扱う。reviewer は live provider account / desktop GUI smoke を行っていない。
 
+#### 固定 upstream source による ordinary tool-follow-up 評価の訂正
+
+上の bullet は当時の port 観測として保持する。ordinary tool-result-only step を UserPromptSubmit parity gap とした評価は、固定 upstream source の再照合により訂正する。
+
+- upstream baseline / path: [`5badb150` の `agent.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/core/agent-loop/src/agent.ts#L267-L326) は turn 内の各 proposed step で `preStep` を呼び、その中で claimed inbox messages を `agent/pre-step` waterfall に渡す。[`hooks-claude-code/src/index.ts`](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts#L223-L240) の listener は `messages.length === 0` なら `next()` を返し、非空の場合だけ `UserPromptSubmit` を起動する。
+- 評価: upstream は各 step で pre-step dispatch を行うが、UserPromptSubmit payload はその step で claim された入力に限る。従って、新しい claimed input を伴わない tool-result-only follow-up が UserPromptSubmit を起動しないことは意図された入力フィルターであり、この事実だけでは port parity gap や upstream defect の根拠にならない。以前の記述は port での非実行を観測した記録として残し、普通の tool-result-only step を gap とする結論を撤回する。入力のない step でも hook を実行するかどうかは別の拡張判断である。
+- 子 agent の初回入力と子 agent 自身の Stop dispatch に関する parity の問いは、この訂正の対象外で、child lifecycle increment で評価する。upstream の同じ hooks source は `SubagentStart` が child context を注入でき、`SubagentStop` は観測のみと区別している（[該当 listener](https://github.com/deepseek-ai/deepseek-harness/blob/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/hooks/hooks-claude-code/src/index.ts#L285-L300)）。これらの観測イベントを child 初回 UserPromptSubmit や child Stop behavior と混同せず、今回の increment の対象に含めない。
+
 ### UserPromptSubmit increment の最終確認
 
 - 修正先: [PR #46](https://github.com/f4ah6o/dsh.mbt/pull/46)、version 0.1.13、固定 source head [`982f2b6`](https://github.com/f4ah6o/dsh.mbt/tree/982f2b6f4b5fd364ebf0500a032bb210b753db9a)。実装は `gpt-6-luna / max`、独立レビューは `gpt-6.1-sol / xhigh`。
@@ -329,6 +337,7 @@ DEBT-009–013 は [`f7e9856`](https://github.com/f4ah6o/dsh.mbt/commit/f7e9856f
 - 2026-10-11: `8250c9e` の Stop truncated-capture / exit-2 経路と upstream codec 契約を照合し、native isolated decoder probe で rank 0 を再現した DEBT-021 を登録。review-only test counts と production suite を区別。UserPromptSubmit の最終確認欄を `982f2b6` 時点の記録に戻し、Stop 現況を Stop increment 内に保持。
 
 - 2026-10-11: DEBT-019–021 の修正 commit と fixed-head runtime / engine regressions を追記し、機能 head `4e28edf` の独立レビュー `APPROVE` を記録。PR #47 を相互参照。最初の CI run は engine 3 files の format gate failure で両 job とも behavior gate 未到達。root 実測の portable matrix 帰属を明確化し、format-only correction 後の独立再レビュー、native asset matrix success、CI 全 job success を追記。PR #47 merge、0.1.14 publication と fresh registry install / source equality、tag release workflow 全 job success と release assets upload まで追記し、公開作業の証拠を確定。child-engine Stop dispatch と per-step UserPromptSubmit の既存 native parity gaps は原典制約と区別して別 scope に記録。
+- 2026-10-11: 固定 upstream `agent.ts` と Claude Code hook listener を照合し、tool-result-only step の UserPromptSubmit 非実行を parity gap とした評価を訂正。child initial prompt / child Stop の問いは別 increment に保ち、観測用 SubagentStart / SubagentStop hooks と区別。
 
 ## 注記
 
