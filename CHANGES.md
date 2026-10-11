@@ -4,9 +4,13 @@
 
 ### Added
 
+- Add opt-in native Stop command hooks to run, web, MCP, ACP, and desktop. A denial steers the same turn through UserPromptSubmit before its next provider request; see the [native runtime guide](docs/native-runtime.md#native-command-hooks) and [remaining parity work](issues/open/0001-upstream-parity.md).
+
 ### Changed
 
 ### Fixed
+
+- Preserve Stop cancellation ownership through continuation hooks, settle oversized Unicode denial reasons instead of leaving sessions busy, and keep known exit-2 denials when captured stderr is truncated or invalid UTF-8.
 
 ### Deprecated
 
@@ -15,6 +19,8 @@
 ### Security
 
 ### Migration
+
+- Native stores containing Stop boundary events require dsh 0.1.14 or later. Back up before downgrading; existing stores without Stop events remain readable.
 
 ## 0.1.13 - 2026-10-10
 
