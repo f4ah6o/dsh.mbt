@@ -1037,6 +1037,8 @@ fn Engine::terminate(
       "hook/subagent-post-tool-prompt-abandoned",
       object([("reason", Json::string(reason))]),
     )
+    session.pending_subagent_post_tool_messages.clear()
+    session.pending_subagent_post_tool_contexts.clear()
   }
   session.calls.clear()
   session.cursor = 0

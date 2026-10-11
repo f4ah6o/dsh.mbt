@@ -1088,6 +1088,26 @@ test "child cancellation abandons known PostToolUse context while a sibling is s
   let restored = Engine::new(test_tools())
   assert_eq(restored.restore(engine.snapshot()), Ok(()))
   assert_eq(get_session_for(restored, "hook-child"), cancelled)
+  let fresh = success(
+    engine.invoke(
+      "session_send",
+      fixture(
+        "{\"session_id\":\"hook-child\",\"prompt\":\"fresh prompt after cancellation\"}",
+      ),
+    ),
+  )
+  assert_eq(get_status(fresh), "running")
+  let fresh_effects = engine.take_effects()
+  assert_eq(fresh_effects.length(), 1)
+  assert_eq(required_string(fresh_effects[0], "kind"), "llm")
+  assert_true(engine.pending_subagent_prompt_hook("hook-child") is None)
+  let fresh_user_messages = subagent_hook_all_messages(fresh_effects[0]).filter(message => {
+      required_string(message, "role") == "user"
+    },
+  )
+  assert_eq(fresh_user_messages.map(subagent_hook_message_text), [
+    "child prompt", "fresh prompt after cancellation",
+  ])
 }
 
 ///|
