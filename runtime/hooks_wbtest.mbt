@@ -361,6 +361,93 @@ test "SessionStart payload and context codec retain the pinned context-only cont
 }
 
 ///|
+async test "SessionStart overflow still runs every later matching command" {
+  let fixture = @fs.tmpdir(prefix="dsh-session-start-overflow-order")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let tools = native_hook_test_tools(workspace)
+    group.add_defer(() => tools.root.close())
+    let config_path = fixture + "/hooks.json"
+    let context_output = (value : String) => {
+      Json::object({
+        "hookSpecificOutput": Json::object({
+          "hookEventName": Json::string("SessionStart"),
+          "additionalContext": Json::string(value),
+        }),
+      }).stringify()
+    }
+    let command = (path : String, marker : String, stdout : String) => {
+      "printf '%s' " +
+      native_hook_shell_quote(marker) +
+      " >> " +
+      native_hook_shell_quote(path) +
+      "; printf '%s' " +
+      native_hook_shell_quote(stdout)
+    }
+    let group_for = (command : String) => {
+      Json::object({
+        "matcher": Json::string("startup"),
+        "hooks": Json::array([
+          Json::object({ "command": Json::string(command) }),
+        ]),
+      })
+    }
+
+    let individual_marker = workspace + "/individual-order.txt"
+    let individual_overflow = Json::object({
+      "SessionStart": Json::array([
+        group_for(
+          command(individual_marker, "1", context_output("x".repeat(4097))),
+        ),
+        group_for(command(individual_marker, "2", "{}")),
+      ]),
+    })
+    @fs.write_file(config_path, @utf8.encode(individual_overflow.stringify()))
+    let individual_hooks = NativeHooks::load(Some(config_path), workspace).unwrap()
+    assert_eq(
+      individual_hooks.before_session_start(
+        tools, "individual-overflow", "startup",
+      ),
+      [],
+    )
+    assert_eq(@fs.read_file(individual_marker).text(), "12")
+
+    let aggregate_marker = workspace + "/aggregate-order.txt"
+    let aggregate_groups : Array[Json] = []
+    let letters = ["a", "b", "c", "d"]
+    for index in 0..<letters.length() {
+      aggregate_groups.push(
+        group_for(
+          command(
+            aggregate_marker,
+            index.to_string(),
+            context_output(letters[index].repeat(4096)),
+          ),
+        ),
+      )
+    }
+    aggregate_groups.push(
+      group_for(command(aggregate_marker, "4", context_output("e"))),
+    )
+    aggregate_groups.push(group_for(command(aggregate_marker, "5", "{}")))
+    let aggregate_overflow = Json::object({
+      "SessionStart": Json::array(aggregate_groups),
+    })
+    @fs.write_file(config_path, @utf8.encode(aggregate_overflow.stringify()))
+    let aggregate_hooks = NativeHooks::load(Some(config_path), workspace).unwrap()
+    assert_eq(
+      aggregate_hooks.before_session_start(
+        tools, "aggregate-overflow", "startup",
+      ),
+      [],
+    )
+    assert_eq(@fs.read_file(aggregate_marker).text(), "012345")
+  }
+}
+
+///|
 test "SubagentStart codec accepts only matching successful event context and ignores decisions" {
   let accepted = native_hook_subagent_start_context({
     exit_code: 0,

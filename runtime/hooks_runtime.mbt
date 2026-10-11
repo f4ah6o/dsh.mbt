@@ -115,20 +115,17 @@ async fn NativeHooks::before_session_start(
         Ok(value) => value
         Err(_) => continue
       }
+      if overflow {
+        continue
+      }
       match native_hook_session_start_context(capture) {
         Some(context) =>
           match native_hook_add_context(contexts, context) {
             Ok(_) => ()
-            Err(_) => {
-              overflow = true
-              break
-            }
+            Err(_) => overflow = true
           }
         None => ()
       }
-    }
-    if overflow {
-      break
     }
   }
   if overflow {
