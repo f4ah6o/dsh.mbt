@@ -19,6 +19,7 @@
 - Restore accepted Start context batches that are staged with a Stop continuation, and reject malformed marker/reason order.
 - Reject empty or oversized child prompts before the Engine claims the pending Start context batch.
 - In direct-admission fallback, count initial Start context once against the Engine's shared hook-context item and UTF-16 limits, leaving only the remaining capacity for later queued input; prompt-hook checkpoints validate each claimed batch separately.
+- Reject snapshots whose initial or staged-Stop SubagentStart contexts plus UserPromptSubmit contexts exceed the combined 32-item or 16,384 UTF-16-unit limits; preserve the staged Stop marker's UserPromptSubmit-only counts and exclude the Stop reason from those context budgets.
 
 ### Deprecated
 

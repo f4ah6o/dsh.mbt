@@ -218,6 +218,8 @@ fn restore_session(
   let mut prompt_context_count = 0
   let mut prompt_context_length = 0
   let mut expected_subagent_context : (Int, Int)? = None
+  let mut stop_subagent_context_count = 0
+  let mut stop_subagent_context_length = 0
   let mut late_subagent_context_admission = false
   let mut late_subagent_context_count = 0
   let mut late_subagent_context_length = 0
@@ -296,6 +298,8 @@ fn restore_session(
       assistant_recorded = false
       prompt_context_count = 0
       prompt_context_length = 0
+      stop_subagent_context_count = 0
+      stop_subagent_context_length = 0
       late_subagent_context_admission = false
       late_subagent_context_count = 0
       late_subagent_context_length = 0
@@ -317,6 +321,8 @@ fn restore_session(
       session.step = step
       session.open_step = true
       stop_settled_pending_boundary = false
+      stop_subagent_context_count = 0
+      stop_subagent_context_length = 0
       late_subagent_context_admission = false
       late_subagent_context_count = 0
       late_subagent_context_length = 0
@@ -374,6 +380,33 @@ fn restore_session(
                         )
                       }
                       expected_subagent_context = None
+                      if session.step == 0 &&
+                        !admitted_user &&
+                        !assistant_recorded {
+                        prompt_context_count += actual_count
+                        prompt_context_length += actual_length
+                        if prompt_context_count > 32 ||
+                          prompt_context_length > 16384 {
+                          raise Invalid(
+                            "Prompt contexts exceed the configured limit",
+                          )
+                        }
+                      } else if session.stop_hook_pending &&
+                        session.stop_continuation_text is Some(_) &&
+                        !session.stop_continuation_admitted {
+                        stop_subagent_context_count += actual_count
+                        stop_subagent_context_length += actual_length
+                        if stop_subagent_context_count +
+                          session.stop_prompt_context_count >
+                          32 ||
+                          stop_subagent_context_length +
+                          session.stop_prompt_context_length >
+                          16384 {
+                          raise Invalid(
+                            "Stop continuation contexts exceed the configured limit",
+                          )
+                        }
+                      }
                       if session.step > 0 &&
                         assistant_recorded &&
                         !(session.stop_hook_pending &&
@@ -410,8 +443,12 @@ fn restore_session(
                           )
                           session.stop_prompt_context_count += context_count
                           session.stop_prompt_context_length += context_length
-                          if session.stop_prompt_context_count > 32 ||
-                            session.stop_prompt_context_length > 16384 {
+                          if stop_subagent_context_count +
+                            session.stop_prompt_context_count >
+                            32 ||
+                            stop_subagent_context_length +
+                            session.stop_prompt_context_length >
+                            16384 {
                             raise Invalid(
                               "Stop continuation contexts exceed the configured limit",
                             )
@@ -1241,6 +1278,8 @@ fn restore_session(
           session.stop_continuation_admitted = false
           session.stop_prompt_context_count = 0
           session.stop_prompt_context_length = 0
+          stop_subagent_context_count = 0
+          stop_subagent_context_length = 0
           stop_continuation_reason_seen = false
           stop_continuation_rejected = false
         }
@@ -1262,6 +1301,8 @@ fn restore_session(
           }
           session.clear_stop_continuation_state()
           stop_settled_pending_boundary = true
+          stop_subagent_context_count = 0
+          stop_subagent_context_length = 0
           stop_continuation_reason_seen = false
           stop_continuation_rejected = false
         }
@@ -1321,6 +1362,8 @@ fn restore_session(
           session.stop_continuation_text = Some(text)
           session.stop_prompt_context_count = 0
           session.stop_prompt_context_length = 0
+          stop_subagent_context_count = 0
+          stop_subagent_context_length = 0
           session.stop_continuation_admitted = false
           stop_continuation_reason_seen = false
           stop_continuation_rejected = false
@@ -1541,7 +1584,11 @@ fn validate_hook_prompt_context(
     if text.is_empty() {
       raise Invalid("Hook prompt context must not contain empty text")
     }
-    total_length += text.length()
+    let units = engine_hook_context_utf16_units(text)
+    if units > 4096 {
+      raise Invalid("Hook prompt context text exceeds the item length limit")
+    }
+    total_length += units
   }
   if total_length > 16384 {
     raise Invalid("Hook prompt context exceeds the aggregate length limit")

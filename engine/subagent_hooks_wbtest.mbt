@@ -70,6 +70,104 @@ fn subagent_hook_message_text(message : Json) -> String raise EngineError {
 }
 
 ///|
+fn subagent_hook_completed_initial_snapshot(
+  start_contexts : Array[String],
+  prompt_contexts : Array[String],
+) -> Json {
+  let engine = subagent_hook_engine()
+  match engine.inject_hook_contexts("hook-child", start_contexts) {
+    Ok(true) => ()
+    _ => abort("Could not queue initial SubagentStart contexts")
+  }
+  let checkpoint = subagent_checkpoint_success(
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", true),
+  )
+  ignore(
+    success(engine.accept_subagent_prompt_hook(checkpoint, prompt_contexts)),
+  )
+  let request = engine.take_effects()[0]
+  ignore(success(engine.complete(id_of(request), stop_response("answer"))))
+  engine.snapshot()
+}
+
+///|
+fn subagent_hook_completed_stop_snapshot(
+  start_contexts : Array[String],
+  prompt_contexts : Array[String],
+) -> Json {
+  let engine = subagent_hook_engine()
+  let initial = subagent_checkpoint_success(
+    engine.begin_subagent_prompt_hook("hook-child", "child prompt", true),
+  )
+  ignore(success(engine.accept_subagent_prompt_hook(initial, [])))
+  let first = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete_effect_with_stop_hook(
+        subagent_stop_effect_id(first),
+        stop_response("answer before continuation"),
+      ),
+    ),
+  )
+  let session_id = SessionId::new("hook-child").unwrap()
+  let stop = engine.pending_stop_hook(session_id).unwrap()
+  match engine.inject_hook_contexts("hook-child", start_contexts) {
+    Ok(true) => ()
+    _ => abort("Could not queue Stop-boundary SubagentStart contexts")
+  }
+  ignore(success(engine.prepare_stop_continuation(stop, "continue")))
+  let staged = engine.pending_stop_hook(session_id).unwrap()
+  ignore(success(engine.continue_stop_hook(staged, prompt_contexts)))
+  let next = engine.take_effects()[0]
+  ignore(success(engine.complete(id_of(next), stop_response("final answer"))))
+  engine.snapshot()
+}
+
+///|
+fn subagent_hook_forge_start_contexts(
+  snapshot : Json,
+  contexts : Array[String],
+) -> Json raise EngineError {
+  let forged = json_copy(snapshot)
+  let session = array_value(required_field(forged, "sessions"), "sessions", 32)[0]
+  let events = array_value(required_field(session, "events"), "events", 32768)
+  let mut marker_index = -1
+  for index, event in events {
+    if required_string(event, "type") == "hook/subagent-start-context" {
+      marker_index = index
+      break
+    }
+  }
+  if marker_index < 0 || marker_index + 1 >= events.length() {
+    abort("Completed Subagent snapshot is missing its Start context pair")
+  }
+  let marker_event = events[marker_index]
+  let message_event = events[marker_index + 1]
+  if required_string(message_event, "type") != "user/message" {
+    abort("Start context marker is not followed by its user message")
+  }
+  let marker_data = required_field(marker_event, "data")
+  fields(marker_data).set("context_count", integer(contexts.length()))
+  fields(marker_data).set(
+    "context_length",
+    integer(engine_subagent_hook_context_length(contexts)),
+  )
+  let content : Array[Json] = contexts.map(context => {
+    object([("type", Json::string("text")), ("text", Json::string(context))])
+  })
+  fields(required_field(message_event, "data")).set(
+    "content",
+    Json::array(content),
+  )
+  forged
+}
+
+///|
+fn subagent_hook_large_contexts(last : String) -> Array[String] {
+  ["a".repeat(4096), "b".repeat(4096), "c".repeat(4096), last]
+}
+
+///|
 test "initial Subagent prompt checkpoint validates prompt bounds atomically" {
   let engine = subagent_hook_engine()
   assert_eq(
@@ -91,6 +189,96 @@ test "initial Subagent prompt checkpoint validates prompt bounds atomically" {
     engine.begin_subagent_prompt_hook("hook-child", "valid prompt", true),
   )
   assert_eq(valid.contexts(), ["keep queued"])
+}
+
+///|
+test "restore enforces the combined initial Start context count" {
+  let valid_snapshot = subagent_hook_completed_initial_snapshot(
+    Array::make(31, "start"),
+    ["prompt"],
+  )
+  let valid_restore = Engine::new(test_tools())
+  assert_eq(valid_restore.restore(valid_snapshot), Ok(()))
+
+  let forged = subagent_hook_forge_start_contexts(
+    valid_snapshot,
+    Array::make(32, "start"),
+  )
+  let destination = Engine::new(test_tools())
+  let before = destination.snapshot()
+  assert_true(destination.restore(forged) is Err(_))
+  assert_eq(destination.snapshot(), before)
+
+  let writer = subagent_hook_engine()
+  assert_eq(
+    writer.inject_hook_contexts("hook-child", Array::make(32, "start")),
+    Ok(true),
+  )
+  let checkpoint = subagent_checkpoint_success(
+    writer.begin_subagent_prompt_hook("hook-child", "child prompt", true),
+  )
+  let before_accept = writer.snapshot()
+  assert_true(
+    writer.accept_subagent_prompt_hook(checkpoint, ["prompt"]) is Err(_),
+  )
+  assert_eq(writer.snapshot(), before_accept)
+}
+
+///|
+test "restore enforces the combined initial Start context UTF-16 length" {
+  let exact_snapshot = subagent_hook_completed_initial_snapshot(
+    subagent_hook_large_contexts("d".repeat(4093) + "😀"),
+    ["x"],
+  )
+  let exact_restore = Engine::new(test_tools())
+  assert_eq(exact_restore.restore(exact_snapshot), Ok(()))
+
+  let forged = subagent_hook_forge_start_contexts(
+    exact_snapshot,
+    subagent_hook_large_contexts("d".repeat(4094) + "😀"),
+  )
+  let destination = Engine::new(test_tools())
+  let before = destination.snapshot()
+  assert_true(destination.restore(forged) is Err(_))
+  assert_eq(destination.snapshot(), before)
+}
+
+///|
+test "restore enforces the combined staged Stop Start context count" {
+  let valid_snapshot = subagent_hook_completed_stop_snapshot(
+    Array::make(31, "start"),
+    ["prompt"],
+  )
+  let valid_restore = Engine::new(test_tools())
+  assert_eq(valid_restore.restore(valid_snapshot), Ok(()))
+
+  let forged = subagent_hook_forge_start_contexts(
+    valid_snapshot,
+    Array::make(32, "start"),
+  )
+  let destination = Engine::new(test_tools())
+  let before = destination.snapshot()
+  assert_true(destination.restore(forged) is Err(_))
+  assert_eq(destination.snapshot(), before)
+}
+
+///|
+test "restore enforces the combined staged Stop Start context UTF-16 length" {
+  let exact_snapshot = subagent_hook_completed_stop_snapshot(
+    subagent_hook_large_contexts("d".repeat(4093) + "😀"),
+    ["x"],
+  )
+  let exact_restore = Engine::new(test_tools())
+  assert_eq(exact_restore.restore(exact_snapshot), Ok(()))
+
+  let forged = subagent_hook_forge_start_contexts(
+    exact_snapshot,
+    subagent_hook_large_contexts("d".repeat(4094) + "😀"),
+  )
+  let destination = Engine::new(test_tools())
+  let before = destination.snapshot()
+  assert_true(destination.restore(forged) is Err(_))
+  assert_eq(destination.snapshot(), before)
 }
 
 ///|
