@@ -1148,6 +1148,10 @@ fn Engine::complete_impl(
     if effect.kind == Llm && session.pending_retry_id is Some(_) {
       raise Invalid("Provider effect completed while a retry was waiting")
     }
+    if effect.kind == Llm &&
+      !native_hook_pending_invocations(session).is_empty() {
+      raise Invalid("Provider effect completed before native hook results")
+    }
     let result = checked_copy(result)
     let ok = bool_value(required_field(result, "ok"), "ok")
     if !ok {

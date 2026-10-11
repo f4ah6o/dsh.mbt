@@ -127,6 +127,9 @@ pub fn Engine::prepare_stop_continuation(
   let candidate = self.copy_state()
   let changed = try {
     let session = candidate.stop_hook_session(checkpoint)
+    if !native_hook_pending_invocations(session).is_empty() {
+      raise Invalid("Cannot close a turn with pending native hook results")
+    }
     if session.stop_continuation_text is Some(_) {
       raise Invalid("Stop continuation is already staged")
     }
@@ -189,6 +192,9 @@ pub fn Engine::finish_stop_hook(
   let candidate = self.copy_state()
   let changed = try {
     let session = candidate.stop_hook_session(checkpoint)
+    if !native_hook_pending_invocations(session).is_empty() {
+      raise Invalid("Cannot close a turn with pending native hook results")
+    }
     if session.stop_continuation_text is Some(_) {
       raise Invalid("Cannot finish Stop while a continuation is staged")
     }

@@ -848,6 +848,39 @@ pub fn HarnessApi::event_log(
 }
 
 ///|
+/// Durably admit a native hook invocation before its command process starts.
+pub fn HarnessApi::record_native_hook_invoked(
+  self : HarnessApi,
+  session_id : String,
+  point : String,
+  handler_id : String,
+  matcher : String?,
+) -> Result[@engine.NativeHookInvocationCheckpoint, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.record_native_hook_invoked(session_id, point, handler_id, matcher)
+}
+
+///|
+/// Record the completed native hook outcome for its exact invocation.
+pub fn HarnessApi::record_native_hook_result(
+  self : HarnessApi,
+  checkpoint : @engine.NativeHookInvocationCheckpoint,
+  decision : String,
+  exit_code : Int?,
+  stderr_summary : String?,
+  duration_ms : Int,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.record_native_hook_result(
+    checkpoint, decision, exit_code, stderr_summary, duration_ms,
+  )
+}
+
+///|
 pub fn HarnessApi::snapshot(self : HarnessApi) -> Json {
   self.engine.snapshot()
 }

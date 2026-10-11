@@ -165,7 +165,12 @@ fn Engine::adopt(self : Engine, candidate : Engine) -> Unit {
 /// provider/tool error itself goes through this admission transaction.
 fn Engine::within_capacity(self : Engine) -> Bool {
   for _, session in self.sessions {
-    if session_capacity_length(session.json()) > SESSION_CAPACITY {
+    let projected = native_hook_result_capacity_projection(session)
+    if session_capacity_length(projected.json()) > SESSION_CAPACITY ||
+      (
+        session.status == Running &&
+        projected.events.length() + NATIVE_HOOK_EVENT_CLOSURE_RESERVE > 32768
+      ) {
       return false
     }
   }
@@ -188,7 +193,12 @@ fn Engine::within_capacity(self : Engine) -> Bool {
     }
   }
   for _, session in starting.sessions {
-    if session_capacity_length(session.json()) > SESSION_CAPACITY {
+    let projected = native_hook_result_capacity_projection(session)
+    if session_capacity_length(projected.json()) > SESSION_CAPACITY ||
+      (
+        session.status == Running &&
+        projected.events.length() + NATIVE_HOOK_EVENT_CLOSURE_RESERVE > 32768
+      ) {
       return false
     }
   }
