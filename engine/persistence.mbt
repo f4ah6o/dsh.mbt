@@ -365,7 +365,10 @@ fn restore_session(
                         )
                       }
                       expected_subagent_context = None
-                      if session.step > 0 && assistant_recorded {
+                      if session.step > 0 &&
+                        assistant_recorded &&
+                        !(session.stop_hook_pending &&
+                        session.stop_continuation_text is Some(_)) {
                         late_subagent_context_admission = true
                         late_subagent_context_count = actual_count
                         late_subagent_context_length = actual_length
@@ -1260,10 +1263,15 @@ fn restore_session(
           if !initial_prompt_context && (!admitted_user || !assistant_recorded) {
             raise Invalid("SubagentStart context outside a child step boundary")
           }
-          if session.stop_hook_pending {
-            if session.stop_continuation_text is None {
-              session.clear_stop_continuation_state()
-            }
+          if session.stop_hook_pending &&
+            (
+              session.stop_continuation_text is None ||
+              session.stop_continuation_admitted ||
+              stop_continuation_reason_seen
+            ) {
+            raise Invalid(
+              "SubagentStart context is outside the Stop continuation input order",
+            )
           }
           expected_subagent_context = Some((context_count, context_length))
         }

@@ -84,6 +84,12 @@ pub fn Engine::begin_subagent_prompt_hook(
   prompt : String,
   admit_later_contexts : Bool,
 ) -> Result[NativeSubagentPromptHookCheckpoint, String] {
+  if prompt.is_empty() {
+    return Err("prompt must not be empty")
+  }
+  if prompt.length() > 16384 {
+    return Err("prompt exceeds the length limit")
+  }
   let candidate = self.copy_state()
   let checkpoint = try {
     let session = candidate.lookup(session_id)

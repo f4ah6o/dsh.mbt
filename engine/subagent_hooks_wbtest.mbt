@@ -70,6 +70,30 @@ fn subagent_hook_message_text(message : Json) -> String raise EngineError {
 }
 
 ///|
+test "initial Subagent prompt checkpoint validates prompt bounds atomically" {
+  let engine = subagent_hook_engine()
+  assert_eq(
+    engine.inject_hook_contexts("hook-child", ["keep queued"]),
+    Ok(true),
+  )
+  let before = engine.snapshot()
+  assert_true(
+    engine.begin_subagent_prompt_hook("hook-child", "", true) is Err(_),
+  )
+  assert_eq(engine.snapshot(), before)
+  assert_true(engine.pending_subagent_prompt_hook("hook-child") is None)
+  assert_true(
+    engine.begin_subagent_prompt_hook("hook-child", "p".repeat(16385), true)
+    is Err(_),
+  )
+  assert_eq(engine.snapshot(), before)
+  let valid = subagent_checkpoint_success(
+    engine.begin_subagent_prompt_hook("hook-child", "valid prompt", true),
+  )
+  assert_eq(valid.contexts(), ["keep queued"])
+}
+
+///|
 test "initial and late SubagentStart batches pass through immutable prompt checkpoints" {
   let engine = subagent_hook_engine()
   assert_eq(
@@ -268,10 +292,6 @@ test "Stop continuation batches earlier Start input before reason and prompt con
     },
     "start before stopcontinue for review",
   )
-  assert_eq(
-    engine.inject_hook_contexts("hook-child", ["start during prompt hook"]),
-    Ok(true),
-  )
   let continued = success(
     engine.continue_stop_hook(checkpoint, ["prompt policy context"]),
   )
@@ -281,18 +301,56 @@ test "Stop continuation batches earlier Start input before reason and prompt con
   assert_eq(subagent_hook_message_text(messages[1]), "start before stop")
   assert_eq(subagent_hook_message_text(messages[2]), "continue for review")
   assert_eq(subagent_hook_message_text(messages[3]), "prompt policy context")
-  assert_false(
-    messages.any(message => {
-      subagent_hook_message_text(message).contains("start during prompt hook")
-    }),
+  let completed = success(
+    engine.complete(id_of(provider), stop_response("continued answer")),
   )
-  ignore(
-    success(engine.complete(id_of(provider), stop_response("continued answer"))),
+  assert_eq(get_status(completed), "completed")
+
+  let snapshot = engine.snapshot()
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(snapshot), Ok(()))
+  assert_eq(get_session_for(restored, "hook-child"), completed)
+
+  let reordered = json_copy(snapshot)
+  let sessions = array_value(
+    required_field(reordered, "sessions"),
+    "sessions",
+    32,
   )
-  assert_eq(
-    engine.pending_subagent_prompt_hook("hook-child").unwrap().prompt(),
-    "start during prompt hook",
-  )
+  let session = sessions[0]
+  let events = array_value(required_field(session, "events"), "events", 32768)
+  let mut start_marker_index = -1
+  let mut stop_reason_index = -1
+  for index, event in events {
+    let kind = required_string(event, "type")
+    let data = required_field(event, "data")
+    if kind == "hook/subagent-start-context" {
+      start_marker_index = index
+    } else if kind == "user/message" &&
+      subagent_hook_message_text(data) == "continue for review" {
+      stop_reason_index = index
+    }
+  }
+  assert_true(start_marker_index >= 0 && stop_reason_index > start_marker_index)
+  let marker = events[start_marker_index]
+  let reason = events[stop_reason_index]
+  let reordered_events : Array[Json] = []
+  for index, event in events {
+    let replacement = if index == start_marker_index {
+      json_copy(reason)
+    } else if index == stop_reason_index {
+      json_copy(marker)
+    } else {
+      json_copy(event)
+    }
+    fields(replacement).set("seq", integer(index))
+    reordered_events.push(replacement)
+  }
+  fields(session).set("events", Json::array(reordered_events))
+  let rejected = Engine::new(test_tools())
+  let rejected_before = rejected.snapshot()
+  assert_true(rejected.restore(reordered) is Err(_))
+  assert_eq(rejected.snapshot(), rejected_before)
 }
 
 ///|
