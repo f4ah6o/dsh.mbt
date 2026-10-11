@@ -1,4 +1,152 @@
 ///|
+priv enum NativeHookEventSink {
+  Root(NativeRuntime, String, NativeJobControl?)
+  Child(@engine.Engine, String)
+}
+
+///|
+priv enum NativeHookExecution {
+  Completed(NativeHookCapture)
+  Failed(String)
+}
+
+///|
+const NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX : String = "native hook diagnostic checkpoint failed: "
+
+///|
+async fn NativeHookEventSink::record_invoked(
+  self : NativeHookEventSink,
+  point : String,
+  handler_id : String,
+  matcher : String?,
+) -> Result[@engine.NativeHookInvocationCheckpoint, String] {
+  let recorded = match self {
+    Root(runtime, session_id, control) =>
+      runtime.record_native_hook_invoked(
+        session_id,
+        point,
+        handler_id,
+        matcher,
+        control~,
+      )
+    Child(engine, session_id) =>
+      engine.record_native_hook_invoked(session_id, point, handler_id, matcher)
+  }
+  match recorded {
+    Ok(value) => Ok(value)
+    Err(error) => Err(NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX + error)
+  }
+}
+
+///|
+async fn NativeHookEventSink::record_result(
+  self : NativeHookEventSink,
+  checkpoint : @engine.NativeHookInvocationCheckpoint,
+  decision : String,
+  exit_code : Int?,
+  stderr_summary : String?,
+  duration_ms : Int,
+) -> Result[Unit, String] {
+  let recorded = match self {
+    Root(runtime, _, _) =>
+      runtime.record_native_hook_result(
+        checkpoint, decision, exit_code, stderr_summary, duration_ms,
+      )
+    Child(engine, _) =>
+      engine
+      .record_native_hook_result(
+        checkpoint, decision, exit_code, stderr_summary, duration_ms,
+      )
+      .map(_ => ())
+  }
+  match recorded {
+    Ok(_) => Ok(())
+    Err(error) => Err(NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX + error)
+  }
+}
+
+///|
+fn NativeHooks::next_handler_id(self : NativeHooks, point : String) -> String {
+  self.handler_counter += 1
+  "claude-code:\{point}:\{self.handler_counter}"
+}
+
+///|
+async fn native_run_hook_diagnostic(
+  tools : NativeTools,
+  hook : NativeHookCommand,
+  payload : String,
+  event : String,
+  handler_id : String,
+  matcher : String?,
+  sink : NativeHookEventSink?,
+) -> Result[NativeHookExecution, String] {
+  let checkpoint = match sink {
+    Some(value) =>
+      match value.record_invoked(event, handler_id, matcher) {
+        Ok(checkpoint) => Some(checkpoint)
+        Err(error) => return Err(error)
+      }
+    None => None
+  }
+  let started = @async.now()
+  let capture = native_run_hook_command(tools, hook, payload)
+  let duration_ms = Int::max(0, (@async.now() - started).to_int())
+  let execution = match capture {
+    Ok(value) => Completed(value)
+    Err(error) => Failed(error)
+  }
+  match execution {
+    Failed(_) if @async.is_being_cancelled() =>
+      return Err("hook process was interrupted before a result was available")
+    _ => ()
+  }
+  match (sink, checkpoint, execution) {
+    (Some(event_sink), Some(invocation), Completed(value)) => {
+      let decision = native_hook_diagnostic_decision(value, event)
+      let summary = native_hook_stderr_summary(value.stderr)
+      match
+        @async.protect_from_cancel(async fn() {
+          event_sink.record_result(
+            invocation,
+            decision,
+            Some(value.exit_code),
+            summary,
+            duration_ms,
+          )
+        }) {
+        Ok(_) => ()
+        Err(error) => return Err(error)
+      }
+      if @async.is_being_cancelled() {
+        @async.pause()
+      }
+    }
+    (Some(event_sink), Some(invocation), Failed(error)) => {
+      let summary = native_hook_stderr_summary(error)
+      match
+        @async.protect_from_cancel(async fn() {
+          event_sink.record_result(
+            invocation,
+            "pass",
+            None,
+            summary,
+            duration_ms,
+          )
+        }) {
+        Ok(_) => ()
+        Err(checkpoint_error) => return Err(checkpoint_error)
+      }
+      if @async.is_being_cancelled() {
+        @async.pause()
+      }
+    }
+    _ => ()
+  }
+  Ok(execution)
+}
+
+///|
 fn native_hook_payload(
   event : String,
   project_dir : String,
@@ -111,6 +259,7 @@ async fn NativeHooks::before_session_start(
       continue
     }
     for hook in group.commands {
+      ignore(self.next_handler_id("SessionStart"))
       let capture = match native_run_hook_command(tools, hook, payload) {
         Ok(value) => value
         Err(_) => continue
@@ -198,6 +347,7 @@ async fn NativeHooks::before_subagent_start(
       continue
     }
     for hook in group.commands {
+      ignore(self.next_handler_id("SubagentStart"))
       let capture = match native_run_hook_command(tools, hook, payload) {
         Ok(value) => value
         Err(_) => continue
@@ -231,6 +381,7 @@ async fn NativeHooks::after_subagent_stop(
       continue
     }
     for hook in group.commands {
+      ignore(self.next_handler_id("SubagentStop"))
       ignore(native_run_hook_command(tools, hook, payload))
     }
   }
@@ -278,6 +429,7 @@ async fn NativeHooks::run_point(
   call_id : String,
   tool_input : Json,
   tool_response : String?,
+  sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let blocked_reasons : Array[String] = []
   let additional_contexts : Array[String] = []
@@ -311,9 +463,23 @@ async fn NativeHooks::run_point(
         Ok(value) => value
         Err(error) => return Err(error)
       }
-      let capture = match native_run_hook_command(tools, hook, payload) {
+      let handler_id = self.next_handler_id(event)
+      let execution = match
+        native_run_hook_diagnostic(
+          tools,
+          hook,
+          payload,
+          event,
+          handler_id,
+          group.matcher,
+          sink,
+        ) {
         Ok(value) => value
-        Err(_) =>
+        Err(error) => return Err(error)
+      }
+      let capture = match execution {
+        Completed(value) => value
+        Failed(_) =>
           // Spawn/timeout errors are nonblocking in Claude Code. The child is
           // still cancelled and reaped before this path returns.
           continue
@@ -378,6 +544,7 @@ async fn NativeHooks::before_user_prompt(
   tools : NativeTools,
   session_id : String,
   prompt : String,
+  sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   self.run_point(
     tools,
@@ -388,6 +555,7 @@ async fn NativeHooks::before_user_prompt(
     "",
     Json::string(prompt),
     None,
+    sink~,
   )
 }
 
@@ -418,6 +586,7 @@ async fn NativeHooks::before_stop(
   self : NativeHooks,
   tools : NativeTools,
   session_id : String,
+  sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let payload = match native_stop_payload(self.project_dir, session_id) {
     Ok(value) => value
@@ -427,9 +596,23 @@ async fn NativeHooks::before_stop(
   let reasons : Array[String] = []
   for group in self.stop {
     for hook in group.commands {
-      let capture = match native_run_hook_command(tools, hook, payload) {
+      let handler_id = self.next_handler_id("Stop")
+      let execution = match
+        native_run_hook_diagnostic(
+          tools,
+          hook,
+          payload,
+          "Stop",
+          handler_id,
+          None,
+          sink,
+        ) {
         Ok(value) => value
-        Err(_) => continue
+        Err(error) => return Err(error)
+      }
+      let capture = match execution {
+        Completed(value) => value
+        Failed(_) => continue
       }
       let outcome = native_hook_stop_result_decision(capture)
       if outcome.rank > winning_rank {
@@ -460,6 +643,7 @@ async fn NativeHooks::before_tool(
   tools : NativeTools,
   session_id : String,
   request : Json,
+  sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let tool_name = string_field(request, "name").unwrap_or("")
   let call_id = string_field(request, "call_id").unwrap_or("")
@@ -473,6 +657,7 @@ async fn NativeHooks::before_tool(
     call_id,
     tool_input,
     None,
+    sink~,
   )
 }
 
@@ -483,6 +668,7 @@ async fn NativeHooks::after_tool(
   session_id : String,
   request : Json,
   result : Json,
+  sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let tool_name = string_field(request, "name").unwrap_or("")
   let call_id = string_field(request, "call_id").unwrap_or("")
@@ -500,5 +686,6 @@ async fn NativeHooks::after_tool(
     call_id,
     tool_input,
     tool_response,
+    sink~,
   )
 }

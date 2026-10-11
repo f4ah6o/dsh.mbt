@@ -446,10 +446,17 @@ async fn NativeRuntime::subagent_complete_provider(
 ///|
 async fn NativeRuntime::run_subagent_prompt_hook(
   self : NativeRuntime,
+  child : @engine.Engine,
   control : NativeJobControl?,
   child_id : String,
   prompt : String,
+  diagnose : Bool,
 ) -> Result[NativeHookOutcome, String] {
+  let sink : NativeHookEventSink? = if diagnose {
+    Some(NativeHookEventSink::Child(child, child_id))
+  } else {
+    None
+  }
   match control {
     Some(value) =>
       self.run_user_prompt_hook_controlled(
@@ -457,8 +464,9 @@ async fn NativeRuntime::run_subagent_prompt_hook(
         child_id,
         prompt,
         attach_task=false,
+        sink~,
       )
-    None => self.hooks.before_user_prompt(self.tools, child_id, prompt)
+    None => self.hooks.before_user_prompt(self.tools, child_id, prompt, sink~)
   }
 }
 
@@ -490,12 +498,18 @@ async fn NativeRuntime::complete_subagent_provider_result(
           if control is Some(value) && value.cancelled.val {
             return Err("native command was cancelled")
           }
-          let stop_outcome = match self.run_stop_hook_controlled(child_id) {
+          let stop_outcome = match
+            self.run_stop_hook_controlled(
+              child_id,
+              sink=Some(NativeHookEventSink::Child(child, child_id)),
+            ) {
             Ok(value) => value
             Err(_) if control is Some(value) && value.cancelled.val =>
               return Err("native command was cancelled")
             Err(_) if @async.is_being_cancelled() =>
               return Err("native command was cancelled")
+            Err(error) if error.has_prefix(NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX) =>
+              return Err(error)
             // Hook process failures are advisory after an accepted answer.
             Err(_) =>
               match child.finish_stop_hook(checkpoint) {
@@ -528,7 +542,7 @@ async fn NativeRuntime::complete_subagent_provider_result(
                       }
                       let prompt_result = if self.hooks.has_user_prompt_submit() {
                         self.run_subagent_prompt_hook(
-                          control, child_id, prompt_text,
+                          child, control, child_id, prompt_text, true,
                         )
                       } else {
                         Ok({
@@ -542,6 +556,9 @@ async fn NativeRuntime::complete_subagent_provider_result(
                           return Err("native command was cancelled")
                         Err(_) if @async.is_being_cancelled() =>
                           return Err("native command was cancelled")
+                        Err(error) if error.has_prefix(
+                            NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX,
+                          ) => return Err(error)
                         Err(error) =>
                           return child
                             .block_stop_continuation(
@@ -621,7 +638,13 @@ async fn NativeRuntime::resolve_subagent_prompt_hook(
     return Err("native command was cancelled")
   }
   let prompt_outcome = if self.hooks.has_user_prompt_submit() {
-    self.run_subagent_prompt_hook(control, child_id, checkpoint.prompt())
+    self.run_subagent_prompt_hook(
+      child,
+      control,
+      child_id,
+      checkpoint.prompt(),
+      !checkpoint.is_initial(),
+    )
   } else {
     Ok({ action: NativeHookAction::Continue, additional_contexts: [], })
   }
@@ -630,6 +653,9 @@ async fn NativeRuntime::resolve_subagent_prompt_hook(
   }
   match prompt_outcome {
     Err(error) => {
+      if error.has_prefix(NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX) {
+        return Err(error)
+      }
       let reason = "UserPromptSubmit hook could not run: " + error
       match child.block_subagent_prompt_hook(checkpoint, reason) {
         Err(block_error) => Err(block_error)
@@ -676,16 +702,29 @@ async fn NativeRuntime::subagent_complete_tool(
   if !["read", "glob", "grep"].contains(name) {
     return Err("child emitted a tool outside its read-only catalog")
   }
-  let (tool_result, additional_contexts) = match
-    self.hooks.before_tool(self.tools, child_session_id, effect.request()) {
-    Err(_) =>
+  let sink = Some(NativeHookEventSink::Child(child, child_session_id))
+  let pre_outcome = match
+    self.hooks.before_tool(
+      self.tools,
+      child_session_id,
+      effect.request(),
+      sink~,
+    ) {
+    Err(error) if error.has_prefix(NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX) =>
+      return Err(error)
+    Err(_) => None
+    Ok(value) => Some(value)
+  }
+  let mut post_diagnostic_error : String? = None
+  let (tool_result, additional_contexts) = match pre_outcome {
+    None =>
       (
         tool_error(
           "PreToolUse hook returned an unsupported result; tool was not run",
         ),
         [],
       )
-    Ok(pre_outcome) =>
+    Some(pre_outcome) =>
       match pre_outcome.action {
         NativeHookAction::Deny(reason) =>
           (
@@ -696,13 +735,24 @@ async fn NativeRuntime::subagent_complete_tool(
           )
         NativeHookAction::Continue => {
           let result = self.tools.execute(effect.request())
+          if self.hooks.has_post_tool_match(name) {
+            match child.record_effect_outcome(effect.id().as_string(), result) {
+              Ok(_) => ()
+              Err(error) => return Err(error)
+            }
+          }
           match
             self.hooks.after_tool(
               self.tools,
               child_session_id,
               effect.request(),
               result,
+              sink~,
             ) {
+            Err(error) if error.has_prefix(NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX) => {
+              post_diagnostic_error = Some(error)
+              (result, [])
+            }
             Err(_) =>
               (
                 tool_error(
@@ -730,7 +780,11 @@ async fn NativeRuntime::subagent_complete_tool(
       effect.id(),
       native_hook_result_with_contexts(tool_result, additional_contexts),
     ) {
-    Ok(_) => Ok(())
+    Ok(_) =>
+      match post_diagnostic_error {
+        Some(error) => Err(error)
+        None => Ok(())
+      }
     Err(error) => Err(error)
   }
 }

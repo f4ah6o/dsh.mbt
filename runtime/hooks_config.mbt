@@ -29,6 +29,7 @@ priv struct NativeHooks {
   subagent_start : Array[NativeHookGroup]
   subagent_stop : Array[NativeHookGroup]
   project_dir : String
+  mut handler_counter : Int
 }
 
 ///|
@@ -336,6 +337,7 @@ async fn NativeHooks::load(
         subagent_start: [],
         subagent_stop: [],
         project_dir,
+        handler_counter: 0,
       })
     Some(path) => {
       let text = match native_hook_read_config(path) {
@@ -366,6 +368,7 @@ async fn NativeHooks::load(
             subagent_start,
             subagent_stop,
             project_dir,
+            handler_counter: 0,
           })
         Err(error) => Err(error)
       }

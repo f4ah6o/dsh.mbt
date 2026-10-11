@@ -493,6 +493,71 @@ fn NativeRuntime::checkpoint_locked(
 }
 
 ///|
+/// Append the hook invocation and persist its checkpoint before the command
+/// process can start. Cancellation may win before the append, but never after
+/// this method returns successfully.
+async fn NativeRuntime::record_native_hook_invoked(
+  self : NativeRuntime,
+  session_id : String,
+  point : String,
+  handler_id : String,
+  matcher : String?,
+  control? : NativeJobControl? = None,
+) -> Result[@engine.NativeHookInvocationCheckpoint, String] {
+  @async.protect_from_cancel(async fn() {
+    self.gate.acquire()
+    defer self.gate.release()
+    if self.stopped || self.closed {
+      return Err("native runtime is stopped")
+    }
+    if (control is Some(value) && value.cancelled.val) ||
+      @async.is_being_cancelled() {
+      return Err("native command was cancelled before hook invocation")
+    }
+    let checkpoint = match
+      self.api.record_native_hook_invoked(
+        session_id, point, handler_id, matcher,
+      ) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    match self.checkpoint_locked() {
+      Ok(_) => Ok(checkpoint)
+      Err(error) => Err(error)
+    }
+  })
+}
+
+///|
+/// Persist the real command result while holding the same gate as turn
+/// closure. This operation is cancellation-protected so either its result or
+/// the cancellation closure wins atomically.
+async fn NativeRuntime::record_native_hook_result(
+  self : NativeRuntime,
+  checkpoint : @engine.NativeHookInvocationCheckpoint,
+  decision : String,
+  exit_code : Int?,
+  stderr_summary : String?,
+  duration_ms : Int,
+) -> Result[Unit, String] {
+  @async.protect_from_cancel(async fn() {
+    self.gate.acquire()
+    defer self.gate.release()
+    if self.stopped || self.closed {
+      return Err("native runtime is stopped")
+    }
+    match
+      self.api.record_native_hook_result(
+        checkpoint, decision, exit_code, stderr_summary, duration_ms,
+      ) {
+      Err(error) => return Err(error)
+      Ok(_) => ()
+    }
+    self.checkpoint_locked()
+  })
+}
+
+///|
 /// Apply an operation and make the state durable before returning effects to
 /// the caller. A read operation is checkpointed too, keeping this boundary
 /// simple until the HTTP dispatcher classifies projections separately.
@@ -617,6 +682,7 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
   prompt : String,
   attach_task? : Bool = true,
   payload_prompt? : String? = None,
+  sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let outcome : Ref[Result[NativeHookOutcome, String]?] = Ref(None)
   let task_result = @async.handle_cancellation(async fn() {
@@ -627,6 +693,7 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
             self.tools,
             session_id,
             payload_prompt.unwrap_or(prompt),
+            sink~,
           )
           outcome.val = Some(result)
           result.map(_ => ())
@@ -642,7 +709,11 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
       }
     catch {
       @async.WaitedTaskAlreadyCancelled => Err("hook process was cancelled")
-      _ => Err("UserPromptSubmit hook task failed")
+      _ =>
+        match outcome.val {
+          Some(Err(error)) => Err(error)
+          _ => Err("UserPromptSubmit hook task failed")
+        }
     }
   })
   match task_result {
@@ -3037,13 +3108,25 @@ async fn NativeRuntime::complete_tool_with_prompt_hook(
               session_id,
               prompt,
               attach_task=false,
+              sink=Some(NativeHookEventSink::Root(self, session_id, control)),
             ) {
             Ok(outcome) => Ok(outcome)
             Err(_) if value.cancelled.val || @async.is_being_cancelled() =>
               return Err("native command was cancelled")
             Err(error) => Err(error)
           }
-        None => self.hooks.before_user_prompt(self.tools, session_id, prompt)
+        None =>
+          self.hooks.before_user_prompt(
+            self.tools,
+            session_id,
+            prompt,
+            sink=Some(NativeHookEventSink::Root(self, session_id, None)),
+          )
+      }
+      match hook_outcome {
+        Err(error) if error.has_prefix(NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX) =>
+          return Err(error)
+        _ => ()
       }
       let settlement = match hook_outcome {
         Err(error) =>
@@ -3130,13 +3213,14 @@ async fn NativeRuntime::settle_post_tool_prompt_hook(
 async fn NativeRuntime::run_stop_hook_controlled(
   self : NativeRuntime,
   session_id : String,
+  sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let outcome : Ref[Result[NativeHookOutcome, String]?] = Ref(None)
   let task_result = @async.handle_cancellation(async fn() {
     try
       @async.with_task_group() <| workers => {
         let task = workers.spawn(no_wait=true, allow_failure=true, async fn() {
-          let result = self.hooks.before_stop(self.tools, session_id)
+          let result = self.hooks.before_stop(self.tools, session_id, sink~)
           outcome.val = Some(result)
           result.map(_ => ())
         })
@@ -3148,7 +3232,11 @@ async fn NativeRuntime::run_stop_hook_controlled(
     catch {
       @async.WaitedTaskAlreadyCancelled =>
         Err("Stop hook process was cancelled")
-      _ => Err("Stop hook task failed")
+      _ =>
+        match outcome.val {
+          Some(Err(error)) => Err(error)
+          _ => Err("Stop hook task failed")
+        }
     }
   })
   match task_result {
@@ -3280,10 +3368,16 @@ async fn NativeRuntime::complete_provider_result(
       if control.cancelled.val {
         return Err("native command was cancelled")
       }
-      let stop_outcome = match self.run_stop_hook_controlled(session_id) {
+      let stop_outcome = match
+        self.run_stop_hook_controlled(
+          session_id,
+          sink=Some(NativeHookEventSink::Root(self, session_id, Some(control))),
+        ) {
         Ok(value) => value
         Err(_) if control.cancelled.val || @async.is_being_cancelled() =>
           return Err("native command was cancelled")
+        Err(error) if error.has_prefix(NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX) =>
+          return Err(error)
         // Stop spawn, timeout, and malformed-output failures are nonblocking.
         Err(_) =>
           { action: NativeHookAction::Continue, additional_contexts: [], }
@@ -3319,10 +3413,16 @@ async fn NativeRuntime::complete_provider_result(
                     session_id,
                     text,
                     attach_task=false,
+                    sink=Some(
+                      NativeHookEventSink::Root(self, session_id, Some(control)),
+                    ),
                   ) {
                   Ok(value) => Ok(value)
                   Err(_) if control.cancelled.val || @async.is_being_cancelled() =>
                     return Err("native command was cancelled")
+                  Err(error) if error.has_prefix(
+                      NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX,
+                    ) => return Err(error)
                   // This runtime rejects an initial prompt when its hook cannot
                   // run. Close the staged continuation explicitly by the same
                   // Failed/blocked session contract instead of leaving it busy.
@@ -3349,6 +3449,9 @@ async fn NativeRuntime::complete_provider_result(
                     ),
                     control,
                   )
+                Err(error) if error.has_prefix(
+                    NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX,
+                  ) => return Err(error)
                 Err(error) =>
                   self.settle_stop_hook(
                     checkpoint,
@@ -3457,6 +3560,7 @@ async fn NativeRuntime::finish_tool_effect(
         session_id,
         effect.request(),
         tool_result,
+        sink=Some(NativeHookEventSink::Root(self, session_id, control)),
       )
     })
     match post_outcome {
@@ -3478,6 +3582,8 @@ async fn NativeRuntime::finish_tool_effect(
     return Err("native command was cancelled after tool execution")
   }
   let (final_result, additional_contexts) = match post_action {
+    Err(error) if error.has_prefix(NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX) =>
+      return Err(error)
     Err(_) =>
       (
         tool_error(
@@ -3523,11 +3629,14 @@ async fn NativeRuntime::run_tool_effect(
     self.tools,
     session_id,
     effect.request(),
+    sink=Some(NativeHookEventSink::Root(self, session_id, control)),
   )
   if control is Some(value) && value.cancelled.val {
     return Err("native command was cancelled")
   }
   match pre_action {
+    Err(error) if error.has_prefix(NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX) =>
+      return Err(error)
     Err(_) =>
       return self.complete(
         effect.id(),
