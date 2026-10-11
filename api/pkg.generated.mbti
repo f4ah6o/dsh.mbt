@@ -27,9 +27,11 @@ pub fn HarnessApi::event_log(Self, @engine.SessionId) -> Result[Array[@engine.En
 pub fn HarnessApi::finish_stop_hook(Self, @engine.NativeStopHookCheckpoint) -> Result[Json, String]
 pub fn HarnessApi::gui_binding(Self, String) -> @capability.GuiBinding[Json, Json]?
 pub fn HarnessApi::invoke(Self, String, Json, origin? : @capability.InvocationOrigin) -> Result[Json, String]
+pub fn HarnessApi::invoke_session_send_with_hook_contexts(Self, Json, Array[String], Array[String]) -> Result[Json, String]
 pub fn HarnessApi::invoke_session_send_with_prompt_contexts(Self, Json, Array[String]) -> Result[Json, String]
 pub fn HarnessApi::manifest(Self) -> String
 pub fn HarnessApi::mcp_handle(Self, String) -> String?
+pub fn HarnessApi::mcp_handle_with_hook_contexts(Self, String, Array[String], Array[String]) -> String?
 pub fn HarnessApi::mcp_handle_with_prompt_contexts(Self, String, Array[String]) -> String?
 pub fn HarnessApi::new(external_mcp_tools? : Array[Json], skill_tool? : Json?, lsp_tool? : Json?, subagent_tool? : Json?) -> Result[Self, String]
 pub fn HarnessApi::pending_post_tool_prompt_hook(Self, @engine.SessionId) -> @engine.NativePostToolPromptHookCheckpoint?

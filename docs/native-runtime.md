@@ -558,12 +558,19 @@ commands themselves run with the selected workspace as their working
 directory.
 
 The config may contain a top-level `hooks` object, or put these events at the
-root. Only command-based `PreToolUse`, `PostToolUse`, `UserPromptSubmit`,
-`Stop`, `SubagentStart`, and `SubagentStop` groups are supported:
+root. Only command-based `SessionStart`, `PreToolUse`, `PostToolUse`,
+`UserPromptSubmit`, `Stop`, `SubagentStart`, and `SubagentStop` groups are
+supported:
 
 ```json
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [{ "command": "/absolute/path/to/record-session-start" }]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "write|edit",
@@ -608,16 +615,66 @@ root. Only command-based `PreToolUse`, `PostToolUse`, `UserPromptSubmit`,
 }
 ```
 
-The `matcher` is an exact tool name, `*` for every tool, or literal names
-separated by `|`. Tool names may contain letters, digits, `_`, and `-`, which
-covers public MCP aliases. Regex and partial wildcards such as `write.*` are
-rejected. An omitted matcher applies to every tool. Each event accepts at most
-16 groups and 32 commands; each command is limited to 8,192 characters. The
-config is limited to 64 KiB. `timeout` is an integer number of seconds from 1
-to 120, defaulting to 10 seconds (upstream allows longer waits). Each hook
-receives one JSON object on stdin, limited to 64 KiB. Stdout and stderr are
-captured independently up to 16 KiB each; overflow is treated as an unsupported
-result.
+For tool events, `matcher` is an exact tool name, `*` for every tool, or
+literal names separated by `|`. `SessionStart` uses the same literal matcher
+syntax with the source values `startup` and `resume`; `startup|resume` matches
+both. Regex and partial wildcards such as `write.*` are rejected. An omitted
+matcher applies to every source or tool. Each event accepts at most 16 groups
+and 32 commands; each command is limited to 8,192 characters. The config is
+limited to 64 KiB. `timeout` is an integer number of seconds from 1 to 120,
+defaulting to 10 seconds (upstream allows longer waits). Each hook receives one
+JSON object on stdin, limited to 64 KiB. Stdout and stderr are captured
+independently up to 16 KiB each; overflow is treated as an unsupported result.
+
+`SessionStart` runs matching commands in configuration order and consumes only
+a successful JSON `hookSpecificOutput.additionalContext` string whose
+`hookEventName` is `SessionStart`. The input has exactly `session_id`, an empty
+`transcript_path`, the canonical workspace `cwd`, `hook_event_name`, and
+`source`. The pinned bridge awaits SessionStart during agent publication and
+uses `startup` for new agents and `resume` for restored agents; although its
+source type also names `clear` and `compact`, the pinned creation paths do not
+emit those values. The native root adapter runs lazily on the first
+preflight-valid, non-replay `session_send`: sessions present when the runtime
+opens use `resume`, and sessions created later use `startup`. It does not run
+while merely creating or listing a root session. For foreground children,
+SessionStart runs as `startup` before SubagentStart and before the child's
+initial UserPromptSubmit admission, under the child's aggregate run deadline.
+
+SessionStart contributes context before the original prompt. When
+UserPromptSubmit is also configured, its `prompt` field is the SessionStart
+context strings concatenated directly with the original prompt, matching the
+pinned bridge's text-block flattening (there is no inserted separator); any
+UserPromptSubmit context follows the prompt. The shared context cap is 32
+strings and 16,384 UTF-16 code units, with a 4,096-unit limit per string.
+If any SessionStart context would exceed that cap, the native adapter drops the
+whole SessionStart context batch after it finishes running all matching
+commands in order.
+Upstream claims and removes this inbox before running UserPromptSubmit. If that
+hook rejects the prompt, the claimed SessionStart context is dropped and the
+SessionStart command does not run again on retry. Native admission keeps this
+source behavior. A successful root SessionStart batch that completes just as
+caller cancellation wins before prompt admission stays in a process-local,
+per-session inbox. The inbox holds at most 64 nonempty pending batches; once
+full, a new session's send is refused with
+`native SessionStart pending inbox limit reached` before another hook command
+is dispatched. Retrying the same session consumes its batch once. Closing or
+reopening the runtime discards unclaimed context, and restore or receipt replay
+never reruns the external hook.
+
+The pinned listener applies only SessionStart `additionalContext`; decisions,
+`continue`, `systemMessage`, and `updatedInput` are ignored, and it emits no
+invocation/result pair for this event. Native history uses the existing
+`hook/subagent-start-context` count/length marker followed by a
+source-tagged user message for either child Start or root SessionStart context.
+The marker name is a shared native representation, not evidence that the
+context came only from SubagentStart. SessionStart reuses the marker/batch
+format supported by the dsh 0.1.16 reader, based on a static audit of that
+reader; the unchanged dsh 0.1.17 reader logic and current probes also accept
+these batches. No dsh 0.1.16 binary was run. This per-format compatibility does
+not establish whole-store downgrade safety: other persisted content can
+require a newer reader, including PostToolUse boundaries introduced in 0.1.17.
+Determine the minimum reader from all persisted content and never downgrade or
+rewrite a store based only on this marker reuse.
 
 `UserPromptSubmit` has no matcher subject in the pinned Claude Code bridge, so
 any `matcher` field on one of its groups is ignored. It runs once for each
@@ -859,10 +916,17 @@ Stores containing Stop boundary or continuation events require dsh 0.1.14 or
 later. Do not rewrite any of these stores with an older reader. dsh 0.1.12
 continues to read context-free dsh 0.1.11 native stores; the engine replay
 tests cover the legacy completion shape without `additional_contexts`.
-Engine snapshots containing the additive `hook/subagent-start-context` event
-or `hook/stop-settled` event require dsh 0.1.16 or later. The former is a
-SubagentStart admission marker in a child Engine, and native subagent child
-snapshots are not persisted as root sessions. The latter is an empty-data
+The `hook/subagent-start-context` marker/batch format is supported by the dsh
+0.1.16 reader according to a static source audit; the unchanged dsh 0.1.17
+reader logic and current probes also accept it. No dsh 0.1.16 binary was run.
+The marker is a shared count/length boundary for child SubagentStart and root
+SessionStart context batches; the following source-tagged user message carries
+the text. The marker name does not identify the producer. This statement covers
+only that format, not whole-store downgrade compatibility: all persisted
+content sets the store's minimum reader version. For example, PostToolUse
+boundaries introduced in 0.1.17 require dsh 0.1.17 or later. Never downgrade
+or rewrite a store based only on marker reuse. The `hook/stop-settled` event is
+an empty-data
 boundary emitted when Stop completes without a staged continuation and queued
 hook input advances to the next step. It may appear in root Engine snapshots
 too. Replay clears only the completed Stop continuation state and preserves
