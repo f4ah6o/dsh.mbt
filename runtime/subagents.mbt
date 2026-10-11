@@ -834,40 +834,60 @@ async fn NativeRuntime::run_subagent_tool(
     1,
     Int::min(run_timeout_ms, NATIVE_SUBAGENT_MAX_RUN_MS),
   )
-  let outcome = @async.with_timeout_opt(timeout_ms, async fn() {
-    @async.with_task_group() <| group => {
-      if self.hooks.has_subagent_stop() {
-        group.add_defer(() => {
-          @async.protect_from_cancel(async fn() {
-            ignore(
-              @async.with_timeout_opt(NATIVE_SUBAGENT_STOP_HOOK_TIMEOUT_MS, async fn() {
-                self.hooks.after_subagent_stop(self.tools, child_id)
-              }),
-            )
-          })
-        })
-      }
-      if self.hooks.has_subagent_start() {
-        ignore(
-          group.spawn(no_wait=true, allow_failure=true, async fn() {
-            let contexts = self.hooks.before_subagent_start(
-              self.tools,
-              child_id,
-            )
-            if !contexts.is_empty() {
-              ignore(child.inject_hook_contexts(child_id, contexts))
-            }
-          }),
-        )
-      }
-      self.start_and_drive_subagent(child, child_id, prompt, binding, control~)
+  let outcome = @async.with_task_group() <| group => {
+    group.add_defer(() => {
+      @async.protect_from_cancel(async fn() {
+        let child_session = child
+          .invoke("session_get", { "session_id": child_id })
+          .map(value => value)
+          .unwrap_or(Json::null())
+        if string_field(child_session, "status") == Some("running") {
+          ignore(child.invoke("session_cancel", { "session_id": child_id }))
+        }
+        if self.hooks.has_subagent_stop() {
+          ignore(
+            @async.with_timeout_opt(NATIVE_SUBAGENT_STOP_HOOK_TIMEOUT_MS, async fn() {
+              self.hooks.after_subagent_stop(self.tools, child_id)
+            }),
+          )
+        }
+      })
+    })
+    let start_task = if self.hooks.has_subagent_start() {
+      Some(
+        group.spawn(no_wait=true, allow_failure=true, async fn() {
+          let contexts = self.hooks.before_subagent_start(self.tools, child_id)
+          if !contexts.is_empty() {
+            ignore(child.inject_hook_contexts(child_id, contexts))
+          }
+        }),
+      )
+    } else {
+      None
     }
-  })
+    let drive_outcome = @async.with_timeout_opt(timeout_ms, async fn() {
+      self.start_and_drive_subagent(child, child_id, prompt, binding, control~)
+    })
+    match start_task {
+      Some(task) => {
+        task.cancel()
+        ignore(task.wait()) catch {
+          _ => ()
+        }
+      }
+      None => ()
+    }
+    match drive_outcome {
+      Some(Ok(_)) => ()
+      Some(Err(_)) | None =>
+        ignore(child.invoke("session_cancel", { "session_id": child_id }))
+    }
+    drive_outcome
+  }
   let (session, terminal_status, failure_reason) = match outcome {
     Some(Ok(value)) =>
       (value, string_field(value, "status").unwrap_or("failed"), None)
     Some(Err(error)) => {
-      let _ = child.invoke("session_cancel", { "session_id": child_id })
       let value = child
         .invoke("session_get", { "session_id": child_id })
         .map(value => value)
@@ -875,7 +895,6 @@ async fn NativeRuntime::run_subagent_tool(
       (value, "failed", Some(error))
     }
     None => {
-      let _ = child.invoke("session_cancel", { "session_id": child_id })
       let value = child
         .invoke("session_get", { "session_id": child_id })
         .map(value => value)

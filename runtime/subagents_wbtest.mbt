@@ -2125,6 +2125,88 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
 }
 
 ///|
+async test "native observational SubagentStop cannot turn a completed child into timed_out" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-subagent-stop-after-deadline")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    native_fixture_provider_env_gate.acquire()
+    let saved_env = native_fixture_provider_env()
+    group.add_defer(() => {
+      native_fixture_restore_env(saved_env)
+      native_fixture_provider_env_gate.release()
+    })
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let hooks_path = fixture + "/hooks.json"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(
+        native_hook_test_config(
+          "SubagentStop", "general-purpose", "/bin/sleep 2",
+        ),
+      ),
+    )
+    let server = @http.Server::Server(
+      @socket.Addr::parse("127.0.0.1:0"),
+      reuse_addr=false,
+    )
+    group.add_defer(() => server.close())
+    let bodies = Ref([])
+    let auth_ok = Ref(true)
+    let serving = group.spawn(no_wait=true, async fn() {
+      native_fixture_provider_server(
+        server,
+        [
+          native_subagent_http_response(
+            native_fixture_openai_text_stream(
+              "Completed before the observation hook ran.",
+            ),
+          ),
+        ],
+        bodies,
+        auth_ok,
+        None,
+      )
+    })
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      false,
+      mode_override="openai",
+      model_override="fixture-model",
+      base_url_override="http://127.0.0.1:" + server.addr.port().to_string(),
+      max_retries=0,
+      hooks_config_path=Some(hooks_path),
+      enable_subagents=true,
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let effect = native_subagent_parent_tool_effect(
+      runtime, "native-subagent-stop-after-deadline", "parent-stop-after-deadline-call",
+      "Delegate the fixture task.",
+    )
+    let (parent, _) = runtime
+      .run_tool_effect(effect, subagent_timeout_ms=500)
+      .unwrap()
+    serving.wait()
+    assert_true(auth_ok.val)
+    assert_eq(bodies.val.length(), 1)
+    let envelope = native_subagent_result_for_call(
+      parent, "parent-stop-after-deadline-call",
+    )
+    assert_true(
+      native_subagent_result_messages(envelope).any(message => {
+        string_field(message, "content") ==
+        Some("Completed before the observation hook ran.")
+      }),
+    )
+    assert_eq(string_field(envelope, "status"), Some("completed"))
+  }
+}
+
+///|
 async test "native child UserPromptSubmit denial prevents provider admission" {
   let fixture = @fs.tmpdir(prefix="dsh-native-subagent-prompt-deny")
   @async.with_task_group() <| group => {
