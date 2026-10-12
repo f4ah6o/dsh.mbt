@@ -1042,6 +1042,20 @@ fn restore_session(
               parsed
             }
           }
+          let additional_context_source_kind = match
+            fields(data).get("additional_contexts_source_kind") {
+            None => "hooks-claude-code"
+            Some(Json::String(value)) if ["hooks-claude-code", "hooks-codex"].contains(
+                value,
+              ) => value
+            _ => raise Invalid("Invalid PostToolUse context source kind")
+          }
+          if additional_contexts.is_empty() &&
+            fields(data).get("additional_contexts_source_kind") is Some(_) {
+            raise Invalid(
+              "PostToolUse source kind requires additional contexts",
+            )
+          }
           match
             (
               fields(data).get("post_tool_prompt_hook"),
@@ -1234,6 +1248,7 @@ fn restore_session(
           call.completed_content = Some(content)
           call.completed_error = Some(is_error)
           call.completed_contexts = additional_contexts
+          call.completed_context_source_kind = additional_context_source_kind
         }
         "tool/result" => {
           let call = result_call(session)
@@ -1329,7 +1344,10 @@ fn restore_session(
                 pending_post_tool_contexts.push(
                   (
                     completed_call.id,
-                    hook_context_message(completed_call.completed_contexts),
+                    hook_context_message(
+                      completed_call.completed_contexts,
+                      source_kind=completed_call.completed_context_source_kind,
+                    ),
                   ),
                 )
               }
@@ -1516,7 +1534,10 @@ fn restore_session(
           }
           if !additional_contexts.is_empty() {
             expected_admitted_post_tool_messages.push(
-              hook_context_message(additional_contexts),
+              hook_context_message(
+                additional_contexts,
+                source_kind=session.native_hook_context_source_kind,
+              ),
             )
           }
           pending_post_tool_contexts.clear()
@@ -1581,7 +1602,10 @@ fn restore_session(
           }
           if !additional_contexts.is_empty() {
             expected_admitted_post_tool_messages.push(
-              hook_context_message(additional_contexts),
+              hook_context_message(
+                additional_contexts,
+                source_kind=session.native_hook_context_source_kind,
+              ),
             )
           }
           pending_post_tool_contexts.clear()
@@ -1742,10 +1766,15 @@ fn restore_session(
           if !open_turn ||
             hook_turn != turn_id ||
             turn_id != session.turn_id ||
-            dialect != "claude-code" ||
+            !["claude-code", "codex"].contains(dialect) ||
             !native_hook_valid_point(point) ||
-            !native_hook_valid_handler_id(handler_id, point) {
+            !native_hook_valid_handler_id(handler_id, point, dialect~) {
             raise Invalid("Native hook invocation is outside its open turn")
+          }
+          session.native_hook_context_source_kind = if dialect == "codex" {
+            "hooks-codex"
+          } else {
+            "hooks-claude-code"
           }
           let key = native_hook_invocation_key(hook_turn, point, handler_id)
           if pending_hook_invocations.get(key) is Some(_) {
@@ -1754,6 +1783,7 @@ fn restore_session(
           pending_hook_invocations[key] = {
             turn_id: hook_turn,
             point,
+            dialect,
             handler_id,
             event_seq: seq,
           }
@@ -1792,7 +1822,6 @@ fn restore_session(
             hook_turn != turn_id ||
             turn_id != session.turn_id ||
             !native_hook_valid_point(point) ||
-            !native_hook_valid_handler_id(handler_id, point) ||
             !["approve", "allow", "block", "deny", "ask", "stop", "pass"].contains(
               decision,
             ) {
@@ -1819,8 +1848,12 @@ fn restore_session(
             Some(invocation) if invocation.event_seq < seq &&
               invocation.turn_id == hook_turn &&
               invocation.point == point &&
-              invocation.handler_id == handler_id =>
-              ignore(pending_hook_invocations.remove(key))
+              invocation.handler_id == handler_id &&
+              native_hook_valid_handler_id(
+                handler_id,
+                point,
+                dialect=invocation.dialect,
+              ) => ignore(pending_hook_invocations.remove(key))
             _ => raise Invalid("Native hook result has no matching invocation")
           }
         }
@@ -2105,7 +2138,12 @@ fn validate_hook_prompt_context(
 ) -> (Int, Int) raise EngineError {
   let source_fields = fields(source)
   if source_fields.length() != 1 ||
-    source_fields.get("kind") != Some(Json::string("hooks-claude-code")) {
+    !["hooks-claude-code", "hooks-codex"].contains(
+      match source_fields.get("kind") {
+        Some(Json::String(value)) => value
+        _ => ""
+      },
+    ) {
     raise Invalid("Unsupported prompt context provenance")
   }
   let blocks = match required_field(data, "content") {

@@ -778,7 +778,11 @@ async fn NativeRuntime::subagent_complete_tool(
   match
     child.complete_effect(
       effect.id(),
-      native_hook_result_with_contexts(tool_result, additional_contexts),
+      native_hook_result_with_contexts(
+        tool_result,
+        additional_contexts,
+        source_kind=self.hooks.context_source_kind(),
+      ),
     ) {
     Ok(_) =>
       match post_diagnostic_error {

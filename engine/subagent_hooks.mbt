@@ -241,7 +241,10 @@ pub fn Engine::accept_subagent_prompt_hook(
         )
         session.append(
           "user/message",
-          hook_context_message(session.subagent_prompt_hook_start_contexts),
+          hook_context_message(
+            session.subagent_prompt_hook_start_contexts,
+            source_kind=session.native_hook_context_source_kind,
+          ),
         )
       }
       session.append(
@@ -252,7 +255,13 @@ pub fn Engine::accept_subagent_prompt_hook(
         ]),
       )
       if !contexts.is_empty() {
-        session.append("user/message", hook_context_message(contexts))
+        session.append(
+          "user/message",
+          hook_context_message(
+            contexts,
+            source_kind=session.native_hook_context_source_kind,
+          ),
+        )
       }
     } else {
       if !session.subagent_prompt_hook_start_contexts.is_empty() {
@@ -271,7 +280,10 @@ pub fn Engine::accept_subagent_prompt_hook(
         )
         session.append(
           "user/message",
-          hook_context_message(session.subagent_prompt_hook_start_contexts),
+          hook_context_message(
+            session.subagent_prompt_hook_start_contexts,
+            source_kind=session.native_hook_context_source_kind,
+          ),
         )
       }
       if !session.subagent_prompt_hook_post_tool_messages.is_empty() {
@@ -306,7 +318,13 @@ pub fn Engine::accept_subagent_prompt_hook(
         session.append("user/message", message)
       }
       if !contexts.is_empty() {
-        session.append("user/message", hook_context_message(contexts))
+        session.append(
+          "user/message",
+          hook_context_message(
+            contexts,
+            source_kind=session.native_hook_context_source_kind,
+          ),
+        )
       }
     }
     session.clear_subagent_prompt_hook()

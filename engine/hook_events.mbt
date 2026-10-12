@@ -8,6 +8,7 @@ const NATIVE_HOOK_EVENT_CLOSURE_RESERVE : Int = 40
 priv struct PendingNativeHookInvocation {
   turn_id : Int
   point : String
+  dialect : String
   handler_id : String
   event_seq : Int
 }
@@ -41,17 +42,26 @@ fn native_hook_pending_invocations(
     } else if event.kind == EngineEventKind::HookInvoked {
       match event.data {
         Json::Object(data) =>
-          match (data.get("turn"), data.get("point"), data.get("handlerId")) {
+          match
+            (
+              data.get("turn"),
+              data.get("point"),
+              data.get("dialect"),
+              data.get("handlerId"),
+            ) {
             (
               Some(Json::Number(turn, ..)),
               Some(Json::String(point)),
+              Some(Json::String(dialect)),
               Some(Json::String(handler_id)),
             ) =>
-              if turn.to_int().to_double() == turn {
+              if turn.to_int().to_double() == turn &&
+                ["claude-code", "codex"].contains(dialect) {
                 let turn_id = turn.to_int()
                 pending[native_hook_invocation_key(turn_id, point, handler_id)] = {
                   turn_id,
                   point,
+                  dialect,
                   handler_id,
                   event_seq: event.seq,
                 }
@@ -116,8 +126,12 @@ fn native_hook_valid_point(point : String) -> Bool {
 }
 
 ///|
-fn native_hook_valid_handler_id(handler_id : String, point : String) -> Bool {
-  let prefix = "claude-code:\{point}:"
+fn native_hook_valid_handler_id(
+  handler_id : String,
+  point : String,
+  dialect? : String = "claude-code",
+) -> Bool {
+  let prefix = "\{dialect}:\{point}:"
   if !handler_id.has_prefix(prefix) || handler_id.length() > 128 {
     return false
   }
@@ -143,9 +157,11 @@ pub fn Engine::record_native_hook_invoked(
   point : String,
   handler_id : String,
   matcher : String?,
+  dialect? : String = "claude-code",
 ) -> Result[NativeHookInvocationCheckpoint, String] {
   if !native_hook_valid_point(point) ||
-    !native_hook_valid_handler_id(handler_id, point) ||
+    !["claude-code", "codex"].contains(dialect) ||
+    !native_hook_valid_handler_id(handler_id, point, dialect~) ||
     (
       matcher is Some(value) &&
       (value.length() > 128 || value.contains("\u0000"))
@@ -173,7 +189,7 @@ pub fn Engine::record_native_hook_invoked(
     let data : Map[String, Json] = {
       "turn": integer(session.turn_id),
       "point": Json::string(point),
-      "dialect": Json::string("claude-code"),
+      "dialect": Json::string(dialect),
       "handlerId": Json::string(handler_id),
     }
     match matcher {
@@ -181,6 +197,11 @@ pub fn Engine::record_native_hook_invoked(
       None => ()
     }
     session.append("hook/invoked", Json::object(data))
+    session.native_hook_context_source_kind = if dialect == "codex" {
+      "hooks-codex"
+    } else {
+      "hooks-claude-code"
+    }
     { session_id, turn_id: session.turn_id, point, handler_id, event_seq, }
   } catch {
     Invalid(message) => return Err(message)
@@ -234,7 +255,17 @@ pub fn Engine::record_native_hook_result(
             Some(integer(checkpoint.turn_id)) &&
             data.get("point") == Some(Json::string(checkpoint.point)) &&
             data.get("handlerId") == Some(Json::string(checkpoint.handler_id)) =>
-            ()
+            match data.get("dialect") {
+              Some(Json::String(dialect)) if ["claude-code", "codex"].contains(
+                  dialect,
+                ) &&
+                native_hook_valid_handler_id(
+                  checkpoint.handler_id,
+                  checkpoint.point,
+                  dialect~,
+                ) => ()
+              _ => raise Invalid("Native hook invocation checkpoint is corrupt")
+            }
           _ => raise Invalid("Native hook invocation checkpoint is corrupt")
         }
       _ => raise Invalid("Native hook invocation checkpoint is stale")

@@ -140,6 +140,8 @@ async fn NativeRuntime::open(
   hooks_config_path? : String? = None,
   lsp_config_path? : String? = None,
   enable_subagents? : Bool = false,
+  hooks_dialect? : String = "claude-code",
+  hooks_model? : String = "",
 ) -> Result[NativeRuntime, String] {
   let provider_config = match
     native_provider_config(
@@ -151,7 +153,13 @@ async fn NativeRuntime::open(
   let workspace_path = @fs.realpath(workspace) catch {
     _ => return Err("cannot resolve workspace directory")
   }
-  let hooks = match NativeHooks::load(hooks_config_path, workspace_path) {
+  let hooks = match
+    NativeHooks::load(
+      hooks_config_path,
+      workspace_path,
+      dialect=hooks_dialect,
+      model=hooks_model,
+    ) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -502,6 +510,7 @@ async fn NativeRuntime::record_native_hook_invoked(
   point : String,
   handler_id : String,
   matcher : String?,
+  dialect? : String = "claude-code",
   control? : NativeJobControl? = None,
 ) -> Result[@engine.NativeHookInvocationCheckpoint, String] {
   @async.protect_from_cancel(async fn() {
@@ -516,7 +525,11 @@ async fn NativeRuntime::record_native_hook_invoked(
     }
     let checkpoint = match
       self.api.record_native_hook_invoked(
-        session_id, point, handler_id, matcher,
+        session_id,
+        point,
+        handler_id,
+        matcher,
+        dialect~,
       ) {
       Ok(value) => value
       Err(error) => return Err(error)
@@ -1015,6 +1028,7 @@ async fn NativeRuntime::invoke_with_user_prompt_hook(
                     prepared_input,
                     outcome.session_start_contexts,
                     outcome.additional_contexts,
+                    source_kind=self.hooks.context_source_kind(),
                   ) {
                   Err(error) => Err(error)
                   Ok(value) =>
@@ -1948,6 +1962,7 @@ async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
           prepared_input,
           outcome.session_start_contexts,
           outcome.additional_contexts,
+          source_kind=self.hooks.context_source_kind(),
         ) {
         Err(error) => {
           let receipt = native_receipt(
@@ -2411,7 +2426,10 @@ async fn[X] NativeRuntime::mcp_handle(
     (!session_start_contexts.is_empty() || !prompt_hook_contexts.is_empty()) {
     self.api
     .mcp_handle_with_hook_contexts(
-      prompt_dispatch_line, session_start_contexts, prompt_hook_contexts,
+      prompt_dispatch_line,
+      session_start_contexts,
+      prompt_hook_contexts,
+      source_kind=self.hooks.context_source_kind(),
     )
     .unwrap_or("")
   } else {
@@ -3604,7 +3622,9 @@ async fn NativeRuntime::finish_tool_effect(
     }
   }
   let result = native_hook_result_with_contexts(
-    final_result, additional_contexts,
+    final_result,
+    additional_contexts,
+    source_kind=self.hooks.context_source_kind(),
   )
   if self.hooks.has_user_prompt_submit() {
     self.complete_tool_with_prompt_hook(effect, result, control~)
