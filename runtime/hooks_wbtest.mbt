@@ -255,6 +255,13 @@ test "native Claude hook config accepts Stop and rejects unsupported events and 
     )
     is Err(_),
   )
+  let hyphenated = native_hook_parse_config(
+    @json.parse(
+      native_hook_test_config("SubagentStart", "general-purpose", "true"),
+    ),
+  ).unwrap()
+  assert_eq(hyphenated.5[0].matcher, Some("general-purpose"))
+  assert_true(native_hook_matches(Some("general-purpose"), "general-purpose"))
   let mcp_alias = "mcp__server-name__tool"
   assert_true(
     native_hook_parse_config(

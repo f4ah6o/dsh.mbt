@@ -79,6 +79,7 @@ fn native_hook_valid_literal_matcher(value : String) -> Bool {
       (character >= 'a' && character <= 'z') ||
       (character >= '0' && character <= '9') ||
       character == '_' ||
+      character == '-' ||
       character == '|') {
       return false
     }

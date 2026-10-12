@@ -487,7 +487,11 @@ fn restore_session(
                           }
                           if !stop_continuation_reason_seen {
                             let reason = session.stop_continuation_text.unwrap()
-                            if data != hook_context_message([reason]) {
+                            if data !=
+                              hook_context_message(
+                                [reason],
+                                source_kind=session.native_hook_context_source_kind,
+                              ) {
                               raise Invalid(
                                 "Stop continuation message differs from its staged reason",
                               )

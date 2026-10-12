@@ -391,6 +391,9 @@ pub fn Engine::apply_session_send_with_hook_contexts(
   additional_contexts : Array[String],
   source_kind? : String = "hooks-claude-code",
 ) -> Result[Json, String] {
+  if !["hooks-claude-code", "hooks-codex"].contains(source_kind) {
+    return Err("Unknown native hook context source")
+  }
   match EngineCommand::SendPrompt(session_id, prompt).validate() {
     Err(error) => return Err(error)
     Ok(_) => ()
