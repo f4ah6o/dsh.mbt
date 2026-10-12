@@ -83,9 +83,13 @@ fn text_content_blocks(
 ///|
 fn has_hooks_context_source(message : Map[String, Json]) -> Bool {
   match message.get("source") {
-    Some(Json::Object(source)) =>
-      source.length() == 1 &&
-      source.get("kind") == Some(Json::string("hooks-claude-code"))
+    Some(Json::Object(source)) => {
+      let is_hook_context = match source.get("kind") {
+        Some(Json::String("hooks-claude-code" | "hooks-codex")) => true
+        _ => false
+      }
+      source.length() == 1 && is_hook_context
+    }
     _ => false
   }
 }

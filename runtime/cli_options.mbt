@@ -1,11 +1,12 @@
 ///|
 fn native_cli_is_value_option(argument : String) -> Bool {
   [
-    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--lsp-config",
-    "--skill-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
-    "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
-    "--approve-tools", "--approval-revision", "--run", "--fork", "--import-session",
-    "--prune-session", "--approve-call", "--deny-call", "--select-model",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--hooks-dialect",
+    "--hooks-model", "--lsp-config", "--skill-dir", "--mode", "--model", "--base-url",
+    "--port", "--assets-dir", "--max-retries", "--host", "--session", "--title",
+    "--threshold-chars", "--head-chars", "--tail-chars", "--approve-tools", "--approval-revision",
+    "--run", "--fork", "--import-session", "--prune-session", "--approve-call", "--deny-call",
+    "--select-model",
   ].contains(argument)
 }
 
@@ -18,11 +19,12 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
     "web", "run", "import-session", "prune-session", "fork-session", "mcp", "acp",
   ]
   let value_options = [
-    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--lsp-config",
-    "--skill-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
-    "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
-    "--approve-tools", "--approval-revision", "--run", "--fork", "--import-session",
-    "--prune-session", "--approve-call", "--deny-call", "--select-model",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--hooks-dialect",
+    "--hooks-model", "--lsp-config", "--skill-dir", "--mode", "--model", "--base-url",
+    "--port", "--assets-dir", "--max-retries", "--host", "--session", "--title",
+    "--threshold-chars", "--head-chars", "--tail-chars", "--approve-tools", "--approval-revision",
+    "--run", "--fork", "--import-session", "--prune-session", "--approve-call", "--deny-call",
+    "--select-model",
   ]
   let mut command_index = -1
   let mut scan = 1
@@ -60,10 +62,10 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
   let mut after_separator = false
   let mut index = 2
   let subcommand_value_options = [
-    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--lsp-config",
-    "--skill-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
-    "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
-    "--approve-tools", "--approval-revision",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--hooks-dialect",
+    "--hooks-model", "--lsp-config", "--skill-dir", "--mode", "--model", "--base-url",
+    "--port", "--assets-dir", "--max-retries", "--host", "--session", "--title",
+    "--threshold-chars", "--head-chars", "--tail-chars", "--approve-tools", "--approval-revision",
   ]
   while index < reordered.length() {
     let argument = reordered[index]
@@ -249,11 +251,12 @@ fn native_cli_paths(args : Array[String]) -> Result[(String, String), String] {
 /// The subcommand aliases have already been normalized to their long options.
 fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
   let value_options = [
-    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--lsp-config",
-    "--skill-dir", "--mode", "--model", "--base-url", "--port", "--assets-dir", "--max-retries",
-    "--host", "--session", "--title", "--threshold-chars", "--head-chars", "--tail-chars",
-    "--approve-tools", "--run", "--fork", "--import-session", "--prune-session",
-    "--approve-call", "--deny-call", "--approval-revision", "--select-model",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--hooks-dialect",
+    "--hooks-model", "--lsp-config", "--skill-dir", "--mode", "--model", "--base-url",
+    "--port", "--assets-dir", "--max-retries", "--host", "--session", "--title",
+    "--threshold-chars", "--head-chars", "--tail-chars", "--approve-tools", "--run",
+    "--fork", "--import-session", "--prune-session", "--approve-call", "--deny-call",
+    "--approval-revision", "--select-model",
   ]
   let boolean_options = [
     "--serve", "--mcp", "--acp", "--demo", "--enable-skills", "--enable-subagents",
@@ -298,12 +301,32 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
   }
   let run = native_option(args, "--run")
   let hooks_config = native_option(args, "--hooks-config")
+  let hooks_dialect = native_option(args, "--hooks-dialect")
+  let hooks_model = native_option(args, "--hooks-model")
   let lsp_config = native_option(args, "--lsp-config")
   if hooks_config == Some("") {
     return Err("--hooks-config requires a nonempty path")
   }
   if native_cli_options(args, "--hooks-config").length() > 1 {
     return Err("--hooks-config may only be specified once")
+  }
+  if hooks_dialect == Some("") || hooks_model == Some("") {
+    return Err("--hooks-dialect and --hooks-model require a nonempty value")
+  }
+  if native_cli_options(args, "--hooks-dialect").length() > 1 ||
+    native_cli_options(args, "--hooks-model").length() > 1 {
+    return Err("--hooks-dialect and --hooks-model may only be specified once")
+  }
+  match hooks_dialect {
+    Some("claude-code" | "codex") | None => ()
+    Some(_) => return Err("--hooks-dialect must be claude-code or codex")
+  }
+  if hooks_model is Some(_) && hooks_dialect != Some("codex") {
+    return Err("--hooks-model requires --hooks-dialect codex")
+  }
+  if (hooks_dialect is Some(_) || hooks_model is Some(_)) &&
+    hooks_config is None {
+    return Err("--hooks-dialect and --hooks-model require --hooks-config")
   }
   if lsp_config == Some("") {
     return Err("--lsp-config requires a nonempty path")

@@ -19,6 +19,7 @@ async fn NativeHookEventSink::record_invoked(
   point : String,
   handler_id : String,
   matcher : String?,
+  dialect : String,
 ) -> Result[@engine.NativeHookInvocationCheckpoint, String] {
   let recorded = match self {
     Root(runtime, session_id, control) =>
@@ -27,10 +28,17 @@ async fn NativeHookEventSink::record_invoked(
         point,
         handler_id,
         matcher,
+        dialect~,
         control~,
       )
     Child(engine, session_id) =>
-      engine.record_native_hook_invoked(session_id, point, handler_id, matcher)
+      engine.record_native_hook_invoked(
+        session_id,
+        point,
+        handler_id,
+        matcher,
+        dialect~,
+      )
   }
   match recorded {
     Ok(value) => Ok(value)
@@ -68,7 +76,16 @@ async fn NativeHookEventSink::record_result(
 ///|
 fn NativeHooks::next_handler_id(self : NativeHooks, point : String) -> String {
   self.handler_counter += 1
-  "claude-code:\{point}:\{self.handler_counter}"
+  "\{self.dialect}:\{point}:\{self.handler_counter}"
+}
+
+///|
+fn NativeHooks::context_source_kind(self : NativeHooks) -> String {
+  if self.dialect == "codex" {
+    "hooks-codex"
+  } else {
+    "hooks-claude-code"
+  }
 }
 
 ///|
@@ -79,18 +96,19 @@ async fn native_run_hook_diagnostic(
   event : String,
   handler_id : String,
   matcher : String?,
+  dialect : String,
   sink : NativeHookEventSink?,
 ) -> Result[NativeHookExecution, String] {
   let checkpoint = match sink {
     Some(value) =>
-      match value.record_invoked(event, handler_id, matcher) {
+      match value.record_invoked(event, handler_id, matcher, dialect) {
         Ok(checkpoint) => Some(checkpoint)
         Err(error) => return Err(error)
       }
     None => None
   }
   let started = @async.now()
-  let capture = native_run_hook_command(tools, hook, payload)
+  let capture = native_run_hook_command(tools, hook, payload, dialect~)
   let duration_ms = Int::max(0, (@async.now() - started).to_int())
   let execution = match capture {
     Ok(value) => Completed(value)
@@ -103,7 +121,11 @@ async fn native_run_hook_diagnostic(
   }
   match (sink, checkpoint, execution) {
     (Some(event_sink), Some(invocation), Completed(value)) => {
-      let decision = native_hook_diagnostic_decision(value, event)
+      let decision = if dialect == "codex" {
+        native_hook_codex_diagnostic_decision(value, event)
+      } else {
+        native_hook_diagnostic_decision(value, event)
+      }
       let summary = native_hook_stderr_summary(value.stderr)
       let exit_code : Int? = if value.exit_code < 0 {
         None
@@ -149,6 +171,9 @@ async fn native_run_hook_diagnostic(
 
 ///|
 fn native_hook_payload(
+  dialect : String,
+  model : String,
+  turn_id : Int,
   event : String,
   project_dir : String,
   session_id : String,
@@ -157,20 +182,41 @@ fn native_hook_payload(
   tool_input : Json,
   tool_response : String?,
 ) -> Result[String, String] {
-  let fields : Map[String, Json] = Map::from_array([
-    ("session_id", Json::string(session_id)),
-    ("transcript_path", Json::string("")),
-    ("cwd", Json::string(project_dir)),
-    ("hook_event_name", Json::string(event)),
-    ("tool_name", Json::string(tool_name)),
-    ("tool_input", tool_input),
-    ("tool_use_id", Json::string(call_id)),
-  ])
+  let fields : Map[String, Json] = if dialect == "codex" {
+    Map::from_array([
+      ("session_id", Json::string(session_id)),
+      ("transcript_path", Json::null()),
+      ("cwd", Json::string(project_dir)),
+      ("hook_event_name", Json::string(event)),
+      ("model", Json::string(model)),
+      ("permission_mode", Json::string("default")),
+      ("turn_id", Json::string(turn_id.to_string())),
+      ("tool_name", Json::string(tool_name)),
+      (
+        "tool_input",
+        Json::object({
+          "command": Json::string(native_hook_codex_command(tool_input)),
+        }),
+      ),
+      ("tool_use_id", Json::string(call_id)),
+    ])
+  } else {
+    Map::from_array([
+      ("session_id", Json::string(session_id)),
+      ("transcript_path", Json::string("")),
+      ("cwd", Json::string(project_dir)),
+      ("hook_event_name", Json::string(event)),
+      ("tool_name", Json::string(tool_name)),
+      ("tool_input", tool_input),
+      ("tool_use_id", Json::string(call_id)),
+    ])
+  }
   match tool_response {
     Some(value) => fields.set("tool_response", Json::string(value))
     None => ()
   }
-  let text = Json::object(fields).stringify() + "\n"
+  let suffix = if dialect == "codex" { "" } else { "\n" }
+  let text = Json::object(fields).stringify() + suffix
   if @utf8.encode(text).length() > NATIVE_HOOK_STDIN_LIMIT {
     Err("hooks stdin exceeds the 64 KiB limit")
   } else {
@@ -179,19 +225,43 @@ fn native_hook_payload(
 }
 
 ///|
+fn native_hook_codex_command(input : Json) -> String {
+  match object_field(input, "command") {
+    Some(Json::String(value)) => value
+    _ => ""
+  }
+}
+
+///|
 fn native_user_prompt_payload(
+  dialect : String,
+  model : String,
+  turn_id : Int,
   project_dir : String,
   session_id : String,
   prompt : String,
 ) -> Result[String, String] {
-  let text = Json::object({
-      "session_id": Json::string(session_id),
-      "transcript_path": Json::string(""),
-      "cwd": Json::string(project_dir),
-      "hook_event_name": Json::string("UserPromptSubmit"),
-      "prompt": Json::string(prompt),
-    }).stringify() +
-    "\n"
+  let fields : Map[String, Json] = Map::from_array([
+    ("session_id", Json::string(session_id)),
+    (
+      "transcript_path",
+      if dialect == "codex" {
+        Json::null()
+      } else {
+        Json::string("")
+      },
+    ),
+    ("cwd", Json::string(project_dir)),
+    ("hook_event_name", Json::string("UserPromptSubmit")),
+    ("prompt", Json::string(prompt)),
+  ])
+  if dialect == "codex" {
+    fields["model"] = Json::string(model)
+    fields["permission_mode"] = Json::string("default")
+    fields["turn_id"] = Json::string(turn_id.to_string())
+  }
+  let suffix = if dialect == "codex" { "" } else { "\n" }
+  let text = Json::object(fields).stringify() + suffix
   if @utf8.encode(text).length() > NATIVE_HOOK_STDIN_LIMIT {
     Err("hooks stdin exceeds the 64 KiB limit")
   } else {
@@ -201,18 +271,32 @@ fn native_user_prompt_payload(
 
 ///|
 fn native_session_start_payload(
+  dialect : String,
+  model : String,
   project_dir : String,
   session_id : String,
   source : String,
 ) -> Result[String, String] {
-  let text = Json::object({
-      "session_id": Json::string(session_id),
-      "transcript_path": Json::string(""),
-      "cwd": Json::string(project_dir),
-      "hook_event_name": Json::string("SessionStart"),
-      "source": Json::string(source),
-    }).stringify() +
-    "\n"
+  let fields : Map[String, Json] = Map::from_array([
+    ("session_id", Json::string(session_id)),
+    (
+      "transcript_path",
+      if dialect == "codex" {
+        Json::null()
+      } else {
+        Json::string("")
+      },
+    ),
+    ("cwd", Json::string(project_dir)),
+    ("hook_event_name", Json::string("SessionStart")),
+    ("source", Json::string(source)),
+  ])
+  if dialect == "codex" {
+    fields["model"] = Json::string(model)
+    fields["permission_mode"] = Json::string("default")
+  }
+  let suffix = if dialect == "codex" { "" } else { "\n" }
+  let text = Json::object(fields).stringify() + suffix
   if @utf8.encode(text).length() > NATIVE_HOOK_STDIN_LIMIT {
     Err("hooks stdin exceeds the 64 KiB limit")
   } else {
@@ -230,7 +314,9 @@ fn NativeHooks::has_post_tool_match(
   self : NativeHooks,
   tool_name : String,
 ) -> Bool {
-  self.post_tool.any(group => native_hook_matches(group.matcher, tool_name))
+  self.post_tool.any(group => {
+    native_hook_group_matches(group, tool_name, self.dialect)
+  })
 }
 
 ///|
@@ -239,9 +325,9 @@ fn NativeHooks::has_user_prompt_submit(self : NativeHooks) -> Bool {
 }
 
 ///|
-/// Run matching context-only SessionStart commands in configuration order.
-/// This follows the pinned Claude bridge's JSON-only additionalContext path;
-/// decisions, plain stdout, and other controls are intentionally ignored.
+/// Run matching SessionStart commands in configuration order. The Claude
+/// adapter accepts matching JSON additionalContext; Codex also accepts the
+/// event's plain-text context result. Both ignore unrelated controls here.
 async fn NativeHooks::before_session_start(
   self : NativeHooks,
   tools : NativeTools,
@@ -249,26 +335,33 @@ async fn NativeHooks::before_session_start(
   source : String,
 ) -> Array[String] {
   let payload = match
-    native_session_start_payload(self.project_dir, session_id, source) {
+    native_session_start_payload(
+      self.dialect,
+      self.model,
+      self.project_dir,
+      session_id,
+      source,
+    ) {
     Ok(value) => value
     Err(_) => return []
   }
   let contexts : Array[String] = []
   let mut overflow = false
   for group in self.session_start {
-    if !native_hook_matches(group.matcher, source) {
+    if !native_hook_group_matches(group, source, self.dialect) {
       continue
     }
     for hook in group.commands {
       ignore(self.next_handler_id("SessionStart"))
-      let capture = match native_run_hook_command(tools, hook, payload) {
+      let capture = match
+        native_run_hook_command(tools, hook, payload, dialect=self.dialect) {
         Ok(value) => value
         Err(_) => continue
       }
       if overflow {
         continue
       }
-      match native_hook_session_start_context(capture) {
+      match native_hook_session_start_context(capture, self.dialect) {
         Some(context) =>
           match native_hook_add_context(contexts, context) {
             Ok(_) => ()
@@ -349,7 +442,8 @@ async fn NativeHooks::before_subagent_start(
     }
     for hook in group.commands {
       ignore(self.next_handler_id("SubagentStart"))
-      let capture = match native_run_hook_command(tools, hook, payload) {
+      let capture = match
+        native_run_hook_command(tools, hook, payload, dialect=self.dialect) {
         Ok(value) => value
         Err(_) => continue
       }
@@ -430,18 +524,22 @@ async fn NativeHooks::run_point(
   call_id : String,
   tool_input : Json,
   tool_response : String?,
+  turn_id : Int,
   sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let blocked_reasons : Array[String] = []
   let additional_contexts : Array[String] = []
   let mut unsupported_error : String? = None
   for group in groups {
-    if !native_hook_matches(group.matcher, tool_name) {
+    if !native_hook_group_matches(group, tool_name, self.dialect) {
       continue
     }
     for hook in group.commands {
       let payload_result = if event == "UserPromptSubmit" {
         native_user_prompt_payload(
+          self.dialect,
+          self.model,
+          turn_id,
           self.project_dir,
           session_id,
           match tool_input {
@@ -451,6 +549,9 @@ async fn NativeHooks::run_point(
         )
       } else {
         native_hook_payload(
+          self.dialect,
+          self.model,
+          turn_id,
           event,
           self.project_dir,
           session_id,
@@ -473,6 +574,7 @@ async fn NativeHooks::run_point(
           event,
           handler_id,
           group.matcher,
+          self.dialect,
           sink,
         ) {
         Ok(value) => value
@@ -485,7 +587,9 @@ async fn NativeHooks::run_point(
           // still cancelled and reaped before this path returns.
           continue
       }
-      let outcome_result = if event == "UserPromptSubmit" {
+      let outcome_result = if self.dialect == "codex" {
+        Ok(native_hook_codex_result_decision(capture, event))
+      } else if event == "UserPromptSubmit" {
         native_hook_prompt_result_decision(capture)
       } else {
         native_hook_result_decision(capture, event)
@@ -545,6 +649,7 @@ async fn NativeHooks::before_user_prompt(
   tools : NativeTools,
   session_id : String,
   prompt : String,
+  turn_id? : Int = 0,
   sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   self.run_point(
@@ -556,23 +661,41 @@ async fn NativeHooks::before_user_prompt(
     "",
     Json::string(prompt),
     None,
+    turn_id,
     sink~,
   )
 }
 
 ///|
 fn native_stop_payload(
+  dialect : String,
+  model : String,
+  turn_id : Int,
   project_dir : String,
   session_id : String,
 ) -> Result[String, String] {
-  let text = Json::object({
-      "session_id": Json::string(session_id),
-      "transcript_path": Json::string(""),
-      "cwd": Json::string(project_dir),
-      "hook_event_name": Json::string("Stop"),
-      "stop_hook_active": Json::boolean(false),
-    }).stringify() +
-    "\n"
+  let fields : Map[String, Json] = Map::from_array([
+    ("session_id", Json::string(session_id)),
+    (
+      "transcript_path",
+      if dialect == "codex" {
+        Json::null()
+      } else {
+        Json::string("")
+      },
+    ),
+    ("cwd", Json::string(project_dir)),
+    ("hook_event_name", Json::string("Stop")),
+    ("stop_hook_active", Json::boolean(false)),
+  ])
+  if dialect == "codex" {
+    fields["model"] = Json::string(model)
+    fields["permission_mode"] = Json::string("default")
+    fields["turn_id"] = Json::string(turn_id.to_string())
+    fields["last_assistant_message"] = Json::null()
+  }
+  let suffix = if dialect == "codex" { "" } else { "\n" }
+  let text = Json::object(fields).stringify() + suffix
   if @utf8.encode(text).length() > NATIVE_HOOK_STDIN_LIMIT {
     Err("hooks stdin exceeds the 64 KiB limit")
   } else {
@@ -587,9 +710,17 @@ async fn NativeHooks::before_stop(
   self : NativeHooks,
   tools : NativeTools,
   session_id : String,
+  turn_id? : Int = 0,
   sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
-  let payload = match native_stop_payload(self.project_dir, session_id) {
+  let payload = match
+    native_stop_payload(
+      self.dialect,
+      self.model,
+      turn_id,
+      self.project_dir,
+      session_id,
+    ) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -606,6 +737,7 @@ async fn NativeHooks::before_stop(
           "Stop",
           handler_id,
           None,
+          self.dialect,
           sink,
         ) {
         Ok(value) => value
@@ -615,7 +747,15 @@ async fn NativeHooks::before_stop(
         Completed(value) => value
         Failed(_) => continue
       }
-      let outcome = native_hook_stop_result_decision(capture)
+      let outcome = if self.dialect == "codex" {
+        let decoded = native_hook_codex_result_decision(capture, "Stop")
+        match decoded.action {
+          NativeHookAction::Deny(reason) => { rank: 3, reason: Some(reason), }
+          NativeHookAction::Continue => { rank: 0, reason: None, }
+        }
+      } else {
+        native_hook_stop_result_decision(capture)
+      }
       if outcome.rank > winning_rank {
         winning_rank = outcome.rank
         reasons.clear()
@@ -644,6 +784,7 @@ async fn NativeHooks::before_tool(
   tools : NativeTools,
   session_id : String,
   request : Json,
+  turn_id? : Int = 0,
   sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let tool_name = string_field(request, "name").unwrap_or("")
@@ -658,6 +799,7 @@ async fn NativeHooks::before_tool(
     call_id,
     tool_input,
     None,
+    turn_id,
     sink~,
   )
 }
@@ -669,6 +811,7 @@ async fn NativeHooks::after_tool(
   session_id : String,
   request : Json,
   result : Json,
+  turn_id? : Int = 0,
   sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let tool_name = string_field(request, "name").unwrap_or("")
@@ -687,6 +830,7 @@ async fn NativeHooks::after_tool(
     call_id,
     tool_input,
     tool_response,
+    turn_id,
     sink~,
   )
 }

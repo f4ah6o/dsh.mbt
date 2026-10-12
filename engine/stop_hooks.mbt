@@ -301,11 +301,29 @@ pub fn Engine::continue_stop_hook(
             ),
           ]),
         )
-        session.append("user/message", hook_context_message(start_contexts))
+        session.append(
+          "user/message",
+          hook_context_message(
+            start_contexts,
+            source_kind=session.native_hook_context_source_kind,
+          ),
+        )
       }
-      session.append("user/message", hook_context_message([reason]))
+      session.append(
+        "user/message",
+        hook_context_message(
+          [reason],
+          source_kind=session.native_hook_context_source_kind,
+        ),
+      )
       if !contexts.is_empty() {
-        session.append("user/message", hook_context_message(contexts))
+        session.append(
+          "user/message",
+          hook_context_message(
+            contexts,
+            source_kind=session.native_hook_context_source_kind,
+          ),
+        )
       }
       session.stop_prompt_context_count = contexts.length()
       session.stop_prompt_context_length = total_length

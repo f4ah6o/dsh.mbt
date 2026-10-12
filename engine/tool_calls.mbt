@@ -13,20 +13,26 @@ const MAX_POST_TOOL_CONTEXT_ITEM_LENGTH : Int = 4096
 const MAX_POST_TOOL_CONTEXT_TOTAL_LENGTH : Int = 16384
 
 ///|
-fn hook_context_message(contexts : Array[String]) -> Json {
+fn hook_context_message(
+  contexts : Array[String],
+  source_kind? : String = "hooks-claude-code",
+) -> Json {
   let content : Array[Json] = contexts.map(context => {
     Json::object({ "type": Json::string("text"), "text": Json::string(context) })
   })
   Json::object({
     "role": Json::string("user"),
     "content": Json::array(content),
-    "source": Json::object({ "kind": Json::string("hooks-claude-code") }),
+    "source": Json::object({ "kind": Json::string(source_kind) }),
   })
 }
 
 ///|
-fn post_tool_context_message(contexts : Array[String]) -> Json {
-  hook_context_message(contexts)
+fn post_tool_context_message(
+  contexts : Array[String],
+  source_kind : String,
+) -> Json {
+  hook_context_message(contexts, source_kind~)
 }
 
 ///|
@@ -140,7 +146,10 @@ fn Session::commit_post_tool_contexts(self : Session) -> Unit {
     if call.completed_contexts.is_empty() {
       continue
     }
-    let message = post_tool_context_message(call.completed_contexts)
+    let message = post_tool_context_message(
+      call.completed_contexts,
+      call.completed_context_source_kind,
+    )
     if self.subagent_prompt_hook_admission {
       self.pending_subagent_post_tool_messages.push(message)
       for context in call.completed_contexts {
@@ -258,6 +267,7 @@ fn Engine::stage_host_tool_result(
   content : String,
   is_error : Bool,
   additional_contexts : Array[String],
+  additional_context_source_kind : String,
   defer_prompt_hook : Bool,
 ) -> Unit {
   self.retire_tool_effect(session, effect_id)
@@ -266,6 +276,7 @@ fn Engine::stage_host_tool_result(
   call.completed_content = Some(content)
   call.completed_error = Some(is_error)
   call.completed_contexts = additional_contexts
+  call.completed_context_source_kind = additional_context_source_kind
   let data = Map::from_array([
     ("source", Json::string("effect")),
     ("call_id", Json::string(call.id)),
@@ -281,6 +292,9 @@ fn Engine::stage_host_tool_result(
   if !additional_contexts.is_empty() {
     data["additional_contexts"] = Json::array(
       additional_contexts.map(context => Json::string(context)),
+    )
+    data["additional_contexts_source_kind"] = Json::string(
+      additional_context_source_kind,
     )
   }
   session.append("tool/completed", Json::object(data))
@@ -374,11 +388,23 @@ fn Engine::complete_tool_effect(
       parsed
     }
   }
+  let additional_context_source_kind = match
+    fields(result).get("additional_contexts_source_kind") {
+    None => "hooks-claude-code"
+    Some(Json::String("hooks-claude-code" | "hooks-codex" as source_kind)) =>
+      source_kind
+    _ => raise Invalid("Invalid PostToolUse context source kind")
+  }
+  if additional_contexts.is_empty() &&
+    fields(result).get("additional_contexts_source_kind") is Some(_) {
+    raise Invalid("PostToolUse source kind requires additional contexts")
+  }
   if defer_prompt_hook && !session.subagent_prompt_hook_admission {
     session.post_tool_prompt_hook_admission = true
   }
   self.stage_host_tool_result(
-    session, call, effect_id, content, is_error, additional_contexts, defer_prompt_hook,
+    session, call, effect_id, content, is_error, additional_contexts, additional_context_source_kind,
+    defer_prompt_hook,
   )
 }
 

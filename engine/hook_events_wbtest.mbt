@@ -84,6 +84,24 @@ test "native hook invocation rejects matcher NUL before changing the snapshot" {
 }
 
 ///|
+test "session send rejects an unsupported hook context source atomically" {
+  let (engine, _) = started_engine()
+  let session_id = SessionId::new("test").unwrap()
+  let before = engine.snapshot()
+  assert_true(
+    engine.apply_session_send_with_hook_contexts(
+      session_id,
+      "hello",
+      [],
+      ["trusted-looking"],
+      source_kind="hooks-forged",
+    )
+    is Err(_),
+  )
+  assert_eq(engine.snapshot(), before)
+}
+
+///|
 test "native hook result reservation includes the interrupted closure" {
   let (engine, provider) = started_engine()
   let mut fills = 0

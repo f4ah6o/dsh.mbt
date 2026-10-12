@@ -369,7 +369,10 @@ fn replay_v4_event(
         }
         match source_kind {
           "user" => replay.admitted_prompt = true
-          "runtime-context" | "repeat-tool-reminder" | "hooks-claude-code" => ()
+          "runtime-context"
+          | "repeat-tool-reminder"
+          | "hooks-claude-code"
+          | "hooks-codex" => ()
           "skill-catalog" => validate_v4_skill_catalog_source(source)
           _ => raise Invalid("Unsupported Session v4 user message provenance")
         }
@@ -592,6 +595,7 @@ fn validate_v4_message_source(
     | ("user", "runtime-context")
     | ("user", "repeat-tool-reminder")
     | ("user", "hooks-claude-code")
+    | ("user", "hooks-codex")
     | ("user", "compact-checkpoint") => ()
     ("user", "skill-catalog") => validate_v4_skill_catalog_source(source)
     ("system", "system-prompt") => ()

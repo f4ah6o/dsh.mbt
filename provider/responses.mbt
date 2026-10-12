@@ -44,7 +44,7 @@ fn prepare_responses_impl(
     if content_value is Array(_) &&
       (role != "user" || !has_hooks_context_source(message)) {
       reject(
-        "INVALID_REQUEST", "content blocks are supported only for hooks-claude-code user messages",
+        "INVALID_REQUEST", "content blocks are supported only for hook-context user messages",
       )
     }
     let content_blocks = text_content_blocks(content_value, "message")

@@ -116,6 +116,54 @@ test "Stop continuation stages before UserPromptSubmit and commits source messag
 }
 
 ///|
+test "Codex Stop continuation source survives snapshot restoration" {
+  let (engine, provider) = started_engine(max_steps=4)
+  ignore(
+    success(
+      engine.complete_effect_with_stop_hook(
+        stop_hook_completion_id(provider),
+        stop_response("First answer"),
+      ),
+    ),
+  )
+  let invocation = engine
+    .record_native_hook_invoked(
+      "test",
+      "Stop",
+      "codex:Stop:1",
+      None,
+      dialect="codex",
+    )
+    .unwrap()
+  ignore(engine.record_native_hook_result(invocation, "pass", Some(0), None, 1))
+  let checkpoint = stop_hook_checkpoint(engine)
+  ignore(
+    success(engine.prepare_stop_continuation(checkpoint, "continue reason")),
+  )
+  let staged = stop_hook_checkpoint(engine)
+  ignore(success(engine.continue_stop_hook(staged, ["prompt note"])))
+  let next = engine.take_effects()[0]
+  ignore(success(engine.complete(id_of(next), stop_response("Second answer"))))
+
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  let session = get_session(restored)
+  let messages = array_value(
+    required_field(session, "messages"),
+    "messages",
+    16,
+  )
+  assert_eq(
+    required_field(messages[2], "source"),
+    object([("kind", Json::string("hooks-codex"))]),
+  )
+  assert_eq(
+    required_field(messages[3], "source"),
+    object([("kind", Json::string("hooks-codex"))]),
+  )
+}
+
+///|
 test "UserPromptSubmit rejection preserves the answer and ends with an explicit blocked status" {
   let (engine, provider) = started_engine()
   ignore(

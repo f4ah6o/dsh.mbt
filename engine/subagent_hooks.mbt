@@ -182,6 +182,7 @@ pub fn Engine::accept_subagent_prompt_hook(
   self : Engine,
   checkpoint : NativeSubagentPromptHookCheckpoint,
   contexts : Array[String],
+  source_kind? : String = "hooks-claude-code",
 ) -> Result[Json, String] {
   let candidate = self.copy_state()
   let changed = try {
@@ -190,6 +191,10 @@ pub fn Engine::accept_subagent_prompt_hook(
     if !native_hook_pending_invocations(session).is_empty() {
       raise Invalid("Cannot advance a turn with pending native hook results")
     }
+    if !["hooks-claude-code", "hooks-codex"].contains(source_kind) {
+      raise Invalid("Unknown native hook context source")
+    }
+    session.native_hook_context_source_kind = source_kind
     let all_contexts = session.subagent_prompt_hook_contexts.copy()
     for context in contexts {
       all_contexts.push(context)
@@ -241,7 +246,10 @@ pub fn Engine::accept_subagent_prompt_hook(
         )
         session.append(
           "user/message",
-          hook_context_message(session.subagent_prompt_hook_start_contexts),
+          hook_context_message(
+            session.subagent_prompt_hook_start_contexts,
+            source_kind=session.native_hook_context_source_kind,
+          ),
         )
       }
       session.append(
@@ -252,7 +260,13 @@ pub fn Engine::accept_subagent_prompt_hook(
         ]),
       )
       if !contexts.is_empty() {
-        session.append("user/message", hook_context_message(contexts))
+        session.append(
+          "user/message",
+          hook_context_message(
+            contexts,
+            source_kind=session.native_hook_context_source_kind,
+          ),
+        )
       }
     } else {
       if !session.subagent_prompt_hook_start_contexts.is_empty() {
@@ -271,7 +285,10 @@ pub fn Engine::accept_subagent_prompt_hook(
         )
         session.append(
           "user/message",
-          hook_context_message(session.subagent_prompt_hook_start_contexts),
+          hook_context_message(
+            session.subagent_prompt_hook_start_contexts,
+            source_kind=session.native_hook_context_source_kind,
+          ),
         )
       }
       if !session.subagent_prompt_hook_post_tool_messages.is_empty() {
@@ -306,7 +323,13 @@ pub fn Engine::accept_subagent_prompt_hook(
         session.append("user/message", message)
       }
       if !contexts.is_empty() {
-        session.append("user/message", hook_context_message(contexts))
+        session.append(
+          "user/message",
+          hook_context_message(
+            contexts,
+            source_kind=session.native_hook_context_source_kind,
+          ),
+        )
       }
     }
     session.clear_subagent_prompt_hook()

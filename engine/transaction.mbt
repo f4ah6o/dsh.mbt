@@ -69,6 +69,7 @@ fn Session::copy_state(self : Session) -> Session {
       completed_content: call.completed_content,
       completed_error: call.completed_error,
       completed_contexts: call.completed_contexts.copy(),
+      completed_context_source_kind: call.completed_context_source_kind,
     }),
     used_calls: self.used_calls.copy(),
     cursor: self.cursor,
@@ -94,6 +95,7 @@ fn Session::copy_state(self : Session) -> Session {
     stop_prompt_context_count: self.stop_prompt_context_count,
     stop_prompt_context_length: self.stop_prompt_context_length,
     pending_hook_contexts: self.pending_hook_contexts.copy(),
+    native_hook_context_source_kind: self.native_hook_context_source_kind,
     subagent_prompt_hook_admission: self.subagent_prompt_hook_admission,
     subagent_prompt_hook_active: self.subagent_prompt_hook_active,
     subagent_prompt_hook_initial: self.subagent_prompt_hook_initial,
@@ -272,6 +274,7 @@ pub fn Engine::inject_hook_contexts(
   self : Engine,
   session_id : String,
   contexts : Array[String],
+  source_kind? : String = "hooks-claude-code",
 ) -> Result[Bool, String] {
   if contexts.is_empty() {
     return Ok(true)
@@ -281,6 +284,9 @@ pub fn Engine::inject_hook_contexts(
     let session = candidate.lookup(session_id)
     if session.imported {
       raise Invalid("Imported Session v4 histories cannot receive hook context")
+    }
+    if !["hooks-claude-code", "hooks-codex"].contains(source_kind) {
+      raise Invalid("Unknown native hook context source")
     }
     if session.status != Idle && session.status != Running {
       return Ok(false)
@@ -300,6 +306,7 @@ pub fn Engine::inject_hook_contexts(
     for context in contexts {
       session.pending_hook_contexts.push(context)
     }
+    session.native_hook_context_source_kind = source_kind
     Ok(true)
   } catch {
     Invalid(message) => Err(message)
@@ -382,7 +389,11 @@ pub fn Engine::apply_session_send_with_hook_contexts(
   prompt : String,
   initial_contexts : Array[String],
   additional_contexts : Array[String],
+  source_kind? : String = "hooks-claude-code",
 ) -> Result[Json, String] {
+  if !["hooks-claude-code", "hooks-codex"].contains(source_kind) {
+    return Err("Unknown native hook context source")
+  }
   match EngineCommand::SendPrompt(session_id, prompt).validate() {
     Err(error) => return Err(error)
     Ok(_) => ()
@@ -396,7 +407,7 @@ pub fn Engine::apply_session_send_with_hook_contexts(
   }
   let candidate = self.copy_state()
   let value = candidate.send_prompt(
-    session_id, prompt, initial_contexts, additional_contexts,
+    session_id, prompt, initial_contexts, additional_contexts, source_kind,
   ) catch {
     Invalid(error) => return Err(error)
   }

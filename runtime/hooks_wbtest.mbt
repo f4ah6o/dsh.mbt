@@ -255,6 +255,13 @@ test "native Claude hook config accepts Stop and rejects unsupported events and 
     )
     is Err(_),
   )
+  let hyphenated = native_hook_parse_config(
+    @json.parse(
+      native_hook_test_config("SubagentStart", "general-purpose", "true"),
+    ),
+  ).unwrap()
+  assert_eq(hyphenated.5[0].matcher, Some("general-purpose"))
+  assert_true(native_hook_matches(Some("general-purpose"), "general-purpose"))
   let mcp_alias = "mcp__server-name__tool"
   assert_true(
     native_hook_parse_config(
@@ -305,7 +312,7 @@ test "native Claude hook config accepts Stop and rejects unsupported events and 
 ///|
 test "SessionStart payload and context codec retain the pinned context-only contract" {
   let payload = native_session_start_payload(
-    "/workspace", "session-start-fixture", "resume",
+    "claude-code", "", "/workspace", "session-start-fixture", "resume",
   ).unwrap()
   let value = @json.parse(payload.trim())
   assert_eq(native_hook_test_fields(value).length(), 5)
@@ -319,12 +326,15 @@ test "SessionStart payload and context codec retain the pinned context-only cont
   assert_false(native_hook_matches(Some("startup|resume"), "clear"))
 
   assert_eq(
-    native_hook_session_start_context({
-      exit_code: 0,
-      stdout: "{\"decision\":\"block\",\"systemMessage\":\"ignored\",\"updatedInput\":{\"prompt\":\"ignored\"},\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"start context\"}}",
-      stderr: "",
-      truncated: false,
-    }),
+    native_hook_session_start_context(
+      {
+        exit_code: 0,
+        stdout: "{\"decision\":\"block\",\"systemMessage\":\"ignored\",\"updatedInput\":{\"prompt\":\"ignored\"},\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"start context\"}}",
+        stderr: "",
+        truncated: false,
+      },
+      "claude-code",
+    ),
     Some("start context"),
   )
   for
@@ -361,7 +371,9 @@ test "SessionStart payload and context codec retain the pinned context-only cont
         truncated: true,
       },
     ] {
-    assert_true(native_hook_session_start_context(capture) is None)
+    assert_true(
+      native_hook_session_start_context(capture, "claude-code") is None,
+    )
   }
 
   assert_eq(
@@ -2603,6 +2615,291 @@ async test "astral PostToolUse prompt denial is bounded, durable, and reusable" 
     assert_eq(string_field(cancelled, "status"), Some("cancelled"))
     assert_true(cancel_effects.is_empty())
   }
+}
+
+///|
+test "Codex hook config uses a bounded regex subset and skips unsupported hooks" {
+  let parsed = native_hook_parse_config(
+    @json.parse(
+      "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash|Terminal\",\"hooks\":[{\"type\":\"command\",\"command\":\"true\",\"timeoutSec\":2},{\"type\":\"command\",\"command\":\"ignored\",\"async\":true}]}],\"UserPromptSubmit\":[{\"matcher\":\".* is ignored for this event\",\"hooks\":[{\"command\":\"prompt\"}]}]}}",
+    ),
+    dialect="codex",
+  )
+  match parsed {
+    Ok((_, pre_tool, _, prompt, _, _, _)) => {
+      assert_eq(pre_tool.length(), 1)
+      assert_eq(pre_tool[0].commands.length(), 1)
+      assert_eq(pre_tool[0].commands[0].timeout_ms, 2000)
+      assert_true(native_hook_group_matches(pre_tool[0], "MyBashTool", "codex"))
+      assert_true(native_hook_group_matches(pre_tool[0], "Terminal", "codex"))
+      assert_false(native_hook_group_matches(pre_tool[0], "Read", "codex"))
+      assert_eq(prompt.length(), 1)
+      assert_true(native_hook_group_matches(prompt[0], "", "codex"))
+    }
+    Err(error) => fail(error)
+  }
+  assert_true(
+    native_hook_parse_config(
+      @json.parse(
+        "{\"PreToolUse\":[{\"matcher\":\"Bash.*\",\"hooks\":[{\"command\":\"true\"}]}]}",
+      ),
+      dialect="codex",
+    )
+    is Err(_),
+  )
+  assert_true(native_hook_valid_literal_matcher("Bash-Tool"))
+  assert_true(native_hook_valid_literal_matcher("Bash|Read"))
+}
+
+///|
+test "Codex payloads preserve snake case, static model, turn ids, and no newline" {
+  let start = native_session_start_payload(
+    "codex", "fixture-model", "/workspace", "session-1", "startup",
+  ).unwrap()
+  assert_false(start.has_suffix("\n"))
+  let start_value = @json.parse(start)
+  assert_eq(native_hook_test_fields(start_value).length(), 7)
+  assert_eq(
+    native_hook_test_required_field(start_value, "transcript_path"),
+    Json::null(),
+  )
+  assert_eq(
+    native_hook_test_required_field(start_value, "model"),
+    Json::string("fixture-model"),
+  )
+  assert_eq(
+    native_hook_test_required_field(start_value, "permission_mode"),
+    Json::string("default"),
+  )
+  assert_eq(
+    native_hook_test_required_field(start_value, "hook_event_name"),
+    Json::string("SessionStart"),
+  )
+
+  let prompt = native_user_prompt_payload(
+    "codex", "fixture-model", 8, "/workspace", "session-1", "hello",
+  ).unwrap()
+  assert_false(prompt.has_suffix("\n"))
+  let prompt_value = @json.parse(prompt)
+  assert_eq(native_hook_test_fields(prompt_value).length(), 8)
+  assert_eq(
+    native_hook_test_required_field(prompt_value, "turn_id"),
+    Json::string("8"),
+  )
+  assert_eq(
+    native_hook_test_required_field(prompt_value, "model"),
+    Json::string("fixture-model"),
+  )
+
+  let tool = native_hook_payload(
+    "codex",
+    "fixture-model",
+    8,
+    "PreToolUse",
+    "/workspace",
+    "session-1",
+    "Bash",
+    "call-1",
+    Json::object({
+      "command": Json::string("pwd"),
+      "timeout": Json::number(1.0),
+    }),
+    None,
+  ).unwrap()
+  assert_false(tool.has_suffix("\n"))
+  let tool_value = @json.parse(tool)
+  assert_eq(native_hook_test_fields(tool_value).length(), 10)
+  assert_eq(
+    native_hook_test_required_field(tool_value, "turn_id"),
+    Json::string("8"),
+  )
+  let tool_input = native_hook_test_required_field(tool_value, "tool_input")
+  assert_eq(native_hook_test_fields(tool_input).length(), 1)
+  assert_eq(
+    native_hook_test_required_field(tool_input, "command"),
+    Json::string("pwd"),
+  )
+
+  let stop = native_stop_payload(
+    "codex", "fixture-model", 8, "/workspace", "session-1",
+  ).unwrap()
+  assert_false(stop.has_suffix("\n"))
+  let stop_value = @json.parse(stop)
+  assert_eq(native_hook_test_fields(stop_value).length(), 9)
+  assert_eq(
+    native_hook_test_required_field(stop_value, "turn_id"),
+    Json::string("8"),
+  )
+  assert_eq(
+    native_hook_test_required_field(stop_value, "stop_hook_active"),
+    Json::boolean(false),
+  )
+  assert_eq(
+    native_hook_test_required_field(stop_value, "last_assistant_message"),
+    Json::null(),
+  )
+}
+
+///|
+test "Codex hook output only applies blocking decisions and event contexts" {
+  let top_block = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"reason\":\"top-level block\",\"continue\":false}",
+      stderr: "",
+      truncated: false,
+    },
+    "PreToolUse",
+  )
+  match top_block.action {
+    NativeHookAction::Deny(reason) => assert_eq(reason, "top-level block")
+    NativeHookAction::Continue => fail("Codex top-level block was ignored")
+  }
+  let nested_allow = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PreToolUse",
+  )
+  assert_true(nested_allow.action is NativeHookAction::Continue)
+  let nested_deny_without_reason = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"reason\":\"original objection\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PreToolUse",
+  )
+  match nested_deny_without_reason.action {
+    NativeHookAction::Deny(reason) => assert_eq(reason, "original objection")
+    NativeHookAction::Continue => fail("Codex nested deny was ignored")
+  }
+  let nested_reason_without_decision = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"reason\":\"old reason\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecisionReason\":\"specific objection\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PreToolUse",
+  )
+  match nested_reason_without_decision.action {
+    NativeHookAction::Deny(reason) => assert_eq(reason, "specific objection")
+    NativeHookAction::Continue => fail("Codex top-level block was ignored")
+  }
+  let nested_empty_reason = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"reason\":\"old reason\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecisionReason\":\"\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PreToolUse",
+  )
+  match nested_empty_reason.action {
+    NativeHookAction::Deny(reason) => assert_eq(reason, "")
+    NativeHookAction::Continue => fail("Codex top-level block was ignored")
+  }
+  let mismatched_allow = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"permissionDecision\":\"allow\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PreToolUse",
+  )
+  assert_true(mismatched_allow.action is NativeHookAction::Deny(_))
+
+  let prompt_context = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "  prompt context \n",
+      stderr: "",
+      truncated: false,
+    },
+    "UserPromptSubmit",
+  )
+  assert_eq(prompt_context.additional_contexts, ["prompt context"])
+  let failed_plain = native_hook_codex_result_decision(
+    { exit_code: 1, stdout: "leaked", stderr: "", truncated: false, },
+    "UserPromptSubmit",
+  )
+  assert_true(failed_plain.additional_contexts.is_empty())
+  let json_plain = native_hook_codex_result_decision(
+    { exit_code: 0, stdout: "{malformed", stderr: "", truncated: false, },
+    "SessionStart",
+  )
+  assert_true(json_plain.additional_contexts.is_empty())
+  let session_start_context = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"startup note\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "SessionStart",
+  )
+  assert_eq(session_start_context.additional_contexts, ["startup note"])
+  let post_plain = native_hook_codex_result_decision(
+    { exit_code: 0, stdout: "ignored", stderr: "", truncated: false, },
+    "PostToolUse",
+  )
+  assert_true(post_plain.additional_contexts.is_empty())
+  let post_context = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"additionalContext\":\"tool context\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PostToolUse",
+  )
+  assert_eq(post_context.additional_contexts, ["tool context"])
+}
+
+///|
+test "Codex diagnostic decisions preserve decoded controls but ignore nonblocking controls" {
+  assert_eq(
+    native_hook_codex_diagnostic_decision(
+      {
+        exit_code: 0,
+        stdout: "{\"decision\":\"block\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\"}}",
+        stderr: "",
+        truncated: false,
+      },
+      "PreToolUse",
+    ),
+    "allow",
+  )
+  assert_eq(
+    native_hook_codex_diagnostic_decision(
+      {
+        exit_code: 0,
+        stdout: "{\"continue\":false}",
+        stderr: "",
+        truncated: false,
+      },
+      "Stop",
+    ),
+    "stop",
+  )
+  assert_eq(
+    native_hook_codex_diagnostic_decision(
+      {
+        exit_code: 1,
+        stdout: "{\"decision\":\"block\"}",
+        stderr: "",
+        truncated: false,
+      },
+      "PreToolUse",
+    ),
+    "pass",
+  )
 }
 
 ///|

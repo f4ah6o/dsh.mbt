@@ -52,9 +52,16 @@ fn Engine::apply_command_impl(
       GetSession(id) => self.lookup(id.as_string()).json()
       ForkSession(id, child_id, title) =>
         self.fork_session(id.as_string(), child_id, title).json()
-      SendPrompt(id, prompt) => self.send_prompt(id, prompt, [], [])
+      SendPrompt(id, prompt) =>
+        self.send_prompt(id, prompt, [], [], "hooks-claude-code")
       SendPromptWithContexts(id, prompt, additional_contexts) =>
-        self.send_prompt(id, prompt, [], additional_contexts)
+        self.send_prompt(
+          id,
+          prompt,
+          [],
+          additional_contexts,
+          "hooks-claude-code",
+        )
       CancelSession(id) => {
         let session = self.lookup(id.as_string())
         if session.imported {
@@ -126,6 +133,7 @@ fn Engine::send_prompt(
   prompt : String,
   initial_contexts : Array[String],
   additional_contexts : Array[String],
+  source_kind : String,
 ) -> Json raise EngineError {
   let session = self.lookup(id.as_string())
   if session.imported {
@@ -181,14 +189,20 @@ fn Engine::send_prompt(
         ),
       ]),
     )
-    session.append("user/message", hook_context_message(initial_contexts))
+    session.append(
+      "user/message",
+      hook_context_message(initial_contexts, source_kind~),
+    )
   }
   session.append(
     "user/message",
     object([("role", Json::string("user")), ("content", Json::string(prompt))]),
   )
   if !additional_contexts.is_empty() {
-    session.append("user/message", hook_context_message(additional_contexts))
+    session.append(
+      "user/message",
+      hook_context_message(additional_contexts, source_kind~),
+    )
   }
   self.start_step(session)
   session.json()
@@ -346,7 +360,12 @@ fn transcript_user_message(data : Json) -> Json {
   let is_hook_context = match values.get("source") {
     Some(Json::Object(source)) =>
       source.length() == 1 &&
-      source.get("kind") == Some(Json::string("hooks-claude-code"))
+      ["hooks-claude-code", "hooks-codex"].contains(
+        match source.get("kind") {
+          Some(Json::String(value)) => value
+          _ => ""
+        },
+      )
     _ => false
   }
   if !is_hook_context {
@@ -705,7 +724,8 @@ fn Session::hook_context_admission_stats(self : Session) -> (Int, Int) {
             }
           _ => None
         }
-        if source_kind == Some("hooks-claude-code") {
+        if source_kind == Some("hooks-claude-code") ||
+          source_kind == Some("hooks-codex") {
           match event.data {
             Json::Object(data) =>
               match data.get("content") {
@@ -892,7 +912,13 @@ fn Engine::start_step(
           ]),
         )
       }
-      session.append("user/message", hook_context_message(contexts))
+      session.append(
+        "user/message",
+        hook_context_message(
+          contexts,
+          source_kind=session.native_hook_context_source_kind,
+        ),
+      )
     }
   }
   session.step += 1
@@ -1315,6 +1341,7 @@ fn parse_calls(value : Json) -> Array[ToolCall] raise EngineError {
       completed_content: None,
       completed_error: None,
       completed_contexts: [],
+      completed_context_source_kind: "hooks-claude-code",
     }
   })
 }
