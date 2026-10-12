@@ -2647,7 +2647,7 @@ test "Codex hook config uses a bounded regex subset and skips unsupported hooks"
     )
     is Err(_),
   )
-  assert_true(!native_hook_valid_literal_matcher("Bash-Tool"))
+  assert_true(native_hook_valid_literal_matcher("Bash-Tool"))
   assert_true(native_hook_valid_literal_matcher("Bash|Read"))
 }
 

@@ -648,7 +648,7 @@ async fn NativeRuntime::invoke(
 fn NativeRuntime::validate_user_prompt_locked(
   self : NativeRuntime,
   input : Json,
-) -> Result[(String, String), String] {
+) -> Result[(String, String, Int), String] {
   let (session_id, prompt) = match
     @engine.EngineCommand::from_json("session_send", input) {
     Ok(@engine.EngineCommand::SendPrompt(session_id, prompt)) =>
@@ -676,6 +676,7 @@ fn NativeRuntime::validate_user_prompt_locked(
   if int_field(session, "turn_id").unwrap_or(0) >= 1000000 {
     return Err("Session turn limit reached")
   }
+  let turn_id = int_field(session, "turn_id").unwrap_or(0) + 1
   let event_count = match object_field(session, "events") {
     Some(Json::Array(events)) => events.length()
     _ => return Err("session events are unavailable")
@@ -684,7 +685,43 @@ fn NativeRuntime::validate_user_prompt_locked(
   if event_count + max_steps * 112 + 16 > 32768 {
     return Err("Session event limit reached; create a new session")
   }
-  Ok((session_id, prompt))
+  Ok((session_id, prompt, turn_id))
+}
+
+///|
+/// Read the current turn coordinate for a root hook that runs after prompt
+/// admission. The pre-admission prompt path instead carries the upcoming turn
+/// directly from validation.
+fn NativeRuntime::current_turn_id(
+  self : NativeRuntime,
+  session_id : String,
+) -> Result[Int, String] {
+  let session = match
+    self.api.invoke("session_get", { "session_id": Json::string(session_id) }) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  match int_field(session, "turn_id") {
+    Some(value) => Ok(value)
+    None => Err("session turn id is unavailable")
+  }
+}
+
+///|
+/// Read a child engine's active turn coordinate for its hook payloads.
+fn native_engine_current_turn_id(
+  engine : @engine.Engine,
+  session_id : String,
+) -> Result[Int, String] {
+  let session = match
+    engine.invoke("session_get", { "session_id": Json::string(session_id) }) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  match int_field(session, "turn_id") {
+    Some(value) => Ok(value)
+    None => Err("session turn id is unavailable")
+  }
 }
 
 ///|
@@ -693,6 +730,7 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
   control : NativeJobControl,
   session_id : String,
   prompt : String,
+  turn_id : Int,
   attach_task? : Bool = true,
   payload_prompt? : String? = None,
   sink? : NativeHookEventSink? = None,
@@ -706,6 +744,7 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
             self.tools,
             session_id,
             payload_prompt.unwrap_or(prompt),
+            turn_id~,
             sink~,
           )
           outcome.val = Some(result)
@@ -868,6 +907,7 @@ async fn NativeRuntime::run_root_send_hooks_controlled(
   control : NativeJobControl,
   session_id : String,
   prompt : String,
+  turn_id : Int,
   attach_task? : Bool = true,
 ) -> Result[NativeRootHookOutcome, String] {
   let start_contexts = match
@@ -881,6 +921,7 @@ async fn NativeRuntime::run_root_send_hooks_controlled(
         control,
         session_id,
         prompt,
+        turn_id,
         attach_task~,
         payload_prompt=Some(start_contexts.join("") + prompt),
       ) {
@@ -928,7 +969,8 @@ async fn NativeRuntime::invoke_with_user_prompt_hook(
     return Err("native runtime is stopped")
   }
   let input = native_hook_prompt_input(raw_input, [])
-  let (session_id, prompt) = match self.validate_user_prompt_locked(input) {
+  let (session_id, prompt, turn_id) = match
+    self.validate_user_prompt_locked(input) {
     Ok(value) => value
     Err(error) => {
       self.gate.release()
@@ -995,7 +1037,7 @@ async fn NativeRuntime::invoke_with_user_prompt_hook(
   }
   self.gate.release()
   let hook_result = @async.handle_cancellation(async fn() {
-    self.run_root_send_hooks_controlled(control, session_id, prompt)
+    self.run_root_send_hooks_controlled(control, session_id, prompt, turn_id)
   })
   @async.protect_from_cancel(async fn() { self.gate.acquire() })
   let owner_cancelled_before_admission = @async.is_being_cancelled()
@@ -1762,7 +1804,7 @@ async fn NativeRuntime::accept_remote_prompt_command(
   let validation = if command.input is Json::Object(_) {
     match self.validate_user_prompt_locked(raw_input) {
       Err(error) => Err(error)
-      Ok((session_id, prompt)) =>
+      Ok((session_id, prompt, turn_id)) =>
         match self.prepare_input("session_send", raw_input) {
           Err(error) => Err(error)
           Ok(prepared) =>
@@ -1770,7 +1812,7 @@ async fn NativeRuntime::accept_remote_prompt_command(
               Err(error) => Err(error)
               Ok(_) =>
                 match self.api.preview_session_send(prepared) {
-                  Ok(_) => Ok((session_id, prompt, prepared))
+                  Ok(_) => Ok((session_id, prompt, turn_id, prepared))
                   Err(error) => Err(error)
                 }
             }
@@ -1779,7 +1821,7 @@ async fn NativeRuntime::accept_remote_prompt_command(
   } else {
     Err("command input must be an object")
   }
-  let (session_id, prompt, prepared_input) = match validation {
+  let (session_id, prompt, turn_id, prepared_input) = match validation {
     Err(error) => {
       let receipt = native_receipt(
         self.state.workspace_id,
@@ -1864,7 +1906,7 @@ async fn NativeRuntime::accept_remote_prompt_command(
   }
   self.gate.release()
   let hook_result = @async.handle_cancellation(async fn() {
-    self.run_root_send_hooks_controlled(control, session_id, prompt)
+    self.run_root_send_hooks_controlled(control, session_id, prompt, turn_id)
   })
   @async.protect_from_cancel(async fn() { self.gate.acquire() })
   let cancelled_before_admission = @async.is_being_cancelled()
@@ -2233,6 +2275,7 @@ async fn[X] NativeRuntime::mcp_handle(
   }
   let mut prompt_session_id : String? = None
   let mut prompt_text : String? = None
+  let mut prompt_turn_id : Int? = None
   let mut prompt_dispatch_line = if tool_name == "session_send" {
     match native_mcp_prompt_request(line) {
       Some(input) =>
@@ -2263,7 +2306,7 @@ async fn[X] NativeRuntime::mcp_handle(
           self.gate.release()
           return Ok(native_mcp_error_response(line, error))
         }
-        Ok((session_id, prompt)) =>
+        Ok((session_id, prompt, turn_id)) =>
           match self.prepare_input("session_send", clean_input) {
             Err(error) => {
               self.gate.release()
@@ -2278,6 +2321,7 @@ async fn[X] NativeRuntime::mcp_handle(
                 Ok(_) => {
                   prompt_session_id = Some(session_id)
                   prompt_text = Some(prompt)
+                  prompt_turn_id = Some(turn_id)
                   prompt_dispatch_line = native_mcp_line_with_prompt_input(
                     line,
                     native_hook_prompt_input(prepared, []),
@@ -2360,8 +2404,8 @@ async fn[X] NativeRuntime::mcp_handle(
       None => ()
     }
   }
-  match (prompt_session_id, prompt_text) {
-    (Some(prompt_session), Some(prompt)) => {
+  match (prompt_session_id, prompt_text, prompt_turn_id) {
+    (Some(prompt_session), Some(prompt), Some(turn_id)) => {
       let hook_control = match control {
         Some(value) => value
         None => {
@@ -2372,7 +2416,7 @@ async fn[X] NativeRuntime::mcp_handle(
       self.gate.release()
       let hook_result = @async.handle_cancellation(async fn() {
         self.run_root_send_hooks_controlled(
-          hook_control, prompt_session, prompt,
+          hook_control, prompt_session, prompt, turn_id,
         )
       })
       @async.protect_from_cancel(async fn() { self.gate.acquire() })
@@ -3118,6 +3162,10 @@ async fn NativeRuntime::complete_tool_with_prompt_hook(
         return Err("native command was cancelled")
       }
       let prompt = checkpoint.prompt()
+      let turn_id = match self.current_turn_id(session_id) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
       let hook_outcome = match control {
         Some(value) =>
           match
@@ -3125,6 +3173,7 @@ async fn NativeRuntime::complete_tool_with_prompt_hook(
               value,
               session_id,
               prompt,
+              turn_id,
               attach_task=false,
               sink=Some(NativeHookEventSink::Root(self, session_id, control)),
             ) {
@@ -3138,6 +3187,7 @@ async fn NativeRuntime::complete_tool_with_prompt_hook(
             self.tools,
             session_id,
             prompt,
+            turn_id~,
             sink=Some(NativeHookEventSink::Root(self, session_id, None)),
           )
       }
@@ -3231,6 +3281,7 @@ async fn NativeRuntime::settle_post_tool_prompt_hook(
 async fn NativeRuntime::run_stop_hook_controlled(
   self : NativeRuntime,
   session_id : String,
+  turn_id : Int,
   sink? : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let outcome : Ref[Result[NativeHookOutcome, String]?] = Ref(None)
@@ -3238,7 +3289,12 @@ async fn NativeRuntime::run_stop_hook_controlled(
     try
       @async.with_task_group() <| workers => {
         let task = workers.spawn(no_wait=true, allow_failure=true, async fn() {
-          let result = self.hooks.before_stop(self.tools, session_id, sink~)
+          let result = self.hooks.before_stop(
+            self.tools,
+            session_id,
+            turn_id~,
+            sink~,
+          )
           outcome.val = Some(result)
           result.map(_ => ())
         })
@@ -3386,9 +3442,14 @@ async fn NativeRuntime::complete_provider_result(
       if control.cancelled.val {
         return Err("native command was cancelled")
       }
+      let turn_id = match self.current_turn_id(session_id) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
       let stop_outcome = match
         self.run_stop_hook_controlled(
           session_id,
+          turn_id,
           sink=Some(NativeHookEventSink::Root(self, session_id, Some(control))),
         ) {
         Ok(value) => value
@@ -3424,12 +3485,17 @@ async fn NativeRuntime::complete_provider_result(
               if control.cancelled.val {
                 return Err("native command was cancelled")
               }
+              let turn_id = match self.current_turn_id(session_id) {
+                Ok(value) => value
+                Err(error) => return Err(error)
+              }
               let prompt_outcome = if self.hooks.has_user_prompt_submit() {
                 match
                   self.run_user_prompt_hook_controlled(
                     control,
                     session_id,
                     text,
+                    turn_id,
                     attach_task=false,
                     sink=Some(
                       NativeHookEventSink::Root(self, session_id, Some(control)),
@@ -3553,6 +3619,10 @@ async fn NativeRuntime::finish_tool_effect(
   control? : NativeJobControl? = None,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
   let name = string_field(effect.request(), "name").unwrap_or("")
+  let turn_id = match self.current_turn_id(session_id) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
   let post_hook_matches = self.hooks.has_post_tool_match(name)
   if post_hook_matches {
     match
@@ -3578,6 +3648,7 @@ async fn NativeRuntime::finish_tool_effect(
         session_id,
         effect.request(),
         tool_result,
+        turn_id~,
         sink=Some(NativeHookEventSink::Root(self, session_id, control)),
       )
     })
@@ -3645,10 +3716,15 @@ async fn NativeRuntime::run_tool_effect(
   }
   let name = string_field(effect.request(), "name").unwrap_or("")
   let session_id = effect.session_id().as_string()
+  let turn_id = match self.current_turn_id(session_id) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
   let pre_action = self.hooks.before_tool(
     self.tools,
     session_id,
     effect.request(),
+    turn_id~,
     sink=Some(NativeHookEventSink::Root(self, session_id, control)),
   )
   if control is Some(value) && value.cancelled.val {
