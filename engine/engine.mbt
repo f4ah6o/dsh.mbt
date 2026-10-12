@@ -1148,6 +1148,10 @@ fn Engine::complete_impl(
     if effect.kind == Llm && session.pending_retry_id is Some(_) {
       raise Invalid("Provider effect completed while a retry was waiting")
     }
+    if effect.kind == Llm &&
+      !native_hook_pending_invocations(session).is_empty() {
+      raise Invalid("Provider effect completed before native hook results")
+    }
     let result = checked_copy(result)
     let ok = bool_value(required_field(result, "ok"), "ok")
     if !ok {
@@ -1272,6 +1276,12 @@ fn Engine::complete_impl(
             session, effect, effect_id, result, defer_post_tool_prompt_hook,
           )
       }
+    }
+    if !native_hook_pending_invocations(session).is_empty() &&
+      (session.status != Running || session.active_effect is Some(_)) {
+      raise Invalid(
+        "Effect completion advanced or ended a turn before native hook results",
+      )
     }
     Ok(session.json())
   } catch {

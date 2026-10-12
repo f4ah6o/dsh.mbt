@@ -59,6 +59,24 @@ fn Engine::restore_impl(self : Engine, snapshot : Json) -> Result[Unit, String] 
       order.push(session.id)
     }
     validate_fork_lineage(loaded, order)
+    // A live native hook invocation reserves its largest valid result together
+    // with the interrupted closure that restore will append. Check both on a
+    // candidate engine before replacing state, without simulating retry starts
+    // for effects that restore deliberately abandons.
+    let recovery = self.copy_state()
+    recovery.sessions.clear()
+    recovery.order.clear()
+    recovery.effects.clear()
+    recovery.queued.clear()
+    for id in order {
+      recovery.sessions.set(id, loaded.get(id).unwrap())
+      recovery.order.push(id)
+    }
+    if !recovery.within_capacity(simulate_retry=false) {
+      raise Invalid(
+        "Snapshot leaves no room for native hook results and interruption",
+      )
+    }
     // All validation is complete. No operation below can fail or dispatch I/O.
     self.sessions.clear()
     self.order.clear()
@@ -226,6 +244,8 @@ fn restore_session(
   let mut stop_settled_pending_boundary = false
   let mut stop_continuation_reason_seen = false
   let mut stop_continuation_rejected = false
+  let pending_hook_invocations : Map[String, PendingNativeHookInvocation] = Map([],
+  )
   let pending_post_tool_contexts : Array[(String, Json)] = []
   let expected_admitted_post_tool_messages : Array[Json] = []
   for index, raw in events {
@@ -310,7 +330,10 @@ fn restore_session(
         raise Invalid("Creation event does not match session metadata")
       }
     } else if kind == "turn/start" {
-      if open_turn || turn_id != session.turn_id + 1 || step != 0 {
+      if open_turn ||
+        pending_hook_invocations.length() != 0 ||
+        turn_id != session.turn_id + 1 ||
+        step != 0 {
         raise Invalid("Invalid turn boundary in snapshot")
       }
       session.turn_id = turn_id
@@ -1689,6 +1712,118 @@ fn restore_session(
           stop_continuation_reason_seen = false
           stop_continuation_rejected = false
         }
+        "hook/invoked" => {
+          let hook_fields = fields(data)
+          if hook_fields.length() < 4 || hook_fields.length() > 5 {
+            raise Invalid("Invalid native hook invocation event shape")
+          }
+          for key, _ in hook_fields {
+            if !["turn", "point", "dialect", "handlerId", "matcher"].contains(
+                key,
+              ) {
+              raise Invalid("Unknown native hook invocation field")
+            }
+          }
+          let hook_turn = int_value(
+            required_field(data, "turn"),
+            "native hook turn",
+            1,
+            1000000,
+          )
+          let point = required_string(data, "point", max=32)
+          let dialect = required_string(data, "dialect", max=32)
+          let handler_id = required_string(data, "handlerId", max=128)
+          match hook_fields.get("matcher") {
+            None => ()
+            Some(Json::String(value)) if value.length() <= 128 &&
+              !value.contains("\u0000") => ()
+            _ => raise Invalid("Invalid native hook matcher")
+          }
+          if !open_turn ||
+            hook_turn != turn_id ||
+            turn_id != session.turn_id ||
+            dialect != "claude-code" ||
+            !native_hook_valid_point(point) ||
+            !native_hook_valid_handler_id(handler_id, point) {
+            raise Invalid("Native hook invocation is outside its open turn")
+          }
+          let key = native_hook_invocation_key(hook_turn, point, handler_id)
+          if pending_hook_invocations.get(key) is Some(_) {
+            raise Invalid("Duplicate pending native hook invocation")
+          }
+          pending_hook_invocations[key] = {
+            turn_id: hook_turn,
+            point,
+            handler_id,
+            event_seq: seq,
+          }
+        }
+        "hook/result" => {
+          let hook_fields = fields(data)
+          if hook_fields.length() < 5 || hook_fields.length() > 7 {
+            raise Invalid("Invalid native hook result event shape")
+          }
+          for key, _ in hook_fields {
+            if ![
+                "turn", "point", "handlerId", "decision", "exitCode", "stderrSummary",
+                "durationMs",
+              ].contains(key) {
+              raise Invalid("Unknown native hook result field")
+            }
+          }
+          let hook_turn = int_value(
+            required_field(data, "turn"),
+            "native hook turn",
+            1,
+            1000000,
+          )
+          let point = required_string(data, "point", max=32)
+          let handler_id = required_string(data, "handlerId", max=128)
+          let decision = required_string(data, "decision", max=16)
+          ignore(
+            int_value(
+              required_field(data, "durationMs"),
+              "native hook duration",
+              0,
+              2147483647,
+            ),
+          )
+          if !open_turn ||
+            hook_turn != turn_id ||
+            turn_id != session.turn_id ||
+            !native_hook_valid_point(point) ||
+            !native_hook_valid_handler_id(handler_id, point) ||
+            !["approve", "allow", "block", "deny", "ask", "stop", "pass"].contains(
+              decision,
+            ) {
+            raise Invalid("Native hook result is outside its open turn")
+          }
+          match hook_fields.get("exitCode") {
+            None => ()
+            Some(value) =>
+              ignore(
+                int_value(
+                  value, "native hook exit code", -2147483648, 2147483647,
+                ),
+              )
+          }
+          match hook_fields.get("stderrSummary") {
+            None => ()
+            Some(Json::String(value)) if !value.is_empty() &&
+              engine_hook_context_utf16_units(value) <=
+              NATIVE_HOOK_RESULT_SUMMARY_MAX_UNITS => ()
+            _ => raise Invalid("Invalid native hook stderr summary")
+          }
+          let key = native_hook_invocation_key(hook_turn, point, handler_id)
+          match pending_hook_invocations.get(key) {
+            Some(invocation) if invocation.event_seq < seq &&
+              invocation.turn_id == hook_turn &&
+              invocation.point == point &&
+              invocation.handler_id == handler_id =>
+              ignore(pending_hook_invocations.remove(key))
+            _ => raise Invalid("Native hook result has no matching invocation")
+          }
+        }
         "hook/subagent-start-context" => {
           let context_count = int_value(
             required_field(data, "context_count"),
@@ -1845,6 +1980,14 @@ fn restore_session(
               "Blocked Stop continuation is missing its pending boundary",
             )
           }
+          if pending_hook_invocations.length() != 0 {
+            if reason != "cancelled" && reason != "interrupted" {
+              raise Invalid(
+                "Turn ended before native hook results were recorded",
+              )
+            }
+            pending_hook_invocations.clear()
+          }
           session.status = match reason {
             "completed" => Completed
             "cancelled" => Cancelled
@@ -1932,6 +2075,10 @@ fn restore_session(
   if expected_approval != actual_approval {
     raise Invalid("Snapshot approval disagrees with the event log")
   }
+  if pending_hook_invocations.length() != 0 &&
+    (!open_turn || session.status != Running) {
+    raise Invalid("Pending native hook invocation is outside an open turn")
+  }
   if open_turn &&
     session.active_effect is None &&
     session.active_tool_effect_count() == 0 &&
@@ -1941,7 +2088,11 @@ fn restore_session(
     !session.post_tool_prompt_hook_active {
     raise Invalid("Snapshot captured an impossible in-between transition")
   }
-  if open_turn && session.events.length() + 40 > 32768 {
+  let hook_result_projection = native_hook_result_capacity_projection(session)
+  if session_capacity_length(hook_result_projection.json()) > SESSION_CAPACITY {
+    raise Invalid("Snapshot leaves no room for native hook results")
+  }
+  if open_turn && hook_result_projection.events.length() + 40 > 32768 {
     raise Invalid("Snapshot leaves no room to settle interrupted work")
   }
   session

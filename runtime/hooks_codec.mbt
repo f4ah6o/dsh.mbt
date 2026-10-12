@@ -101,6 +101,109 @@ fn native_hook_prefix_utf16(value : String, maximum : Int) -> String {
 }
 
 ///|
+/// JavaScript's String.trim whitespace set used by the pinned hook bridge.
+fn native_hook_js_trim_space(character : Char) -> Bool {
+  let value = character.to_int()
+  value == 0x0009 ||
+  value == 0x000A ||
+  value == 0x000B ||
+  value == 0x000C ||
+  value == 0x000D ||
+  value == 0x0020 ||
+  value == 0x00A0 ||
+  value == 0x1680 ||
+  (value >= 0x2000 && value <= 0x200A) ||
+  value == 0x2028 ||
+  value == 0x2029 ||
+  value == 0x202F ||
+  value == 0x205F ||
+  value == 0x3000 ||
+  value == 0xFEFF
+}
+
+///|
+fn native_hook_js_trim(value : String) -> String {
+  let characters : Array[Char] = []
+  for character in value {
+    characters.push(character)
+  }
+  let mut start = 0
+  let mut end = characters.length()
+  while start < end && native_hook_js_trim_space(characters[start]) {
+    start += 1
+  }
+  while end > start && native_hook_js_trim_space(characters[end - 1]) {
+    end -= 1
+  }
+  let output = StringBuilder()
+  for index in start..<end {
+    output.write_char(characters[index])
+  }
+  output.to_string()
+}
+
+///|
+/// The JS bridge slices stderr by UTF-16 units and adds an ellipsis after an
+/// over-limit prefix. MoonBit strings cannot contain an isolated surrogate,
+/// so a boundary that would split a supplementary scalar keeps its safe prefix.
+fn native_hook_stderr_summary(value : String) -> String? {
+  let trimmed = native_hook_js_trim(value)
+  if trimmed.is_empty() {
+    return None
+  }
+  let units = native_provider_utf16_units(trimmed)
+  if units <= 500 {
+    Some(trimmed)
+  } else {
+    Some(native_hook_prefix_utf16(trimmed, 500) + "…")
+  }
+}
+
+///|
+/// Preserve the upstream audit decision independently of the native adapter's
+/// merged allow/block behavior and stricter output validation.
+fn native_hook_diagnostic_decision(
+  capture : NativeHookCapture,
+  event : String,
+) -> String {
+  if capture.exit_code == 2 {
+    return "block"
+  }
+  if capture.exit_code != 0 {
+    return "pass"
+  }
+  let stdout = native_hook_js_trim(capture.stdout)
+  if stdout.is_empty() || !stdout.has_prefix("{") {
+    return "pass"
+  }
+  let document = @json.parse(stdout) catch { _ => return "pass" }
+  let fields = match native_hook_object(document) {
+    Some(value) => value
+    None => return "pass"
+  }
+  let mut decision = match fields.get("decision") {
+    Some(Json::String("approve")) => Some("approve")
+    Some(Json::String("block")) => Some("block")
+    _ => None
+  }
+  match fields.get("hookSpecificOutput") {
+    Some(Json::Object(specific)) if specific.get("hookEventName") ==
+      Some(Json::string(event)) =>
+      match specific.get("permissionDecision") {
+        Some(Json::String(value)) if ["allow", "deny", "ask"].contains(value) =>
+          decision = Some(value)
+        _ => ()
+      }
+    _ => ()
+  }
+  match decision {
+    Some(value) => value
+    None if fields.get("continue") == Some(Json::boolean(false)) => "stop"
+    None => "pass"
+  }
+}
+
+///|
 fn native_hook_json_string(
   value : Json?,
   field : String,

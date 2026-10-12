@@ -187,6 +187,9 @@ pub fn Engine::accept_subagent_prompt_hook(
   let changed = try {
     let session = candidate.lookup(checkpoint.session_id)
     session.validate_subagent_prompt_hook(checkpoint)
+    if !native_hook_pending_invocations(session).is_empty() {
+      raise Invalid("Cannot advance a turn with pending native hook results")
+    }
     let all_contexts = session.subagent_prompt_hook_contexts.copy()
     for context in contexts {
       all_contexts.push(context)
@@ -337,6 +340,9 @@ pub fn Engine::block_subagent_prompt_hook(
   let changed = try {
     let session = candidate.lookup(checkpoint.session_id)
     session.validate_subagent_prompt_hook(checkpoint)
+    if !native_hook_pending_invocations(session).is_empty() {
+      raise Invalid("Cannot close a turn with pending native hook results")
+    }
     let has_post_tool_contexts = !session.subagent_prompt_hook_post_tool_messages.is_empty()
     let prefix = if has_post_tool_contexts {
       "UserPromptSubmit hook rejected the PostToolUse context"

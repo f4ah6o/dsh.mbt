@@ -48,6 +48,18 @@ pub struct NativePostToolPromptHookCheckpoint {
 }
 
 ///|
+/// Opaque identity for a durable native command-hook invocation. The event is
+/// checkpointed before the external command starts; a result can only be paired
+/// with this exact open invocation.
+pub struct NativeHookInvocationCheckpoint {
+  priv session_id : String
+  priv turn_id : Int
+  priv point : String
+  priv handler_id : String
+  priv event_seq : Int
+}
+
+///|
 priv enum Status {
   Idle
   Running

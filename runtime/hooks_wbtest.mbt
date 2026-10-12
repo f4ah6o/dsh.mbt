@@ -171,6 +171,26 @@ fn native_hook_has_event(
 }
 
 ///|
+fn native_hook_diagnostic_events(
+  session : Json,
+  event_type : String,
+) -> Array[Json] {
+  match object_field(session, "events") {
+    Some(Json::Array(events)) =>
+      events.filter(event => string_field(event, "type") == Some(event_type))
+    _ => []
+  }
+}
+
+///|
+fn native_hook_diagnostic_field(event : Json, name : String) -> Json? {
+  match object_field(event, "data") {
+    Some(data) => object_field(data, name)
+    None => None
+  }
+}
+
+///|
 fn native_hook_tool_result_ids(session : Json) -> Array[String] {
   let output : Array[String] = []
   match object_field(session, "messages") {
@@ -945,6 +965,75 @@ test "native hook result codec preserves supported Claude exit and decision sema
 }
 
 ///|
+test "native hook diagnostic decision and stderr summary match the pinned codec" {
+  let matching_permission = native_hook_diagnostic_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"allow\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PreToolUse",
+  )
+  assert_eq(matching_permission, "allow")
+  assert_eq(
+    native_hook_diagnostic_decision(
+      {
+        exit_code: 0,
+        stdout: "{\"decision\":\"block\",\"hookSpecificOutput\":{\"hookEventName\":\"PostToolUse\",\"permissionDecision\":\"deny\"}}",
+        stderr: "",
+        truncated: false,
+      },
+      "PreToolUse",
+    ),
+    "block",
+  )
+  assert_eq(
+    native_hook_diagnostic_decision(
+      {
+        exit_code: 0,
+        stdout: "{\"decision\":\"deny\",\"continue\":false}",
+        stderr: "",
+        truncated: false,
+      },
+      "PreToolUse",
+    ),
+    "stop",
+  )
+  assert_eq(
+    native_hook_diagnostic_decision(
+      {
+        exit_code: 7,
+        stdout: "{\"decision\":\"block\"}",
+        stderr: "",
+        truncated: false,
+      },
+      "PreToolUse",
+    ),
+    "pass",
+  )
+  assert_eq(
+    native_hook_diagnostic_decision(
+      {
+        exit_code: 2,
+        stdout: "{\"decision\":\"approve\"}",
+        stderr: "blocked",
+        truncated: false,
+      },
+      "PreToolUse",
+    ),
+    "block",
+  )
+  assert_eq(native_hook_stderr_summary("\uFEFF\u00A0 \t"), None)
+  let capped = native_hook_stderr_summary("a".repeat(501)).unwrap()
+  assert_eq(capped, "a".repeat(500) + "…")
+  assert_eq(native_provider_utf16_units(capped), 501)
+  let astral = native_hook_stderr_summary("a" + "😀".repeat(250)).unwrap()
+  assert_eq(native_provider_utf16_units(astral), 500)
+  assert_true(astral.has_suffix("…"))
+}
+
+///|
 async test "PostToolUse aggregates matching contexts in order with blocking feedback" {
   let fixture = @fs.tmpdir(prefix="dsh-native-hooks-context-order")
   @async.with_task_group() <| group => {
@@ -1062,14 +1151,7 @@ async test "native hook subprocess bounds streams, scrubs env, and kills timeout
       { command: "head -c 17000 /dev/zero; /bin/sleep 5", timeout_ms: 400, },
       "{}\n",
     )
-    assert_true(oversized_before_timeout is Ok(value) && value.truncated)
-    assert_true(
-      native_hook_result_decision(
-        oversized_before_timeout.unwrap(),
-        "PreToolUse",
-      )
-      is Err(_),
-    )
+    assert_true(oversized_before_timeout is Err(_))
 
     let timeout_hook = {
       command: "(printf ready > hook-child-ready; while [ ! -f hook-timeout-release ]; do /bin/sleep 0.01; done; printf escaped > hook-child-alive) & wait",
@@ -1753,6 +1835,12 @@ async test "SessionStart context is claimed before UserPromptSubmit and prompt c
       .invoke("session_get", { "session_id": session_id.to_json() })
       .unwrap()
     assert_eq(int_field(denied_session, "turn_id"), Some(0))
+    assert_true(
+      native_hook_diagnostic_events(denied_session, "hook/invoked").is_empty(),
+    )
+    assert_true(
+      native_hook_diagnostic_events(denied_session, "hook/result").is_empty(),
+    )
 
     let retry_id = @protocol.uuid_v7_command_id_from_entropy(
       now + 1L,
@@ -3436,6 +3524,39 @@ async test "native owner task cancellation during PreToolUse cannot dispatch a t
     @async.sleep(100)
     assert_false(@fs.exists(workspace + "/native-demo.txt"))
     assert_false(@fs.exists(workspace + "/hook-post-count.txt"))
+    let session_id = "hook-pre-cancel-session"
+    let (cancelled, cancel_effects) = runtime
+      .invoke("session_cancel", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(string_field(cancelled, "status"), Some("cancelled"))
+    assert_true(cancel_effects.is_empty())
+    let invoked = native_hook_diagnostic_events(cancelled, "hook/invoked")
+    let results = native_hook_diagnostic_events(cancelled, "hook/result")
+    assert_eq(invoked.length(), 1)
+    assert_true(results.is_empty())
+    assert_true(runtime.close() is Ok(_))
+    let reopened = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(reopened.close()))
+    })
+    let (recovered, _) = reopened
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    assert_eq(string_field(recovered, "status"), Some("cancelled"))
+    assert_eq(
+      native_hook_diagnostic_events(recovered, "hook/invoked").length(),
+      1,
+    )
+    assert_true(
+      native_hook_diagnostic_events(recovered, "hook/result").is_empty(),
+    )
+    assert_false(@fs.exists(workspace + "/hook-post-count.txt"))
   }
 }
 
@@ -3616,6 +3737,25 @@ async test "native pending PostToolUse result cannot reorder parallel reads" {
     let (finished, _) = runtime
       .invoke("session_get", { "session_id": session_id.to_json() })
       .unwrap()
+    let invoked_events = native_hook_diagnostic_events(finished, "hook/invoked")
+    let result_events = native_hook_diagnostic_events(finished, "hook/result")
+    assert_eq(invoked_events.length(), 2)
+    assert_eq(result_events.length(), 2)
+    for invoked in invoked_events {
+      let handler_id = native_hook_diagnostic_field(invoked, "handlerId").unwrap()
+      let paired = result_events.filter(result => {
+        native_hook_diagnostic_field(result, "handlerId") == Some(handler_id)
+      })
+      assert_eq(paired.length(), 1)
+      assert_eq(
+        native_hook_diagnostic_field(invoked, "matcher"),
+        Some("read".to_json()),
+      )
+      assert_true(
+        int_field(paired[0], "seq").unwrap() >
+        int_field(invoked, "seq").unwrap(),
+      )
+    }
     assert_eq(native_hook_tool_result_ids(finished), ["read-a", "read-b"])
     let a_result = native_hook_tool_result(finished, "read-a").unwrap()
     assert_true(native_json_true(object_field(a_result, "is_error")))
@@ -3722,6 +3862,46 @@ async test "native PreToolUse denial prevents tool work and receipt replay does 
       .invoke("session_get", { "session_id": session_id.to_json() })
       .unwrap()
     assert_true(denied_session.stringify().contains("fixture denial"))
+    let invoked_events = native_hook_diagnostic_events(
+      denied_session, "hook/invoked",
+    )
+    let result_events = native_hook_diagnostic_events(
+      denied_session, "hook/result",
+    )
+    assert_eq(invoked_events.length(), 1)
+    assert_eq(result_events.length(), 1)
+    let invoked = invoked_events[0]
+    let result = result_events[0]
+    let handler_id = native_hook_diagnostic_field(invoked, "handlerId").unwrap()
+    assert_eq(
+      native_hook_diagnostic_field(result, "handlerId"),
+      Some(handler_id),
+    )
+    assert_eq(
+      native_hook_diagnostic_field(invoked, "point"),
+      Some("PreToolUse".to_json()),
+    )
+    assert_eq(
+      native_hook_diagnostic_field(invoked, "dialect"),
+      Some("claude-code".to_json()),
+    )
+    assert_eq(
+      native_hook_diagnostic_field(invoked, "matcher"),
+      Some("write".to_json()),
+    )
+    assert_eq(
+      native_hook_diagnostic_field(result, "decision"),
+      Some("block".to_json()),
+    )
+    assert_eq(
+      native_hook_diagnostic_field(result, "exitCode"),
+      Some(Json::number(0.0)),
+    )
+    assert_true(native_hook_diagnostic_field(result, "durationMs") is Some(_))
+    assert_false(invoked.stringify().contains("command"))
+    assert_false(invoked.stringify().contains("stdout"))
+    assert_false(result.stringify().contains("stdout"))
+    assert_false(result.stringify().contains("fixture denial"))
 
     let replay = native_runtime_approval_command(
       runtime.state.workspace_id,
@@ -3767,6 +3947,151 @@ async test "native PreToolUse denial prevents tool work and receipt replay does 
     assert_true(restart_effects.is_empty())
     assert_false(restart_started)
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+  }
+}
+
+///|
+async test "native hook diagnostics record timeout, signal, and output overflow without replay data" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-hook-diagnostic-failures")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    @fs.write_file(workspace + "/read.txt", @utf8.encode("readable"))
+    let hooks_path = fixture + "/hooks.json"
+    let hooks = Json::object({
+      "PreToolUse": Json::array([
+        Json::object({
+          "matcher": "read".to_json(),
+          "hooks": Json::array([
+            Json::object({
+              "type": "command".to_json(),
+              "command": "printf 'failure note' >&2; exit 7".to_json(),
+            }),
+            Json::object({
+              "type": "command".to_json(),
+              "command": "head -c 17000 /dev/zero".to_json(),
+            }),
+            Json::object({
+              "type": "command".to_json(),
+              "command": "sleep 5".to_json(),
+              "timeout": Json::number(1.0),
+            }),
+            Json::object({
+              "type": "command".to_json(),
+              "command": "kill -KILL $$".to_json(),
+            }),
+            Json::object({
+              "type": "command".to_json(),
+              "command": "exit 143".to_json(),
+            }),
+          ]),
+        }),
+      ]),
+    })
+    @fs.write_file(hooks_path, @utf8.encode(hooks.stringify()))
+    let runtime = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "hook-diagnostic-failures-session"
+    ignore(
+      runtime
+      .invoke("session_create", {
+        "id": session_id.to_json(),
+        "title": "Hook diagnostic failures",
+      })
+      .unwrap(),
+    )
+    let (_, provider_effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id.to_json(),
+        "prompt": "Read the fixture file",
+      })
+      .unwrap()
+    let provider = native_effect_by_kind(
+      provider_effects,
+      @engine.EffectType::Provider,
+    ).unwrap()
+    let (_, tool_effects) = runtime
+      .complete(provider.id(), {
+        "ok": true,
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "diagnostic-read",
+            "name": "read",
+            "arguments": "{\"file_path\":\"read.txt\"}",
+          },
+        ],
+        "finish_reason": "tool_calls",
+      })
+      .unwrap()
+    let tool = native_effect_by_kind(tool_effects, @engine.EffectType::Tool).unwrap()
+    let (_, next_effects) = runtime.run_tool_effect(tool).unwrap()
+    assert_eq(next_effects.length(), 1)
+    let (session, _) = runtime
+      .invoke("session_get", { "session_id": session_id.to_json() })
+      .unwrap()
+    let invoked = native_hook_diagnostic_events(session, "hook/invoked")
+    let results = native_hook_diagnostic_events(session, "hook/result")
+    assert_eq(invoked.length(), 5)
+    assert_eq(results.length(), 5)
+    for index in 0..<5 {
+      let invocation = invoked[index]
+      let result = results[index]
+      assert_eq(
+        native_hook_diagnostic_field(invocation, "handlerId"),
+        native_hook_diagnostic_field(result, "handlerId"),
+      )
+      assert_eq(
+        native_hook_diagnostic_field(result, "decision"),
+        Some("pass".to_json()),
+      )
+      if index == 0 {
+        assert_eq(
+          native_hook_diagnostic_field(result, "exitCode"),
+          Some(Json::number(7.0)),
+        )
+        assert_eq(
+          native_hook_diagnostic_field(result, "stderrSummary"),
+          Some("failure note".to_json()),
+        )
+      } else if index == 1 {
+        assert_eq(
+          native_hook_diagnostic_field(result, "exitCode"),
+          Some(Json::number(0.0)),
+        )
+        assert_true(
+          native_hook_diagnostic_field(result, "stderrSummary") is None,
+        )
+      } else if index == 2 {
+        assert_true(native_hook_diagnostic_field(result, "exitCode") is None)
+        assert_eq(
+          native_hook_diagnostic_field(result, "stderrSummary"),
+          Some(
+            "hook timed out, was cancelled, or could not be started".to_json(),
+          ),
+        )
+      } else if index == 3 {
+        assert_true(native_hook_diagnostic_field(result, "exitCode") is None)
+      } else {
+        assert_eq(
+          native_hook_diagnostic_field(result, "exitCode"),
+          Some(Json::number(143.0)),
+        )
+      }
+      assert_false(invocation.stringify().contains("command"))
+      assert_false(result.stringify().contains("command"))
+      assert_false(result.stringify().contains("stdout"))
+      assert_false(result.stringify().contains("readable"))
+    }
   }
 }
 
@@ -4158,6 +4483,31 @@ async test "Stop denial stages a same-turn UserPromptSubmit continuation before 
     let events = native_hook_test_array(
       native_hook_test_required_field(session, "events"),
       "events",
+    )
+    let diagnostic_invocations = native_hook_diagnostic_events(
+      session, "hook/invoked",
+    )
+    let diagnostic_results = native_hook_diagnostic_events(
+      session, "hook/result",
+    )
+    assert_eq(diagnostic_invocations.length(), 3)
+    assert_eq(diagnostic_results.length(), 3)
+    assert_eq(
+      diagnostic_invocations
+      .filter(event => {
+        native_hook_diagnostic_field(event, "point") == Some("Stop".to_json())
+      })
+      .length(),
+      2,
+    )
+    assert_eq(
+      diagnostic_invocations
+      .filter(event => {
+        native_hook_diagnostic_field(event, "point") ==
+        Some("UserPromptSubmit".to_json())
+      })
+      .length(),
+      1,
     )
     assert_eq(
       events

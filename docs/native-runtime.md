@@ -896,12 +896,65 @@ decoder described above. For non-Stop hooks, truncated output and native
 context-limit overflow reject the request instead of being silently truncated;
 Stop keeps exit-2 control when its captured stderr truncates. Native session
 capacity and provider-shape checks remain stricter. Restore, Session v4 import,
-receipt replay, and retries do not rerun hooks. Arbitrary async hooks and
-prompt-hook types other than command-based UserPromptSubmit,
-`${CLAUDE_PLUGIN_ROOT}` substitution, and dedicated durable `hook/*` diagnostic
-events are not implemented. A matching PostToolUse hook adds a durable
-`effect-known` result event before running the hook. Native session capacity
+receipt replay, and retries do not rerun hooks. Arbitrary async hooks,
+prompt-hook types other than command-based UserPromptSubmit, and
+`${CLAUDE_PLUGIN_ROOT}` substitution are not implemented. A matching
+PostToolUse hook adds a durable `effect-known` result event before running the
+hook. Native session capacity
 limits still apply to the additional context metadata and messages.
+
+### Durable command-hook diagnostics
+
+For turn-scoped hooks, native records a `hook/invoked` checkpoint before it
+starts each matching command, then records the paired `hook/result` after the
+command returns or a non-cancellation runner failure is known. The invocation
+contains `turn`, `point`, `dialect: "claude-code"`, `handlerId`, and an optional
+`matcher`. The result contains `turn`, `point`, `handlerId`, the per-command
+`decision`, and `durationMs`, with optional `exitCode` and `stderrSummary`.
+Native handler IDs use the `claude-code:<point>:<counter>` form. Results pair
+by turn, point, and handler ID, including when hooks for parallel tools finish
+in a different order from their invocations.
+
+The diagnostic decision records the hook protocol's decoded result, not the
+native merged action: exit status 2 records `block`; successful structured
+output can record top-level `approve` / `block` or a matching
+`hookSpecificOutput.permissionDecision` of `allow` / `deny` / `ask`; an
+otherwise unmatched `continue: false` records `stop`; and unrecognized or
+neutral output records `pass`. A timeout, process-start failure, or signal
+termination can produce a `pass` result without an `exitCode`; native does not
+synthesize one. Diagnostics do not store command text, stdin, or full stdout.
+A nonempty stderr summary is trimmed first. When it exceeds 500 UTF-16 code
+units, native stores its 500-unit prefix plus an ellipsis (at most 501 units).
+The summary contains hook-emitted stderr and is not redacted. Hook processes do
+not inherit provider credential environment variables and should not print
+credentials to stderr.
+MoonBit preserves valid Unicode scalars at that boundary, so a supplementary
+character is not split even though the pinned JavaScript implementation may
+slice between its surrogate units.
+
+The invocation event is committed before the command can cause an external
+effect. If that checkpoint fails, native does not start the command. If a
+result checkpoint fails, the error is fatal to the pending transition; for a
+PostToolUse hook the already-known tool outcome remains committed and is not
+replayed. A cancelled process that has not returned a result leaves an
+unresolved invocation rather than a fabricated exit code or result. Restore
+marks an open turn with such an invocation interrupted and never reruns the
+command. Normal completed, blocked, provider-error, and max-step closures
+reject unresolved invocations; cancelled or interrupted closures may retain
+them. If the observed result checkpoint wins the cancellation race, native
+records that result before applying cancellation.
+
+Diagnostics are emitted for PreToolUse, PostToolUse, Stop, and UserPromptSubmit
+when its boundary is inside an open turn. Every direct root `session_send`
+runs UserPromptSubmit before that new turn is admitted, so none of those root
+prompt-hook commands have a diagnostic pair. A child's initial prompt hook is
+also preturn and unpaired. Root UserPromptSubmit diagnostics therefore apply
+only to in-turn continuations such as PostToolUse context or Stop steer.
+SessionStart, SubagentStart, and
+SubagentStop also have no pair, matching the pinned bridge's event shapes.
+Root diagnostics are stored with the root session. Child diagnostics stay in
+the ephemeral child Engine and are not copied into the parent snapshot; the
+parent tool result remains the no-replay boundary for the child call.
 
 Stores that contain `effect-known` events from this opt-in path require dsh
 0.1.5 or later: dsh 0.1.4 and earlier readers reject this event source. dsh
@@ -948,6 +1001,12 @@ admission; child markers also make public child Engine snapshots
 self-validating across admission, rejection, and interruption. Native
 subagent sessions remain ephemeral and are not persisted as root sessions.
 Do not reopen these snapshots with an older reader.
+
+Snapshots containing `hook/invoked` or `hook/result` require dsh 0.1.19 or
+later because earlier native readers reject these additive event kinds.
+dsh 0.1.19 continues to read legacy snapshots without hook diagnostics. A
+pending invocation is valid at an interrupted boundary; a normal turn closure
+must contain its result.
 
 `--approve-call` and `--deny-call` act on a session that is already waiting for approval, for example one started from the browser or MCP carrier. Pass its current `approval_revision` and `pending_approval.call_id`; stale or mismatched decisions are rejected:
 

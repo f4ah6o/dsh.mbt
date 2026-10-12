@@ -173,11 +173,7 @@ async fn native_run_hook_command(
       if @async.is_being_cancelled() {
         @async.pause()
       }
-      if output_overflowed.val {
-        Ok({ exit_code: 124, stdout: "", stderr: "", truncated: true, })
-      } else {
-        Err("hook timed out, was cancelled, or could not be started")
-      }
+      Err("hook timed out, was cancelled, or could not be started")
     }
   }
 }
