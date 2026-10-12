@@ -2789,6 +2789,16 @@ test "Codex hook output only applies blocking decisions and event contexts" {
     "SessionStart",
   )
   assert_true(json_plain.additional_contexts.is_empty())
+  let session_start_context = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"hookSpecificOutput\":{\"hookEventName\":\"SessionStart\",\"additionalContext\":\"startup note\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "SessionStart",
+  )
+  assert_eq(session_start_context.additional_contexts, ["startup note"])
   let post_plain = native_hook_codex_result_decision(
     { exit_code: 0, stdout: "ignored", stderr: "", truncated: false, },
     "PostToolUse",

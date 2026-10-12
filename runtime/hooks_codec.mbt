@@ -445,7 +445,9 @@ fn native_hook_codex_result_decision(
         }
         _ => ()
       }
-      if event == "PostToolUse" || event == "UserPromptSubmit" {
+      if event == "SessionStart" ||
+        event == "PostToolUse" ||
+        event == "UserPromptSubmit" {
         match specific.get("additionalContext") {
           Some(Json::String(value)) =>
             ignore(native_hook_add_context(additional_contexts, value))
