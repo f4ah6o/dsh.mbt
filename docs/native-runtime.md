@@ -923,10 +923,11 @@ otherwise unmatched `continue: false` records `stop`; and unrecognized or
 neutral output records `pass`. A timeout, process-start failure, or signal
 termination can produce a `pass` result without an `exitCode`; native does not
 synthesize one. Diagnostics do not store command text, stdin, or full stdout.
-A nonempty stderr summary is trimmed and capped at
-500 UTF-16 code units, followed by an ellipsis when truncated. It is hook-
-emitted stderr and is not redacted; hook processes do not inherit provider
-credential environment variables and should not print credentials to stderr.
+A nonempty stderr summary is trimmed first. When it exceeds 500 UTF-16 code
+units, native stores its 500-unit prefix plus an ellipsis (at most 501 units).
+The summary contains hook-emitted stderr and is not redacted. Hook processes do
+not inherit provider credential environment variables and should not print
+credentials to stderr.
 MoonBit preserves valid Unicode scalars at that boundary, so a supplementary
 character is not split even though the pinned JavaScript implementation may
 slice between its surrogate units.
@@ -940,8 +941,8 @@ unresolved invocation rather than a fabricated exit code or result. Restore
 marks an open turn with such an invocation interrupted and never reruns the
 command. Normal completed, blocked, provider-error, and max-step closures
 reject unresolved invocations; cancelled or interrupted closures may retain
-them. If the process result was already available when cancellation arrived,
-native records that observed result before applying cancellation.
+them. If the observed result checkpoint wins the cancellation race, native
+records that result before applying cancellation.
 
 Diagnostics are emitted for PreToolUse, PostToolUse, Stop, and UserPromptSubmit
 when its boundary is inside an open turn. Every direct root `session_send`
