@@ -50,6 +50,8 @@ pub fn Engine::preview(Self, EngineCommand) -> Result[Json, String]
 pub fn Engine::project_effect_stream(Self, EffectId, String, String) -> Result[Json, String]
 pub fn Engine::project_stream(Self, String, String, String) -> Result[Json, String]
 pub fn Engine::record_effect_outcome(Self, String, Json) -> Result[Json, String]
+pub fn Engine::record_native_hook_invoked(Self, String, String, String, String?) -> Result[NativeHookInvocationCheckpoint, String]
+pub fn Engine::record_native_hook_result(Self, NativeHookInvocationCheckpoint, String, Int?, String?, Int) -> Result[Json, String]
 pub fn Engine::restore(Self, Json) -> Result[Unit, String]
 pub fn Engine::schedule_effect_retry(Self, EffectId, Json) -> Result[Json, String]
 pub fn Engine::schedule_retry(Self, String, Json) -> Result[Json, String]
@@ -117,6 +119,8 @@ pub(all) enum EngineEventKind {
   ToolResult
   ToolResultPruned
   TodoWrite
+  HookInvoked
+  HookResult
   SubagentStartContext
   StopHookSettled
   UpstreamHeader
@@ -127,6 +131,10 @@ pub fn EngineEventKind::equal(Self, Self) -> Bool
 pub fn EngineEventKind::from_wire(String) -> Self
 pub fn EngineEventKind::not_equal(Self, Self) -> Bool
 pub fn EngineEventKind::wire(Self) -> String
+
+pub struct NativeHookInvocationCheckpoint {
+  // private fields
+}
 
 pub struct NativePostToolPromptHookCheckpoint {
   // private fields

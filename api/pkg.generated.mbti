@@ -42,6 +42,8 @@ pub fn HarnessApi::preview_session_send(Self, Json) -> Result[Json, String]
 pub fn HarnessApi::project_effect_stream(Self, @engine.EffectId, String, String) -> Result[Json, String]
 pub fn HarnessApi::project_stream(Self, String, String, String) -> Result[Json, String]
 pub fn HarnessApi::record_effect_outcome(Self, @engine.EffectId, Json) -> Result[Json, String]
+pub fn HarnessApi::record_native_hook_invoked(Self, String, String, String, String?) -> Result[@engine.NativeHookInvocationCheckpoint, String]
+pub fn HarnessApi::record_native_hook_result(Self, @engine.NativeHookInvocationCheckpoint, String, Int?, String?, Int) -> Result[Json, String]
 pub fn HarnessApi::restore(Self, Json) -> Result[Unit, String]
 pub fn HarnessApi::schedule_retry(Self, String, Json) -> Result[Json, String]
 pub fn HarnessApi::snapshot(Self) -> Json
