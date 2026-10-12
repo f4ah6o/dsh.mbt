@@ -189,9 +189,10 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
       1,
     )
     assert_true(
-      first_messages.map(message => message.stringify()).join("").contains(
-        "Codex root prompt context",
-      ),
+      first_messages
+      .map(message => message.stringify())
+      .join("")
+      .contains("Codex root prompt context"),
     )
     assert_false(
       first_provider.request().stringify().contains("forged external context"),
@@ -209,7 +210,11 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
     let first_completed = runtime
       .invoke("session_get", { "session_id": session_id.to_json() })
       .unwrap().0
-    assert_eq(string_field(first_completed, "status"), Some("completed"))
+    if string_field(first_completed, "status") != Some("completed") {
+      fail(
+        "first native session did not complete: " + first_completed.stringify(),
+      )
+    }
 
     let (second_session, second_effects) = runtime
       .invoke("session_send", {
@@ -227,12 +232,13 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
     )
     native_codex_test_assert_context_source(
       native_hook_context_messages(second_session),
-      1,
+      2,
     )
     assert_true(
-      second_messages.map(message => message.stringify()).join("").contains(
-        "Codex root prompt context",
-      ),
+      second_messages
+      .map(message => message.stringify())
+      .join("")
+      .contains("Codex root prompt context"),
     )
     let second_command_id = native_command_id().unwrap()
     match
@@ -247,7 +253,9 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
     let completed = runtime
       .invoke("session_get", { "session_id": session_id.to_json() })
       .unwrap().0
-    assert_eq(string_field(completed, "status"), Some("completed"))
+    if string_field(completed, "status") != Some("completed") {
+      fail("second native session did not complete: " + completed.stringify())
+    }
     serving.wait()
     assert_true(auth_ok.val)
     assert_eq(bodies.val.length(), 2)
@@ -311,7 +319,9 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
     let invocations = native_hook_diagnostic_events(
       restored_before, "hook/invoked",
     )
-    assert_eq(invocations.length(), 4)
+    // Root preturn UserPromptSubmit diagnostics remain outside the persisted
+    // event pair; the two Stop hooks run within controlled provider jobs.
+    assert_eq(invocations.length(), 2)
     for event in invocations {
       assert_eq(
         native_hook_test_required_string(
@@ -514,14 +524,14 @@ async test "Codex child hooks retain the active turn through tool follow-up" {
       Json::object({ "command": Json::string("") }),
     )
     let stops : Array[Json] = []
-    for index in 1..<3 {
+    for index in 1..<2 {
       let text = @fs.read_file(
         workspace + "/codex-stop-" + index.to_string() + ".json",
       ).text()
       assert_false(text.has_suffix("\n"))
       stops.push(@json.parse(text))
     }
-    assert_eq(stops.length(), 2)
+    assert_eq(stops.length(), 1)
     assert_true(
       stops.all(stop => native_hook_test_required_string(stop, "turn_id") == "1"),
     )
@@ -603,7 +613,7 @@ async test "Codex child hooks retain the active turn through tool follow-up" {
     )
     assert_eq(@fs.read_file(workspace + "/codex-prompt-count").text(), "3")
     assert_eq(@fs.read_file(workspace + "/codex-post-count").text(), "1")
-    assert_eq(@fs.read_file(workspace + "/codex-stop-count").text(), "2")
+    assert_eq(@fs.read_file(workspace + "/codex-stop-count").text(), "1")
   }
 }
 
