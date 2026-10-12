@@ -16,6 +16,29 @@
 
 ### Migration
 
+## 0.1.19 - 2026-10-12
+
+### Added
+
+- Persist native turn-scoped command-hook `hook/invoked` and `hook/result`
+  diagnostics around PreToolUse, PostToolUse, UserPromptSubmit, and Stop
+  commands. The events correlate by turn, point, and handler ID; they retain the
+  decoded decision, an optional observed exit code, a bounded stderr summary,
+  and duration without storing command text, stdin, or full stdout. See the
+  [native runtime guide](docs/native-runtime.md#native-command-hooks).
+
+### Changed
+
+- Preserve interrupted native invocations as unresolved checkpoints and never
+  rerun their commands during restore. Foreground child diagnostics belong to
+  the ephemeral child Engine and are not copied into the parent session.
+
+### Migration
+
+- Snapshots containing `hook/invoked` or `hook/result` require dsh 0.1.19 or
+  later; older native readers reject these additive events. dsh 0.1.19 continues
+  to read legacy snapshots without them.
+
 ## 0.1.18 - 2026-10-12
 
 ### Added
