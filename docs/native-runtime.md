@@ -920,9 +920,10 @@ native merged action: exit status 2 records `block`; successful structured
 output can record top-level `approve` / `block` or a matching
 `hookSpecificOutput.permissionDecision` of `allow` / `deny` / `ask`; an
 otherwise unmatched `continue: false` records `stop`; and unrecognized or
-neutral output records `pass`. A timeout or process-start failure can produce
-a `pass` result without an `exitCode`. Diagnostics do not store command text,
-stdin, or full stdout. A nonempty stderr summary is trimmed and capped at
+neutral output records `pass`. A timeout, process-start failure, or signal
+termination can produce a `pass` result without an `exitCode`; native does not
+synthesize one. Diagnostics do not store command text, stdin, or full stdout.
+A nonempty stderr summary is trimmed and capped at
 500 UTF-16 code units, followed by an ellipsis when truncated. It is hook-
 emitted stderr and is not redacted; hook processes do not inherit provider
 credential environment variables and should not print credentials to stderr.
@@ -943,9 +944,12 @@ them. If the process result was already available when cancellation arrived,
 native records that observed result before applying cancellation.
 
 Diagnostics are emitted for PreToolUse, PostToolUse, Stop, and UserPromptSubmit
-when its boundary is inside an open turn. The initial root and child
-UserPromptSubmit commands run before turn admission in this native adapter and
-therefore have no diagnostic pair. SessionStart, SubagentStart, and
+when its boundary is inside an open turn. Every direct root `session_send`
+runs UserPromptSubmit before that new turn is admitted, so none of those root
+prompt-hook commands have a diagnostic pair. A child's initial prompt hook is
+also preturn and unpaired. Root UserPromptSubmit diagnostics therefore apply
+only to in-turn continuations such as PostToolUse context or Stop steer.
+SessionStart, SubagentStart, and
 SubagentStop also have no pair, matching the pinned bridge's event shapes.
 Root diagnostics are stored with the root session. Child diagnostics stay in
 the ephemeral child Engine and are not copied into the parent snapshot; the

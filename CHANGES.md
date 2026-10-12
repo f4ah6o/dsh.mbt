@@ -32,6 +32,9 @@
 - Preserve interrupted native invocations as unresolved checkpoints and never
   rerun their commands during restore. Foreground child diagnostics belong to
   the ephemeral child Engine and are not copied into the parent session.
+- Keep direct root `session_send` and initial child UserPromptSubmit commands
+  outside the open turn, so those preturn invocations have no diagnostic pair;
+  root midturn prompt hooks on continuations remain traced.
 
 ### Migration
 
