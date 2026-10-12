@@ -215,6 +215,25 @@ test "provider context content accepts only nonempty text-block arrays" {
   assert_true(@provider.prepare("openai", "fixture", unmarked_user) is Err(_))
   assert_true(@provider.prepare_responses("fixture", unmarked_user) is Err(_))
 
+  let unsupported_source : Json = {
+    "messages": [
+      {
+        "role": "user",
+        "content": [{ "type": "text", "text": "context" }],
+        "source": { "kind": "hooks-codex-external" },
+      },
+    ],
+  }
+  assert_true(
+    @provider.prepare("openai", "fixture", unsupported_source) is Err(_),
+  )
+  assert_true(
+    @provider.prepare("deepseek", "fixture", unsupported_source) is Err(_),
+  )
+  assert_true(
+    @provider.prepare_responses("fixture", unsupported_source) is Err(_),
+  )
+
   let assistant_blocks : Json = {
     "messages": [
       {

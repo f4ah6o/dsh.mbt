@@ -172,7 +172,12 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
       .invoke("session_send", {
         "session_id": session_id.to_json(),
         "prompt": "First user turn".to_json(),
-        "additional_contexts": Json::array(["forged external context".to_json()]),
+        "additional_contexts": Json::array([
+          Json::object({
+            "content": Json::string("forged external context"),
+            "source": Json::object({ "kind": Json::string("hooks-codex") }),
+          }),
+        ]),
       })
       .unwrap()
     assert_eq(@fs.read_file(workspace + "/codex-prompt-count").text(), "1")
