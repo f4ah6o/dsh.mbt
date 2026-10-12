@@ -25,9 +25,9 @@ pub struct Engine {
   // private fields
 }
 pub fn Engine::accept_post_tool_prompt_hook(Self, NativePostToolPromptHookCheckpoint, Array[String]) -> Result[Json, String]
-pub fn Engine::accept_subagent_prompt_hook(Self, NativeSubagentPromptHookCheckpoint, Array[String]) -> Result[Json, String]
+pub fn Engine::accept_subagent_prompt_hook(Self, NativeSubagentPromptHookCheckpoint, Array[String], source_kind? : String) -> Result[Json, String]
 pub fn Engine::apply(Self, EngineCommand) -> Result[Json, String]
-pub fn Engine::apply_session_send_with_hook_contexts(Self, SessionId, String, Array[String], Array[String]) -> Result[Json, String]
+pub fn Engine::apply_session_send_with_hook_contexts(Self, SessionId, String, Array[String], Array[String], source_kind? : String) -> Result[Json, String]
 pub fn Engine::begin_subagent_prompt_hook(Self, String, String, Bool) -> Result[NativeSubagentPromptHookCheckpoint, String]
 pub fn Engine::block_post_tool_prompt_hook(Self, NativePostToolPromptHookCheckpoint, String) -> Result[Json, String]
 pub fn Engine::block_stop_continuation(Self, NativeStopHookCheckpoint, String) -> Result[Json, String]
@@ -39,7 +39,7 @@ pub fn Engine::complete_effect_with_stop_hook(Self, EffectId, Json) -> Result[Js
 pub fn Engine::continue_stop_hook(Self, NativeStopHookCheckpoint, Array[String]) -> Result[Json, String]
 pub fn Engine::event_log(Self, SessionId) -> Result[Array[EngineEvent], String]
 pub fn Engine::finish_stop_hook(Self, NativeStopHookCheckpoint) -> Result[Json, String]
-pub fn Engine::inject_hook_contexts(Self, String, Array[String]) -> Result[Bool, String]
+pub fn Engine::inject_hook_contexts(Self, String, Array[String], source_kind? : String) -> Result[Bool, String]
 pub fn Engine::invoke(Self, String, Json) -> Result[Json, String]
 pub fn Engine::new(Array[Json]) -> Self
 pub fn Engine::pending_post_tool_prompt_hook(Self, SessionId) -> NativePostToolPromptHookCheckpoint?
@@ -50,7 +50,7 @@ pub fn Engine::preview(Self, EngineCommand) -> Result[Json, String]
 pub fn Engine::project_effect_stream(Self, EffectId, String, String) -> Result[Json, String]
 pub fn Engine::project_stream(Self, String, String, String) -> Result[Json, String]
 pub fn Engine::record_effect_outcome(Self, String, Json) -> Result[Json, String]
-pub fn Engine::record_native_hook_invoked(Self, String, String, String, String?) -> Result[NativeHookInvocationCheckpoint, String]
+pub fn Engine::record_native_hook_invoked(Self, String, String, String, String?, dialect? : String) -> Result[NativeHookInvocationCheckpoint, String]
 pub fn Engine::record_native_hook_result(Self, NativeHookInvocationCheckpoint, String, Int?, String?, Int) -> Result[Json, String]
 pub fn Engine::restore(Self, Json) -> Result[Unit, String]
 pub fn Engine::schedule_effect_retry(Self, EffectId, Json) -> Result[Json, String]
