@@ -16,6 +16,40 @@
 
 ### Migration
 
+## 0.1.20 - 2026-10-12
+
+### Added
+
+- Add an opt-in Codex five-event command-hook bridge for SessionStart,
+  PreToolUse, PostToolUse, UserPromptSubmit, and Stop. Select it with
+  `--hooks-dialect codex`; `--hooks-model NAME` supplies the static model field
+  used in its payloads. The existing Claude Code dialect remains the default.
+  See the [native runtime guide](docs/native-runtime.md#codex-command-hooks).
+
+### Changed
+
+- Keep Codex hook contexts tagged as `hooks-codex` through provider requests,
+  root and child admission, snapshots, reopen, and fork. Codex diagnostics use
+  the `codex` dialect and `codex:<point>:<counter>` handler identities.
+- Preserve actual upcoming/current turn IDs in Codex payloads and the upstream
+  null transcript path, default permission mode, static model, and no-newline
+  stdin shape.
+
+### Fixed
+
+- Preserve structured SessionStart context, nested denial-reason precedence,
+  and Codex Stop-continuation snapshots across restore. Accept trusted hook
+  context messages from both supported dialects on all provider routes, while
+  rejecting unknown provenance before it mutates a session.
+
+### Migration
+
+- Native stores containing `hooks-codex` context provenance or Codex values in
+  `hook/invoked` diagnostics require dsh 0.1.20 or later. Earlier readers reject
+  these source/dialect values. dsh 0.1.20 continues to read existing stores;
+  choose the minimum reader from all persisted content and do not downgrade or
+  rewrite a store with an older reader.
+
 ## 0.1.19 - 2026-10-12
 
 ### Added

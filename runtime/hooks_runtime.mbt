@@ -325,9 +325,9 @@ fn NativeHooks::has_user_prompt_submit(self : NativeHooks) -> Bool {
 }
 
 ///|
-/// Run matching context-only SessionStart commands in configuration order.
-/// This follows the pinned Claude bridge's JSON-only additionalContext path;
-/// decisions, plain stdout, and other controls are intentionally ignored.
+/// Run matching SessionStart commands in configuration order. The Claude
+/// adapter accepts matching JSON additionalContext; Codex also accepts the
+/// event's plain-text context result. Both ignore unrelated controls here.
 async fn NativeHooks::before_session_start(
   self : NativeHooks,
   tools : NativeTools,
