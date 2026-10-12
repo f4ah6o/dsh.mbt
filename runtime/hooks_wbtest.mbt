@@ -2758,6 +2758,45 @@ test "Codex hook output only applies blocking decisions and event contexts" {
     "PreToolUse",
   )
   assert_true(nested_allow.action is NativeHookAction::Continue)
+  let nested_deny_without_reason = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"reason\":\"original objection\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PreToolUse",
+  )
+  match nested_deny_without_reason.action {
+    NativeHookAction::Deny(reason) => assert_eq(reason, "original objection")
+    NativeHookAction::Continue => fail("Codex nested deny was ignored")
+  }
+  let nested_reason_without_decision = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"reason\":\"old reason\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecisionReason\":\"specific objection\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PreToolUse",
+  )
+  match nested_reason_without_decision.action {
+    NativeHookAction::Deny(reason) => assert_eq(reason, "specific objection")
+    NativeHookAction::Continue => fail("Codex top-level block was ignored")
+  }
+  let nested_empty_reason = native_hook_codex_result_decision(
+    {
+      exit_code: 0,
+      stdout: "{\"decision\":\"block\",\"reason\":\"old reason\",\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecisionReason\":\"\"}}",
+      stderr: "",
+      truncated: false,
+    },
+    "PreToolUse",
+  )
+  match nested_empty_reason.action {
+    NativeHookAction::Deny(reason) => assert_eq(reason, "")
+    NativeHookAction::Continue => fail("Codex top-level block was ignored")
+  }
   let mismatched_allow = native_hook_codex_result_decision(
     {
       exit_code: 0,

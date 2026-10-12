@@ -432,17 +432,12 @@ fn native_hook_codex_result_decision(
     Some(Json::Object(specific)) if specific.get("hookEventName") ==
       Some(Json::string(event)) => {
       match specific.get("permissionDecision") {
-        Some(Json::String("deny")) => {
-          blocked = true
-          reason = match specific.get("permissionDecisionReason") {
-            Some(Json::String(value)) => native_hook_limit_reason(value)
-            _ => ""
-          }
-        }
-        Some(Json::String("allow" | "ask")) => {
-          blocked = false
-          reason = ""
-        }
+        Some(Json::String("deny")) => blocked = true
+        Some(Json::String("allow" | "ask")) => blocked = false
+        _ => ()
+      }
+      match specific.get("permissionDecisionReason") {
+        Some(Json::String(value)) => reason = native_hook_limit_reason(value)
         _ => ()
       }
       if event == "SessionStart" ||
