@@ -234,3 +234,33 @@ test "provider context content accepts only nonempty text-block arrays" {
     @provider.prepare_responses("fixture", assistant_blocks) is Err(_),
   )
 }
+
+///|
+test "Codex hook context messages are accepted by every provider adapter" {
+  let request : Json = {
+    "messages": [
+      { "role": "user", "content": "Original request" },
+      {
+        "role": "user",
+        "content": [{ "type": "text", "text": "Codex hook context" }],
+        "source": { "kind": "hooks-codex" },
+      },
+    ],
+    "stream": false,
+  }
+  let openai = match @provider.prepare("openai", "fixture", request) {
+    Ok(value) => value
+    Err(error) => fail(error)
+  }
+  let deepseek = match @provider.prepare("deepseek", "fixture", request) {
+    Ok(value) => value
+    Err(error) => fail(error)
+  }
+  let responses = match @provider.prepare_responses("fixture", request) {
+    Ok(value) => value
+    Err(error) => fail(error)
+  }
+  assert_true(openai.stringify().contains("Codex hook context"))
+  assert_true(deepseek.stringify().contains("Codex hook context"))
+  assert_true(responses.stringify().contains("Codex hook context"))
+}
