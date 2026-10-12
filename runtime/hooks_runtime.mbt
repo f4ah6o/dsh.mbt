@@ -105,14 +105,15 @@ async fn native_run_hook_diagnostic(
     (Some(event_sink), Some(invocation), Completed(value)) => {
       let decision = native_hook_diagnostic_decision(value, event)
       let summary = native_hook_stderr_summary(value.stderr)
+      let exit_code : Int? = if value.exit_code < 0 {
+        None
+      } else {
+        Some(value.exit_code)
+      }
       match
         @async.protect_from_cancel(async fn() {
           event_sink.record_result(
-            invocation,
-            decision,
-            Some(value.exit_code),
-            summary,
-            duration_ms,
+            invocation, decision, exit_code, summary, duration_ms,
           )
         }) {
         Ok(_) => ()

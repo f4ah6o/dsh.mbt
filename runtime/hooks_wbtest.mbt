@@ -3951,7 +3951,7 @@ async test "native PreToolUse denial prevents tool work and receipt replay does 
 }
 
 ///|
-async test "native hook diagnostics record timeout and output overflow without replay data" {
+async test "native hook diagnostics record timeout, signal, and output overflow without replay data" {
   let fixture = @fs.tmpdir(prefix="dsh-native-hook-diagnostic-failures")
   @async.with_task_group() <| group => {
     group.add_defer(() => @fs.rmdir(fixture, recursive=true))
@@ -3976,6 +3976,14 @@ async test "native hook diagnostics record timeout and output overflow without r
               "type": "command".to_json(),
               "command": "sleep 5".to_json(),
               "timeout": Json::number(1.0),
+            }),
+            Json::object({
+              "type": "command".to_json(),
+              "command": "kill -KILL $$".to_json(),
+            }),
+            Json::object({
+              "type": "command".to_json(),
+              "command": "exit 143".to_json(),
             }),
           ]),
         }),
@@ -4033,9 +4041,9 @@ async test "native hook diagnostics record timeout and output overflow without r
       .unwrap()
     let invoked = native_hook_diagnostic_events(session, "hook/invoked")
     let results = native_hook_diagnostic_events(session, "hook/result")
-    assert_eq(invoked.length(), 3)
-    assert_eq(results.length(), 3)
-    for index in 0..<3 {
+    assert_eq(invoked.length(), 5)
+    assert_eq(results.length(), 5)
+    for index in 0..<5 {
       let invocation = invoked[index]
       let result = results[index]
       assert_eq(
@@ -4063,13 +4071,20 @@ async test "native hook diagnostics record timeout and output overflow without r
         assert_true(
           native_hook_diagnostic_field(result, "stderrSummary") is None,
         )
-      } else {
+      } else if index == 2 {
         assert_true(native_hook_diagnostic_field(result, "exitCode") is None)
         assert_eq(
           native_hook_diagnostic_field(result, "stderrSummary"),
           Some(
             "hook timed out, was cancelled, or could not be started".to_json(),
           ),
+        )
+      } else if index == 3 {
+        assert_true(native_hook_diagnostic_field(result, "exitCode") is None)
+      } else {
+        assert_eq(
+          native_hook_diagnostic_field(result, "exitCode"),
+          Some(Json::number(143.0)),
         )
       }
       assert_false(invocation.stringify().contains("command"))
