@@ -12,7 +12,7 @@ uses the service's credential-free projection and never reads OAuth secrets.
 
 ## Build and smoke checks
 
-The repository pins MoonBit `0.10.14+7d59c7ec9`. The C bridge compiles the
+The repository pins MoonBit `0.10.15+943464bfa`. The C bridge compiles the
 matching runtime sources from `$MOON_HOME/lib/runtime` with the system
 allocator. On iOS, the small `include/sys/random.h` compatibility header maps
 the runtime's `getentropy` call to Apple's `arc4random_buf` API.

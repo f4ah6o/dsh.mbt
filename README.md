@@ -13,7 +13,7 @@ git clone --recurse-submodules https://github.com/f4ah6o/dsh.mbt.git
 cd dsh.mbt
 
 # .moonbit-version と同じ compiler / core を導入
-curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s -- '0.10.14+7d59c7ec9'
+curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s -- '0.10.15+943464bfa'
 export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 
 moon update

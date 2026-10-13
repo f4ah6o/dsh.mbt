@@ -31,8 +31,8 @@ jobs:
           submodules: recursive
       - uses: hustcer/setup-moonbit@1522f9aef02a8ca0187dfc00a41f5dd6b16750f7 # v1.23
         with:
-          version: 0.10.14+7d59c7ec9
-          core-version: 0.10.14+7d59c7ec9
+          version: 0.10.15+943464bfa
+          core-version: 0.10.15+943464bfa
       - name: Confirm Node and npm are unavailable
         run: |
           if command -v node || command -v npm; then
@@ -55,8 +55,8 @@ jobs:
           submodules: recursive
       - uses: hustcer/setup-moonbit@1522f9aef02a8ca0187dfc00a41f5dd6b16750f7 # v1.23
         with:
-          version: 0.10.14+7d59c7ec9
-          core-version: 0.10.14+7d59c7ec9
+          version: 0.10.15+943464bfa
+          core-version: 0.10.15+943464bfa
       - name: Refresh the MoonBit package registry
         run: moon update
       - name: Resolve pinned MoonBit dependencies
