@@ -123,6 +123,7 @@ priv struct ToolCall {
   mut completed_content : String?
   mut completed_error : Bool?
   mut completed_contexts : Array[String]
+  mut completed_context_source_kind : String
 }
 
 ///|
@@ -188,6 +189,8 @@ priv struct Session {
   mut stop_prompt_context_length : Int
   /// Ephemeral SubagentStart context waiting for the next provider request.
   pending_hook_contexts : Array[String]
+  /// Source tag for transient hook context queued by the active native dialect.
+  mut native_hook_context_source_kind : String
   /// The child runtime opts in so Start input pauses at the next pre-step hook.
   mut subagent_prompt_hook_admission : Bool
   /// One claimed batch is immutable while its UserPromptSubmit command runs.
@@ -316,6 +319,7 @@ fn fresh_session(
     stop_prompt_context_count: 0,
     stop_prompt_context_length: 0,
     pending_hook_contexts: [],
+    native_hook_context_source_kind: "hooks-claude-code",
     subagent_prompt_hook_admission: false,
     subagent_prompt_hook_active: false,
     subagent_prompt_hook_initial: false,

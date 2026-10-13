@@ -132,7 +132,13 @@ pub fn Engine::accept_post_tool_prompt_hook(
       session.append("user/message", message)
     }
     if !contexts.is_empty() {
-      session.append("user/message", hook_context_message(contexts))
+      session.append(
+        "user/message",
+        hook_context_message(
+          contexts,
+          source_kind=session.native_hook_context_source_kind,
+        ),
+      )
     }
     session.clear_post_tool_prompt_hook()
     candidate.start_step(session, skip_pending_hook_contexts=true)

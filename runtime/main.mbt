@@ -101,20 +101,20 @@ fn native_usage() -> String {
   "Usage:\n" +
   "  dsh --help\n" +
   "  dsh --demo --data-dir PATH --workspace PATH\n\n" +
-  "  dsh run PROMPT [--session ID] [--mcp-config PATH] [--hooks-config PATH] [--lsp-config PATH] [--enable-subagents] [--demo] --data-dir PATH --workspace PATH\n" +
+  "  dsh run PROMPT [--session ID] [--mcp-config PATH] [--hooks-config PATH] [--hooks-dialect claude-code|codex] [--hooks-model NAME] [--lsp-config PATH] [--enable-subagents] [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh import-session PATH [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh prune-session ID [--threshold-chars N --head-chars N --tail-chars N] --data-dir PATH --workspace PATH\n" +
   "  dsh fork-session ID [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh --session ID --approve-call CALL_ID --approval-revision REV [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh --session ID --deny-call CALL_ID --approval-revision REV [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh --auth-status|--sign-in|--models|--sign-out|--select-model MODEL --data-dir PATH --workspace PATH\n\n" +
-  "  dsh web --data-dir PATH --workspace PATH [--mcp-config PATH] [--hooks-config PATH] [--lsp-config PATH] [--enable-subagents] [--port PORT] [--assets-dir PATH] [--allow-shell] [--demo]\n" +
-  "  dsh mcp --data-dir PATH --workspace PATH [--mcp-config PATH] [--hooks-config PATH] [--lsp-config PATH] [--enable-subagents] [--allow-shell] [--demo]\n\n" +
-  "  dsh acp --data-dir PATH --workspace PATH [--mcp-config PATH] [--hooks-config PATH] [--lsp-config PATH] [--enable-subagents] [--allow-shell] [--demo]\n\n" +
-  "  dsh desktop [--app-path /absolute/path/to/Dsh.app] [--mcp-config PATH] [--hooks-config PATH] [--lsp-config PATH] [--enable-subagents] [desktop options]\n\n" +
+  "  dsh web --data-dir PATH --workspace PATH [--mcp-config PATH] [--hooks-config PATH] [--hooks-dialect claude-code|codex] [--hooks-model NAME] [--lsp-config PATH] [--enable-subagents] [--port PORT] [--assets-dir PATH] [--allow-shell] [--demo]\n" +
+  "  dsh mcp --data-dir PATH --workspace PATH [--mcp-config PATH] [--hooks-config PATH] [--hooks-dialect claude-code|codex] [--hooks-model NAME] [--lsp-config PATH] [--enable-subagents] [--allow-shell] [--demo]\n\n" +
+  "  dsh acp --data-dir PATH --workspace PATH [--mcp-config PATH] [--hooks-config PATH] [--hooks-dialect claude-code|codex] [--hooks-model NAME] [--lsp-config PATH] [--enable-subagents] [--allow-shell] [--demo]\n\n" +
+  "  dsh desktop [--app-path /absolute/path/to/Dsh.app] [--mcp-config PATH] [--hooks-config PATH] [--hooks-dialect claude-code|codex] [--hooks-model NAME] [--lsp-config PATH] [--enable-subagents] [desktop options]\n\n" +
   "Provider options: --mode deepseek|openai|openai-responses --model NAME --base-url URL --max-retries 0..5\n" +
   "MCP options: --mcp-config PATH starts trusted external stdio servers; calls require approval by default.\n" +
-  "Hook options: --hooks-config PATH opts in to strict Claude Code PreToolUse/PostToolUse command hooks; commands run as trusted host code.\n" +
+  "Hook options: --hooks-config PATH opts in to command hooks; --hooks-dialect codex selects Codex's five-event bridge; --hooks-model sets its payload model. Commands run as trusted host code.\n" +
   "LSP options: --lsp-config PATH opts in to trusted stdio language servers and the approved lsp navigation tool.\n" +
   "Skill options: --enable-skills discovers workspace skills; repeat --skill-dir PATH to add workspace-relative roots.\n" +
   "Subagent options: --enable-subagents adds one foreground child agent with read-only workspace tools, capped at three model steps and a 90-second run.\n" +
@@ -598,6 +598,10 @@ pub async fn run_cli() -> Unit {
         enable_skills=native_flag(args, "--enable-skills"),
         skill_dirs=native_cli_options(args, "--skill-dir"),
         enable_subagents=native_flag(args, "--enable-subagents"),
+        hooks_dialect=native_option(args, "--hooks-dialect").unwrap_or(
+          "claude-code",
+        ),
+        hooks_model=native_option(args, "--hooks-model").unwrap_or(""),
       ) {
       Err(error) => abort("native runtime could not start: " + error)
       Ok(runtime) => runtime
@@ -646,6 +650,10 @@ pub async fn run_cli() -> Unit {
         enable_skills=native_flag(args, "--enable-skills"),
         skill_dirs=native_cli_options(args, "--skill-dir"),
         enable_subagents=native_flag(args, "--enable-subagents"),
+        hooks_dialect=native_option(args, "--hooks-dialect").unwrap_or(
+          "claude-code",
+        ),
+        hooks_model=native_option(args, "--hooks-model").unwrap_or(""),
       ) {
       Err(error) => abort("native runtime could not start: " + error)
       Ok(runtime) => runtime
@@ -694,6 +702,10 @@ pub async fn run_cli() -> Unit {
         enable_skills=native_flag(args, "--enable-skills"),
         skill_dirs=native_cli_options(args, "--skill-dir"),
         enable_subagents=native_flag(args, "--enable-subagents"),
+        hooks_dialect=native_option(args, "--hooks-dialect").unwrap_or(
+          "claude-code",
+        ),
+        hooks_model=native_option(args, "--hooks-model").unwrap_or(""),
       ) {
       Err(_) => {
         native_acp_fatal("native runtime could not start")
@@ -750,6 +762,10 @@ pub async fn run_cli() -> Unit {
         enable_skills=native_flag(args, "--enable-skills"),
         skill_dirs=native_cli_options(args, "--skill-dir"),
         enable_subagents=native_flag(args, "--enable-subagents"),
+        hooks_dialect=native_option(args, "--hooks-dialect").unwrap_or(
+          "claude-code",
+        ),
+        hooks_model=native_option(args, "--hooks-model").unwrap_or(""),
       ) {
       Err(error) => abort("native runtime could not start: " + error)
       Ok(runtime) => runtime

@@ -57,6 +57,7 @@ fn native_hook_add_context(
 fn native_hook_result_with_contexts(
   result : Json,
   contexts : Array[String],
+  source_kind? : String = "hooks-claude-code",
 ) -> Json {
   if contexts.is_empty() {
     return result
@@ -68,6 +69,7 @@ fn native_hook_result_with_contexts(
   fields["additional_contexts"] = Json::array(
     contexts.map(context => Json::string(context)),
   )
+  fields["additional_contexts_source_kind"] = Json::string(source_kind)
   Json::object(fields)
 }
 
@@ -379,12 +381,144 @@ fn native_hook_result_decision(
 }
 
 ///|
+/// Decode only the Codex bridge's blocking decisions and supported context.
+/// Unknown fields, malformed JSON, ask/allow decisions, and continue controls
+/// remain neutral. Event-specific permission decisions override that hook's
+/// top-level approve/block decision when the discriminator matches.
+fn native_hook_codex_result_decision(
+  capture : NativeHookCapture,
+  event : String,
+) -> NativeHookOutcome {
+  if capture.truncated || (capture.exit_code != 0 && capture.exit_code != 2) {
+    return { action: NativeHookAction::Continue, additional_contexts: [], }
+  }
+  if capture.exit_code == 2 {
+    let reason = native_hook_js_trim(capture.stderr)
+    return { action: NativeHookAction::Deny(reason), additional_contexts: [], }
+  }
+  let stdout = native_hook_js_trim(capture.stdout)
+  if stdout.is_empty() {
+    return { action: NativeHookAction::Continue, additional_contexts: [], }
+  }
+  if !stdout.has_prefix("{") {
+    if event == "SessionStart" || event == "UserPromptSubmit" {
+      return {
+        action: NativeHookAction::Continue,
+        additional_contexts: [stdout],
+      }
+    }
+    return { action: NativeHookAction::Continue, additional_contexts: [], }
+  }
+  let document = @json.parse(stdout) catch {
+    _ => return { action: NativeHookAction::Continue, additional_contexts: [], }
+  }
+  let fields = match native_hook_object(document) {
+    Some(value) => value
+    None =>
+      return { action: NativeHookAction::Continue, additional_contexts: [], }
+  }
+  let top_decision = match fields.get("decision") {
+    Some(Json::String("block")) => "block"
+    _ => ""
+  }
+  let top_reason = match fields.get("reason") {
+    Some(Json::String(value)) => native_hook_limit_reason(value)
+    _ => ""
+  }
+  let mut blocked = top_decision == "block"
+  let mut reason = top_reason
+  let additional_contexts : Array[String] = []
+  match fields.get("hookSpecificOutput") {
+    Some(Json::Object(specific)) if specific.get("hookEventName") ==
+      Some(Json::string(event)) => {
+      match specific.get("permissionDecision") {
+        Some(Json::String("deny")) => blocked = true
+        Some(Json::String("allow" | "ask")) => blocked = false
+        _ => ()
+      }
+      match specific.get("permissionDecisionReason") {
+        Some(Json::String(value)) => reason = native_hook_limit_reason(value)
+        _ => ()
+      }
+      if event == "SessionStart" ||
+        event == "PostToolUse" ||
+        event == "UserPromptSubmit" {
+        match specific.get("additionalContext") {
+          Some(Json::String(value)) =>
+            ignore(native_hook_add_context(additional_contexts, value))
+          _ => ()
+        }
+      }
+    }
+    _ => ()
+  }
+  {
+    action: if blocked {
+      NativeHookAction::Deny(reason)
+    } else {
+      NativeHookAction::Continue
+    },
+    additional_contexts,
+  }
+}
+
+///|
+/// Persist the Codex bridge's decoded decision for the hook/result audit row.
+fn native_hook_codex_diagnostic_decision(
+  capture : NativeHookCapture,
+  event : String,
+) -> String {
+  if capture.exit_code == 2 {
+    return "block"
+  }
+  if capture.truncated || capture.exit_code != 0 {
+    return "pass"
+  }
+  let stdout = native_hook_js_trim(capture.stdout)
+  if stdout.is_empty() || !stdout.has_prefix("{") {
+    return "pass"
+  }
+  let document = @json.parse(stdout) catch { _ => return "pass" }
+  let fields = match native_hook_object(document) {
+    Some(value) => value
+    None => return "pass"
+  }
+  let mut decision = match fields.get("decision") {
+    Some(Json::String("approve")) => Some("approve")
+    Some(Json::String("block")) => Some("block")
+    _ => None
+  }
+  match fields.get("hookSpecificOutput") {
+    Some(Json::Object(specific)) if specific.get("hookEventName") ==
+      Some(Json::string(event)) =>
+      match specific.get("permissionDecision") {
+        Some(Json::String(value)) if ["allow", "deny", "ask"].contains(value) =>
+          decision = Some(value)
+        _ => ()
+      }
+    _ => ()
+  }
+  match decision {
+    Some(value) => value
+    None if fields.get("continue") == Some(Json::boolean(false)) => "stop"
+    None => "pass"
+  }
+}
+
+///|
 /// SessionStart is context-only in the pinned Claude bridge. Its upstream
 /// codec is lenient: plain output and malformed or mismatched event payloads
 /// add no context, while decision/control fields are ignored by the bridge.
-fn native_hook_session_start_context(capture : NativeHookCapture) -> String? {
+fn native_hook_session_start_context(
+  capture : NativeHookCapture,
+  dialect : String,
+) -> String? {
   if capture.truncated || capture.exit_code != 0 {
     return None
+  }
+  if dialect == "codex" {
+    let outcome = native_hook_codex_result_decision(capture, "SessionStart")
+    return outcome.additional_contexts.get(0)
   }
   let stdout = capture.stdout.trim().to_owned()
   if !stdout.has_prefix("{") {

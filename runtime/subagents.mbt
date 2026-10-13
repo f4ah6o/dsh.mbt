@@ -452,6 +452,11 @@ async fn NativeRuntime::run_subagent_prompt_hook(
   prompt : String,
   diagnose : Bool,
 ) -> Result[NativeHookOutcome, String] {
+  let current_turn = match native_engine_current_turn_id(child, child_id) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let turn_id = if diagnose { current_turn } else { current_turn + 1 }
   let sink : NativeHookEventSink? = if diagnose {
     Some(NativeHookEventSink::Child(child, child_id))
   } else {
@@ -463,10 +468,18 @@ async fn NativeRuntime::run_subagent_prompt_hook(
         value,
         child_id,
         prompt,
+        turn_id,
         attach_task=false,
         sink~,
       )
-    None => self.hooks.before_user_prompt(self.tools, child_id, prompt, sink~)
+    None =>
+      self.hooks.before_user_prompt(
+        self.tools,
+        child_id,
+        prompt,
+        turn_id~,
+        sink~,
+      )
   }
 }
 
@@ -498,9 +511,14 @@ async fn NativeRuntime::complete_subagent_provider_result(
           if control is Some(value) && value.cancelled.val {
             return Err("native command was cancelled")
           }
+          let turn_id = match native_engine_current_turn_id(child, child_id) {
+            Ok(value) => value
+            Err(error) => return Err(error)
+          }
           let stop_outcome = match
             self.run_stop_hook_controlled(
               child_id,
+              turn_id,
               sink=Some(NativeHookEventSink::Child(child, child_id)),
             ) {
             Ok(value) => value
@@ -673,7 +691,12 @@ async fn NativeRuntime::resolve_subagent_prompt_hook(
       }
     }
     Ok({ action: NativeHookAction::Continue, additional_contexts, }) =>
-      match child.accept_subagent_prompt_hook(checkpoint, additional_contexts) {
+      match
+        child.accept_subagent_prompt_hook(
+          checkpoint,
+          additional_contexts,
+          source_kind=self.hooks.context_source_kind(),
+        ) {
         Ok(value) => Ok(value)
         Err(error) => {
           let reason = "UserPromptSubmit hook could not admit child input: " +
@@ -702,12 +725,17 @@ async fn NativeRuntime::subagent_complete_tool(
   if !["read", "glob", "grep"].contains(name) {
     return Err("child emitted a tool outside its read-only catalog")
   }
+  let turn_id = match native_engine_current_turn_id(child, child_session_id) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
   let sink = Some(NativeHookEventSink::Child(child, child_session_id))
   let pre_outcome = match
     self.hooks.before_tool(
       self.tools,
       child_session_id,
       effect.request(),
+      turn_id~,
       sink~,
     ) {
     Err(error) if error.has_prefix(NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX) =>
@@ -747,6 +775,7 @@ async fn NativeRuntime::subagent_complete_tool(
               child_session_id,
               effect.request(),
               result,
+              turn_id~,
               sink~,
             ) {
             Err(error) if error.has_prefix(NATIVE_HOOK_DIAGNOSTIC_ERROR_PREFIX) => {
@@ -778,7 +807,11 @@ async fn NativeRuntime::subagent_complete_tool(
   match
     child.complete_effect(
       effect.id(),
-      native_hook_result_with_contexts(tool_result, additional_contexts),
+      native_hook_result_with_contexts(
+        tool_result,
+        additional_contexts,
+        source_kind=self.hooks.context_source_kind(),
+      ),
     ) {
     Ok(_) =>
       match post_diagnostic_error {

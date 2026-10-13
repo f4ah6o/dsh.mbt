@@ -615,23 +615,123 @@ supported:
 }
 ```
 
-For tool events, `matcher` is an exact tool name, `*` for every tool, or
-literal names separated by `|`. `SessionStart` uses the same literal matcher
-syntax with the source values `startup` and `resume`; `startup|resume` matches
-both. Regex and partial wildcards such as `write.*` are rejected. An omitted
-matcher applies to every source or tool. Each event accepts at most 16 groups
+In the Claude Code dialect, tool-event `matcher` is an exact tool name, `*`
+for every tool, or literal names separated by `|`. `SessionStart` uses the
+same literal matcher syntax with the source values `startup` and `resume`;
+`startup|resume` matches both. Regex and partial wildcards such as `write.*`
+are rejected. An omitted matcher applies to every source or tool. Each event
+accepts at most 16 groups
 and 32 commands; each command is limited to 8,192 characters. The config is
 limited to 64 KiB. `timeout` is an integer number of seconds from 1 to 120,
 defaulting to 10 seconds (upstream allows longer waits). Each hook receives one
 JSON object on stdin, limited to 64 KiB. Stdout and stderr are captured
 independently up to 16 KiB each; overflow is treated as an unsupported result.
 
-`SessionStart` runs matching commands in configuration order and consumes only
-a successful JSON `hookSpecificOutput.additionalContext` string whose
+### Codex command hooks
+
+Pass `--hooks-dialect codex` with `--hooks-config PATH` to select the native
+Codex adapter; without it, the runtime keeps the Claude Code dialect. This is a
+single process-wide dialect for the runtime. `--hooks-model NAME` sets the
+static `model` value in Codex payloads and is valid only with the Codex dialect
+and a hooks config. The model defaults to the empty string; it is not inferred
+from a provider session or changed during a turn.
+
+Codex reads `SessionStart`, `PreToolUse`, `PostToolUse`, `UserPromptSubmit`, and
+`Stop` command hooks from a `hooks` object or from event arrays at the config
+root. Other events, including `SubagentStart` and `SubagentStop`, are not part
+of this adapter. A matching tool-hook pattern uses JavaScript `RegExp` search
+semantics, but native accepts only a bounded ASCII subset of at most 128
+characters: literals, groups, alternation, positive ASCII character classes,
+and quantifiers. `*` remains the match-all shorthand. Dot, negated or POSIX
+classes, flags, non-ASCII patterns, lookaround, and unsupported escapes are
+rejected at startup rather than interpreted with different regex semantics.
+`UserPromptSubmit` and `Stop` have no matcher subject, so their matchers are
+ignored.
+
+For example, a Codex command hook config can look like this:
+
+```json
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Terminal",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/absolute/path/to/check-command",
+            "timeoutSec": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [{ "command": "/absolute/path/to/check-prompt" }] }
+    ]
+  }
+}
+```
+
+Start a CLI session with the selected dialect and static model:
+
+```sh
+dsh run \
+  'Review this change.' \
+  --hooks-config /absolute/path/to/hooks.json \
+  --hooks-dialect codex --hooks-model MODEL \
+  --data-dir /absolute/path/to/dsh-data \
+  --workspace /absolute/path/to/project
+```
+
+Hook commands are trusted host shell code; the matcher does not add an approval
+step.
+
+Codex command entries accept `timeout` or `timeoutSec`; native uses a 10-second
+default and a 1–120 second integer range. It skips unsupported asynchronous
+entries. The native config file is limited to 64 KiB, each command to 8,192
+characters, each stdin payload to 64 KiB, and captured stdout and stderr to
+16 KiB each. The pinned bridge permits longer waits and full JavaScript regular
+expressions.
+
+Codex payloads are JSON objects written without a trailing newline. They use
+`transcript_path: null`, `permission_mode: "default"`, the configured static
+model, and a decimal-string `turn_id` on PreToolUse, PostToolUse,
+UserPromptSubmit, and Stop; SessionStart has no turn ID. Tool events expose
+`tool_input` only as `{ "command": ... }`, where the value is the tool's string
+command or an empty string. This intentionally preserves the pinned bridge's
+shell-only projection even when a matched tool has richer arguments. Stop also
+sets `stop_hook_active: false` and `last_assistant_message: null`.
+
+Only blocking decisions affect admission: exit code 2, top-level
+`decision: "block"`, or a matching event's nested
+`permissionDecision: "deny"` can block. A matching nested `allow` or `ask`
+clears a top-level block; native does not create an approval prompt.
+On successful, nontruncated exit, matching JSON
+`hookSpecificOutput.additionalContext` is consumed for SessionStart,
+PostToolUse, and UserPromptSubmit. Successful trimmed plain stdout is also
+context for SessionStart and UserPromptSubmit when it does not start with
+`{`. Malformed JSON, continuation and input-rewrite controls, and context from
+other events are ignored. Codex commands run with the native minimal process
+environment and do not receive `CLAUDE_PROJECT_DIR` or provider credentials.
+
+Root SessionStart activation remains lazy: it runs on the first preflight-valid,
+non-replay send, using `resume` for sessions loaded when the runtime opened and
+`startup` for sessions created later. Direct root and child-initial
+UserPromptSubmit commands run before turn admission and have no diagnostic
+invocation/result pair. Turn-scoped diagnostics retain dialect `codex` and
+`codex:<point>:<counter>` identities. Codex context keeps `hooks-codex`
+provenance through provider preparation, root and child turns, snapshots, reopen,
+and fork; callers cannot forge that trusted provenance through request
+metadata.
+
+In the Claude Code dialect, `SessionStart` runs matching commands in
+configuration order and consumes only a successful JSON
+`hookSpecificOutput.additionalContext` string whose
 `hookEventName` is `SessionStart`. The input has exactly `session_id`, an empty
 `transcript_path`, the canonical workspace `cwd`, `hook_event_name`, and
-`source`. The pinned bridge awaits SessionStart during agent publication and
-uses `startup` for new agents and `resume` for restored agents; although its
+`source`; Codex uses the null transcript path described above. The pinned
+Claude bridge awaits SessionStart during agent publication and uses `startup`
+for new agents and `resume` for restored agents; although its
 source type also names `clear` and `compact`, the pinned creation paths do not
 emit those values. The native root adapter runs lazily on the first
 preflight-valid, non-replay `session_send`: sessions present when the runtime
@@ -1007,6 +1107,12 @@ later because earlier native readers reject these additive event kinds.
 dsh 0.1.19 continues to read legacy snapshots without hook diagnostics. A
 pending invocation is valid at an interrupted boundary; a normal turn closure
 must contain its result.
+
+Snapshots containing source-tagged user messages with `source.kind` equal to
+`hooks-codex`, or `hook/invoked` events with dialect `codex`, require dsh 0.1.20
+or later. Older readers reject these provenance values; dsh 0.1.20 continues to
+read legacy stores. Determine a store's minimum reader from all persisted
+content and do not downgrade or rewrite it using an older reader.
 
 `--approve-call` and `--deny-call` act on a session that is already waiting for approval, for example one started from the browser or MCP carrier. Pass its current `approval_revision` and `pending_approval.call_id`; stale or mismatched decisions are rejected:
 

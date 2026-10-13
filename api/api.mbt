@@ -10,6 +10,7 @@ pub struct HarnessApi {
   priv profiler : @hotpath.Profiler
   priv native_prompt_contexts : Ref[Array[String]]
   priv native_session_start_contexts : Ref[Array[String]]
+  priv native_hook_context_source_kind : Ref[String]
   priv preview_session_send : Ref[Bool]
 }
 
@@ -204,6 +205,7 @@ fn create_api(
   let profiler = @hotpath.Profiler::new()
   let native_prompt_contexts : Ref[Array[String]] = Ref([])
   let native_session_start_contexts : Ref[Array[String]] = Ref([])
+  let native_hook_context_source_kind = Ref("hooks-claude-code")
   let preview_session_send = Ref(false)
   let operations : Map[String, @capability.TypedCapability[Json, Json]] = Map([])
   for
@@ -300,27 +302,18 @@ fn create_api(
             "session_send" =>
               match @engine.EngineCommand::from_json("session_send", input) {
                 Ok(@engine.EngineCommand::SendPrompt(session_id, prompt)) => {
-                  let command_result = if !native_session_start_contexts.val.is_empty() {
+                  let command_result = if !native_session_start_contexts.val.is_empty() ||
+                    !native_prompt_contexts.val.is_empty() {
                     engine.apply_session_send_with_hook_contexts(
                       session_id,
                       prompt,
                       native_session_start_contexts.val,
                       native_prompt_contexts.val,
+                      source_kind=native_hook_context_source_kind.val,
                     )
-                  } else if native_prompt_contexts.val.is_empty() {
+                  } else {
                     let command = @engine.EngineCommand::SendPrompt(
                       session_id, prompt,
-                    )
-                    if preview_session_send.val {
-                      engine.preview(command)
-                    } else {
-                      engine.apply(command)
-                    }
-                  } else {
-                    let command = @engine.EngineCommand::SendPromptWithContexts(
-                      session_id,
-                      prompt,
-                      native_prompt_contexts.val,
                     )
                     if preview_session_send.val {
                       engine.preview(command)
@@ -390,6 +383,7 @@ fn create_api(
     profiler,
     native_prompt_contexts,
     native_session_start_contexts,
+    native_hook_context_source_kind,
     preview_session_send,
   }
 }
@@ -487,14 +481,18 @@ pub fn HarnessApi::invoke_session_send_with_hook_contexts(
   input : Json,
   session_start_contexts : Array[String],
   prompt_contexts : Array[String],
+  source_kind? : String = "hooks-claude-code",
 ) -> Result[Json, String] {
   let previous = self.native_prompt_contexts.val
   let previous_session_start = self.native_session_start_contexts.val
+  let previous_source_kind = self.native_hook_context_source_kind.val
   self.native_prompt_contexts.val = prompt_contexts
   self.native_session_start_contexts.val = session_start_contexts
+  self.native_hook_context_source_kind.val = source_kind
   defer {
     self.native_prompt_contexts.val = previous
     self.native_session_start_contexts.val = previous_session_start
+    self.native_hook_context_source_kind.val = previous_source_kind
   }
   self.invoke("session_send", input)
 }
@@ -540,14 +538,18 @@ pub fn HarnessApi::mcp_handle_with_hook_contexts(
   line : String,
   session_start_contexts : Array[String],
   prompt_contexts : Array[String],
+  source_kind? : String = "hooks-claude-code",
 ) -> String? {
   let previous = self.native_prompt_contexts.val
   let previous_session_start = self.native_session_start_contexts.val
+  let previous_source_kind = self.native_hook_context_source_kind.val
   self.native_prompt_contexts.val = prompt_contexts
   self.native_session_start_contexts.val = session_start_contexts
+  self.native_hook_context_source_kind.val = source_kind
   defer {
     self.native_prompt_contexts.val = previous
     self.native_session_start_contexts.val = previous_session_start
+    self.native_hook_context_source_kind.val = previous_source_kind
   }
   self.protocol.handle_line(line)
 }
@@ -855,11 +857,18 @@ pub fn HarnessApi::record_native_hook_invoked(
   point : String,
   handler_id : String,
   matcher : String?,
+  dialect? : String = "claude-code",
 ) -> Result[@engine.NativeHookInvocationCheckpoint, String] {
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.engine.record_native_hook_invoked(session_id, point, handler_id, matcher)
+  self.engine.record_native_hook_invoked(
+    session_id,
+    point,
+    handler_id,
+    matcher,
+    dialect~,
+  )
 }
 
 ///|
