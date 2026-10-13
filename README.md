@@ -87,7 +87,7 @@ moon run native --target native --release -- --help
 Mooncakes registry から `dsh` command package を install できます。次の例では `dsh` を Moon の既定の `bin` directory に配置します。
 
 ```sh
-moon install f4ah6o/dsh/cmd/dsh@0.1.20
+moon install f4ah6o/dsh/cmd/dsh@0.1.21
 export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 dsh --help
 ```
@@ -108,7 +108,21 @@ dsh web --demo --data-dir /absolute/path/to/dsh-demo-data \
 
 `dsh web` は browser assets を executable から配信するため、checkout 外から起動できます。埋め込み bundle は source install と release binary の両方に含まれます。`--assets-dir /path/to/web` を明示するとその directory の assets で override できます。source install には再帰 submodule clone を使ってください。
 
-事前に upstream [`moon-binstall`](https://github.com/f4ah6o/moon-binstall) を PATH に導入していれば、GitHub Release の対応 binary を `moon binstall dsh` で install できます。公開 asset は Linux x86-64 / ARM64 と macOS Apple Silicon 向けです。
+PATH に導入した upstream [`moon-binstall`](https://github.com/f4ah6o/moon-binstall) 0.1.6 では、GitHub Release の checksum 検証付き binary を install できます。GitHub Release coordinate の repository 名は `f4ah6o/dsh.mbt` です。`f4ah6o/dsh` は Mooncakes module 名です。Mooncakes package coordinate で解決する場合は、package path まで含めた `f4ah6o/dsh/cmd/dsh` を指定します。
+
+```sh
+moon binstall f4ah6o/dsh.mbt
+export PATH="${MOON_BINSTALL_DIR:-$HOME/.local/bin}:$PATH"
+dsh --help
+```
+
+Mooncakes module/package coordinate を使う場合は、上の GitHub Release coordinate の代わりに次を実行します。
+
+```sh
+moon binstall f4ah6o/dsh/cmd/dsh
+```
+
+どちらの coordinate も既定では `~/.local/bin` に install します。上の `PATH` 設定後、`dsh --help` で起動を確認できます。既存の `dsh` executable を更新または置き換えるには `moon binstall f4ah6o/dsh.mbt --force` を実行してください。Mooncakes package coordinate にも同じ `--force` を付けられます。公開 asset は Linux x86-64 / ARM64 と macOS Apple Silicon 向けです。
 
 ### macOS native app
 

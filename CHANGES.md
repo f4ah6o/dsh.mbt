@@ -16,6 +16,24 @@
 
 ### Migration
 
+## 0.1.21 - 2026-10-13
+
+### Added
+
+### Changed
+
+- Document the working `moon binstall` release and Mooncakes package coordinates, and correct the previous nonexistent `moon binstall dsh` example.
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
 ## 0.1.20 - 2026-10-12
 
 ### Added
