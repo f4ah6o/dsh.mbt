@@ -129,7 +129,7 @@ fn native_usage() -> String {
 /// `abort` writes its runtime diagnostic to stdout in native builds. ACP owns
 /// stdout as a JSON-RPC stream, so fatal startup/shutdown paths use a bounded
 /// stderr message and terminate with a nonzero status instead.
-extern "C" fn native_process_exit(status : Int) -> Unit = "exit"
+extern "C" fn native_process_exit(status : Int32) -> Unit = "exit"
 
 ///|
 fn native_acp_fatal(message : String) -> Unit {
@@ -156,8 +156,8 @@ async fn native_cli_command(
   session_id : String?,
   operation : String,
   input : Json,
-  approval_revision : Int?,
-  acp_activity_session_id? : String = "",
+  approval_revision : Int32?,
+  acp_activity_session_id~ : String = "",
 ) -> Result[Json, String] {
   let command_id = match native_command_id() {
     Ok(value) => value

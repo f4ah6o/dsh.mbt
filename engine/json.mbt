@@ -4,7 +4,7 @@ fn object(fields : Array[(String, Json)]) -> Json {
 }
 
 ///|
-fn integer(value : Int) -> Json {
+fn integer(value : Int32) -> Json {
   Json::number(value.to_double())
 }
 
@@ -33,7 +33,7 @@ fn required_field(value : Json, key : String) -> Json raise EngineError {
 fn string_value(
   value : Json,
   label : String,
-  max? : Int = 65536,
+  max~ : Int32 = 65536,
 ) -> String raise EngineError {
   match value {
     Json::String(text) => {
@@ -50,7 +50,7 @@ fn string_value(
 fn required_string(
   value : Json,
   key : String,
-  max? : Int = 65536,
+  max~ : Int32 = 65536,
 ) -> String raise EngineError {
   string_value(required_field(value, key), key, max~)
 }
@@ -60,7 +60,7 @@ fn optional_string(
   value : Json,
   key : String,
   fallback : String,
-  max? : Int = 65536,
+  max~ : Int32 = 65536,
 ) -> String raise EngineError {
   match fields(value).get(key) {
     None => fallback
@@ -81,9 +81,9 @@ fn bool_value(value : Json, label : String) -> Bool raise EngineError {
 fn int_value(
   value : Json,
   label : String,
-  minimum : Int,
-  maximum : Int,
-) -> Int raise EngineError {
+  minimum : Int32,
+  maximum : Int32,
+) -> Int32 raise EngineError {
   match value {
     Json::Number(number, ..) => {
       if number.is_inf() ||
@@ -106,7 +106,7 @@ fn int_value(
 fn array_value(
   value : Json,
   label : String,
-  maximum : Int,
+  maximum : Int32,
 ) -> Array[Json] raise EngineError {
   match value {
     Json::Array(items) => {
@@ -140,8 +140,8 @@ fn identifier(value : String, label : String) -> String raise EngineError {
 
 ///|
 priv struct JsonBudget {
-  mut nodes : Int
-  mut chars : Int
+  mut nodes : Int32
+  mut chars : Int32
 }
 
 ///|
@@ -154,7 +154,7 @@ fn checked_copy(value : Json) -> Json raise EngineError {
 ///|
 fn copy_with_budget(
   value : Json,
-  depth : Int,
+  depth : Int32,
   budget : JsonBudget,
 ) -> Json raise EngineError {
   budget.nodes -= 1
@@ -267,7 +267,7 @@ fn parse_tool(value : Json) -> Tool raise EngineError {
 fn validate_arguments(
   schema : Json,
   value : Json,
-  depth? : Int = 0,
+  depth~ : Int32 = 0,
 ) -> Unit raise EngineError {
   if depth > 32 {
     raise Invalid("Tool argument schema exceeds the depth limit")

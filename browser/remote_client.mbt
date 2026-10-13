@@ -1,15 +1,15 @@
 ///|
 priv struct BrowserRequestError {
-  status : Int
+  status : Int32
   message : String
 }
 
 ///|
 priv struct RemoteClient {
-  handle : Int
+  handle : Int32
   mut restored_scope : String
   mut stream : BrowserValue?
-  mut persist_timer : Int?
+  mut persist_timer : Int32?
 }
 
 ///|
@@ -28,9 +28,9 @@ fn browser_error_text(value : Json, fallback : String) -> String {
 ///|
 async fn request_json(
   path : String,
-  http_method? : String = "GET",
-  body? : String = "",
-  timeout_ms? : Int = 20_000,
+  http_method~ : String = "GET",
+  body~ : String = "",
+  timeout_ms~ : Int32 = 20_000,
 ) -> Result[Json, BrowserRequestError] {
   let controller = @js_async.AbortController::new()
   let timed_out = Ref(false)
@@ -356,7 +356,7 @@ async fn RemoteClient::command(
   operation : String,
   session_id : String?,
   input : Json,
-  approval_revision? : Int = -1,
+  approval_revision~ : Int32 = -1,
 ) -> Result[Json, String] {
   let command_id = @client.client_new_command_id(
     browser_now_ms(),

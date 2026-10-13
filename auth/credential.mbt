@@ -13,7 +13,7 @@ pub struct Credential {
   priv access_token : String
   priv refresh_token : String?
   priv scopes : Array[String]
-  priv expires_at : Int
+  priv expires_at : Int32
 }
 
 ///|
@@ -86,7 +86,7 @@ pub fn Credential::identity_for_native(self : Credential) -> String {
 
 ///|
 /// Access-token expiry used by the native refresh coordinator.
-pub fn Credential::expires_at_for_native(self : Credential) -> Int {
+pub fn Credential::expires_at_for_native(self : Credential) -> Int32 {
   self.expires_at
 }
 
@@ -229,7 +229,7 @@ pub fn Credential::refresh_request(self : Credential) -> Result[Json, String] {
 pub fn Credential::accept_refresh(
   self : Credential,
   token_response : Json,
-  now_seconds : Int,
+  now_seconds : Int32,
 ) -> Result[Credential, String] {
   try {
     let tokens = auth_object(token_response, "refresh response")
@@ -271,7 +271,7 @@ pub fn Credential::accept_refresh(
 /// delete a usable credential.
 pub fn classify_refresh_error(
   code : String,
-  http_status : Int,
+  http_status : Int32,
 ) -> RefreshDisposition {
   match code {
     "invalid_grant"

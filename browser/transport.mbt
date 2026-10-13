@@ -28,7 +28,7 @@ extern "js" fn browser_response_ok(response : BrowserResponse) -> Bool =
   #| (response) => response.ok
 
 ///|
-extern "js" fn browser_response_status(response : BrowserResponse) -> Int =
+extern "js" fn browser_response_status(response : BrowserResponse) -> Int32 =
   #| (response) => response.status
 
 ///|
@@ -40,12 +40,12 @@ extern "js" fn browser_response_text(
 ///|
 extern "js" fn browser_timeout(
   callback : () -> Unit,
-  milliseconds : Int,
-) -> Int =
+  milliseconds : Int32,
+) -> Int32 =
   #| (callback, milliseconds) => setTimeout(callback, milliseconds)
 
 ///|
-extern "js" fn browser_clear_timeout(timer : Int) -> Unit =
+extern "js" fn browser_clear_timeout(timer : Int32) -> Unit =
   #| (timer) => clearTimeout(timer)
 
 ///|

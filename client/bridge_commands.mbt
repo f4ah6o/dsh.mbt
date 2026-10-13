@@ -4,12 +4,12 @@
 #warnings("-deprecated")
 #export_name("client_queue_command")
 pub fn client_queue_command(
-  handle : Int,
+  handle : Int32,
   command_id : String,
   operation : String,
   session_id : String,
   input_raw : String,
-  approval_revision : Int,
+  approval_revision : Int32,
 ) -> String {
   match get_client(handle) {
     None =>
@@ -53,7 +53,7 @@ pub fn client_queue_command(
 
 ///|
 #export_name("client_mark_command_sent")
-pub fn client_mark_command_sent(handle : Int, command_id : String) -> String {
+pub fn client_mark_command_sent(handle : Int32, command_id : String) -> String {
   match get_client(handle) {
     Some(state) => {
       let marked = state.mark_command_sent(command_id)
@@ -76,7 +76,7 @@ pub fn client_mark_command_sent(handle : Int, command_id : String) -> String {
 ///|
 #export_name("client_mark_command_uncertain")
 pub fn client_mark_command_uncertain(
-  handle : Int,
+  handle : Int32,
   command_id : String,
 ) -> String {
   match get_client(handle) {
@@ -100,7 +100,7 @@ pub fn client_mark_command_uncertain(
 
 ///|
 #export_name("client_apply_receipt")
-pub fn client_apply_receipt(handle : Int, raw : String) -> String {
+pub fn client_apply_receipt(handle : Int32, raw : String) -> String {
   match get_client(handle) {
     None =>
       client_result(None, false, "disposed", Some("client handle is disposed"))
@@ -120,7 +120,10 @@ pub fn client_apply_receipt(handle : Int, raw : String) -> String {
 
 ///|
 #export_name("client_mark_receipt_missing")
-pub fn client_mark_receipt_missing(handle : Int, command_id : String) -> String {
+pub fn client_mark_receipt_missing(
+  handle : Int32,
+  command_id : String,
+) -> String {
   match get_client(handle) {
     Some(state) => {
       let marked = state.mark_receipt_missing(command_id)
@@ -142,7 +145,7 @@ pub fn client_mark_receipt_missing(handle : Int, command_id : String) -> String 
 
 ///|
 #export_name("client_pending_ids")
-pub fn client_pending_ids(handle : Int) -> String {
+pub fn client_pending_ids(handle : Int32) -> String {
   match get_client(handle) {
     Some(state) =>
       Json::array(state.pending_command_ids().map(Json::string)).stringify()

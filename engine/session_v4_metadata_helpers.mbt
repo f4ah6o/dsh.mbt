@@ -21,7 +21,7 @@ fn v4_only_fields(
 ///|
 fn v4_image_reference_text(
   block : Json,
-  line_number : Int,
+  line_number : Int32,
 ) -> String raise EngineError {
   v4_only_fields(block, ["type", "attachment"], [], "image block")
   let attachment = required_field(block, "attachment")

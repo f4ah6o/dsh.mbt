@@ -57,7 +57,7 @@ async fn native_subagent_parent_tool_effect(
   session_id : String,
   call_id : String,
   prompt : String,
-  child_prompt? : String = "Complete the fixture child task.",
+  child_prompt~ : String = "Complete the fixture child task.",
 ) -> @engine.EngineEffect {
   runtime
   .invoke("session_create", { "id": session_id, "title": "Subagent fixture" })
@@ -107,11 +107,11 @@ async fn native_subagent_provider_server_gated_index(
   responses : Array[NativeFixtureHttpResponse],
   bodies : Ref[Array[String]],
   auth_ok : Ref[Bool],
-  gate_index : Int,
+  gate_index : Int32,
   release : @async.Semaphore,
-  ignored_connections? : Ref[Int]? = None,
-  ignored_connection_errors? : Ref[Array[String]]? = None,
-  response_errors? : Ref[Array[String]]? = None,
+  ignored_connections~ : Ref[Int32]? = None,
+  ignored_connection_errors~ : Ref[Array[String]]? = None,
+  response_errors~ : Ref[Array[String]]? = None,
 ) -> Unit {
   let mut index = 0
   let mut ignored = 0

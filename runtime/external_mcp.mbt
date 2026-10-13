@@ -1,28 +1,28 @@
 ///|
-const NATIVE_EXTERNAL_MCP_CONFIG_LIMIT : Int = 1048576
+const NATIVE_EXTERNAL_MCP_CONFIG_LIMIT : Int32 = 1048576
 
 ///|
-const NATIVE_EXTERNAL_MCP_MAX_SERVERS : Int = 8
+const NATIVE_EXTERNAL_MCP_MAX_SERVERS : Int32 = 8
 
 ///|
-const NATIVE_EXTERNAL_MCP_MAX_TOOLS : Int = 64
+const NATIVE_EXTERNAL_MCP_MAX_TOOLS : Int32 = 64
 
 ///|
-const NATIVE_EXTERNAL_MCP_MAX_PAGES : Int = 16
+const NATIVE_EXTERNAL_MCP_MAX_PAGES : Int32 = 16
 
 ///|
-const NATIVE_EXTERNAL_MCP_STARTUP_TIMEOUT_MS : Int = 10000
+const NATIVE_EXTERNAL_MCP_STARTUP_TIMEOUT_MS : Int32 = 10000
 
 ///|
-const NATIVE_EXTERNAL_MCP_DEFAULT_TOOL_TIMEOUT_MS : Int = 60000
+const NATIVE_EXTERNAL_MCP_DEFAULT_TOOL_TIMEOUT_MS : Int32 = 60000
 
 ///|
-const NATIVE_EXTERNAL_MCP_MAX_NOTIFICATIONS : Int = 64
+const NATIVE_EXTERNAL_MCP_MAX_NOTIFICATIONS : Int32 = 64
 
 ///|
 
 ///|
-const NATIVE_EXTERNAL_MCP_CATALOG_LIMIT : Int = 1048576
+const NATIVE_EXTERNAL_MCP_CATALOG_LIMIT : Int32 = 1048576
 
 ///|
 priv struct NativeMcpServerConfig {
@@ -31,7 +31,7 @@ priv struct NativeMcpServerConfig {
   args : Array[String]
   cwd : String?
   env : Array[(String, String)]
-  tool_timeout_ms : Int
+  tool_timeout_ms : Int32
 }
 
 ///|
@@ -45,7 +45,7 @@ priv struct NativeMcpTool {
 
 ///|
 priv struct NativeMcpRoute {
-  server_index : Int
+  server_index : Int32
   raw_name : String
 }
 
@@ -58,15 +58,15 @@ priv struct NativeMcpRpcResponse {
 ///|
 priv struct NativeMcpServer {
   name : String
-  tool_timeout_ms : Int
-  pid : Int
+  tool_timeout_ms : Int32
+  pid : Int32
   reader : @process.ReadFromProcess
   writer : @process.WriteToProcess
   gate : @async.Mutex
   close_gate : @async.Mutex
   framer : NativeMcpFramer
   mut queued_frames : Array[NativeMcpFrame]
-  mut next_id : Int
+  mut next_id : Int32
   mut poisoned : Bool
   mut closed : Bool
 }
@@ -81,7 +81,7 @@ priv struct NativeMcpPool {
 }
 
 ///|
-fn native_mcp_catalog_capacity(existing : Int, incoming : Int) -> Bool {
+fn native_mcp_catalog_capacity(existing : Int32, incoming : Int32) -> Bool {
   existing >= 0 &&
   incoming >= 0 &&
   existing + incoming <= NATIVE_EXTERNAL_MCP_MAX_TOOLS
@@ -89,8 +89,8 @@ fn native_mcp_catalog_capacity(existing : Int, incoming : Int) -> Bool {
 
 ///|
 priv struct NativeMcpSchemaBudget {
-  mut nodes : Int
-  mut chars : Int
+  mut nodes : Int32
+  mut chars : Int32
 }
 
 ///|
@@ -358,7 +358,7 @@ fn native_mcp_annotation_key(key : String) -> Bool {
 ///|
 fn native_mcp_normalize_schema(
   schema : Json,
-  depth : Int,
+  depth : Int32,
   budget : NativeMcpSchemaBudget,
 ) -> Result[Json, String] {
   if depth > 24 {
@@ -524,7 +524,7 @@ fn native_mcp_normalize_schema(
 ///|
 fn native_mcp_copy_bounded_json(
   value : Json,
-  depth : Int,
+  depth : Int32,
   budget : NativeMcpSchemaBudget,
 ) -> Result[Json, String] {
   if depth > 24 {
@@ -653,7 +653,7 @@ fn native_mcp_public_tool_name(
       Ok(value) => value[:12].to_owned()
       Err(error) => return Err(error)
     }
-    let prefix_length = Int::min(51, normalized.length())
+    let prefix_length = Int32::min(51, normalized.length())
     normalized[:prefix_length].to_owned() + "_" + hash
   }
   Ok(name)
@@ -661,7 +661,7 @@ fn native_mcp_public_tool_name(
 
 ///|
 fn native_mcp_parse_tool(
-  server_index : Int,
+  server_index : Int32,
   server_name : String,
   value : Json,
 ) -> Result[(NativeMcpTool, Json, NativeMcpRoute), String] {
@@ -845,10 +845,10 @@ fn native_mcp_canonical_json(value : Json) -> String {
 }
 
 ///|
-fn native_mcp_string_compare(left : String, right : String) -> Int {
+fn native_mcp_string_compare(left : String, right : String) -> Int32 {
   let left_chars = left.to_array()
   let right_chars = right.to_array()
-  let limit = Int::min(left_chars.length(), right_chars.length())
+  let limit = Int32::min(left_chars.length(), right_chars.length())
   for index in 0..<limit {
     if left_chars[index] < right_chars[index] {
       return -1

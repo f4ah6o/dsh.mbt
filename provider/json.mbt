@@ -146,7 +146,7 @@ fn boolean(value : Json, where_ : String) -> Bool raise ProviderError {
 }
 
 ///|
-fn integer(value : Json, where_ : String) -> Int raise ProviderError {
+fn integer(value : Json, where_ : String) -> Int32 raise ProviderError {
   match value {
     Number(number, ..) => {
       if number < 0.0 ||

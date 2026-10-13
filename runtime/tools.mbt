@@ -1,25 +1,25 @@
 ///|
-const TOOL_OUTPUT_LIMIT : Int = 65536
+const TOOL_OUTPUT_LIMIT : Int32 = 65536
 
 ///|
-const TOOL_FILE_LIMIT : Int = 4194304
+const TOOL_FILE_LIMIT : Int32 = 4194304
 
 ///|
-const TOOL_MAX_VISITED : Int = 10000
+const TOOL_MAX_VISITED : Int32 = 10000
 
 ///|
-const TOOL_GLOB_MATCH_STEPS : Int = 20000000
+const TOOL_GLOB_MATCH_STEPS : Int32 = 20000000
 
 ///|
 priv struct ToolWalkBudget {
-  mut visited : Int
+  mut visited : Int32
   mut truncated : Bool
   files : Array[String]
 }
 
 ///|
 priv struct GlobMatchBudget {
-  mut steps : Int
+  mut steps : Int32
 }
 
 ///|
@@ -52,7 +52,7 @@ fn tool_success(content : String) -> Json {
 fn tool_arg_string(
   args : Json,
   name : String,
-  maximum? : Int = TOOL_FILE_LIMIT,
+  maximum~ : Int32 = TOOL_FILE_LIMIT,
 ) -> Result[String, String] {
   match string_field(args, name) {
     Some(value) if value.length() <= maximum => Ok(value)
@@ -65,10 +65,10 @@ fn tool_arg_string(
 fn tool_arg_int(
   args : Json,
   name : String,
-  fallback : Int,
-  minimum : Int,
-  maximum : Int,
-) -> Result[Int, String] {
+  fallback : Int32,
+  minimum : Int32,
+  maximum : Int32,
+) -> Result[Int32, String] {
   match object_field(args, name) {
     None => Ok(fallback)
     Some(Json::Number(value, ..)) if value >= minimum.to_double() &&
@@ -103,7 +103,7 @@ fn tool_arg_bool(
 fn NativeTools::resolve_path(
   self : NativeTools,
   value : String,
-  allow_root? : Bool = false,
+  allow_root~ : Bool = false,
 ) -> Result[String, String] {
   if value.length() > 4096 ||
     value.contains("\u0000") ||
@@ -170,7 +170,7 @@ fn NativeTools::new(
 fn NativeTools::walk(
   self : NativeTools,
   start : String,
-  depth : Int,
+  depth : Int32,
   budget : ToolWalkBudget,
 ) -> Unit {
   if depth > 32 || budget.visited >= TOOL_MAX_VISITED {
@@ -255,8 +255,8 @@ fn NativeTools::read_tool(self : NativeTools, args : Json) -> Json {
     Err(error) => tool_error(error)
     Ok((text, _)) => {
       let lines = text.split("\n").to_array()
-      let start = Int::min(offset - 1, lines.length())
-      let stop = Int::min(start + limit, lines.length())
+      let start = Int32::min(offset - 1, lines.length())
+      let stop = Int32::min(start + limit, lines.length())
       let output : Array[String] = []
       for index = start; index < stop; index = index + 1 {
         output.push((index + 1).to_string() + ": " + lines[index].to_owned())
@@ -531,7 +531,7 @@ async fn NativeTools::grep_tool(self : NativeTools, args : Json) -> Json {
             "/usr/bin/grep",
             ["-E", "-n", "--", pattern],
             text,
-            Int::max(1, 5000 - (@async.now() - started).to_int()),
+            Int32::max(1, 5000 - (@async.now() - started).to_int()),
             memory_limit_mb=256,
           ) {
           Err(_) =>
@@ -613,7 +613,7 @@ async fn NativeTools::bash_tool(self : NativeTools, args : Json) -> Json {
 
 ///|
 priv struct ProcessCapture {
-  code : Int
+  code : Int32
   output : String
   truncated : Bool
 }
@@ -637,7 +637,7 @@ async fn collect_process_output(
 }
 
 ///|
-async fn cancel_process_group(pid : Int, leader_reaped : Ref[Bool]) -> Unit {
+async fn cancel_process_group(pid : Int32, leader_reaped : Ref[Bool]) -> Unit {
   if !os_kill_process_group(pid, 15) {
     // The trampoline may be cancelled before `setsid()`. Killing the leader
     // closes that startup window; a second group signal below catches workers
@@ -663,8 +663,8 @@ async fn NativeTools::run_process(
   executable : String,
   arguments : Array[String],
   stdin_text : String,
-  timeout_ms : Int,
-  memory_limit_mb? : Int = 512,
+  timeout_ms : Int32,
+  memory_limit_mb~ : Int32 = 512,
 ) -> Result[ProcessCapture, String] {
   // Environment is deliberately rebuilt from a tiny allowlist. Provider
   // tokens, API keys, and host secrets never reach tool or grep subprocesses.
@@ -673,7 +673,7 @@ async fn NativeTools::run_process(
     ("LANG", "C.UTF-8"),
     ("LC_ALL", "C.UTF-8"),
   ])
-  let mut worker_pid : Int? = None
+  let mut worker_pid : Int32? = None
   let leader_reaped = Ref(false)
   let outcome = Some(
     @async.with_timeout(timeout_ms, () => {
@@ -681,7 +681,7 @@ async fn NativeTools::run_process(
         let (stdin_reader, stdin_writer) = @process.write_to_process()
         let (stdout_reader, stdout_writer) = @process.read_from_process()
         defer stdout_reader.close()
-        let cpu_limit_seconds = Int::max(1, (timeout_ms + 999) / 1000)
+        let cpu_limit_seconds = Int32::max(1, (timeout_ms + 999) / 1000)
         let worker_arguments = [
           "--internal-worker",
           memory_limit_mb.to_string(),

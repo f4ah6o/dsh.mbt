@@ -40,7 +40,7 @@ fn todo_array(value : Json, key : String) -> Array[Json] {
 }
 
 ///|
-fn todo_event_index(events : Array[Json], event_type : String) -> Int? {
+fn todo_event_index(events : Array[Json], event_type : String) -> Int32? {
   for index in 0..<events.length() {
     if todo_string(events[index], "type") == event_type {
       return Some(index)
@@ -51,7 +51,7 @@ fn todo_event_index(events : Array[Json], event_type : String) -> Int? {
 
 ///|
 fn todo_event_record(
-  seq : Int,
+  seq : Int32,
   event_type : String,
   turn_id : Json,
   step : Json,
@@ -67,7 +67,7 @@ fn todo_event_record(
 }
 
 ///|
-fn todo_count_events(session : Json, event_type : String) -> Int {
+fn todo_count_events(session : Json, event_type : String) -> Int32 {
   todo_array(session, "events")
   .filter(event => todo_string(event, "type") == event_type)
   .length()
@@ -193,9 +193,9 @@ fn todo_finish_prompt_turn(
 fn todo_capacity_trial(
   base : Json,
   id : String,
-  prompt_length : Int,
-  response_length : Int,
-) -> (Int, Json)? {
+  prompt_length : Int32,
+  response_length : Int32,
+) -> (Int32, Json)? {
   let trial = Engine::new(todo_test_tools())
   match trial.restore(base) {
     Ok(_) => ()
@@ -478,8 +478,8 @@ fn todo_snapshot_forged_event(
     }
     session_fields["events"] = Json::array(kept)
   } else if change == "completion" {
-    let completion : Int? = {
-      let mut found : Int? = None
+    let completion : Int32? = {
+      let mut found : Int32? = None
       for event_index in 0..<events.length() {
         let event = events[event_index]
         if todo_string(event, "type") == "tool/completed" &&

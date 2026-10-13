@@ -3,20 +3,20 @@
 
 ///|
 #borrow(out)
-extern "C" fn c_auth_random(out : FixedArray[Byte], length : Int) -> Int = "dsh_auth_random"
+extern "C" fn c_auth_random(out : FixedArray[Byte], length : Int32) -> Int32 = "dsh_auth_random"
 
 ///|
 #borrow(url)
-extern "C" fn c_auth_open_url(url : Bytes) -> Int = "dsh_auth_open_url"
+extern "C" fn c_auth_open_url(url : Bytes) -> Int32 = "dsh_auth_open_url"
 
 ///|
 extern "C" fn c_auth_unix_time() -> Int64 = "dsh_auth_unix_time"
 
 ///|
-const NATIVE_AUTH_HTTP_TIMEOUT_MS : Int = 15000
+const NATIVE_AUTH_HTTP_TIMEOUT_MS : Int32 = 15000
 
 ///|
-const NATIVE_AUTH_RESPONSE_BYTE_LIMIT : Int = 1048576
+const NATIVE_AUTH_RESPONSE_BYTE_LIMIT : Int32 = 1048576
 
 ///|
 priv struct AuthEndpoints {
@@ -323,7 +323,7 @@ fn native_auth_load(
 }
 
 ///|
-fn native_auth_int(value : Json?, fallback : Int) -> Int {
+fn native_auth_int(value : Json?, fallback : Int32) -> Int32 {
   match value {
     Some(Number(number, ..)) if number >= 0.0 &&
       number <= 2147483647.0 &&
@@ -744,7 +744,7 @@ async fn NativeAuth::credential_for_selection_with(
 async fn NativeAuth::refresh_locked(
   self : NativeAuth,
   credential : @auth.Credential,
-  now : Int,
+  now : Int32,
 ) -> Result[@auth.Credential, String] {
   self.refresh_locked_with(
     credential,
@@ -761,9 +761,9 @@ async fn NativeAuth::refresh_locked(
 async fn NativeAuth::refresh_locked_with(
   self : NativeAuth,
   credential : @auth.Credential,
-  now : Int,
+  now : Int32,
   post_form : async (AuthEndpoints, String, String) -> Result[
-    (Int, Json),
+    (Int32, Json),
     String,
   ],
   persist : () -> Result[Unit, String],
@@ -1350,7 +1350,7 @@ fn NativeAuth::close(self : NativeAuth) -> Unit {
 }
 
 ///|
-fn native_auth_now() -> Int {
+fn native_auth_now() -> Int32 {
   let value = c_auth_unix_time()
   if value < 0L || value > 2147483647L {
     0
@@ -1360,7 +1360,7 @@ fn native_auth_now() -> Int {
 }
 
 ///|
-fn native_auth_random_bytes(length : Int) -> Result[Bytes, String] {
+fn native_auth_random_bytes(length : Int32) -> Result[Bytes, String] {
   if length < 1 || length > 4096 {
     return Err("AUTH_RANDOM_ERROR: invalid random byte request")
   }
@@ -1376,7 +1376,7 @@ fn native_auth_random_bytes(length : Int) -> Result[Bytes, String] {
 }
 
 ///|
-fn native_auth_random_token(length : Int) -> Result[String, String] {
+fn native_auth_random_token(length : Int32) -> Result[String, String] {
   match native_auth_random_bytes(length) {
     Ok(bytes) => Ok(native_base64url_encode(bytes))
     Err(error) => Err(error)
@@ -1425,11 +1425,11 @@ fn native_base64url_encode(bytes : Bytes) -> String {
 }
 
 ///|
-fn native_base64url_value(character : Char) -> Int? {
+fn native_base64url_value(character : Char) -> Int32? {
   match character {
-    'A'..='Z' => Some(character.to_int() - 'A'.to_int())
-    'a'..='z' => Some(character.to_int() - 'a'.to_int() + 26)
-    '0'..='9' => Some(character.to_int() - '0'.to_int() + 52)
+    'A'..<='Z' => Some(character.to_int() - 'A'.to_int())
+    'a'..<='z' => Some(character.to_int() - 'a'.to_int() + 26)
+    '0'..<='9' => Some(character.to_int() - '0'.to_int() + 52)
     '-' => Some(62)
     '_' => Some(63)
     _ => None
@@ -1439,7 +1439,7 @@ fn native_base64url_value(character : Char) -> Int? {
 ///|
 fn native_base64url_decode(
   value : String,
-  limit? : Int = 65536,
+  limit~ : Int32 = 65536,
 ) -> Result[Bytes, String] {
   if value.is_empty() || value.length() % 4 == 1 || value.length() > limit {
     return Err("malformed base64url input")
@@ -1543,11 +1543,11 @@ fn native_percent_decode(value : String) -> Result[String, String] {
 }
 
 ///|
-fn native_hex(value : Char) -> Int? {
+fn native_hex(value : Char) -> Int32? {
   match value {
-    '0'..='9' => Some(value.to_int() - '0'.to_int())
-    'a'..='f' => Some(value.to_int() - 'a'.to_int() + 10)
-    'A'..='F' => Some(value.to_int() - 'A'.to_int() + 10)
+    '0'..<='9' => Some(value.to_int() - '0'.to_int())
+    'a'..<='f' => Some(value.to_int() - 'a'.to_int() + 10)
+    'A'..<='F' => Some(value.to_int() - 'A'.to_int() + 10)
     _ => None
   }
 }
@@ -1624,7 +1624,7 @@ async fn native_wait_for_callback(
 /// sign-in task open indefinitely.
 async fn native_wait_for_callback_timeout(
   server : @http.Server,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Result[Json, String] {
   let connection : Ref[@http.ServerConnection?] = Ref(None)
   defer {
@@ -1682,8 +1682,8 @@ async fn oauth_post_form(
   endpoints : AuthEndpoints,
   endpoint : String,
   body : String,
-  timeout_ms? : Int = NATIVE_AUTH_HTTP_TIMEOUT_MS,
-) -> Result[(Int, Json), String] {
+  timeout_ms~ : Int32 = NATIVE_AUTH_HTTP_TIMEOUT_MS,
+) -> Result[(Int32, Json), String] {
   if !native_auth_endpoint_allowed(endpoints, endpoint, "token") {
     return Err("AUTH_ENDPOINT_INVALID: token endpoint is not trusted")
   }
@@ -1715,9 +1715,9 @@ async fn oauth_get_json(
   endpoints : AuthEndpoints,
   endpoint : String,
   kind : String,
-  headers? : @http.Headers = Map([]),
-  timeout_ms? : Int = NATIVE_AUTH_HTTP_TIMEOUT_MS,
-) -> Result[(Int, Json), String] {
+  headers~ : @http.Headers = Map([]),
+  timeout_ms~ : Int32 = NATIVE_AUTH_HTTP_TIMEOUT_MS,
+) -> Result[(Int32, Json), String] {
   if !native_auth_endpoint_allowed(endpoints, endpoint, kind) {
     return Err("AUTH_ENDPOINT_INVALID: HTTPS endpoint is not trusted")
   }

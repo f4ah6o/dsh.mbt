@@ -354,7 +354,7 @@ pub fn accept_token_response(
   token_response : Json,
   verified_claims : Json,
   signature_verified : Bool,
-  now_seconds : Int,
+  now_seconds : Int32,
 ) -> Result[Credential, String] {
   try {
     if !signature_verified {
@@ -459,7 +459,7 @@ pub fn accept_token_response(
 }
 
 ///|
-fn auth_integer(value : Json, name : String) -> Int raise AuthError {
+fn auth_integer(value : Json, name : String) -> Int32 raise AuthError {
   match value {
     Number(number, ..) =>
       if number >= 0.0 &&

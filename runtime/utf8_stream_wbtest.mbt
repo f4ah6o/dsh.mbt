@@ -15,7 +15,10 @@ fn native_json_field(value : Json, name : String) -> Json? {
 }
 
 ///|
-fn native_utf8_chunks(bytes : Bytes, cuts : Array[Int]) -> Result[Json, String] {
+fn native_utf8_chunks(
+  bytes : Bytes,
+  cuts : Array[Int32],
+) -> Result[Json, String] {
   let utf8 = Utf8StreamDecoder::new()
   let sse = @provider.ResponsesStreamDecoder::new()
   let boundaries = [0, ..cuts, bytes.length()]
@@ -53,7 +56,7 @@ test "native byte transport reconstructs UTF-8 split at every boundary" {
     }
   }
   // Byte-at-a-time transport catches sequences split across several reads.
-  let cuts : Array[Int] = []
+  let cuts : Array[Int32] = []
   for index = 1; index < bytes.length(); index = index + 1 {
     cuts.push(index)
   }

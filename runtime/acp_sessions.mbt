@@ -1,5 +1,5 @@
 ///|
-const NATIVE_ACP_SESSION_PAGE_SIZE : Int = 16
+const NATIVE_ACP_SESSION_PAGE_SIZE : Int32 = 16
 
 ///|
 fn native_acp_timestamp() -> String? {
@@ -226,7 +226,7 @@ async fn NativeRuntime::set_acp_session_model(
 /// advancing the durable revision or restoring any session.
 async fn NativeRuntime::read_acp_sessions(
   self : NativeRuntime,
-) -> Result[(Json, Array[NativeAcpStoredSession], Int), String] {
+) -> Result[(Json, Array[NativeAcpStoredSession], Int32), String] {
   self.gate.acquire()
   defer self.gate.release()
   if self.stopped || self.closed {
@@ -307,7 +307,11 @@ async fn NativeRuntime::record_acp_activity(
 }
 
 ///|
-fn native_acp_list_cursor(offset : Int, cwd : String, revision : Int) -> String {
+fn native_acp_list_cursor(
+  offset : Int32,
+  cwd : String,
+  revision : Int32,
+) -> String {
   native_base64url_encode(
     @utf8.encode(
       Json::object({
@@ -324,8 +328,8 @@ fn native_acp_list_cursor(offset : Int, cwd : String, revision : Int) -> String 
 fn native_acp_parse_list_cursor(
   cursor : String,
   cwd : String,
-  revision : Int,
-) -> Result[Int, String] {
+  revision : Int32,
+) -> Result[Int32, String] {
   let bytes = match native_base64url_decode(cursor, limit=8192) {
     Ok(value) => value
     Err(_) => return Err("cursor is invalid")
@@ -423,7 +427,7 @@ async fn NativeAcpService::list_sessions(
     return Err(native_acp_invalid_params("cursor is invalid or stale"))
   }
   let sessions : Array[Json] = []
-  let end = Int::min(offset + NATIVE_ACP_SESSION_PAGE_SIZE, matches.length())
+  let end = Int32::min(offset + NATIVE_ACP_SESSION_PAGE_SIZE, matches.length())
   for index in offset..<end {
     let (record, summary) = matches[index]
     let info : Map[String, Json] = {

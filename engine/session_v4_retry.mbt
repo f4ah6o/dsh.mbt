@@ -3,8 +3,8 @@ fn replay_v4_retry_event(
   replay : V4Replay,
   kind : String,
   data : Json,
-  line_number : Int,
-) -> (Int, Int) raise EngineError {
+  line_number : Int32,
+) -> (Int32, Int32) raise EngineError {
   match kind {
     "llm/retry" => replay_v4_retry_schedule(replay, data, line_number)
     "llm/retry-started" => replay_v4_retry_started(replay, data)
@@ -16,8 +16,8 @@ fn replay_v4_retry_event(
 fn replay_v4_retry_schedule(
   replay : V4Replay,
   data : Json,
-  _line_number : Int,
-) -> (Int, Int) raise EngineError {
+  _line_number : Int32,
+) -> (Int32, Int32) raise EngineError {
   v4_only_fields(
     data,
     [
@@ -109,7 +109,7 @@ fn replay_v4_retry_schedule(
 fn replay_v4_retry_started(
   replay : V4Replay,
   data : Json,
-) -> (Int, Int) raise EngineError {
+) -> (Int32, Int32) raise EngineError {
   v4_only_fields(
     data,
     ["retryId", "turn", "step", "retry"],
@@ -142,8 +142,8 @@ fn replay_v4_retry_started(
 
 ///|
 fn v4_retry_chain_key(
-  turn : Int,
-  step : Int,
+  turn : Int32,
+  step : Int32,
   provider : String,
   policy_key : String,
 ) -> String {
@@ -151,7 +151,7 @@ fn v4_retry_chain_key(
 }
 
 ///|
-fn v4_retry_attempt_key(retry_id : String, retry : Int) -> String {
+fn v4_retry_attempt_key(retry_id : String, retry : Int32) -> String {
   "\{retry_id.length()}:\{retry_id}:\{retry}"
 }
 

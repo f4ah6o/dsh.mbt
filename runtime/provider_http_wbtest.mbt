@@ -1,7 +1,7 @@
 ///|
 async fn native_provider_serve_stalled_response(
   server : @http.Server,
-  delay_ms : Int,
+  delay_ms : Int32,
 ) -> Unit {
   try {
     let (connection, _) = server.accept()

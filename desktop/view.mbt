@@ -33,7 +33,7 @@ fn desktop_rect(
 }
 
 ///|
-fn desktop_color(red : Int, green : Int, blue : Int) -> @primitives.Color {
+fn desktop_color(red : Int32, green : Int32, blue : Int32) -> @primitives.Color {
   match @primitives.Color::rgba(red, green, blue, 255) {
     Ok(value) => value
     Err(_) => abort("desktop palette channels must be valid")
@@ -65,7 +65,7 @@ fn desktop_json_array(value : Json, name : String) -> Array[Json] {
 }
 
 ///|
-fn desktop_clipboard_supported_codepoint(value : Int) -> Bool {
+fn desktop_clipboard_supported_codepoint(value : Int32) -> Bool {
   (value >= 0x20 && value <= 0x7e) ||
   (value >= 0xa0 && value <= 0x024f) ||
   value == 0x09 ||
@@ -86,7 +86,7 @@ fn desktop_clipboard_supported_codepoint(value : Int) -> Bool {
 /// GPUI's current CoreText renderer deliberately reports unsupported and
 /// color glyphs as errors. Keep external/provider text renderable by replacing
 /// codepoints outside the bounded grayscale font set with a visible square.
-fn desktop_renderable_text(source : String, limit : Int) -> String {
+fn desktop_renderable_text(source : String, limit : Int32) -> String {
   let output = StringBuilder()
   let mut kept = 0
   let mut clipped = false
@@ -114,7 +114,7 @@ fn desktop_renderable_text(source : String, limit : Int) -> String {
 /// GPUI text scene items are single-line CoreText runs. Normalize externally
 /// supplied labels and messages at the final boundary so embedded line breaks
 /// cannot make present fail; transcript paragraphs are wrapped before this.
-fn desktop_renderable_single_line(source : String, limit : Int) -> String {
+fn desktop_renderable_single_line(source : String, limit : Int32) -> String {
   let output = StringBuilder()
   let mut kept = 0
   let mut clipped = false
@@ -153,7 +153,7 @@ fn desktop_add_quad(
   id : UInt64,
   bounds : @primitives.Rect,
   color : @primitives.Color,
-  clip_id : Int?,
+  clip_id : Int32?,
 ) -> Unit {
   match
     @scene.SceneItem::quad(
@@ -179,7 +179,7 @@ fn desktop_add_text(
   font_size : Double,
   text : String,
   color : @primitives.Color,
-  clip_id : Int?,
+  clip_id : Int32?,
 ) -> Unit {
   let text_width = if width > 2048.0 {
     2048.0
@@ -250,21 +250,21 @@ fn desktop_settings_button_rect(
 }
 
 ///|
-fn desktop_settings_visible_model_rows(height : Double) -> Int {
+fn desktop_settings_visible_model_rows(height : Double) -> Int32 {
   ((height - 432.0) / 44.0).to_int().max(1).min(9)
 }
 
 ///|
-fn desktop_settings_max_scroll(model_count : Int, height : Double) -> Int {
+fn desktop_settings_max_scroll(model_count : Int32, height : Double) -> Int32 {
   (model_count - desktop_settings_visible_model_rows(height)).max(0)
 }
 
 ///|
 fn desktop_settings_clamp_scroll(
-  settings_scroll : Int,
-  model_count : Int,
+  settings_scroll : Int32,
+  model_count : Int32,
   height : Double,
-) -> Int {
+) -> Int32 {
   settings_scroll.max(0).min(desktop_settings_max_scroll(model_count, height))
 }
 
@@ -281,7 +281,7 @@ fn desktop_auth_model_label(model : Json) -> String {
 
 ///|
 fn desktop_settings_model_rect(
-  visible_index : Int,
+  visible_index : Int32,
   width : Double,
   height : Double,
 ) -> @primitives.Rect {
@@ -295,11 +295,11 @@ fn desktop_settings_model_rect(
 ///|
 fn desktop_settings_model_focus_at(
   auth : Json,
-  settings_scroll : Int,
+  settings_scroll : Int32,
   width : Double,
   height : Double,
   position : @primitives.Point,
-) -> Int? {
+) -> Int32? {
   let model_count = desktop_auth_model_count(auth)
   let first = desktop_settings_clamp_scroll(
     settings_scroll, model_count, height,
@@ -374,7 +374,7 @@ fn desktop_add_focus_outline(
 }
 
 ///|
-fn desktop_session_row_rect(index : Int) -> @primitives.Rect {
+fn desktop_session_row_rect(index : Int32) -> @primitives.Rect {
   desktop_rect(12.0, 126.0 + index.to_double() * 50.0, 212.0, 42.0)
 }
 
@@ -602,11 +602,11 @@ fn desktop_scene(
   scale : Double,
   focused : Bool,
   scroll_up : Double,
-  settings_open? : Bool = false,
-  auth_busy? : Bool = false,
-  auth_error? : String = "",
-  settings_scroll? : Int = 0,
-  settings_focus? : Int = 0,
+  settings_open~ : Bool = false,
+  auth_busy~ : Bool = false,
+  auth_error~ : String = "",
+  settings_scroll~ : Int32 = 0,
+  settings_focus~ : Int32 = 0,
 ) -> @scene.SceneSnapshot {
   let viewport = desktop_rect(0.0, 0.0, width, height)
   let items : Array[@scene.SceneItem] = []
@@ -945,8 +945,8 @@ fn desktop_add_settings(
   height : Double,
   auth_busy : Bool,
   auth_error : String,
-  settings_scroll : Int,
-  settings_focus : Int,
+  settings_scroll : Int32,
+  settings_focus : Int32,
 ) -> Unit {
   // Settings replaces the conversation workspace while keeping the history
   // sidebar visible, matching the Electron shell's navigation hierarchy.
@@ -1361,7 +1361,7 @@ fn desktop_draft_string(characters : Array[Char]) -> String {
 }
 
 ///|
-fn desktop_draft_with_caret(characters : Array[Char], cursor : Int) -> String {
+fn desktop_draft_with_caret(characters : Array[Char], cursor : Int32) -> String {
   let output = StringBuilder()
   for index = 0; index < characters.length(); index = index + 1 {
     if index == cursor {

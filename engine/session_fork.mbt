@@ -3,7 +3,7 @@
 /// history so two sessions can retain the same tool/provider transcript without
 /// claiming ownership of the same durable effect.
 priv struct EffectIdRekey {
-  mut next_effect : Int
+  mut next_effect : Int32
   old_to_new : Map[String, String]
   pairs : Array[(String, String)]
 }

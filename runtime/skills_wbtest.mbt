@@ -3,7 +3,7 @@ fn native_skill_test_file(
   name : String,
   description : String,
   body : String,
-  extra? : String = "",
+  extra~ : String = "",
 ) -> String {
   "---\nname: " +
   name +

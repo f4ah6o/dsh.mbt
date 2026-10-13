@@ -35,9 +35,9 @@ fn completed_engine_with_tool_result(content : String) -> Engine {
 
 ///|
 fn pruning_input(
-  threshold_chars? : Int,
-  head_chars? : Int,
-  tail_chars? : Int,
+  threshold_chars? : Int32,
+  head_chars? : Int32,
+  tail_chars? : Int32,
 ) -> Json {
   let values = Map::from_array([("session_id", Json::string("test"))])
   match threshold_chars {

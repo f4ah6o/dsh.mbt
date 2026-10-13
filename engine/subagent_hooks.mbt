@@ -4,7 +4,7 @@ fn engine_hook_context_join(contexts : Array[String]) -> String {
 }
 
 ///|
-fn engine_subagent_hook_context_length(contexts : Array[String]) -> Int {
+fn engine_subagent_hook_context_length(contexts : Array[String]) -> Int32 {
   let mut total = 0
   for context in contexts {
     total += engine_hook_context_utf16_units(context)
@@ -15,7 +15,7 @@ fn engine_subagent_hook_context_length(contexts : Array[String]) -> Int {
 ///|
 fn engine_validate_hook_contexts(
   contexts : Array[String],
-) -> Int raise EngineError {
+) -> Int32 raise EngineError {
   if contexts.length() > 32 {
     raise Invalid("hook contexts exceed the 32-item limit")
   }
@@ -182,7 +182,7 @@ pub fn Engine::accept_subagent_prompt_hook(
   self : Engine,
   checkpoint : NativeSubagentPromptHookCheckpoint,
   contexts : Array[String],
-  source_kind? : String = "hooks-claude-code",
+  source_kind~ : String = "hooks-claude-code",
 ) -> Result[Json, String] {
   let candidate = self.copy_state()
   let changed = try {
@@ -373,7 +373,7 @@ pub fn Engine::block_subagent_prompt_hook(
       "UserPromptSubmit hook blocked the SubagentStart context"
     }
     let separator = ": "
-    let remaining = Int::max(
+    let remaining = Int32::max(
       0,
       8192 - engine_hook_context_utf16_units(prefix + separator),
     )
@@ -413,7 +413,7 @@ pub fn Engine::block_subagent_prompt_hook(
 }
 
 ///|
-fn native_engine_hook_prefix(value : String, maximum : Int) -> String {
+fn native_engine_hook_prefix(value : String, maximum : Int32) -> String {
   let output = StringBuilder()
   let mut units = 0
   for character in value {

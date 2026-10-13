@@ -212,11 +212,14 @@ extern "js" fn dom_resize_observer(
   #| (element, callback) => new ResizeObserver(callback).observe(element)
 
 ///|
-extern "js" fn dom_request_frame(callback : () -> Unit) -> Int =
+extern "js" fn dom_request_frame(callback : () -> Unit) -> Int32 =
   #| (callback) => requestAnimationFrame(callback)
 
 ///|
-extern "js" fn dom_interval(callback : () -> Unit, milliseconds : Int) -> Int =
+extern "js" fn dom_interval(
+  callback : () -> Unit,
+  milliseconds : Int32,
+) -> Int32 =
   #| (callback, milliseconds) => setInterval(callback, milliseconds)
 
 ///|

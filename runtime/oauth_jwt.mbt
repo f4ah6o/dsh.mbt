@@ -23,7 +23,7 @@ async fn native_verify_id_token_with(
   endpoints : AuthEndpoints,
   token : String,
   fetch_json : async (String, String, @http.Headers) -> Result[
-    (Int, Json),
+    (Int32, Json),
     String,
   ],
 ) -> Result[Json, String] {
@@ -164,7 +164,7 @@ fn native_jwt_json(segment : String) -> Result[Json, String] {
 }
 
 ///|
-fn native_jwks_find(response : (Int, Json), kid : String) -> Json? {
+fn native_jwks_find(response : (Int32, Json), kid : String) -> Json? {
   let (status, value) = response
   if status < 200 || status >= 300 {
     return None

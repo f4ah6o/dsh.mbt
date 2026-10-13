@@ -56,7 +56,7 @@ fn native_fixture_transport(
   endpoint : String,
   kind : String,
   headers : @http.Headers,
-) -> Result[(Int, Json), String] {
+) -> Result[(Int32, Json), String] {
   ignore(headers)
   token_calls.push(kind)
   if kind == "discovery" && endpoint == endpoints.discovery {
@@ -631,7 +631,7 @@ async test "native callback deadline covers accepted sockets with incomplete hea
 async fn native_auth_serve_json_once(
   server : @http.Server,
   body : String,
-  delay_ms : Int,
+  delay_ms : Int32,
 ) -> Unit {
   try {
     let (connection, _) = server.accept()

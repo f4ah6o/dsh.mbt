@@ -12,18 +12,18 @@ priv struct NativeHookOutcome {
 
 ///|
 priv struct NativeStopHookResult {
-  rank : Int
+  rank : Int32
   reason : String?
 }
 
 ///|
-const NATIVE_HOOK_CONTEXT_ITEM_LIMIT : Int = 4096
+const NATIVE_HOOK_CONTEXT_ITEM_LIMIT : Int32 = 4096
 
 ///|
-const NATIVE_HOOK_CONTEXT_COUNT_LIMIT : Int = 32
+const NATIVE_HOOK_CONTEXT_COUNT_LIMIT : Int32 = 32
 
 ///|
-const NATIVE_HOOK_CONTEXT_TOTAL_LENGTH_LIMIT : Int = 16384
+const NATIVE_HOOK_CONTEXT_TOTAL_LENGTH_LIMIT : Int32 = 16384
 
 ///|
 fn native_hook_add_context(
@@ -57,7 +57,7 @@ fn native_hook_add_context(
 fn native_hook_result_with_contexts(
   result : Json,
   contexts : Array[String],
-  source_kind? : String = "hooks-claude-code",
+  source_kind~ : String = "hooks-claude-code",
 ) -> Json {
   if contexts.is_empty() {
     return result
@@ -88,7 +88,7 @@ fn native_hook_limit_reason(value : String) -> String {
 }
 
 ///|
-fn native_hook_prefix_utf16(value : String, maximum : Int) -> String {
+fn native_hook_prefix_utf16(value : String, maximum : Int32) -> String {
   let output = StringBuilder()
   let mut units = 0
   for character in value {

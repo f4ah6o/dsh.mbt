@@ -1,9 +1,9 @@
 ///|
 fn test_snapshot(
-  revision : Int,
+  revision : Int32,
   epoch : String,
   identity_key : String,
-  auth_revision : Int,
+  auth_revision : Int32,
   sessions : String,
 ) -> @protocol.RemoteSnapshot {
   let raw = "{\"protocol_version\":1,\"server_id\":\"server-a\",\"identity_key\":\"" +

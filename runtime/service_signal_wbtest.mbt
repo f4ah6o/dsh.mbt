@@ -45,7 +45,7 @@ async fn native_service_signal_post_json(
   url : String,
   value : Json,
   origin : String,
-) -> Result[(Int, Json), String] {
+) -> Result[(Int32, Json), String] {
   try {
     let (response, body) = @http.post(url, value, headers={
       "Content-Type": "application/json",
@@ -65,7 +65,7 @@ async fn native_service_signal_prepare_pending(
   data_dir : String,
   workspace : String,
   command : String,
-) -> (String, String, String, Int) {
+) -> (String, String, String, Int32) {
   let runtime = match NativeRuntime::open(data_dir, workspace, true, true) {
     Ok(value) => value
     Err(error) => fail(error)
@@ -114,11 +114,11 @@ async fn native_service_signal_prepare_pending(
 
 ///|
 async fn native_service_signal_request_approval(
-  port : Int,
+  port : Int32,
   workspace_id : String,
   session_id : String,
   call_id : String,
-  approval_revision : Int,
+  approval_revision : Int32,
 ) -> (String, Json) {
   let command_id = native_command_id().unwrap()
   let origin = "http://127.0.0.1:" + port.to_string()
@@ -235,7 +235,7 @@ async test "native service handles SIGTERM and SIGINT with durable worker cleanu
       )
       assert_eq(string_field(accepted, "status"), Some("accepted"))
       let marker = workspace + "/shutdown-child.pid"
-      let mut child_pid : Int? = None
+      let mut child_pid : Int32? = None
       for _ in 0..<200 {
         if @fs.exists(marker) {
           let text = @fs.read_file(marker).text()

@@ -1,18 +1,18 @@
 ///|
-const NATIVE_HOOK_STDIN_LIMIT : Int = 65536
+const NATIVE_HOOK_STDIN_LIMIT : Int32 = 65536
 
 ///|
-const NATIVE_HOOK_OUTPUT_LIMIT : Int = 16384
+const NATIVE_HOOK_OUTPUT_LIMIT : Int32 = 16384
 
 ///|
-const NATIVE_HOOK_DEFAULT_TIMEOUT_MS : Int = 10000
+const NATIVE_HOOK_DEFAULT_TIMEOUT_MS : Int32 = 10000
 
 ///|
-const NATIVE_HOOK_MAX_TIMEOUT_MS : Int = 120000
+const NATIVE_HOOK_MAX_TIMEOUT_MS : Int32 = 120000
 
 ///|
 priv struct NativeHookCapture {
-  exit_code : Int
+  exit_code : Int32
   stdout : String
   stderr : String
   truncated : Bool
@@ -20,7 +20,7 @@ priv struct NativeHookCapture {
 
 ///|
 priv struct NativeHookChildOutput {
-  code : Int
+  code : Int32
   stdout : String
   stderr : String
   truncated : Bool
@@ -49,7 +49,7 @@ async fn native_run_hook_command(
   tools : NativeTools,
   hook : NativeHookCommand,
   stdin_text : String,
-  dialect? : String = "claude-code",
+  dialect~ : String = "claude-code",
 ) -> Result[NativeHookCapture, String] {
   let stdin_bytes = @utf8.encode(stdin_text)
   if stdin_bytes.length() > NATIVE_HOOK_STDIN_LIMIT {
@@ -63,7 +63,7 @@ async fn native_run_hook_command(
   if dialect == "claude-code" {
     worker_env["CLAUDE_PROJECT_DIR"] = tools.workspace
   }
-  let mut worker_pid : Int? = None
+  let mut worker_pid : Int32? = None
   let leader_reaped = Ref(false)
   let output_overflowed = Ref(false)
   let outcome = @async.handle_cancellation(async fn() {
@@ -75,7 +75,7 @@ async fn native_run_hook_command(
           let (stderr_reader, stderr_writer) = @process.read_from_process()
           defer stdout_reader.close()
           defer stderr_reader.close()
-          let cpu_limit_seconds = Int::max(1, (hook.timeout_ms + 999) / 1000)
+          let cpu_limit_seconds = Int32::max(1, (hook.timeout_ms + 999) / 1000)
           let worker_arguments = [
             "--internal-worker",
             "512",

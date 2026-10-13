@@ -2,17 +2,17 @@
 const NATIVE_ACP_MODEL_CONFIG_ID : String = "model"
 
 ///|
-const NATIVE_ACP_MODEL_ENV_BYTE_LIMIT : Int = 16384
+const NATIVE_ACP_MODEL_ENV_BYTE_LIMIT : Int32 = 16384
 
 ///|
-const NATIVE_ACP_MODEL_LIMIT : Int = 32
+const NATIVE_ACP_MODEL_LIMIT : Int32 = 32
 
 ///|
-const NATIVE_ACP_MODEL_NAME_LIMIT : Int = 256
+const NATIVE_ACP_MODEL_NAME_LIMIT : Int32 = 256
 
 ///|
 // JSON may escape every model-name character as a six-character \uXXXX form.
-const NATIVE_ACP_MODEL_SELECTOR_VALUE_LIMIT : Int = NATIVE_ACP_MODEL_NAME_LIMIT *
+const NATIVE_ACP_MODEL_SELECTOR_VALUE_LIMIT : Int32 = NATIVE_ACP_MODEL_NAME_LIMIT *
   6 +
   128
 

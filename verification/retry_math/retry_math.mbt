@@ -4,10 +4,10 @@
 /// Calculate the deterministic exponential delay for a retry, bounded by the
 /// configured ceiling. The engine validates this function's preconditions.
 pub fn capped_exponential_delay(
-  base_ms : Int,
-  retry_number : Int,
-  cap_ms : Int,
-) -> Int where {
+  base_ms : Int32,
+  retry_number : Int32,
+  cap_ms : Int32,
+) -> Int32 where {
   proof_require: 0 <= base_ms,
   proof_require: base_ms <= cap_ms,
   proof_require: 1 <= retry_number,

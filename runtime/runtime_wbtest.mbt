@@ -39,7 +39,7 @@ fn native_runtime_approval_command(
   session_id : String,
   command_id : String,
   call_id : String,
-  approval_revision : Int,
+  approval_revision : Int32,
 ) -> @protocol.RemoteCommand raise {
   let command : Json = {
     "protocol_version": @protocol.PROTOCOL_VERSION.to_json(),

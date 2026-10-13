@@ -7,26 +7,26 @@
 const PRUNE_MARKER : String = "\n\n[... tool result middle pruned ...]\n\n"
 
 ///|
-const DEFAULT_PRUNE_THRESHOLD : Int = 8192
+const DEFAULT_PRUNE_THRESHOLD : Int32 = 8192
 
 ///|
-const DEFAULT_PRUNE_HEAD : Int = 4096
+const DEFAULT_PRUNE_HEAD : Int32 = 4096
 
 ///|
-const DEFAULT_PRUNE_TAIL : Int = 1024
+const DEFAULT_PRUNE_TAIL : Int32 = 1024
 
 ///|
 pub struct ToolResultPruneConfig {
-  threshold_chars : Int
-  head_chars : Int
-  tail_chars : Int
+  threshold_chars : Int32
+  head_chars : Int32
+  tail_chars : Int32
 }
 
 ///|
 pub fn ToolResultPruneConfig::new(
-  threshold_chars : Int,
-  head_chars : Int,
-  tail_chars : Int,
+  threshold_chars : Int32,
+  head_chars : Int32,
+  tail_chars : Int32,
 ) -> Result[ToolResultPruneConfig, String] {
   Ok(checked_prune_config(threshold_chars, head_chars, tail_chars)) catch {
     Invalid(message) => Err(message)
@@ -34,7 +34,7 @@ pub fn ToolResultPruneConfig::new(
 }
 
 ///|
-fn code_point_length(text : String) -> Int {
+fn code_point_length(text : String) -> Int32 {
   text[:].char_length()
 }
 
@@ -52,9 +52,9 @@ fn reject_unknown_fields(
 
 ///|
 fn checked_prune_config(
-  threshold_chars : Int,
-  head_chars : Int,
-  tail_chars : Int,
+  threshold_chars : Int32,
+  head_chars : Int32,
+  tail_chars : Int32,
 ) -> ToolResultPruneConfig raise EngineError {
   if threshold_chars <= 0 || threshold_chars > SESSION_CAPACITY {
     raise Invalid(
@@ -151,9 +151,9 @@ fn prune_text(text : String, config : ToolResultPruneConfig) -> String? {
 /// tool/result. Original events are never mutated or removed.
 fn Session::tool_result_pruning_state(
   self : Session,
-) -> (Map[Int, String], Map[Int, Int]) {
-  let content_by_result : Map[Int, String] = Map([])
-  let latest_seq_by_result : Map[Int, Int] = Map([])
+) -> (Map[Int32, String], Map[Int32, Int32]) {
+  let content_by_result : Map[Int32, String] = Map([])
+  let latest_seq_by_result : Map[Int32, Int32] = Map([])
   for event in self.events {
     if event.kind == EngineEventKind::ToolResult {
       match event.data {
@@ -191,7 +191,7 @@ fn Session::tool_result_pruning_state(
 ///|
 fn projected_tool_result(
   event : Event,
-  content_by_result : Map[Int, String],
+  content_by_result : Map[Int32, String],
 ) -> Json {
   match content_by_result.get(event.seq) {
     None => detached(event.data)

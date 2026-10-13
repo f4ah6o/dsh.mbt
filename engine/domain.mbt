@@ -97,7 +97,7 @@ fn validate_domain_id(value : String, name : String) -> Result[String, String] {
 ///|
 /// Semantic engine operations accepted by the legacy JSON operation adapter.
 pub(all) enum EngineCommand {
-  CreateSession(String?, String, String, Int?)
+  CreateSession(String?, String, String, Int32?)
   ForkSession(SessionId, String?, String?)
   ListSessions
   ImportSession(String)
@@ -426,15 +426,15 @@ pub fn EngineEventKind::wire(self : EngineEventKind) -> String {
 
 ///|
 pub struct EngineEvent {
-  priv seq : Int
+  priv seq : Int32
   priv kind : EngineEventKind
-  priv turn_id : Int
-  priv step : Int
+  priv turn_id : Int32
+  priv step : Int32
   priv data : Json
 }
 
 ///|
-pub fn EngineEvent::sequence(self : EngineEvent) -> Int {
+pub fn EngineEvent::sequence(self : EngineEvent) -> Int32 {
   self.seq
 }
 
@@ -444,12 +444,12 @@ pub fn EngineEvent::kind(self : EngineEvent) -> EngineEventKind {
 }
 
 ///|
-pub fn EngineEvent::turn(self : EngineEvent) -> Int {
+pub fn EngineEvent::turn(self : EngineEvent) -> Int32 {
   self.turn_id
 }
 
 ///|
-pub fn EngineEvent::step(self : EngineEvent) -> Int {
+pub fn EngineEvent::step(self : EngineEvent) -> Int32 {
   self.step
 }
 

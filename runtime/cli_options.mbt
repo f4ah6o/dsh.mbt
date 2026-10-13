@@ -463,7 +463,7 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
 }
 
 ///|
-fn native_cli_retry_limit(args : Array[String]) -> Result[Int, String] {
+fn native_cli_retry_limit(args : Array[String]) -> Result[Int32, String] {
   match native_option(args, "--max-retries") {
     None => Ok(5)
     Some(value) =>
@@ -615,7 +615,7 @@ async fn native_cli_prune_action(
 }
 
 ///|
-fn native_cli_approval_revision_number(session : Json) -> Int? {
+fn native_cli_approval_revision_number(session : Json) -> Int32? {
   match native_cli_approval_revision(session) {
     Json::Number(value, ..) if value >= 0.0 => Some(value.to_int())
     _ => None

@@ -390,10 +390,10 @@ fn create_api(
 
 ///|
 pub fn HarnessApi::new(
-  external_mcp_tools? : Array[Json] = [],
-  skill_tool? : Json? = None,
-  lsp_tool? : Json? = None,
-  subagent_tool? : Json? = None,
+  external_mcp_tools~ : Array[Json] = [],
+  skill_tool~ : Json? = None,
+  lsp_tool~ : Json? = None,
+  subagent_tool~ : Json? = None,
 ) -> Result[HarnessApi, String] {
   Ok(create_api(external_mcp_tools, skill_tool, lsp_tool, subagent_tool)) catch {
     InitError(error) => Err(error)
@@ -406,7 +406,7 @@ pub fn HarnessApi::invoke(
   self : HarnessApi,
   operation : String,
   input : Json,
-  origin? : @capability.InvocationOrigin = @capability.Direct,
+  origin~ : @capability.InvocationOrigin = @capability.Direct,
 ) -> Result[Json, String] {
   let capability = match self.operations.get(operation) {
     None => return Err("Unknown operation: " + operation)
@@ -481,7 +481,7 @@ pub fn HarnessApi::invoke_session_send_with_hook_contexts(
   input : Json,
   session_start_contexts : Array[String],
   prompt_contexts : Array[String],
-  source_kind? : String = "hooks-claude-code",
+  source_kind~ : String = "hooks-claude-code",
 ) -> Result[Json, String] {
   let previous = self.native_prompt_contexts.val
   let previous_session_start = self.native_session_start_contexts.val
@@ -538,7 +538,7 @@ pub fn HarnessApi::mcp_handle_with_hook_contexts(
   line : String,
   session_start_contexts : Array[String],
   prompt_contexts : Array[String],
-  source_kind? : String = "hooks-claude-code",
+  source_kind~ : String = "hooks-claude-code",
 ) -> String? {
   let previous = self.native_prompt_contexts.val
   let previous_session_start = self.native_session_start_contexts.val
@@ -857,7 +857,7 @@ pub fn HarnessApi::record_native_hook_invoked(
   point : String,
   handler_id : String,
   matcher : String?,
-  dialect? : String = "claude-code",
+  dialect~ : String = "claude-code",
 ) -> Result[@engine.NativeHookInvocationCheckpoint, String] {
   if !self.registry.is_alive() {
     return Err("application is closed")
@@ -877,9 +877,9 @@ pub fn HarnessApi::record_native_hook_result(
   self : HarnessApi,
   checkpoint : @engine.NativeHookInvocationCheckpoint,
   decision : String,
-  exit_code : Int?,
+  exit_code : Int32?,
   stderr_summary : String?,
-  duration_ms : Int,
+  duration_ms : Int32,
 ) -> Result[Json, String] {
   if !self.registry.is_alive() {
     return Err("application is closed")

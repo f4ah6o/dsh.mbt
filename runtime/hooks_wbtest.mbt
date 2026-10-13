@@ -1652,8 +1652,8 @@ async test "PostToolUse contexts reach a real follow-up request and survive rece
         ["hook one", "hook two"],
       )
     }
-    let last_tool_result_index : Ref[Int] = Ref(-1)
-    let first_context_index : Ref[Int] = Ref(-1)
+    let last_tool_result_index : Ref[Int32] = Ref(-1)
+    let first_context_index : Ref[Int32] = Ref(-1)
     for index, message in provider_messages {
       if string_field(message, "role") == Some("tool") {
         last_tool_result_index.val = index

@@ -1,6 +1,6 @@
 ///|
 priv struct NativeFixtureHttpResponse {
-  code : Int
+  code : Int32
   reason : String
   body : String
   retry_after : String?
@@ -12,7 +12,7 @@ priv suberror NativeFixtureProviderFailure {
 }
 
 ///|
-const NATIVE_FIXTURE_MAX_EMPTY_PROVIDER_CONNECTIONS : Int = 32
+const NATIVE_FIXTURE_MAX_EMPTY_PROVIDER_CONNECTIONS : Int32 = 32
 
 ///|
 let native_fixture_provider_env_gate : @async.Mutex = @async.Mutex::Mutex()
@@ -117,7 +117,7 @@ async fn native_fixture_handle_provider_request(
   auth_ok : Ref[Bool],
   response : NativeFixtureHttpResponse,
   release : @async.Semaphore?,
-  ignored_connections : Ref[Int]?,
+  ignored_connections : Ref[Int32]?,
   ignored_connection_errors : Ref[Array[String]]?,
   response_errors : Ref[Array[String]]?,
 ) -> Bool {
@@ -193,9 +193,9 @@ async fn native_fixture_provider_server(
   bodies : Ref[Array[String]],
   auth_ok : Ref[Bool],
   first_release : @async.Semaphore?,
-  ignored_connections? : Ref[Int]? = None,
-  ignored_connection_errors? : Ref[Array[String]]? = None,
-  response_errors? : Ref[Array[String]]? = None,
+  ignored_connections~ : Ref[Int32]? = None,
+  ignored_connection_errors~ : Ref[Array[String]]? = None,
+  response_errors~ : Ref[Array[String]]? = None,
 ) -> Unit {
   let mut index = 0
   let mut ignored = 0
@@ -233,7 +233,7 @@ async fn native_fixture_mcp_provider_request(
   bodies : Ref[Array[String]],
   auth_ok : Ref[Bool],
   release : @async.Semaphore,
-  ignored_connections : Ref[Int]?,
+  ignored_connections : Ref[Int32]?,
   ignored_connection_errors : Ref[Array[String]]?,
   response_errors : Ref[Array[String]]?,
 ) -> Bool? {
@@ -306,7 +306,7 @@ async fn native_fixture_mcp_provider_server(
   bodies : Ref[Array[String]],
   auth_ok : Ref[Bool],
   release : @async.Semaphore,
-  response_errors? : Ref[Array[String]]? = None,
+  response_errors~ : Ref[Array[String]]? = None,
 ) -> Unit {
   let ignored_connections = Ref(0)
   let ignored_connection_errors = Ref([])

@@ -21,7 +21,7 @@ priv struct PendingCommand {
 priv struct ClientState {
   mut scope : @protocol.ClientScope?
   mut epoch : String
-  mut revision : Int
+  mut revision : Int32
   mut cursor : String
   mut projection : Json?
   mut selected_session_projection : Json?
@@ -203,7 +203,7 @@ fn ClientState::queue_command(
   operation : String,
   session_id : String?,
   input : Json,
-  approval_revision : Int?,
+  approval_revision : Int32?,
 ) -> Result[@protocol.RemoteCommand, String] {
   match self.connection {
     Synced => ()
@@ -406,7 +406,7 @@ fn ClientState::approval_revision_for(
   self : ClientState,
   session_id : String,
   call_id : String,
-) -> Int? {
+) -> Int32? {
   let sessions = match self.projection {
     Some(Json::Object(fields)) =>
       match fields.get("sessions") {

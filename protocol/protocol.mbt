@@ -1,7 +1,7 @@
 ///|
 /// Version 1 of the remote client protocol. Bump this when an incompatible
 /// field or state transition is introduced; do not rely on enum serialization.
-pub const PROTOCOL_VERSION : Int = 1
+pub const PROTOCOL_VERSION : Int32 = 1
 
 ///|
 /// Opaque authorization scope returned by the server. `identity_key` is a
@@ -11,7 +11,7 @@ pub struct ClientScope {
   server_id : String
   identity_key : String
   workspace_id : String
-  auth_revision : Int
+  auth_revision : Int32
 }
 
 ///|
@@ -42,10 +42,10 @@ pub struct AuthProjection {
 /// Workspace projection is presentation data only. Server authorization is
 /// still checked for every command, receipt lookup, snapshot, and event stream.
 pub struct RemoteSnapshot {
-  protocol_version : Int
+  protocol_version : Int32
   scope : ClientScope
   epoch : String
-  revision : Int
+  revision : Int32
   cursor : String
   auth : AuthProjection
   projection : Json
@@ -53,12 +53,12 @@ pub struct RemoteSnapshot {
 
 ///|
 pub struct ProjectionEvent {
-  protocol_version : Int
+  protocol_version : Int32
   identity_key : String
-  auth_revision : Int
+  auth_revision : Int32
   workspace_id : String
   epoch : String
-  revision : Int
+  revision : Int32
   cursor : String
   kind : String
   projection : Json?
@@ -66,24 +66,24 @@ pub struct ProjectionEvent {
 
 ///|
 pub struct RemoteSessionProjection {
-  protocol_version : Int
+  protocol_version : Int32
   identity_key : String
-  auth_revision : Int
+  auth_revision : Int32
   workspace_id : String
   epoch : String
-  revision : Int
+  revision : Int32
   cursor : String
   session : Json
 }
 
 ///|
 pub struct CommandReceipt {
-  protocol_version : Int
+  protocol_version : Int32
   workspace_id : String
   command_id : String
   payload_fingerprint : String
   status : String
-  accepted_revision : Int?
+  accepted_revision : Int32?
   result : Json?
   error : String?
 }

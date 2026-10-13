@@ -65,9 +65,9 @@ extern "js" fn canvas_set_alpha(context : BrowserValue, alpha : Double) -> Unit 
 ///|
 extern "js" fn canvas_set_color(
   context : BrowserValue,
-  red : Int,
-  green : Int,
-  blue : Int,
+  red : Int32,
+  green : Int32,
+  blue : Int32,
   alpha : Double,
 ) -> Unit =
   #| (context, red, green, blue, alpha) => { context.fillStyle = `rgba(${red}, ${green}, ${blue}, ${alpha})` }
@@ -130,10 +130,10 @@ priv struct SceneRect {
 
 ///|
 priv struct SceneColor {
-  red : Int
-  green : Int
-  blue : Int
-  alpha : Int
+  red : Int32
+  green : Int32
+  blue : Int32
+  alpha : Int32
 }
 
 ///|
@@ -153,7 +153,7 @@ priv struct SceneItem {
   color : SceneColor
   transform : SceneTransform
   opacity : Double
-  clip_chain_id : Int?
+  clip_chain_id : Int32?
   text : String
   font_size : Double
 }
@@ -161,7 +161,7 @@ priv struct SceneItem {
 ///|
 priv struct ValidatedScene {
   viewport : SceneRect
-  clip_chains : Map[Int, Array[SceneRect]]
+  clip_chains : Map[Int32, Array[SceneRect]]
   items : Array[SceneItem]
 }
 
@@ -192,7 +192,7 @@ fn scene_string(value : Json, key : String) -> String? {
 ///|
 fn scene_error(
   message : String,
-  code? : String = "conversion_failed",
+  code~ : String = "conversion_failed",
 ) -> CanvasSceneError {
   { message, code, }
 }
@@ -329,7 +329,7 @@ fn parse_transform(value : Json) -> Result[SceneTransform, CanvasSceneError] {
 ///|
 fn parse_scene_item(
   value : Json,
-  clip_chains : Map[Int, Array[SceneRect]],
+  clip_chains : Map[Int32, Array[SceneRect]],
 ) -> Result[SceneItem, CanvasSceneError] {
   let kind = match scene_string(value, "kind") {
     Some(text) => text
@@ -486,7 +486,7 @@ fn parse_validated_scene(
   if !finite(scene_scale) || scene_scale <= 0.0 {
     return Err(scene_error("Scene scale must be finite and positive."))
   }
-  let clip_chains : Map[Int, Array[SceneRect]] = Map([])
+  let clip_chains : Map[Int32, Array[SceneRect]] = Map([])
   for chain in raw_chains {
     let id = match scene_number(chain, "id") {
       Some(value) if integer(value) &&

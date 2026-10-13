@@ -50,16 +50,16 @@ let active_key : String = "/__dsh_shell_active__"
 let pending_key : String = "/__dsh_shell_pending__"
 
 ///|
-let max_shell_asset_bytes : Int = 4 * 1024 * 1024
+let max_shell_asset_bytes : Int32 = 4 * 1024 * 1024
 
 ///|
-let max_shell_bundle_bytes : Int = 8 * 1024 * 1024
+let max_shell_bundle_bytes : Int32 = 8 * 1024 * 1024
 
 ///|
 let text_content_type : String = "text/plain; charset=utf-8"
 
 ///|
-let shell_fetch_timeout_ms : Int = 10_000
+let shell_fetch_timeout_ms : Int32 = 10_000
 
 ///|
 let legacy_cache_names : ReadOnlyArray[String] = [
@@ -82,7 +82,7 @@ let shell_content_types : ReadOnlyArray[String] = [
 let refresh_in_flight : Ref[@js_async.Promise[String?]?] = Ref(None)
 
 ///|
-let generation_counter : Ref[Int] = Ref(0)
+let generation_counter : Ref[Int32] = Ref(0)
 
 ///|
 extern "js" fn sw_available() -> Bool =
@@ -243,7 +243,7 @@ extern "js" fn sw_text_response(
 
 ///|
 extern "js" fn sw_text_response_with_status(
-  status : Int,
+  status : Int32,
   body : String,
   content_type : String,
 ) -> SwResponse =
@@ -289,7 +289,7 @@ extern "js" fn sw_chunk_is_done(chunk : SwChunk) -> Bool =
   #| (chunk) => !!chunk.done
 
 ///|
-extern "js" fn sw_chunk_byte_length(chunk : SwChunk) -> Int =
+extern "js" fn sw_chunk_byte_length(chunk : SwChunk) -> Int32 =
   #| (chunk) => chunk.value ? chunk.value.byteLength : 0
 
 ///|
@@ -314,7 +314,7 @@ extern "js" fn sw_fetch(
 ///|
 extern "js" fn sw_with_timeout(
   promise : @js_async.Promise[Bool],
-  timeout_ms : Int,
+  timeout_ms : Int32,
   error_message : String,
   on_timeout : () -> Unit,
 ) -> @js_async.Promise[Bool] =
@@ -368,7 +368,7 @@ fn is_generation_name(name : String) -> Bool {
 }
 
 ///|
-fn parse_nonnegative_length(value : String) -> Int? {
+fn parse_nonnegative_length(value : String) -> Int32? {
   if value == "" {
     return None
   }
@@ -433,7 +433,7 @@ fn is_cacheable_shell_response(
 ///|
 async fn consume_bounded_body(
   response : SwResponse,
-  bundle_bytes : Ref[Int],
+  bundle_bytes : Ref[Int32],
 ) -> Bool {
   let declared = sw_response_header(response, "content-length")
   if declared != "" {
@@ -492,7 +492,7 @@ async fn fetch_and_cache_shell_asset(
   asset : String,
   cache : SwCache,
   generation : String,
-  bundle_bytes : Ref[Int],
+  bundle_bytes : Ref[Int32],
 ) -> Bool {
   let origin = sw_location_origin()
   let expected_url = origin + asset

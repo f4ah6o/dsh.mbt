@@ -1,11 +1,11 @@
 ///|
 fn retry_policy(
-  code? : String = "SERVER",
-  max_retries? : Int = 2,
-  initial_delay_ms? : Int = 5,
-  max_delay_ms? : Int = 50,
-  retry_after_ms? : Int? = None,
-  request_id? : String? = None,
+  code~ : String = "SERVER",
+  max_retries~ : Int32 = 2,
+  initial_delay_ms~ : Int32 = 5,
+  max_delay_ms~ : Int32 = 50,
+  retry_after_ms~ : Int32? = None,
+  request_id~ : String? = None,
 ) -> Json {
   let failure = Map::from_array([
     ("code", Json::string(code)),

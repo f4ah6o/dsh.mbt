@@ -18,7 +18,7 @@ fn native_codex_test_counted_capture(
   workspace : String,
   stem : String,
   reply : String,
-  extra? : String = "",
+  extra~ : String = "",
 ) -> String {
   let count_path = native_hook_shell_quote(workspace + "/" + stem + "-count")
   let prefix = native_hook_shell_quote(workspace + "/" + stem + "-")
@@ -40,7 +40,7 @@ fn native_codex_test_counted_capture(
 fn native_codex_test_config(
   user_prompt_command : String,
   stop_command : String,
-  post_tool_command? : String? = None,
+  post_tool_command~ : String? = None,
 ) -> Json {
   let events : Map[String, Json] = Map::from_array([
     (
@@ -65,7 +65,7 @@ fn native_codex_test_config(
 ///|
 fn native_codex_test_assert_context_source(
   messages : Array[Json],
-  expected_count : Int,
+  expected_count : Int32,
 ) -> Unit raise {
   let contexts = messages.filter(message => {
     object_field(message, "source") is Some(_)

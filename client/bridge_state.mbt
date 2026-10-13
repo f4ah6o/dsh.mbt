@@ -2,13 +2,13 @@
 /// A handle table lets a native host own several windows/client lifetimes and
 /// makes callbacks after disposal a checked error. Handles are monotonic and
 /// are never reused within a process.
-let client_handles : Map[Int, ClientState] = Map([])
+let client_handles : Map[Int32, ClientState] = Map([])
 
 ///|
-let next_client_handle : Ref[Int] = Ref(1)
+let next_client_handle : Ref[Int32] = Ref(1)
 
 ///|
-fn get_client(handle : Int) -> ClientState? {
+fn get_client(handle : Int32) -> ClientState? {
   client_handles.get(handle)
 }
 
@@ -116,7 +116,7 @@ fn client_result(
 ///|
 /// Create an independent client lifetime and return its opaque integer handle.
 #export_name("client_init")
-pub fn client_init() -> Int {
+pub fn client_init() -> Int32 {
   if next_client_handle.val >= 2147483647 {
     return -1
   }
@@ -143,7 +143,7 @@ pub fn client_new_command_id(now_ms : String, entropy_hex : String) -> String {
 
 ///|
 #export_name("client_dispose")
-pub fn client_dispose(handle : Int) -> Bool {
+pub fn client_dispose(handle : Int32) -> Bool {
   match get_client(handle) {
     Some(_) => {
       client_handles.remove(handle)
@@ -155,7 +155,7 @@ pub fn client_dispose(handle : Int) -> Bool {
 
 ///|
 #export_name("client_state")
-pub fn client_state(handle : Int) -> String {
+pub fn client_state(handle : Int32) -> String {
   match get_client(handle) {
     Some(state) => client_state_json(state).stringify()
     None =>
@@ -165,7 +165,7 @@ pub fn client_state(handle : Int) -> String {
 
 ///|
 #export_name("client_begin_connect")
-pub fn client_begin_connect(handle : Int) -> String {
+pub fn client_begin_connect(handle : Int32) -> String {
   match get_client(handle) {
     Some(state) => {
       state.begin_connect()
@@ -178,7 +178,7 @@ pub fn client_begin_connect(handle : Int) -> String {
 
 ///|
 #export_name("client_connection_failed")
-pub fn client_connection_failed(handle : Int) -> String {
+pub fn client_connection_failed(handle : Int32) -> String {
   match get_client(handle) {
     Some(state) => {
       state.connection_failed()
@@ -191,7 +191,7 @@ pub fn client_connection_failed(handle : Int) -> String {
 
 ///|
 #export_name("client_connection_restored")
-pub fn client_connection_restored(handle : Int) -> String {
+pub fn client_connection_restored(handle : Int32) -> String {
   match get_client(handle) {
     Some(state) => {
       state.connection_restored()
@@ -204,7 +204,7 @@ pub fn client_connection_restored(handle : Int) -> String {
 
 ///|
 #export_name("client_accept_snapshot")
-pub fn client_accept_snapshot(handle : Int, raw : String) -> String {
+pub fn client_accept_snapshot(handle : Int32, raw : String) -> String {
   match get_client(handle) {
     None =>
       client_result(None, false, "disposed", Some("client handle is disposed"))
@@ -227,7 +227,7 @@ pub fn client_accept_snapshot(handle : Int, raw : String) -> String {
 
 ///|
 #export_name("client_accept_session")
-pub fn client_accept_session(handle : Int, raw : String) -> String {
+pub fn client_accept_session(handle : Int32, raw : String) -> String {
   match get_client(handle) {
     None =>
       client_result(None, false, "disposed", Some("client handle is disposed"))
@@ -255,7 +255,7 @@ pub fn client_accept_session(handle : Int, raw : String) -> String {
 ///|
 #export_name("client_accept_event")
 pub fn client_accept_event(
-  handle : Int,
+  handle : Int32,
   raw : String,
   event_id : String,
 ) -> String {

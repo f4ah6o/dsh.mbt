@@ -64,7 +64,7 @@ async fn desktop_command(
   operation : String,
   session_id : String?,
   input : Json,
-  approval_revision : Int?,
+  approval_revision : Int32?,
 ) -> Result[Json, String] {
   let receipt = match
     state.runtime.command(

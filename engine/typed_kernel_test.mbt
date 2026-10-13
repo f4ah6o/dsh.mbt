@@ -293,8 +293,8 @@ test "event kind compatibility preserves imported and future wire tags" {
 ///|
 test "QuickCheck verifies repeated typed send and settlement operation sequences" {
   @quickcheck.check(
-    (sample : Int) => {
-      let turns = Int::abs(sample % 8) + 1
+    (sample : Int32) => {
+      let turns = Int32::abs(sample % 8) + 1
       let engine = @engine.Engine::new([])
       if engine.apply(
           typed_test_command("session_create", { "id": "quickcheck" }),

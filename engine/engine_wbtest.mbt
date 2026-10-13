@@ -29,7 +29,7 @@ fn test_tools() -> Array[Json] {
 }
 
 ///|
-fn started_engine(max_steps? : Int = 16) -> (Engine, Json) {
+fn started_engine(max_steps~ : Int32 = 16) -> (Engine, Json) {
   let engine = Engine::new(test_tools())
   ignore(
     success(

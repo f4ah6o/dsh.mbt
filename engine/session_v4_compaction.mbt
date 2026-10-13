@@ -1,5 +1,5 @@
 ///|
-fn v4_compaction_turn(data : Json) -> Int? raise EngineError {
+fn v4_compaction_turn(data : Json) -> Int32? raise EngineError {
   match required_field(data, "turn") {
     Json::Null => None
     value => Some(int_value(value, "compaction turn", 1, 1000000))
@@ -9,7 +9,7 @@ fn v4_compaction_turn(data : Json) -> Int? raise EngineError {
 ///|
 fn validate_v4_compaction_owner_turn(
   replay : V4Replay,
-  turn : Int?,
+  turn : Int32?,
   label : String,
 ) -> Unit raise EngineError {
   match turn {
@@ -30,9 +30,9 @@ fn validate_v4_compaction_owner_turn(
 fn validate_v4_compaction_span(
   replay : V4Replay,
   data : Json,
-  source_seq : Int,
+  source_seq : Int32,
   label : String,
-) -> Array[Int] raise EngineError {
+) -> Array[Int32] raise EngineError {
   let range = required_field(data, "shadowedRange")
   for key, _ in fields(range) {
     if key != "start" && key != "end" {
@@ -69,7 +69,7 @@ fn validate_v4_compaction_span(
       "Session v4 \{label} shadowedSeqs do not name an exact current surface span",
     )
   }
-  let expected : Array[Int] = []
+  let expected : Array[Int32] = []
   for index in first..<=last {
     let seq = replay.surface[index]
     if int_value(
@@ -140,8 +140,8 @@ fn replay_v4_compaction(
   _record : Json,
   kind : String,
   data : Json,
-  source_seq : Int,
-  line_number : Int,
+  source_seq : Int32,
+  line_number : Int32,
 ) -> Unit raise EngineError {
   validate_v4_compaction_fields(data, kind)
   if kind == "compaction/prune" {

@@ -2,7 +2,7 @@
 async fn desktop_wait_status(
   state : DesktopState,
   status : String,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Result[Unit, String] {
   let deadline = @async.now() + timeout_ms.to_int64()
   while @async.now() < deadline {

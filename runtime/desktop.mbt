@@ -12,20 +12,20 @@ pub struct NativeDesktop {
 pub async fn NativeDesktop::open(
   data_dir : String,
   workspace : String,
-  demo? : Bool = false,
-  allow_shell? : Bool = false,
-  mode? : String = "",
-  model? : String = "",
-  base_url? : String = "",
-  max_retries? : Int = 5,
-  mcp_config_path? : String? = None,
-  hooks_config_path? : String? = None,
-  lsp_config_path? : String? = None,
-  enable_skills? : Bool = false,
-  skill_dirs? : Array[String] = [],
-  enable_subagents? : Bool = false,
-  hooks_dialect? : String = "claude-code",
-  hooks_model? : String = "",
+  demo~ : Bool = false,
+  allow_shell~ : Bool = false,
+  mode~ : String = "",
+  model~ : String = "",
+  base_url~ : String = "",
+  max_retries~ : Int32 = 5,
+  mcp_config_path~ : String? = None,
+  hooks_config_path~ : String? = None,
+  lsp_config_path~ : String? = None,
+  enable_skills~ : Bool = false,
+  skill_dirs~ : Array[String] = [],
+  enable_subagents~ : Bool = false,
+  hooks_dialect~ : String = "claude-code",
+  hooks_model~ : String = "",
 ) -> Result[NativeDesktop, String] {
   // A packaged Dsh.app carries the CLI as a private helper because native
   // tool effects re-enter the executable with --internal-worker.
@@ -240,7 +240,7 @@ pub async fn[X] NativeDesktop::command(
   operation : String,
   session_id : String?,
   input : Json,
-  approval_revision : Int?,
+  approval_revision : Int32?,
   group : @async.TaskGroup[X],
 ) -> Result[Json, String] {
   if operation == "tool_approve" {

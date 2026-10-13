@@ -63,7 +63,7 @@ async fn NativeMcpServer::initialize(
 ///|
 async fn NativeMcpServer::list_tools(
   self : NativeMcpServer,
-  server_index : Int,
+  server_index : Int32,
 ) -> Result[
   (Array[NativeMcpTool], Array[Json], Map[String, NativeMcpRoute]),
   String,
