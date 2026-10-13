@@ -108,18 +108,21 @@ dsh web --demo --data-dir /absolute/path/to/dsh-demo-data \
 
 `dsh web` は browser assets を executable から配信するため、checkout 外から起動できます。埋め込み bundle は source install と release binary の両方に含まれます。`--assets-dir /path/to/web` を明示するとその directory の assets で override できます。source install には再帰 submodule clone を使ってください。
 
-PATH に導入した upstream [`moon-binstall`](https://github.com/f4ah6o/moon-binstall) 0.1.6 では、GitHub Release の checksum 検証付き binary を次のどちらの coordinate でも install できます。GitHub Release で使う repository 名は `f4ah6o/dsh.mbt` です。`f4ah6o/dsh` は Mooncakes module 名なので、Mooncakes package coordinate では package path まで含めた `f4ah6o/dsh/cmd/dsh` を指定します。
+PATH に導入した upstream [`moon-binstall`](https://github.com/f4ah6o/moon-binstall) 0.1.6 では、GitHub Release の checksum 検証付き binary を install できます。GitHub Release coordinate の repository 名は `f4ah6o/dsh.mbt` です。`f4ah6o/dsh` は Mooncakes module 名です。Mooncakes package coordinate で解決する場合は、package path まで含めた `f4ah6o/dsh/cmd/dsh` を指定します。
 
 ```sh
 moon binstall f4ah6o/dsh.mbt
-# Mooncakes の module/package coordinate を使う場合
-moon binstall f4ah6o/dsh/cmd/dsh
-
 export PATH="${MOON_BINSTALL_DIR:-$HOME/.local/bin}:$PATH"
 dsh --help
 ```
 
-既定の install 先は `~/.local/bin` です。既存の `dsh` executable を更新または置き換えるには `moon binstall f4ah6o/dsh.mbt --force` を実行してください。Mooncakes package coordinate にも同じ `--force` を付けられます。公開 asset は Linux x86-64 / ARM64 と macOS Apple Silicon 向けです。
+Mooncakes module/package coordinate を使う場合は、上の GitHub Release coordinate の代わりに次を実行します。
+
+```sh
+moon binstall f4ah6o/dsh/cmd/dsh
+```
+
+どちらの coordinate も既定では `~/.local/bin` に install します。上の `PATH` 設定後、`dsh --help` で起動を確認できます。既存の `dsh` executable を更新または置き換えるには `moon binstall f4ah6o/dsh.mbt --force` を実行してください。Mooncakes package coordinate にも同じ `--force` を付けられます。公開 asset は Linux x86-64 / ARM64 と macOS Apple Silicon 向けです。
 
 ### macOS native app
 
