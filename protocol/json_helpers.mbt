@@ -91,7 +91,7 @@ fn optional_field(value : Json, key : String) -> Json? {
 ///|
 fn has_exact_keys(fields : Map[String, Json], expected : Array[String]) -> Bool {
   let keys = fields.keys()
-  if keys.length() != expected.length() {
+  if keys.count() != expected.length() {
     return false
   }
   for key in keys {

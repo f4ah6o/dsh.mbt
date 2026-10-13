@@ -357,17 +357,17 @@ fn NativeAuth::persist_locked(self : NativeAuth) -> Result[Unit, String] {
   let content = Json::object({
     "version": 1,
     "credential": credential,
-    "generation": self.generation.to_json(),
+    "generation": self.generation,
     "selected_model": match self.selected_model {
-      Some(value) => value.to_json()
+      Some(value) => value
       None => Json::null()
     },
     "model_identity": match self.model_identity {
-      Some(value) => value.to_json()
+      Some(value) => value
       None => Json::null()
     },
     "models": Json::array(self.models),
-    "login_state": self.login_state.to_json(),
+    "login_state": self.login_state,
   }).stringify()
   match self.root.write_atomic_protected("siwc-auth.json", content) {
     Ok(_) => Ok(())
@@ -397,7 +397,7 @@ fn NativeAuth::status(self : NativeAuth) -> Json {
         "scopes": Json::array([]),
         "models": Json::array([]),
         "selected_model": match self.selected_model {
-          Some(model) => model.to_json()
+          Some(model) => model
           None => Json::null()
         },
       }
@@ -408,9 +408,9 @@ fn NativeAuth::status(self : NativeAuth) -> Json {
         _ => Map([])
       }
       fields["models"] = Json::array(self.visible_models())
-      fields["state"] = self.login_state.to_json()
+      fields["state"] = self.login_state
       fields["selected_model"] = match self.selected_model {
-        Some(model) => model.to_json()
+        Some(model) => model
         None => Json::null()
       }
       Json::object(fields)
@@ -547,7 +547,7 @@ async fn NativeAuth::models_with(
       Ok({
         "models": Json::array(rows),
         "selected_model": match self.selected_model {
-          Some(model) => model.to_json()
+          Some(model) => model
           None => Json::null()
         },
       })
@@ -621,7 +621,7 @@ async fn NativeAuth::select_model_for_profile(
     return Err("AUTH_ACCOUNT_CHANGED: model catalog belongs to another account")
   }
   if self.selected_model == Some(model) {
-    return Ok({ "ok": true, "model": model.to_json() })
+    return Ok({ "ok": true, "model": model })
   }
   let old_model = self.selected_model
   let old_generation = self.generation
@@ -637,7 +637,7 @@ async fn NativeAuth::select_model_for_profile(
       self.generation = old_generation
       Err(error)
     }
-    Ok(_) => Ok({ "ok": true, "model": self.selected_model.unwrap().to_json() })
+    Ok(_) => Ok({ "ok": true, "model": self.selected_model.unwrap() })
   }
 }
 
@@ -1580,7 +1580,7 @@ fn native_parse_callback_query(path : String) -> Result[Json, String] {
     if values.contains(key) {
       return Err("AUTH_CALLBACK_INVALID: duplicate OAuth callback field")
     }
-    values[key] = value.to_json()
+    values[key] = value
   }
   Ok(Json::object(values))
 }

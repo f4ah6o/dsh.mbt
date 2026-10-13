@@ -440,10 +440,7 @@ async fn NativeService::handle_get(
   identity_key : String,
 ) -> Unit {
   if path == "/api/metadata" {
-    self.respond_json(connection, 200, {
-      "ok": true.to_json(),
-      "result": self.metadata(),
-    })
+    self.respond_json(connection, 200, { "ok": true, "result": self.metadata() })
     return
   }
   if path == "/api/v1/snapshot" {
@@ -684,10 +681,10 @@ async fn NativeService::metadata(self : NativeService) -> Json {
     provider_config.model
   }
   {
-    "project": native_workspace_basename(self.runtime.tools.workspace).to_json(),
+    "project": native_workspace_basename(self.runtime.tools.workspace),
     "repository": self.runtime.tools.repository_metadata(),
-    "provider": service_provider_label(provider_config).to_json(),
-    "model": service_model_display_name(model).to_json(),
+    "provider": service_provider_label(provider_config),
+    "model": service_model_display_name(model),
   }
 }
 
@@ -1084,8 +1081,8 @@ fn service_event(
       ),
       "epoch": object_field(snapshot, "epoch").unwrap_or(Json::null()),
       "revision": object_field(snapshot, "revision").unwrap_or(Json::null()),
-      "cursor": current.to_json(),
-      "kind": kind.to_json(),
+      "cursor": current,
+      "kind": kind,
       "projection": projection,
     },
   )

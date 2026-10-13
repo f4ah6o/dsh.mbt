@@ -186,10 +186,7 @@ async fn desktop_approve(state : DesktopState, approved : Bool) -> Unit {
       state,
       "tool_approve",
       Some(state.selected_id),
-      Json::object({
-        "call_id": Json::string(call_id),
-        "approved": approved.to_json(),
-      }),
+      Json::object({ "call_id": Json::string(call_id), "approved": approved }),
       revision,
     ) {
     Err(error) => state.error_message = error

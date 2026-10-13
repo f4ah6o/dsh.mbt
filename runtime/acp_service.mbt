@@ -744,7 +744,7 @@ async fn NativeAcpService::run_prompt_turn(
         self.runtime,
         Some(session.native_session_id),
         "tool_approve",
-        { "call_id": call_id.to_json(), "approved": approved.to_json() },
+        { "call_id": call_id, "approved": approved },
         Some(revision),
         acp_activity_session_id=session.native_session_id,
       ) {

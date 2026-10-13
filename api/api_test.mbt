@@ -19,14 +19,14 @@ fn rpc(
 ) -> Json raise {
   let request : Json = {
     "jsonrpc": "2.0",
-    "id": id.to_json(),
+    "id": id,
     "method": "tools/call",
     "params": {
       "_meta": {
         "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": {},
       },
-      "name": operation.to_json(),
+      "name": operation,
       "arguments": arguments,
     },
   }

@@ -545,8 +545,7 @@ fn imported_pending_inbox(events : Array[Event]) -> Json {
                       start <= queue.length() &&
                       removed >= 0 &&
                       removed <= queue.length() - start {
-                      if json_field(data, "outcome") !=
-                        Some("canceled".to_json()) {
+                      if json_field(data, "outcome") != Some("canceled") {
                         for index in start..<(start + removed) {
                           if target == "next-turn" {
                             claimed_turn.push(queue[index])

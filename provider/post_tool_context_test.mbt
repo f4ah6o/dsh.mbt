@@ -70,21 +70,15 @@ test "PostToolUse context messages follow every correlated result in each provid
     post_tool_context_field(post_tool_context_field(openai, "body"), "messages"),
   )
   assert_eq(openai_messages.length(), 6)
-  assert_eq(
-    post_tool_context_field(openai_messages[2], "role"),
-    "tool".to_json(),
-  )
+  assert_eq(post_tool_context_field(openai_messages[2], "role"), "tool")
   assert_eq(
     post_tool_context_field(openai_messages[2], "tool_call_id"),
-    "read-a".to_json(),
+    "read-a",
   )
-  assert_eq(
-    post_tool_context_field(openai_messages[3], "role"),
-    "tool".to_json(),
-  )
+  assert_eq(post_tool_context_field(openai_messages[3], "role"), "tool")
   assert_eq(
     post_tool_context_field(openai_messages[3], "tool_call_id"),
-    "read-b".to_json(),
+    "read-b",
   )
   assert_eq(
     post_tool_context_array(
@@ -99,7 +93,7 @@ test "PostToolUse context messages follow every correlated result in each provid
       )[1],
       "text",
     ),
-    "context a second hook".to_json(),
+    "context a second hook",
   )
   assert_eq(
     post_tool_context_field(
@@ -108,7 +102,7 @@ test "PostToolUse context messages follow every correlated result in each provid
       )[0],
       "text",
     ),
-    "context b".to_json(),
+    "context b",
   )
 
   let deepseek = match
@@ -129,24 +123,18 @@ test "PostToolUse context messages follow every correlated result in each provid
   assert_eq(deepseek_tool_turn.length(), 5)
   assert_eq(
     post_tool_context_field(deepseek_tool_turn[0], "tool_use_id"),
-    "read-a".to_json(),
+    "read-a",
   )
   assert_eq(
     post_tool_context_field(deepseek_tool_turn[1], "tool_use_id"),
-    "read-b".to_json(),
+    "read-b",
   )
-  assert_eq(
-    post_tool_context_field(deepseek_tool_turn[2], "text"),
-    "context a".to_json(),
-  )
+  assert_eq(post_tool_context_field(deepseek_tool_turn[2], "text"), "context a")
   assert_eq(
     post_tool_context_field(deepseek_tool_turn[3], "text"),
-    "context a second hook".to_json(),
+    "context a second hook",
   )
-  assert_eq(
-    post_tool_context_field(deepseek_tool_turn[4], "text"),
-    "context b".to_json(),
-  )
+  assert_eq(post_tool_context_field(deepseek_tool_turn[4], "text"), "context b")
 
   let responses = match
     @provider.prepare_responses("fixture", post_tool_context_request()) {
@@ -159,31 +147,19 @@ test "PostToolUse context messages follow every correlated result in each provid
   assert_eq(responses_input.length(), 7)
   assert_eq(
     post_tool_context_field(responses_input[3], "type"),
-    "function_call_output".to_json(),
+    "function_call_output",
   )
-  assert_eq(
-    post_tool_context_field(responses_input[3], "call_id"),
-    "read-a".to_json(),
-  )
-  assert_eq(
-    post_tool_context_field(responses_input[4], "call_id"),
-    "read-b".to_json(),
-  )
-  assert_eq(
-    post_tool_context_field(responses_input[5], "role"),
-    "user".to_json(),
-  )
+  assert_eq(post_tool_context_field(responses_input[3], "call_id"), "read-a")
+  assert_eq(post_tool_context_field(responses_input[4], "call_id"), "read-b")
+  assert_eq(post_tool_context_field(responses_input[5], "role"), "user")
   let response_context = post_tool_context_array(
     post_tool_context_field(responses_input[5], "content"),
   )
   assert_eq(response_context.length(), 2)
-  assert_eq(
-    post_tool_context_field(response_context[0], "type"),
-    "input_text".to_json(),
-  )
+  assert_eq(post_tool_context_field(response_context[0], "type"), "input_text")
   assert_eq(
     post_tool_context_field(response_context[1], "text"),
-    "context a second hook".to_json(),
+    "context a second hook",
   )
   assert_eq(
     post_tool_context_field(
@@ -192,7 +168,7 @@ test "PostToolUse context messages follow every correlated result in each provid
       )[0],
       "text",
     ),
-    "context b".to_json(),
+    "context b",
   )
 }
 

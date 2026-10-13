@@ -172,7 +172,7 @@ fn native_provider_timeout_failure(message : String) -> Json {
 ///|
 fn native_provider_is_failure_json(value : Json) -> Bool {
   match value {
-    Object(fields) => fields.get("ok") == Some(false.to_json())
+    Object(fields) => fields.get("ok") == Some(false)
     _ => false
   }
 }
@@ -355,7 +355,7 @@ async fn native_run_api_key_inner(
   }
   let request = match request {
     Object(fields) => {
-      fields["stream"] = true.to_json()
+      fields["stream"] = true
       Json::object(fields)
     }
     _ => return Err("INVALID_REQUEST: provider request must be an object")
@@ -761,27 +761,23 @@ fn native_provider_failure_json(
   request_id~ : String? = None,
 ) -> Json {
   let safe_message = native_provider_clip(message, 512)
-  let failure : Map[String, Json] = {
-    "code": code.to_json(),
-    "message": safe_message.to_json(),
-  }
+  let failure : Map[String, Json] = { "code": code, "message": safe_message }
   match status {
-    Some(value) if value >= 100 && value <= 599 =>
-      failure["status"] = value.to_json()
+    Some(value) if value >= 100 && value <= 599 => failure["status"] = value
     _ => ()
   }
   match retry_after_ms {
-    Some(value) if value >= 0 => failure["retry_after_ms"] = value.to_json()
+    Some(value) if value >= 0 => failure["retry_after_ms"] = value
     _ => ()
   }
   match request_id {
     Some(value) if native_provider_valid_request_id(value) =>
-      failure["request_id"] = value.to_json()
+      failure["request_id"] = value
     _ => ()
   }
   Json::object({
-    "ok": false.to_json(),
-    "error": safe_message.to_json(),
+    "ok": false,
+    "error": safe_message,
     "failure": Json::object(failure),
   })
 }

@@ -8,7 +8,7 @@ fn native_subagent_openai_text_stream_with_reason(
   content : String,
   finish_reason : String,
 ) -> String {
-  let escaped = content.to_json().stringify()
+  let escaped = content.stringify()
   let reason = finish_reason.to_json().stringify()
   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\{escaped}},\"finish_reason\":null}]}\r\n\r\n" +
   "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\{reason}}]}\r\n\r\n" +
@@ -2338,7 +2338,7 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
       .text()
       .split("\n")
       .filter(line => !line.is_empty())
-      .length(),
+      .count(),
       1,
     )
     assert_eq(
@@ -2346,7 +2346,7 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
       .text()
       .split("\n")
       .filter(line => !line.is_empty())
-      .length(),
+      .count(),
       1,
     )
   }
@@ -2576,7 +2576,7 @@ async test "native child Stop denial cannot exceed the existing three-step limit
       .text()
       .split("\n")
       .filter(line => !line.is_empty())
-      .length(),
+      .count(),
       3,
     )
     let (completed, trailing) = runtime
@@ -2671,7 +2671,7 @@ async test "native child Stop continuation keeps max-token completion sticky" {
       .text()
       .split("\n")
       .filter(line => !line.is_empty())
-      .length(),
+      .count(),
       2,
     )
     let (completed, trailing) = runtime

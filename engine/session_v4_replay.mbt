@@ -538,7 +538,7 @@ fn validate_v4_references(
 ) -> Unit raise EngineError {
   let kind = required_string(record, "type", max=128)
   let is_append_result = kind == "tool/result" &&
-    fields(record).get("surfaceOp") == Some("append".to_json())
+    fields(record).get("surfaceOp") == Some("append")
   match fields(record).get("sourceEventSeqs") {
     None => ()
     Some(encoded) =>

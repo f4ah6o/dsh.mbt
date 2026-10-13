@@ -659,7 +659,7 @@ fn NativeRuntime::validate_user_prompt_locked(
     Err(error) => return Err(error)
   }
   let session = match
-    self.api.invoke("session_get", { "session_id": session_id.to_json() }) {
+    self.api.invoke("session_get", { "session_id": session_id }) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -851,7 +851,7 @@ async fn NativeRuntime::prepare_session_start_contexts(
     return Ok(contexts.copy())
   }
   if self.session_start_pending.get(session_id) is None &&
-    self.session_start_pending.keys().length() >=
+    self.session_start_pending.keys().count() >=
     NATIVE_SESSION_START_PENDING_INBOX_LIMIT {
     self.gate.release()
     return Err("native SessionStart pending inbox limit reached")
@@ -1180,27 +1180,25 @@ fn native_safe_session(value : Json) -> Json {
         }
         if kind == "tool/result/pruned" {
           safe_events.push({
-            "type": kind.to_json(),
+            "type": kind,
             "turn_id": object_field(event, "turn_id").unwrap_or(Json::null()),
-            "data": {
-              "call_id": string_field(data, "call_id").unwrap_or("").to_json(),
-            },
+            "data": { "call_id": string_field(data, "call_id").unwrap_or("") },
           })
         } else if string_field(data, "error") is Some(error) &&
           error.length() <= 512 {
           safe_events.push({
-            "type": kind.to_json(),
+            "type": kind,
             "turn_id": object_field(event, "turn_id").unwrap_or(Json::null()),
-            "data": { "error": error.to_json() },
+            "data": { "error": error },
           })
         }
       }
     _ => ()
   }
   if approval_revision is Some(revision) {
-    result["approval_revision"] = revision.to_json()
+    result["approval_revision"] = revision
   }
-  result["has_tool_results"] = has_tool_results.to_json()
+  result["has_tool_results"] = has_tool_results
   result["events"] = Json::array(safe_events)
   Json::object(result)
 }
@@ -1231,7 +1229,7 @@ async fn NativeRuntime::remote_snapshot(
       continue
     }
     let detail = match
-      self.api.invoke("session_get", { "session_id": session_id.to_json() }) {
+      self.api.invoke("session_get", { "session_id": session_id }) {
       Ok(value) => native_safe_session(value)
       Err(_) => continue
     }
@@ -1244,8 +1242,7 @@ async fn NativeRuntime::remote_snapshot(
   }
   let selected = match selected_session {
     Some(session_id) =>
-      match
-        self.api.invoke("session_get", { "session_id": session_id.to_json() }) {
+      match self.api.invoke("session_get", { "session_id": session_id }) {
         Ok(value) if string_field(value, "id") == Some(session_id) =>
           native_safe_session(value)
         _ => Json::null()
@@ -1254,13 +1251,13 @@ async fn NativeRuntime::remote_snapshot(
   }
   Ok({
     "protocol_version": 1,
-    "server_id": self.state.server_id.to_json(),
-    "workspace_id": self.state.workspace_id.to_json(),
-    "identity_key": identity_key.to_json(),
-    "auth_revision": self.state.auth_revision.to_json(),
-    "epoch": self.state.epoch.to_json(),
-    "revision": self.state.revision.to_json(),
-    "cursor": cursor.to_json(),
+    "server_id": self.state.server_id,
+    "workspace_id": self.state.workspace_id,
+    "identity_key": identity_key,
+    "auth_revision": self.state.auth_revision,
+    "epoch": self.state.epoch,
+    "revision": self.state.revision,
+    "cursor": cursor,
     "auth": self.auth.status(),
     "projection": {
       "sessions": Json::array(summaries),
@@ -1284,7 +1281,7 @@ async fn NativeRuntime::remote_session(
     return Err("caller identity is no longer authorized")
   }
   let detail = match
-    self.api.invoke("session_get", { "session_id": session_id.to_json() }) {
+    self.api.invoke("session_get", { "session_id": session_id }) {
     Ok(value) => native_safe_session(value)
     Err(error) => return Err(error)
   }
@@ -1298,12 +1295,12 @@ async fn NativeRuntime::remote_session(
   }
   Ok({
     "protocol_version": 1,
-    "workspace_id": self.state.workspace_id.to_json(),
-    "identity_key": identity_key.to_json(),
-    "auth_revision": self.state.auth_revision.to_json(),
-    "epoch": self.state.epoch.to_json(),
-    "revision": self.state.revision.to_json(),
-    "cursor": cursor.to_json(),
+    "workspace_id": self.state.workspace_id,
+    "identity_key": identity_key,
+    "auth_revision": self.state.auth_revision,
+    "epoch": self.state.epoch,
+    "revision": self.state.revision,
+    "cursor": cursor,
     "projection": { "session": detail },
   })
 }
@@ -1320,17 +1317,17 @@ fn native_receipt(
 ) -> Json {
   {
     "protocol_version": 1,
-    "workspace_id": workspace_id.to_json(),
-    "command_id": command_id.to_json(),
-    "payload_fingerprint": fingerprint.to_json(),
-    "status": status.to_json(),
+    "workspace_id": workspace_id,
+    "command_id": command_id,
+    "payload_fingerprint": fingerprint,
+    "status": status,
     "accepted_revision": match accepted_revision {
-      Some(value) => value.to_json()
+      Some(value) => value
       None => Json::null()
     },
     "result": result.unwrap_or(Json::null()),
     "error": match error {
-      Some(value) => value.to_json()
+      Some(value) => value
       None => Json::null()
     },
   }
@@ -1355,7 +1352,7 @@ fn native_receipt_owner(receipt : Json) -> String {
 fn native_receipt_with_owner(receipt : Json, identity_key : String) -> Json {
   match receipt {
     Json::Object(fields) => {
-      fields["owner_identity_key"] = identity_key.to_json()
+      fields["owner_identity_key"] = identity_key
       Json::object(fields)
     }
     _ => receipt
@@ -1374,8 +1371,8 @@ fn native_mark_unfinished_receipts_uncertain(
     if string_field(receipt, "status") == Some("accepted") {
       match receipt {
         Json::Object(fields) => {
-          fields["status"] = "uncertain".to_json()
-          fields["error"] = "host restarted before the accepted command had a durable outcome".to_json()
+          fields["status"] = "uncertain"
+          fields["error"] = "host restarted before the accepted command had a durable outcome"
           recovered.push(Json::object(fields))
         }
         _ => recovered.push(receipt)
@@ -1596,7 +1593,7 @@ async fn NativeRuntime::accept_remote_command(
         "tool_approve", "session_send", "session_cancel", "session_prune_tool_results",
         "session_fork",
       ].contains(command.operation) {
-      input_fields["session_id"] = session_id.to_json()
+      input_fields["session_id"] = session_id
     }
   }
   let input = Json::object(input_fields)
@@ -1794,7 +1791,7 @@ async fn NativeRuntime::accept_remote_prompt_command(
     Json::Object(fields) => {
       let copy = fields.copy()
       match command.session_id {
-        Some(session_id) => copy["session_id"] = session_id.to_json()
+        Some(session_id) => copy["session_id"] = session_id
         None => ()
       }
       native_hook_prompt_input(Json::object(copy), [])
@@ -2103,7 +2100,7 @@ fn NativeRuntime::approval_matches_locked(
     None => return false
   }
   let current = match
-    self.api.invoke("session_get", { "session_id": session_id.to_json() }) {
+    self.api.invoke("session_get", { "session_id": session_id }) {
     Ok(value) => value
     Err(_) => return false
   }
@@ -2171,10 +2168,8 @@ async fn NativeRuntime::finish_receipt(
       string_field(previous, "command_id") == Some(command_id) {
       let replacement = match previous {
         Json::Object(fields) => {
-          fields["status"] = status.to_json()
-          fields["error"] = error
-            .map(value => value.to_json())
-            .unwrap_or(Json::null())
+          fields["status"] = status
+          fields["error"] = error.map(value => value).unwrap_or(Json::null())
           Json::object(fields)
         }
         _ => previous
@@ -2687,8 +2682,8 @@ fn native_provider_failure(error : String) -> Json {
   } else {
     error
   }
-  let failure = { "code": code.to_json(), "message": message.to_json() }
-  { "ok": false, "error": message.to_json(), "failure": failure }
+  let failure = { "code": code, "message": message }
+  { "ok": false, "error": message, "failure": failure }
 }
 
 ///|
@@ -3856,11 +3851,7 @@ fn native_demo_function_call_response(
     "content": "",
     "reasoning": "",
     "tool_calls": [
-      {
-        "id": call_id.to_json(),
-        "name": name.to_json(),
-        "arguments": arguments.stringify().to_json(),
-      },
+      { "id": call_id, "name": name, "arguments": arguments.stringify() },
     ],
     "finish_reason": "tool_calls",
     "usage": { "input_tokens": 1, "output_tokens": 1, "total_tokens": 2 },

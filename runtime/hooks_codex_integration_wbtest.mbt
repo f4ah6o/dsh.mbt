@@ -162,7 +162,7 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "Codex root hook turns",
       })
       .unwrap(),
@@ -170,8 +170,8 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
 
     let (first_session, first_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
-        "prompt": "First user turn".to_json(),
+        "session_id": session_id,
+        "prompt": "First user turn",
         "additional_contexts": Json::array([
           Json::object({
             "content": Json::string("forged external context"),
@@ -213,7 +213,7 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
       Err(error) => fail("first native job failed: " + error)
     }
     let first_completed = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap().0
     if string_field(first_completed, "status") != Some("completed") {
       fail(
@@ -223,8 +223,8 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
 
     let (second_session, second_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
-        "prompt": "Second user turn".to_json(),
+        "session_id": session_id,
+        "prompt": "Second user turn",
       })
       .unwrap()
     let second_provider = native_effect_by_kind(
@@ -256,7 +256,7 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
       Err(error) => fail("second native job failed: " + error)
     }
     let completed = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap().0
     if string_field(completed, "status") != Some("completed") {
       fail("second native session did not complete: " + completed.stringify())
@@ -313,7 +313,7 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
     assert_eq(@fs.read_file(workspace + "/claude-project-dir").text(), "unset")
 
     let (restored_before, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     let restored_contexts = native_hook_context_messages(restored_before)
     assert_eq(restored_contexts.length(), 2)
@@ -348,7 +348,7 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
       @async.protect_from_cancel(() => ignore(reopened.close()))
     })
     let (restored, restored_effects) = reopened
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_true(restored_effects.is_empty())
     native_codex_test_assert_context_source(
@@ -356,7 +356,7 @@ async test "Codex root hooks use upcoming turn IDs and survive reopen and fork" 
       2,
     )
     let (forked, fork_effects) = reopened
-      .invoke("session_fork", { "session_id": session_id.to_json() })
+      .invoke("session_fork", { "session_id": session_id })
       .unwrap()
     assert_true(fork_effects.is_empty())
     assert_eq(string_field(forked, "parent_session_id"), Some(session_id))
@@ -609,7 +609,7 @@ async test "Codex child hooks retain the active turn through tool follow-up" {
       @async.protect_from_cancel(() => ignore(reopened.close()))
     })
     let (restored, effects) = reopened
-      .invoke("session_get", { "session_id": parent_id.to_json() })
+      .invoke("session_get", { "session_id": parent_id })
       .unwrap()
     assert_true(effects.is_empty())
     native_codex_test_assert_context_source(
@@ -689,7 +689,7 @@ async test "Codex cancellation closes a prompt hook without admitting or replayi
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "Codex hook cancellation",
       })
       .unwrap(),
@@ -697,8 +697,8 @@ async test "Codex cancellation closes a prompt hook without admitting or replayi
     let send_task = group.spawn(
       async fn() {
         runtime.invoke("session_send", {
-          "session_id": session_id.to_json(),
-          "prompt": prompt.to_json(),
+          "session_id": session_id,
+          "prompt": prompt,
         })
       },
       no_wait=true,
@@ -715,7 +715,7 @@ async test "Codex cancellation closes a prompt hook without admitting or replayi
     assert_true(hook_started)
     let (_, cancel_effects) = match
       @async.with_timeout_opt(500, async fn() {
-        runtime.invoke("session_cancel", { "session_id": session_id.to_json() })
+        runtime.invoke("session_cancel", { "session_id": session_id })
       }) {
       Some(Ok(value)) => value
       Some(Err(error)) => fail(error)
@@ -730,7 +730,7 @@ async test "Codex cancellation closes a prompt hook without admitting or replayi
     assert_true(send_result is Err(_))
     assert_eq(@fs.read_file(workspace + "/hook-count").text(), "x")
     let (cancelled, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(string_field(cancelled, "status"), Some("cancelled"))
     assert_eq(int_field(cancelled, "turn_id"), Some(0))
@@ -740,8 +740,8 @@ async test "Codex cancellation closes a prompt hook without admitting or replayi
 
     let (_, follow_up) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
-        "prompt": "Fresh Codex send after cancellation".to_json(),
+        "session_id": session_id,
+        "prompt": "Fresh Codex send after cancellation",
       })
       .unwrap()
     assert_eq(follow_up.length(), 1)

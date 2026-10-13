@@ -30,11 +30,7 @@ fn decoded_call(
   }
   seen[id] = true
   ignore(parse_object(arguments, "tool arguments"))
-  {
-    "id": id.to_json(),
-    "name": name.to_json(),
-    "arguments": arguments.to_json(),
-  }
+  { "id": id, "name": name, "arguments": arguments }
 }
 
 ///|

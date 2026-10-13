@@ -915,8 +915,7 @@ pub fn HarnessApi::close(self : HarnessApi) -> Unit {
       for session in sessions {
         if session is { "id": String(id), "status": String(status), .. } {
           if status == "running" {
-            self.engine.invoke("session_cancel", { "session_id": id.to_json() })
-            |> ignore
+            self.engine.invoke("session_cancel", { "session_id": id }) |> ignore
           }
         }
       }

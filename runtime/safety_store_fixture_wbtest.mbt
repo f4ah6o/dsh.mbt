@@ -179,10 +179,10 @@ async test "native store recovers only a dead local lock owner" {
       local_data + "/host.lock",
       @utf8.encode(
         Json::object({
-          "pid": (2147483647).to_json(),
-          "hostname": hostname.to_json(),
-          "token": "dead-owner".to_json(),
-          "created_at": "2026-10-08T00:00:00Z".to_json(),
+          "pid": 2147483647,
+          "hostname": hostname,
+          "token": "dead-owner",
+          "created_at": "2026-10-08T00:00:00Z",
         }).stringify(),
       ),
     )
@@ -205,10 +205,10 @@ async test "native store recovers only a dead local lock owner" {
       remote_data + "/host.lock",
       @utf8.encode(
         Json::object({
-          "pid": (2147483647).to_json(),
-          "hostname": "unknown-other-machine".to_json(),
-          "token": "remote-owner".to_json(),
-          "created_at": "2026-10-08T00:00:00Z".to_json(),
+          "pid": 2147483647,
+          "hostname": "unknown-other-machine",
+          "token": "remote-owner",
+          "created_at": "2026-10-08T00:00:00Z",
         }).stringify(),
       ),
     )

@@ -224,7 +224,7 @@ fn native_cli_approval_revision(session : Json) -> Json {
           ) ==
           call_id {
           return int_field(event, "seq")
-            .map(value => value.to_json())
+            .map(value => value)
             .unwrap_or(Json::null())
         }
       }
@@ -364,10 +364,10 @@ async fn native_cli_action(
         None,
         "session_create",
         {
-          "id": generated.to_json(),
-          "title": native_option(args, "--title")
-          .unwrap_or("Native CLI session")
-          .to_json(),
+          "id": generated,
+          "title": native_option(args, "--title").unwrap_or(
+            "Native CLI session",
+          ),
         },
         None,
       ) {
@@ -391,7 +391,7 @@ async fn native_cli_action(
           runtime,
           Some(active_session),
           "session_send",
-          { "prompt": prompt_text.to_json() },
+          { "prompt": prompt_text },
           None,
         ) {
         Ok(value) => value
@@ -420,7 +420,7 @@ async fn native_cli_action(
               runtime,
               Some(active_session),
               "tool_approve",
-              { "call_id": call_id.to_json(), "approved": approved.to_json() },
+              { "call_id": call_id, "approved": approved },
               Some(revision),
             ) {
             Ok(value) => value
@@ -490,8 +490,8 @@ async fn native_cli_action(
         Some(active_session),
         "tool_approve",
         {
-          "call_id": string_field(pending, "call_id").unwrap_or("").to_json(),
-          "approved": approved.to_json(),
+          "call_id": string_field(pending, "call_id").unwrap_or(""),
+          "approved": approved,
         },
         Some(revision),
       ) {
@@ -507,16 +507,14 @@ async fn native_cli_action(
   }
   Ok({
     "kind": if prompt is Some(_) {
-      "run".to_json()
+      "run"
     } else if fork_source is Some(_) {
-      "fork".to_json()
+      "fork"
     } else {
-      "approval".to_json()
+      "approval"
     },
-    "source_session_id": fork_source
-    .map(value => value.to_json())
-    .unwrap_or(Json::null()),
-    "session_id": active_session.to_json(),
+    "source_session_id": fork_source.map(value => value).unwrap_or(Json::null()),
+    "session_id": active_session,
     "receipt": receipt.unwrap_or(Json::null()),
     "approval_revision": native_cli_approval_revision(session),
     "session": session,

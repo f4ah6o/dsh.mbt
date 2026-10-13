@@ -201,7 +201,7 @@ fn restore_session(
   effect_ids : Map[String, Bool],
   next_effect : Int32,
 ) -> Session raise EngineError {
-  if json_field(value, "source_format") == Some("deepseek-session-v4".to_json()) {
+  if json_field(value, "source_format") == Some("deepseek-session-v4") {
     return restore_imported_session(value)
   }
   if session_capacity_length(value) > SESSION_CAPACITY {

@@ -420,9 +420,7 @@ test "pending native hook cannot complete a provider turn and cancellation remai
   )
   assert_true(engine.complete(id_of(effect), stop_response("done")) is Err(_))
   assert_eq(required_string(get_session(engine), "status"), "running")
-  ignore(
-    success(engine.invoke("session_cancel", { "session_id": "test".to_json() })),
-  )
+  ignore(success(engine.invoke("session_cancel", { "session_id": "test" })))
   let restored = Engine::new(test_tools())
   assert_eq(restored.restore(engine.snapshot()), Ok(()))
   assert_eq(get_status(get_session(restored)), "cancelled")
@@ -445,10 +443,7 @@ test "completed native handler IDs may be reused in a later turn" {
   ignore(success(engine.complete(id_of(effect), stop_response("first"))))
   ignore(
     success(
-      engine.invoke("session_send", {
-        "session_id": "test".to_json(),
-        "prompt": "next".to_json(),
-      }),
+      engine.invoke("session_send", { "session_id": "test", "prompt": "next" }),
     ),
   )
   let next_effect = engine.take_effects()[0]

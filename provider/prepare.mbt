@@ -39,7 +39,7 @@ fn append_message(
       _ => ()
     }
   }
-  messages.push({ "role": role.to_json(), "content": Json::array(blocks) })
+  messages.push({ "role": role, "content": Json::array(blocks) })
 }
 
 ///|
@@ -83,7 +83,7 @@ fn prepare_impl(
   }
   let messages : Array[Json] = []
   if mode == "openai" && !system.is_empty() {
-    messages.push({ "role": "system", "content": system.to_json() })
+    messages.push({ "role": "system", "content": system })
   }
   let pending : Map[String, Bool] = Map([])
   let seen_ids : Map[String, Bool] = Map([])
@@ -122,21 +122,16 @@ fn prepare_impl(
       if mode == "deepseek" {
         let result : Map[String, Json] = {
           "type": "tool_result",
-          "tool_use_id": id.to_json(),
-          "content": Json::array([{ "type": "text", "text": content.to_json() }]),
+          "tool_use_id": id,
+          "content": Json::array([{ "type": "text", "text": content }]),
         }
         match message.get("is_error") {
           None => ()
-          Some(value) =>
-            result["is_error"] = boolean(value, "is_error").to_json()
+          Some(value) => result["is_error"] = boolean(value, "is_error")
         }
         append_message(messages, "user", [Json::object(result)])
       } else {
-        messages.push({
-          "role": "tool",
-          "tool_call_id": id.to_json(),
-          "content": content.to_json(),
-        })
+        messages.push({ "role": "tool", "tool_call_id": id, "content": content })
       }
       continue
     }
@@ -147,7 +142,7 @@ fn prepare_impl(
     let openai_calls : Array[Json] = []
     let reasoning = optional_text(message, "reasoning").unwrap_or("")
     if role == "assistant" && mode == "deepseek" && !reasoning.is_empty() {
-      blocks.push({ "type": "thinking", "thinking": reasoning.to_json() })
+      blocks.push({ "type": "thinking", "thinking": reasoning })
     }
     blocks.append(content_blocks)
     for raw_call in calls {
@@ -163,15 +158,15 @@ fn prepare_impl(
       if mode == "deepseek" {
         blocks.push({
           "type": "tool_use",
-          "id": id.to_json(),
-          "name": name.to_json(),
+          "id": id,
+          "name": name,
           "input": historical_input(arguments),
         })
       }
       openai_calls.push({
-        "id": id.to_json(),
+        "id": id,
         "type": "function",
-        "function": { "name": name.to_json(), "arguments": arguments.to_json() },
+        "function": { "name": name, "arguments": arguments },
       })
     }
     if mode == "deepseek" {
@@ -180,10 +175,10 @@ fn prepare_impl(
       }
     } else {
       let wire : Map[String, Json] = {
-        "role": role.to_json(),
+        "role": role,
         "content": match content_value {
           String(value) if value.is_empty() && !calls.is_empty() => Json::null()
-          String(value) => value.to_json()
+          String(value) => value
           Array(_) => Json::array(content_blocks)
           _ => Json::null()
         },
@@ -192,7 +187,7 @@ fn prepare_impl(
         wire["tool_calls"] = Json::array(openai_calls)
       }
       if role == "assistant" && !reasoning.is_empty() {
-        wire["reasoning_content"] = reasoning.to_json()
+        wire["reasoning_content"] = reasoning
       }
       messages.push(Json::object(wire))
     }
@@ -204,14 +199,14 @@ fn prepare_impl(
     reject("INVALID_REQUEST", "request has no nonempty messages")
   }
   let body : Map[String, Json] = {
-    "model": model.to_json(),
+    "model": model,
     "messages": Json::array(messages),
-    "stream": stream.to_json(),
-    "max_tokens": max_tokens.to_json(),
+    "stream": stream,
+    "max_tokens": max_tokens,
   }
   if mode == "deepseek" {
     if !system.is_empty() {
-      body["system"] = system.to_json()
+      body["system"] = system
     }
     let effort = optional_text(request, "reasoning_effort").unwrap_or("high")
     if effort != "off" && effort != "low" && effort != "high" && effort != "max" {
@@ -225,12 +220,12 @@ fn prepare_impl(
       },
     }
     if effort != "off" {
-      body["output_config"] = { "effort": effort.to_json() }
+      body["output_config"] = { "effort": effort }
     }
   } else {
     match optional_text(request, "reasoning_effort") {
       None => ()
-      Some(effort) => body["reasoning_effort"] = effort.to_json()
+      Some(effort) => body["reasoning_effort"] = effort
     }
     if stream {
       body["stream_options"] = { "include_usage": true }
@@ -250,16 +245,16 @@ fn prepare_impl(
     ignore(object(schema, "tool input_schema"))
     if mode == "deepseek" {
       tools.push({
-        "name": name.to_json(),
-        "description": description.to_json(),
+        "name": name,
+        "description": description,
         "input_schema": schema,
       })
     } else {
       tools.push({
         "type": "function",
         "function": {
-          "name": name.to_json(),
-          "description": description.to_json(),
+          "name": name,
+          "description": description,
           "parameters": schema,
         },
       })

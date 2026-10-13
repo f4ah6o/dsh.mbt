@@ -248,7 +248,7 @@ fn validate_v4_surface(
     Some(Json::Object(operation)) => {
       if !surface ||
         operation.length() != 3 ||
-        operation.get("op") != Some("replace".to_json()) ||
+        operation.get("op") != Some("replace") ||
         operation.get("startSeq") is None ||
         operation.get("endSeq") is None {
         raise Invalid("Session v4 surfaceOp replacement is malformed")

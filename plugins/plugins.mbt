@@ -140,7 +140,7 @@ pub fn Registry::tools(self : Registry) -> Array[Json] {
 pub fn Registry::manifest(self : Registry) -> Json {
   Json::array(
     self.entries.map(entry => {
-      "id": entry.id.to_json(),
+      "id": entry.id,
       "requires": Json::array(entry.requires.map(value => Json::string(value))),
       "tools": Json::array(
         entry.tools.map(tool => Json::string(tool_name(tool).unwrap())),

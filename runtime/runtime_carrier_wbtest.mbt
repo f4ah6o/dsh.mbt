@@ -24,10 +24,7 @@ fn native_fixture_openai_tool_stream(
   content : String,
 ) -> String {
   let arguments = Json::string(
-    Json::object({
-      "file_path": file_path.to_json(),
-      "content": content.to_json(),
-    }).stringify(),
+    Json::object({ "file_path": file_path.to_json(), "content": content }).stringify(),
   ).stringify()
   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"\{call_id}\",\"type\":\"function\",\"function\":{\"name\":\"write\",\"arguments\":\{arguments}}}]},\"finish_reason\":null}]}\r\n\r\n" +
   "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\r\n\r\n" +
@@ -71,7 +68,7 @@ fn native_fixture_openai_calls_stream(
 
 ///|
 fn native_fixture_openai_text_stream(content : String) -> String {
-  let escaped = content.to_json().stringify()
+  let escaped = content.stringify()
   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\{escaped}},\"finish_reason\":null}]}\r\n\r\n" +
   "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\r\n\r\n" +
   "data: [DONE]\r\n\r\n"
@@ -84,15 +81,15 @@ fn native_fixture_mcp_line(
   arguments : Json,
 ) -> String {
   Json::object({
-    "jsonrpc": "2.0".to_json(),
-    "id": request_id.to_json(),
-    "method": "tools/call".to_json(),
+    "jsonrpc": "2.0",
+    "id": request_id,
+    "method": "tools/call",
     "params": Json::object({
       "_meta": Json::object({
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28".to_json(),
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": Json::empty_object(),
       }),
-      "name": operation.to_json(),
+      "name": operation,
       "arguments": arguments,
     }),
   }).stringify()

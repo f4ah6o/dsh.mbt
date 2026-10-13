@@ -34,7 +34,7 @@ fn v4_legacy_projection_supported(events : Array[Event]) -> Bool {
             return false
           }
           if is_v4_surface_event(kind) &&
-            fields(record).get("surfaceOp") != Some("append".to_json()) {
+            fields(record).get("surfaceOp") != Some("append") {
             return false
           }
           match fields(record).get("sourceEventSeqs") {

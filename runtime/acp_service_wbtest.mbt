@@ -895,7 +895,7 @@ async test "ACP approved native turns preserve approval and isolate close across
       current_dir + "/tests/fixtures/upstream-tool-call-turn/session.v4.jsonl",
     ).text()
     let (imported, imported_effects) = reopened
-      .invoke("session_import", { "jsonl": imported_jsonl.to_json() })
+      .invoke("session_import", { "jsonl": imported_jsonl })
       .unwrap()
     assert_true(imported_effects.is_empty())
     let imported_id = string_field(imported, "id").unwrap()

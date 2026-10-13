@@ -243,26 +243,26 @@ pub fn LoginAttempt::new(
 /// opening the system browser. Dynamic registration hints are sent only once.
 pub fn LoginAttempt::authorization_params(self : LoginAttempt) -> Json {
   let values : Map[String, Json] = {
-    "client_id": self.requested_client_id.unwrap_or(DYNAMIC_CLIENT_ID).to_json(),
-    "response_type": "code".to_json(),
-    "redirect_uri": self.redirect_uri.to_json(),
-    "scope": REQUESTED_SCOPES.to_json(),
-    "resource": API_RESOURCE.to_json(),
-    "ext_agent_host_id": self.host_id.to_json(),
-    "state": self.state.to_json(),
-    "nonce": self.nonce.to_json(),
-    "code_challenge": self.challenge.to_json(),
-    "code_challenge_method": "S256".to_json(),
+    "client_id": self.requested_client_id.unwrap_or(DYNAMIC_CLIENT_ID),
+    "response_type": "code",
+    "redirect_uri": self.redirect_uri,
+    "scope": REQUESTED_SCOPES,
+    "resource": API_RESOURCE,
+    "ext_agent_host_id": self.host_id,
+    "state": self.state,
+    "nonce": self.nonce,
+    "code_challenge": self.challenge,
+    "code_challenge_method": "S256",
   }
   if self.requested_client_id is None {
-    values["agent_name_hint"] = AGENT_NAME.to_json()
+    values["agent_name_hint"] = AGENT_NAME
   }
   match self.id_token_hint {
-    Some(value) => values["id_token_hint"] = value.to_json()
+    Some(value) => values["id_token_hint"] = value
     None => ()
   }
   match self.login_hint {
-    Some(value) => values["login_hint"] = value.to_json()
+    Some(value) => values["login_hint"] = value
     None => ()
   }
   Json::object(values)

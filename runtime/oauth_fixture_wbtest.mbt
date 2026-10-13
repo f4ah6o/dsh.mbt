@@ -39,12 +39,12 @@ fn native_fixture_endpoints() -> AuthEndpoints {
 ///|
 fn native_fixture_jwk() -> Json {
   Json::object({
-    "kid": "fixture-kid-1".to_json(),
-    "kty": "RSA".to_json(),
-    "alg": "RS256".to_json(),
-    "use": "sig".to_json(),
-    "n": NATIVE_OAUTH_FIXTURE_MODULUS.to_json(),
-    "e": "AQAB".to_json(),
+    "kid": "fixture-kid-1",
+    "kty": "RSA",
+    "alg": "RS256",
+    "use": "sig",
+    "n": NATIVE_OAUTH_FIXTURE_MODULUS,
+    "e": "AQAB",
   })
 }
 
@@ -64,8 +64,8 @@ fn native_fixture_transport(
       (
         200,
         Json::object({
-          "issuer": "https://auth.openai.com".to_json(),
-          "jwks_uri": NATIVE_OAUTH_FIXTURE_JWKS_URL.to_json(),
+          "issuer": "https://auth.openai.com",
+          "jwks_uri": NATIVE_OAUTH_FIXTURE_JWKS_URL,
         }),
       ),
     )
@@ -83,10 +83,7 @@ fn native_fixture_transport(
           200,
           Json::object({
             "keys": Json::array([
-              Json::object({
-                "kid": "previous-key".to_json(),
-                "kty": "RSA".to_json(),
-              }),
+              Json::object({ "kid": "previous-key", "kty": "RSA" }),
             ]),
           }),
         ),
@@ -171,12 +168,12 @@ fn native_fixture_callback(
 ///|
 fn native_fixture_token_response(id_token : String) -> Json {
   Json::object({
-    "token_type": "Bearer".to_json(),
-    "access_token": "synthetic-access-token".to_json(),
-    "refresh_token": "synthetic-refresh-token".to_json(),
-    "id_token": id_token.to_json(),
+    "token_type": "Bearer",
+    "access_token": "synthetic-access-token",
+    "refresh_token": "synthetic-refresh-token",
+    "id_token": id_token,
     "expires_in": Json::number(3600.0),
-    "scope": @auth.REQUESTED_SCOPES.to_json(),
+    "scope": @auth.REQUESTED_SCOPES,
   })
 }
 
@@ -331,14 +328,9 @@ async test "model catalog refresh clears removed selection and fences old effect
         "access_token": "synthetic-access-token",
         "refresh_token": "synthetic-refresh-token",
         "scopes": Json::array([
-          "openid".to_json(),
-          "profile".to_json(),
-          "email".to_json(),
-          "offline_access".to_json(),
-          "resource.invoke".to_json(),
-          "chatgpt.tokens.use.direct".to_json(),
+          "openid", "profile", "email", "offline_access", "resource.invoke", "chatgpt.tokens.use.direct",
         ]),
-        "expires_at": (native_auth_now() + 7200).to_json(),
+        "expires_at": native_auth_now() + 7200,
       }) {
       Ok(value) => value
       Err(error) => fail(error)
@@ -416,14 +408,9 @@ async test "rotated refresh survives failed save and stale sign-in rollback" {
         "access_token": "synthetic-access-token",
         "refresh_token": "synthetic-refresh-token",
         "scopes": Json::array([
-          "openid".to_json(),
-          "profile".to_json(),
-          "email".to_json(),
-          "offline_access".to_json(),
-          "resource.invoke".to_json(),
-          "chatgpt.tokens.use.direct".to_json(),
+          "openid", "profile", "email", "offline_access", "resource.invoke", "chatgpt.tokens.use.direct",
         ]),
-        "expires_at": (native_auth_now() + 30).to_json(),
+        "expires_at": native_auth_now() + 30,
       }) {
       Ok(value) => value
       Err(error) => fail(error)
@@ -471,9 +458,9 @@ async test "rotated refresh survives failed save and stale sign-in rollback" {
           (
             200,
             Json::object({
-              "token_type": "Bearer".to_json(),
-              "access_token": "rotated-access-fixture".to_json(),
-              "refresh_token": "rotated-refresh-fixture".to_json(),
+              "token_type": "Bearer",
+              "access_token": "rotated-access-fixture",
+              "refresh_token": "rotated-refresh-fixture",
               "expires_in": Json::number(3600.0),
             }),
           ),
@@ -512,14 +499,9 @@ async test "rotated refresh survives failed save and stale sign-in rollback" {
         "access_token": "synthetic-replacement-access-token",
         "refresh_token": "synthetic-replacement-refresh-token",
         "scopes": Json::array([
-          "openid".to_json(),
-          "profile".to_json(),
-          "email".to_json(),
-          "offline_access".to_json(),
-          "resource.invoke".to_json(),
-          "chatgpt.tokens.use.direct".to_json(),
+          "openid", "profile", "email", "offline_access", "resource.invoke", "chatgpt.tokens.use.direct",
         ]),
-        "expires_at": (native_auth_now() + 7200).to_json(),
+        "expires_at": native_auth_now() + 7200,
       }) {
       Ok(value) => value
       Err(error) => fail(error)
@@ -796,14 +778,9 @@ async test "browser sign-in handoff never exposes the stored ID token hint" {
         "access_token": "synthetic-access-token",
         "refresh_token": "synthetic-refresh-token",
         "scopes": Json::array([
-          "openid".to_json(),
-          "profile".to_json(),
-          "email".to_json(),
-          "offline_access".to_json(),
-          "resource.invoke".to_json(),
-          "chatgpt.tokens.use.direct".to_json(),
+          "openid", "profile", "email", "offline_access", "resource.invoke", "chatgpt.tokens.use.direct",
         ]),
-        "expires_at": (native_auth_now() + 7200).to_json(),
+        "expires_at": native_auth_now() + 7200,
       }) {
       Ok(value) => value
       Err(error) => fail(error)

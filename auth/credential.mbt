@@ -102,11 +102,11 @@ pub fn Credential::access_token_for_transport(self : Credential) -> String {
 pub fn Credential::public_summary(self : Credential) -> Json {
   let account : Map[String, Json] = Map([])
   match self.email {
-    Some(value) => account["email"] = value.to_json()
+    Some(value) => account["email"] = value
     None => ()
   }
   match self.profile_id {
-    Some(value) => account["profile_id"] = value.to_json()
+    Some(value) => account["profile_id"] = value
     None => ()
   }
   {
@@ -121,7 +121,7 @@ pub fn Credential::public_summary(self : Credential) -> Json {
     } else {
       "disabled"
     },
-    "scopes": Json::array(self.scopes.map(scope => scope.to_json())),
+    "scopes": Json::array(self.scopes.map(scope => scope)),
     "models": Json::array([]),
   }
 }
@@ -136,21 +136,21 @@ pub fn Credential::storage_json(self : Credential) -> Json {
     "client_id": self.client_id,
     "subject": self.subject,
     "email": match self.email {
-      Some(value) => value.to_json()
+      Some(value) => value
       None => Json::null()
     },
     "profile_id": match self.profile_id {
-      Some(value) => value.to_json()
+      Some(value) => value
       None => Json::null()
     },
     "id_token": self.id_token,
     "access_token": self.access_token,
     "refresh_token": match self.refresh_token {
-      Some(value) => value.to_json()
+      Some(value) => value
       None => Json::null()
     },
-    "scopes": Json::array(self.scopes.map(scope => scope.to_json())),
-    "expires_at": self.expires_at.to_json(),
+    "scopes": Json::array(self.scopes.map(scope => scope)),
+    "expires_at": self.expires_at,
   }
 }
 

@@ -73,15 +73,15 @@ async fn native_service_signal_prepare_pending(
   let session_id = "signal-shutdown-session"
   let (_, create_effects) = runtime
     .invoke("session_create", {
-      "id": session_id.to_json(),
-      "title": "Signal shutdown fixture".to_json(),
+      "id": session_id,
+      "title": "Signal shutdown fixture",
     })
     .unwrap()
   assert_true(create_effects.is_empty())
   let (_, effects) = runtime
     .invoke("session_send", {
-      "session_id": session_id.to_json(),
-      "prompt": "Run the approved shutdown fixture command".to_json(),
+      "session_id": session_id,
+      "prompt": "Run the approved shutdown fixture command",
     })
     .unwrap()
   let provider = match
@@ -94,7 +94,7 @@ async fn native_service_signal_prepare_pending(
     .unwrap()
   assert_true(trailing.is_empty())
   let (session, effects) = runtime
-    .invoke("session_get", { "session_id": session_id.to_json() })
+    .invoke("session_get", { "session_id": session_id })
     .unwrap()
   assert_true(effects.is_empty())
   let pending = object_field(session, "pending_approval").unwrap_or(
@@ -310,7 +310,7 @@ async test "native service handles SIGTERM and SIGINT with durable worker cleanu
       }
       assert_eq(wire_receipt.status, "uncertain")
       let (session, effects) = recovered
-        .invoke("session_get", { "session_id": session_id.to_json() })
+        .invoke("session_get", { "session_id": session_id })
         .unwrap()
       assert_true(effects.is_empty())
       assert_true(session is Json::Object(_))

@@ -869,9 +869,9 @@ async fn NativeTools::repository_metadata(self : NativeTools) -> Json {
         }
       }
       if safe {
-        (value.to_json(), false.to_json())
+        (value, false)
       } else {
-        (Json::null(), false.to_json())
+        (Json::null(), false)
       }
     }
     _ => {
@@ -897,14 +897,14 @@ async fn NativeTools::repository_metadata(self : NativeTools) -> Json {
         }
       }
       if valid_commit {
-        (commit.to_json(), true.to_json())
+        (commit, true)
       } else {
-        (Json::null(), false.to_json())
+        (Json::null(), false)
       }
     }
   }
   Json::object({
-    "name": repository_name.to_json(),
+    "name": repository_name,
     "branch": branch,
     "detached": detached,
   })
