@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- Selecting a ChatGPT model now explicitly activates and saves the ChatGPT provider across root requests, subagents, workspace metadata, and ACP. Switching providers fences in-flight streams and results; signing out requires authentication instead of silently falling back to an API key. Settings can explicitly restore the startup provider configuration.
+
 ### Deprecated
 
 ### Removed
@@ -15,6 +17,8 @@
 ### Security
 
 ### Migration
+
+- The protected ChatGPT store now writes format 2 with the provider choice. Format 1 is read with the existing startup route preserved until a model is explicitly selected. Older dsh versions cannot read format 2; keep a backup before downgrading.
 
 ## 0.1.24 - 2026-10-14
 

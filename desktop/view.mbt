@@ -244,6 +244,7 @@ fn desktop_settings_button_rect(
     "settings-nav-chatgpt" => desktop_rect(258.0, 94.0, 194.0, 38.0)
     "auth-sign-in" => desktop_rect(content_x + 16.0, 252.0, 172.0, 34.0)
     "auth-models-retry" => desktop_rect(content_x + 16.0, 252.0, 156.0, 34.0)
+    "auth-use-configured" => desktop_rect(content_x + 16.0, 292.0, 252.0, 30.0)
     "auth-sign-out" => desktop_rect(content_x + 180.0, 252.0, 112.0, 34.0)
     _ => desktop_rect(0.0, 0.0, content_width, height)
   }
@@ -310,7 +311,7 @@ fn desktop_settings_model_focus_at(
       desktop_settings_model_rect(visible_index, width, height).contains(
         position,
       ) {
-      return Some(model_index + 4)
+      return Some(model_index + 5)
     }
   }
   None
@@ -1227,6 +1228,21 @@ fn desktop_add_settings(
     )
   }
 
+  desktop_add_button(
+    items,
+    529,
+    desktop_settings_button_rect("auth-use-configured", width, height),
+    "起動時のプロバイダー設定を使用",
+    desktop_color(243, 244, 246),
+    desktop_color(55, 65, 81),
+  )
+  if settings_focus == (if connected { 4 } else { 3 }) {
+    desktop_add_focus_outline(
+      items,
+      300529,
+      desktop_settings_button_rect("auth-use-configured", width, height),
+    )
+  }
   desktop_add_text(
     items,
     530,
@@ -1290,7 +1306,9 @@ fn desktop_add_settings(
       let label = desktop_auth_model_label(model)
       let visible_index = model_index - first
       let row = desktop_settings_model_rect(visible_index, width, height)
-      let is_selected = slug != "" && slug == selected_model
+      let is_selected = slug != "" &&
+        slug == selected_model &&
+        desktop_json_string(auth, "provider_choice") == "chatgpt"
       if is_selected {
         desktop_add_quad(
           items,
@@ -1300,7 +1318,7 @@ fn desktop_add_settings(
           None,
         )
       }
-      if settings_focus == model_index + 4 {
+      if settings_focus == model_index + 5 {
         desktop_add_focus_outline(
           items,
           301000 + model_index.to_uint64() * 4,

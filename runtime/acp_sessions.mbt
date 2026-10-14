@@ -166,6 +166,16 @@ async fn NativeRuntime::acp_model_for_session(
   }
   for record in self.state.acp_sessions {
     if record.session_id == session_id {
+      let route = match self.acp_route_id() {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+      if (record.route is Some(stored) && stored != route) ||
+        (record.route is None && record.model is Some(_)) {
+        return Err(
+          "ACP provider route changed; select a model again before prompting",
+        )
+      }
       return Ok(record.model)
     }
   }

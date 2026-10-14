@@ -32,9 +32,9 @@ fn desktop_auth_model_slug(auth : Json, index : Int32) -> String {
 ///|
 fn desktop_auth_focus_count(auth : Json) -> Int32 {
   if desktop_auth_connected(auth) {
-    4 + desktop_auth_model_count(auth)
+    5 + desktop_auth_model_count(auth)
   } else {
-    3
+    4
   }
 }
 
@@ -67,11 +67,11 @@ fn desktop_auth_scroll_for_focus(
   auth : Json,
   focus : Int32,
 ) -> Unit {
-  if !desktop_auth_connected(auth) || focus < 4 {
+  if !desktop_auth_connected(auth) || focus < 5 {
     return
   }
   let visible = desktop_settings_visible_model_rows(state.height)
-  let model_index = focus - 4
+  let model_index = focus - 5
   if model_index < state.settings_scroll {
     state.settings_scroll = model_index
   } else if model_index >= state.settings_scroll + visible {
@@ -279,8 +279,10 @@ async fn desktop_auth_activate_focus(state : DesktopState) -> Unit {
     desktop_auth_start_refresh_models(state)
   } else if connected && state.settings_focus == 3 {
     desktop_auth_start_sign_out(state)
-  } else if connected && state.settings_focus >= 4 {
-    let model = desktop_auth_model_slug(auth, state.settings_focus - 4)
+  } else if state.settings_focus == (if connected { 4 } else { 3 }) {
+    desktop_auth_start_configured_provider(state)
+  } else if connected && state.settings_focus >= 5 {
+    let model = desktop_auth_model_slug(auth, state.settings_focus - 5)
     desktop_auth_start_select_model(state, model)
   }
 }
@@ -367,6 +369,13 @@ async fn desktop_auth_handle_settings_click(
     state.dirty = true
     return
   }
+  if desktop_settings_button_rect("auth-use-configured", width, height).contains(
+      position,
+    ) {
+    state.settings_focus = if desktop_auth_connected(auth) { 4 } else { 3 }
+    desktop_auth_start_configured_provider(state)
+    return
+  }
   if desktop_auth_connected(auth) {
     if desktop_settings_button_rect("auth-models-retry", width, height).contains(
         position,
@@ -385,8 +394,9 @@ async fn desktop_auth_handle_settings_click(
     match model_focus {
       Some(model_focus) => {
         state.settings_focus = model_focus
-        let model = desktop_auth_model_slug(auth, model_focus - 4)
-        if model != desktop_json_string(auth, "selected_model") {
+        let model = desktop_auth_model_slug(auth, model_focus - 5)
+        if model != desktop_json_string(auth, "selected_model") ||
+          desktop_json_string(auth, "provider_choice") != "chatgpt" {
           desktop_auth_start_select_model(state, model)
         } else {
           state.dirty = true
@@ -400,5 +410,21 @@ async fn desktop_auth_handle_settings_click(
     ) {
     state.settings_focus = 2
     desktop_auth_start_sign_in(state)
+  }
+}
+
+///|
+fn desktop_auth_start_configured_provider(state : DesktopState) -> Unit {
+  if state.auth_busy {
+    return
+  }
+  state.auth_busy = true
+  state.auth_error = ""
+  state.group.spawn_bg(no_wait=true, allow_failure=true) <| () => {
+    match state.runtime.auth_use_configured_provider() {
+      Ok(_) => ()
+      Err(error) => state.auth_error = error
+    }
+    desktop_auth_finish_action(state)
   }
 }

@@ -720,11 +720,9 @@ fn service_model_display_name(value : String) -> String {
 
 ///|
 async fn NativeService::metadata(self : NativeService) -> Json {
-  let provider_config = self.runtime.provider_config
+  let provider_config = self.runtime.effective_provider_config()
   let model = if provider_config.auth_mode == NativeAuthMode::ChatGPT {
-    string_field(self.runtime.auth.status(), "selected_model").unwrap_or(
-      provider_config.model,
-    )
+    self.runtime.auth.visible_selected_model().unwrap_or("")
   } else {
     provider_config.model
   }
@@ -732,7 +730,11 @@ async fn NativeService::metadata(self : NativeService) -> Json {
     "project": native_workspace_basename(self.runtime.tools.workspace),
     "repository": self.runtime.tools.repository_metadata(),
     "provider": service_provider_label(provider_config),
-    "model": service_model_display_name(model),
+    "model": if model.is_empty() && provider_config.auth_mode == ChatGPT {
+      "モデル未選択"
+    } else {
+      service_model_display_name(model)
+    },
   }
 }
 
@@ -970,9 +972,23 @@ async fn NativeService::handle_call(
           }
         Err(error) => self.auth_error(connection, error)
       }
+    "auth_use_configured_provider" =>
+      match self.runtime.auth.use_configured_provider() {
+        Ok(result) =>
+          match self.runtime.touch_projection() {
+            Ok(_) =>
+              self.respond_json(connection, 200, {
+                "ok": true,
+                "result": result,
+              })
+            Err(error) =>
+              self.respond_json(connection, 503, { "ok": false, "error": error })
+          }
+        Err(error) => self.auth_error(connection, error)
+      }
     "auth_select_model" => {
       let model = string_field(input, "model").unwrap_or("")
-      match self.runtime.auth.select_model(model) {
+      match self.runtime.select_chatgpt_model(model) {
         Ok(result) =>
           match self.runtime.touch_projection() {
             Ok(_) =>

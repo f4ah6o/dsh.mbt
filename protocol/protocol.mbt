@@ -36,6 +36,7 @@ pub struct AuthProjection {
   scopes : Array[String]
   models : Array[ModelProjection]
   selected_model : String?
+  provider_choice : String
 }
 
 ///|

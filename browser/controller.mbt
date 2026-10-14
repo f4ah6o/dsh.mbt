@@ -130,6 +130,7 @@ fn app_auth_context_key(app : BrowserApp) -> String {
       Json::null(),
     ),
     field(auth, "selected_model").unwrap_or(Json::null()),
+    field(auth, "provider_choice").unwrap_or(Json::null()),
   ]).stringify()
 }
 
@@ -556,33 +557,34 @@ fn render_account(app : BrowserApp) -> Unit {
     "disabled",
     app.mutation || app.auth_models_loading,
   )
-  let options : Array[@yami_kumo.Html] = []
-  if model_count == 0 {
-    let label = if connected {
-      "利用できるモデルがありません"
-    } else {
-      "ChatGPT に接続してモデルを表示"
-    }
-    options.push(
-      html_element("option", [html_attribute("value", "")], [html_text(label)]),
-    )
-  } else {
+  let options : Array[@yami_kumo.Html] = [
+    html_element("option", [html_attribute("value", "")], [
+      html_text("起動時のプロバイダー設定を使用"),
+    ]),
+  ]
+  if string_member(auth, "provider_choice") == "chatgpt" &&
+    !models.any(model => {
+      string_member(model, "slug") == string_member(auth, "selected_model")
+    }) {
     options.push(
       html_element(
         "option",
-        [html_attribute("value", ""), html_boolean_attribute("disabled")],
-        [html_text("モデルを選択")],
+        [
+          html_attribute("value", "chatgpt:"),
+          html_boolean_attribute("disabled"),
+        ],
+        [html_text("ChatGPT に接続してモデルを選択")],
       ),
     )
-    for model in models {
-      let slug = string_member(model, "slug")
-      if slug != "" {
-        options.push(
-          html_element("option", [html_attribute("value", slug)], [
-            html_text(object_string(model, "display_name", slug)),
-          ]),
-        )
-      }
+  }
+  for model in models {
+    let slug = string_member(model, "slug")
+    if slug != "" {
+      options.push(
+        html_element("option", [html_attribute("value", "chatgpt:" + slug)], [
+          html_text(object_string(model, "display_name", slug)),
+        ]),
+      )
     }
   }
   let option_html = match @yami_kumo.render_html(@yami_kumo.fragment(options)) {
@@ -596,17 +598,17 @@ fn render_account(app : BrowserApp) -> Unit {
   })
   dom_set_value(
     "model-picker",
-    if selected_is_available {
-      selected_model
+    if string_member(auth, "provider_choice") == "chatgpt" {
+      if selected_is_available {
+        "chatgpt:" + selected_model
+      } else {
+        "chatgpt:"
+      }
     } else {
       ""
     },
   )
-  dom_set_boolean_property(
-    "model-picker",
-    "disabled",
-    !connected || model_count == 0 || app.mutation,
-  )
+  dom_set_boolean_property("model-picker", "disabled", app.mutation)
   dom_set_boolean_property("install-app", "hidden", app.install_prompt is None)
   schedule_auth_refresh(app, auth_state == "signing_in")
 }
@@ -1935,14 +1937,20 @@ async fn install_prompt_choice(app : BrowserApp, prompt : BrowserValue) -> Unit 
 
 ///|
 fn handle_model_change(app : BrowserApp) -> Unit {
-  let model = dom_value("model-picker")
-  if model == "" {
-    return
+  let value = dom_value("model-picker")
+  let model = if value.has_prefix("chatgpt:") {
+    value[8:].to_owned()
+  } else {
+    ""
   }
   mutate(app, async fn() {
     match
       local_operation(
-        "auth_select_model",
+        if model == "" {
+          "auth_use_configured_provider"
+        } else {
+          "auth_select_model"
+        },
         Json::object({ "model": Json::string(model) }),
       ) {
       Ok(_) =>
@@ -1954,7 +1962,11 @@ fn handle_model_change(app : BrowserApp) -> Unit {
                 display_name = object_string(entry, "display_name", model)
               }
             }
-            app.action_message = "\{display_name} を使用しています。"
+            app.action_message = if model == "" {
+              "起動時のプロバイダー設定を使用しています。"
+            } else {
+              "ChatGPT の \{display_name} を使用しています。"
+            }
             sync_from_client(app)
             Ok(())
           }
