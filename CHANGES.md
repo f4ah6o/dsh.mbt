@@ -4,9 +4,13 @@
 
 ### Added
 
+- Bundle the complete signed macOS Dsh.app in the raw Apple Silicon CLI release, so the same `moon binstall` installation can launch `dsh desktop`. Extract and verify it in an owner-only version/content cache while retaining the separate unbundled worker helper.
+
 ### Changed
 
 ### Fixed
+
+- Selecting a ChatGPT model now explicitly activates and saves the ChatGPT provider across root requests, subagents, workspace metadata, and ACP. Switching providers fences in-flight streams and results; signing out requires authentication instead of silently falling back to an API key. Settings can explicitly restore the startup provider configuration.
 
 ### Deprecated
 
@@ -14,7 +18,11 @@
 
 ### Security
 
+- Validate macOS payload bounds, SHA-256 and archive paths/types before extraction, match the cache against an embedded file manifest and verify its signature before every launch, serialize concurrent extraction and preserve quarantine. Existing cache entries are never replaced automatically.
+
 ### Migration
+
+- The protected ChatGPT store now writes format 2 with the provider choice. Format 1 is read with the existing startup route preserved until a model is explicitly selected. Older dsh versions cannot read format 2; keep a backup before downgrading.
 
 ## 0.1.24 - 2026-10-14
 

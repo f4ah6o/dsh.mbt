@@ -32,6 +32,7 @@ fn native_fixture_endpoints() -> AuthEndpoints {
     token: "http://127.0.0.1:43127/token",
     discovery: "http://127.0.0.1:43127/.well-known/openid-configuration",
     models: "http://127.0.0.1:43127/models",
+    responses: "http://127.0.0.1:43127/v1/responses",
     test_mode: true,
   }
 }
@@ -647,6 +648,7 @@ async test "OAuth GET deadline and body limit cover streamed responses" {
     token: endpoint,
     discovery: endpoint,
     models: endpoint,
+    responses: endpoint,
     test_mode: true,
   }
   @async.with_task_group() <| group => {
@@ -678,6 +680,7 @@ async test "OAuth GET deadline and body limit cover streamed responses" {
     token: second_endpoint,
     discovery: second_endpoint,
     models: second_endpoint,
+    responses: second_endpoint,
     test_mode: true,
   }
   @async.with_task_group() <| group => {
@@ -723,6 +726,7 @@ async test "OAuth token POST deadline includes response body streaming" {
     token: endpoint,
     discovery: endpoint,
     models: endpoint,
+    responses: endpoint,
     test_mode: true,
   }
   @async.with_task_group() <| group => {

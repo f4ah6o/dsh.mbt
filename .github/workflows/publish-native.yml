@@ -79,6 +79,14 @@ jobs:
           sh scripts/build-desktop-linux.sh --build
           DSH_LINUX_DESKTOP_CLI="$PWD/_build/native/release/build/f4ah6o/dsh/cmd/dsh/dsh.exe" python3 scripts/test-linux-desktop-payload.py
           python3 scripts/test-smoke-release-linux.py
+      - name: Build and package the macOS app
+        if: matrix.platform == 'darwin-aarch64'
+        run: |
+          sh scripts/build-desktop.sh --build
+          sh scripts/package-macos-app.sh _build/macos/Dsh.app release/Dsh-macos-arm64.zip
+      - name: Validate the extracted macOS app bundle in hosted CI
+        if: matrix.platform == 'darwin-aarch64'
+        run: sh scripts/smoke-release-macos.sh --bundle-only release/Dsh-macos-arm64.zip
       - name: Package raw release asset
         shell: bash
         run: |
@@ -100,7 +108,8 @@ jobs:
               --desktop _build/native/release/build/f4ah6o/dsh/desktop/linux/linux.exe \
               --output "release/dsh-${{ matrix.platform }}"
           else
-            cp "$binaries" "release/dsh-${{ matrix.platform }}"
+            sh scripts/package-macos-cli.sh release/Dsh-macos-arm64.zip "release/dsh-${{ matrix.platform }}"
+            DSH_MACOS_DESKTOP_CLI="$PWD/release/dsh-${{ matrix.platform }}" python3 scripts/test-macos-desktop-payload.py
           fi
           chmod 755 "release/dsh-${{ matrix.platform }}"
           test -s "release/dsh-${{ matrix.platform }}"
@@ -117,14 +126,6 @@ jobs:
           path: _build/linux-gui-evidence/
           if-no-files-found: warn
           retention-days: 7
-      - name: Build and package the macOS app
-        if: matrix.platform == 'darwin-aarch64'
-        run: |
-          sh scripts/build-desktop.sh --build
-          sh scripts/package-macos-app.sh _build/macos/Dsh.app release/Dsh-macos-arm64.zip
-      - name: Validate the extracted macOS app bundle in hosted CI
-        if: matrix.platform == 'darwin-aarch64'
-        run: sh scripts/smoke-release-macos.sh --bundle-only release/Dsh-macos-arm64.zip
       - uses: actions/upload-artifact@v4
         with:
           name: native-${{ matrix.platform }}

@@ -2753,8 +2753,9 @@ async fn NativeRuntime::project_provider_stream_batch(
   effect_id : @engine.EffectId,
   text : String,
   reasoning : String,
+  selection~ : NativeProviderSelection? = None,
 ) -> Result[Unit, String] {
-  match self.project(effect_id, text, reasoning) {
+  match self.project(effect_id, text, reasoning, selection~) {
     Ok(next_effects) if next_effects.is_empty() => Ok(())
     Ok(_) => Err("provider stream projection produced new effects")
     Err(error) => Err(error)
@@ -2767,22 +2768,28 @@ async fn NativeRuntime::project_provider_delta(
   effect_id : @engine.EffectId,
   text : String,
   reasoning : String,
+  selection~ : NativeProviderSelection? = None,
 ) -> Result[Unit, String] {
   if text.is_empty() && reasoning.is_empty() {
     return Ok(())
   }
   if native_provider_utf16_units(text) + native_provider_utf16_units(reasoning) <=
     NATIVE_PROVIDER_STREAM_DELTA_CAPACITY {
-    return self.project_provider_stream_batch(effect_id, text, reasoning)
+    return self.project_provider_stream_batch(
+      effect_id,
+      text,
+      reasoning,
+      selection~,
+    )
   }
   for chunk in native_provider_split_stream_delta(text) {
-    match self.project_provider_stream_batch(effect_id, chunk, "") {
+    match self.project_provider_stream_batch(effect_id, chunk, "", selection~) {
       Ok(_) => ()
       Err(error) => return Err(error)
     }
   }
   for chunk in native_provider_split_stream_delta(reasoning) {
-    match self.project_provider_stream_batch(effect_id, "", chunk) {
+    match self.project_provider_stream_batch(effect_id, "", chunk, selection~) {
       Ok(_) => ()
       Err(error) => return Err(error)
     }
@@ -2813,40 +2820,10 @@ async fn NativeRuntime::run_provider_effect(
   // Bind every retry to the account, model, and generation selected for this
   // effect. A sign-out, re-login, or model switch during backoff must make the
   // old effect fail instead of silently sending it under a new identity.
-  let selection = if self.provider_config.demo_provider {
-    match
-      NativeProviderSelection::api_key(
-        NativeProtocol::OpenAIChatCompletions,
-        "offline-demo",
-        None,
-        self.provider_config.generation,
-      ) {
-      Ok(value) => value
-      Err(error) =>
-        return self.complete(effect.id(), native_provider_failure(error))
-    }
-  } else if self.provider_config.auth_mode == NativeAuthMode::ChatGPT {
-    let selected = match acp_model {
-      Some(model) => self.auth.provider_selection_for_model(model)
-      None => self.auth.provider_selection()
-    }
-    match selected {
-      Ok(value) => value
-      Err(error) =>
-        return self.complete(effect.id(), native_provider_failure(error))
-    }
-  } else {
-    match
-      NativeProviderSelection::api_key(
-        self.provider_config.protocol,
-        acp_model.unwrap_or(self.provider_config.model),
-        self.provider_config.base_url,
-        self.provider_config.generation,
-      ) {
-      Ok(value) => value
-      Err(error) =>
-        return self.complete(effect.id(), native_provider_failure(error))
-    }
+  let selection = match self.capture_provider_selection(acp_model) {
+    Ok(value) => value
+    Err(error) =>
+      return self.complete(effect.id(), native_provider_failure(error))
   }
   let api_key = if self.provider_config.demo_provider {
     None
@@ -2872,7 +2849,12 @@ async fn NativeRuntime::run_provider_effect(
     None
   }
   while final_result is None {
-    let result : Result[Json, String] = if self.provider_config.demo_provider {
+    let result : Result[Json, String] = if self.validate_provider_selection(
+        selection,
+      )
+      is Err(error) {
+      Err(error)
+    } else if self.provider_config.demo_provider {
       Ok(native_demo_provider_response(request))
     } else if selection.auth_mode() == NativeAuthMode::ChatGPT {
       self.auth.run_responses(selection, request, async fn(
@@ -2883,14 +2865,24 @@ async fn NativeRuntime::run_provider_effect(
           @provider.ResponsesEvent::ReasoningDelta(value) => ("", value)
           _ => ("", "")
         }
-        self.project_provider_delta(effect.id(), text, why)
+        self.project_provider_delta(
+          effect.id(),
+          text,
+          why,
+          selection=Some(selection),
+        )
       })
     } else {
       native_run_api_key(selection, request, api_key.unwrap(), async fn(
         text,
         why,
       ) -> Result[Unit, String] {
-        self.project_provider_delta(effect.id(), text, why)
+        self.project_provider_delta(
+          effect.id(),
+          text,
+          why,
+          selection=Some(selection),
+        )
       })
     }
     match result {
@@ -2953,8 +2945,18 @@ async fn NativeRuntime::run_provider_effect(
   }
   match control {
     Some(value) =>
-      self.complete_provider_result(effect, final_result.unwrap(), value)
-    None => self.complete(effect.id(), final_result.unwrap())
+      self.complete_provider_result(
+        effect,
+        final_result.unwrap(),
+        value,
+        selection=Some(selection),
+      )
+    None =>
+      self.complete(
+        effect.id(),
+        final_result.unwrap(),
+        selection=Some(selection),
+      )
   }
 }
 
@@ -3084,11 +3086,18 @@ async fn NativeRuntime::project(
   effect_id : @engine.EffectId,
   content : String,
   reasoning : String,
+  selection~ : NativeProviderSelection? = None,
 ) -> Result[Array[@engine.EngineEffect], String] {
   self.gate.acquire()
   defer self.gate.release()
   if self.stopped || self.closed {
     return Err("native runtime is stopped")
+  }
+  if selection is Some(value) {
+    match self.validate_provider_selection(value) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
   }
   match self.api.project_effect_stream(effect_id, content, reasoning) {
     Err(error) => Err(error)
@@ -3105,11 +3114,16 @@ async fn NativeRuntime::complete(
   self : NativeRuntime,
   effect_id : @engine.EffectId,
   result : Json,
+  selection~ : NativeProviderSelection? = None,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
   self.gate.acquire()
   defer self.gate.release()
   if self.stopped || self.closed {
     return Err("native runtime is stopped")
+  }
+  let result = match selection {
+    Some(value) => self.provider_result(value, result)
+    None => result
   }
   let completion = match self.api.complete_effect(effect_id, result) {
     Ok(value) => value
@@ -3409,9 +3423,10 @@ async fn NativeRuntime::complete_provider_result(
   effect : @engine.EngineEffect,
   result : Json,
   control : NativeJobControl,
+  selection~ : NativeProviderSelection? = None,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
   if !self.hooks.has_stop() {
-    return self.complete(effect.id(), result)
+    return self.complete(effect.id(), result, selection~)
   }
   let session_id = effect.session_id().as_string()
   let typed_session_id = match @engine.SessionId::new(session_id) {
@@ -3426,6 +3441,10 @@ async fn NativeRuntime::complete_provider_result(
     }
     if control.cancelled.val {
       return Err("native command was cancelled")
+    }
+    let result = match selection {
+      Some(value) => self.provider_result(value, result)
+      None => result
     }
     let completion = match
       self.api.complete_effect_with_stop_hook(effect.id(), result) {

@@ -29,5 +29,6 @@ options(
     "oauth_os.c",
     "signal_os.c",
     "linux_desktop_payload.c",
+    "macos_desktop_payload.c",
   ],
 )

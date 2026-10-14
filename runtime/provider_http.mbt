@@ -245,7 +245,21 @@ async fn NativeAuth::run_responses_inner(
     "Authorization": "Bearer " + credential.access_token_for_transport(),
     "Content-Type": "application/json",
   }
-  let client = @http.Client("https://api.openai.com", headers~) catch {
+  // Endpoints are private, immutable coordinator configuration. Production
+  // remains pinned; fixtures can use the same HTTP/decoder path on loopback.
+  if !native_auth_endpoint_allowed(
+      self.endpoints,
+      self.endpoints.responses,
+      "responses",
+    ) {
+    return Err("AUTH_ENDPOINT_INVALID: Responses endpoint is not trusted")
+  }
+  let (origin, path) = match
+    native_provider_base_url(self.endpoints.responses) {
+    Ok(value) => value
+    Err(_) => return Err("AUTH_ENDPOINT_INVALID: Responses endpoint is invalid")
+  }
+  let client = @http.Client(origin, headers~) catch {
     _ =>
       return Ok(
         native_provider_failure_json(
@@ -254,10 +268,7 @@ async fn NativeAuth::run_responses_inner(
       )
   }
   defer client.close()
-  let response = client
-    ..request(@http.Post, "/v1/responses")
-    ..write(body)
-    .end_request() catch {
+  let response = client..request(@http.Post, path)..write(body).end_request() catch {
       _ =>
         return Ok(
           native_provider_failure_json(

@@ -225,7 +225,21 @@ fn AuthProjection::parse(value : Json) -> Result[AuthProjection, String] {
   if selected_model is Some(slug) && !models.any(model => model.slug == slug) {
     return Err("selected model is not present in the visible account catalog")
   }
-  Ok({ state, account, plan_usage, scopes, models, selected_model, })
+  let provider_choice = optional_string_field(value, "provider_choice").unwrap_or(
+    "configured",
+  )
+  if !["configured", "chatgpt"].contains(provider_choice) {
+    return Err("auth projection has an invalid provider choice")
+  }
+  Ok({
+    state,
+    account,
+    plan_usage,
+    scopes,
+    models,
+    selected_model,
+    provider_choice,
+  })
 }
 
 ///|
@@ -271,6 +285,7 @@ pub fn AuthProjection::json(self : AuthProjection) -> Json {
       }),
     ),
     "selected_model": optional_string_json(self.selected_model),
+    "provider_choice": Json::string(self.provider_choice),
   })
 }
 

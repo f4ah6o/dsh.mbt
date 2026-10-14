@@ -286,7 +286,7 @@ async fn native_cli_action(
   }
   match native_option(args, "--select-model") {
     Some(model) => {
-      let result = match runtime.auth.select_model(model) {
+      let result = match runtime.select_chatgpt_model(model) {
         Ok(value) => value
         Err(error) => return Err(error)
       }

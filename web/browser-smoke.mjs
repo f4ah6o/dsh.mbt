@@ -669,6 +669,7 @@ async function testCompiledAuthModelFlow(browserInstance) {
   let connected = false;
   let modelsLoaded = false;
   let selectedModel = "";
+  let providerChoice = "configured";
   let modelRefreshes = 0;
   let signInRequests = 0;
   let invalidAuthorizationUrl = false;
@@ -711,6 +712,7 @@ async function testCompiledAuthModelFlow(browserInstance) {
           ]
           : [],
         selected_model: selectedModel || null,
+        provider_choice: providerChoice,
       }
       : {
         state: "signed_out",
@@ -760,6 +762,11 @@ async function testCompiledAuthModelFlow(browserInstance) {
       });
       return;
     }
+    if (operation === "auth_use_configured_provider") {
+      providerChoice = "configured";
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ ok: true, result: {} }) });
+      return;
+    }
     if (operation === "auth_select_model") {
       if (rejectNextModel) {
         rejectNextModel = false;
@@ -775,6 +782,7 @@ async function testCompiledAuthModelFlow(browserInstance) {
         return;
       }
       selectedModel = input.model;
+      providerChoice = "chatgpt";
       await route.fulfill({
         contentType: "application/json",
         body: JSON.stringify({ ok: true, result: { selected_model: selectedModel } }),
@@ -827,7 +835,7 @@ async function testCompiledAuthModelFlow(browserInstance) {
   assert.equal(await page.locator("#auth-models-retry").isHidden(), false);
   await page.locator("#auth-models-retry").click();
   await page.waitForFunction(
-    () => document.querySelector("#model-picker option[value='fixture-model']"),
+    () => document.querySelector("#model-picker option[value='chatgpt:fixture-model']"),
     null,
     { timeout: 20_000 },
   );
@@ -845,12 +853,19 @@ async function testCompiledAuthModelFlow(browserInstance) {
   assert.equal(tabs[1].href, "https://auth.openai.com/api/accounts/authorize?client_id=fixture");
   assert.equal(tabs[1].opener, null, "the authorization window has no opener");
 
-  await page.locator("#model-picker").selectOption("fixture-model");
+  await page.locator("#model-picker").selectOption("chatgpt:fixture-model");
   await page.waitForFunction(
-    () => document.getElementById("model-picker")?.value === "fixture-model",
+    () => document.getElementById("model-picker")?.value === "chatgpt:fixture-model" && !document.getElementById("model-picker").disabled,
   );
+  await page.locator("#model-picker").selectOption("");
+  await page.waitForFunction(() => document.getElementById("model-picker")?.value === "" && !document.getElementById("model-picker").disabled);
+  assert.equal(providerChoice, "configured", "restoring startup routing is explicit");
+  assert.equal(selectedModel, "fixture-model", "restoring keeps the cached ChatGPT model");
+  await page.locator("#model-picker").selectOption("chatgpt:fixture-model");
+  await page.waitForFunction(() => document.getElementById("model-picker")?.value === "chatgpt:fixture-model" && !document.getElementById("model-picker").disabled);
+  assert.equal(providerChoice, "chatgpt", "choosing the same cached model reactivates ChatGPT");
   rejectNextModel = true;
-  await page.locator("#model-picker").selectOption("alternate-model");
+  await page.locator("#model-picker").selectOption("chatgpt:alternate-model");
   await page.waitForFunction(
     () => {
       const error = document.getElementById("settings-error");
@@ -860,13 +875,13 @@ async function testCompiledAuthModelFlow(browserInstance) {
   assert.equal(await page.locator("#settings-error").isVisible(), true, "rejected model selections are visible in Settings");
   assert.equal(
     await page.locator("#model-picker").inputValue(),
-    "fixture-model",
+    "chatgpt:fixture-model",
     "a failed remote model selection restores the previously active model",
   );
 
   holdNextModelRejection = true;
   rejectNextModel = true;
-  await page.locator("#model-picker").selectOption("alternate-model");
+  await page.locator("#model-picker").selectOption("chatgpt:alternate-model");
   await rejectedModelStarted;
   await page.locator("#settings-close").click();
   await page.waitForFunction(() => document.getElementById("settings-page")?.hidden === true);
@@ -987,14 +1002,14 @@ async function testStaleAuthCatalogCannotOverwriteNewAccount(browserInstance) {
   connectedProfile = "profile-b";
   await page.evaluate(() => window.dispatchEvent(new Event("pageshow")));
   await page.waitForFunction(
-    () => Boolean(document.querySelector("#model-picker option[value='model-b']")),
+    () => Boolean(document.querySelector("#model-picker option[value='chatgpt:model-b']")),
     null,
     { timeout: 20_000 },
   );
   assert.ok(authModelRequests >= 2, "profile B starts its own model catalog request while A is pending");
   releaseProfileA();
   await page.waitForTimeout(300);
-  assert.equal(await page.locator("#model-picker option[value='model-b']").count(), 1);
+  assert.equal(await page.locator("#model-picker option[value='chatgpt:model-b']").count(), 1);
   assert.equal(await page.locator("#model-picker").isDisabled(), false);
   assert.equal(await page.locator("#auth-models-retry").isHidden(), true);
   assert.doesNotMatch(await page.locator("#auth-guidance").textContent(), /モデルを読み込めませんでした/);

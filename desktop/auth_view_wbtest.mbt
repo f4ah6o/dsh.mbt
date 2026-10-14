@@ -5,10 +5,10 @@ test "ChatGPT settings keyboard focus follows available account controls" {
     "account": Json::null(),
     "models": Json::array([]),
   })
-  assert_eq(desktop_auth_focus_count(signed_out), 3)
+  assert_eq(desktop_auth_focus_count(signed_out), 4)
   assert_eq(desktop_auth_next_focus(signed_out, 0, false), 1)
-  assert_eq(desktop_auth_next_focus(signed_out, 2, false), 0)
-  assert_eq(desktop_auth_next_focus(signed_out, 0, true), 2)
+  assert_eq(desktop_auth_next_focus(signed_out, 3, false), 0)
+  assert_eq(desktop_auth_next_focus(signed_out, 0, true), 3)
 
   let connected = Json::object({
     "state": Json::string("connected"),
@@ -18,9 +18,9 @@ test "ChatGPT settings keyboard focus follows available account controls" {
       Json::object({ "slug": Json::string("fixture-model-two") }),
     ]),
   })
-  assert_eq(desktop_auth_focus_count(connected), 6)
-  assert_eq(desktop_auth_next_focus(connected, 5, false), 0)
-  assert_eq(desktop_auth_next_focus(connected, 0, true), 5)
+  assert_eq(desktop_auth_focus_count(connected), 7)
+  assert_eq(desktop_auth_next_focus(connected, 6, false), 0)
+  assert_eq(desktop_auth_next_focus(connected, 0, true), 6)
   assert_eq(desktop_auth_model_slug(connected, 1), "fixture-model-two")
   assert_eq(desktop_auth_model_slug(connected, 2), "")
 }
@@ -112,7 +112,7 @@ test "Settings pointer mapping targets the model row painted before focus repair
       (row.top() + row.bottom()) / 2.0,
     ),
   )
-  assert_eq(focus_after_click, 4)
+  assert_eq(focus_after_click, 5)
   assert_eq(scroll_after_click, 0)
-  assert_eq(clicked_focus, Some(4))
+  assert_eq(clicked_focus, Some(5))
 }

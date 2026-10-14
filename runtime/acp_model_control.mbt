@@ -100,23 +100,40 @@ fn native_acp_route_fingerprint(
 
 ///|
 fn NativeRuntime::acp_route_id(self : NativeRuntime) -> Result[String, String] {
-  let auth = match self.provider_config.auth_mode {
+  let auth = match self.effective_provider_config().auth_mode {
     NativeAuthMode::ApiKey => "api-key"
     NativeAuthMode::ChatGPT => "chatgpt"
   }
-  let base_url = if self.provider_config.auth_mode == NativeAuthMode::ChatGPT {
+  let base_url = if self.effective_provider_config().auth_mode ==
+    NativeAuthMode::ChatGPT {
     "https://api.openai.com"
   } else {
-    self.provider_config.base_url.unwrap_or(
-      if self.provider_config.protocol == NativeProtocol::DeepSeekMessages {
+    self.effective_provider_config().base_url.unwrap_or(
+      if self.effective_provider_config().protocol ==
+        NativeProtocol::DeepSeekMessages {
         "https://api.deepseek.com/anthropic"
       } else {
         "https://api.openai.com"
       },
     )
   }
+  let auth = if self.provider_config.demo_provider {
+    auth
+  } else {
+    let identity = if self.effective_provider_config().auth_mode == ChatGPT {
+      self.auth.model_identity.unwrap_or("signed-out")
+    } else {
+      ""
+    }
+    // Retain the legacy configured fingerprint until an explicit transition.
+    if self.auth.route_generation.is_empty() && identity.is_empty() {
+      auth
+    } else {
+      auth + ":" + self.auth.route_generation + ":" + identity
+    }
+  }
   native_acp_route_fingerprint(
-    self.provider_config.protocol,
+    self.effective_provider_config().protocol,
     auth,
     base_url,
     self.provider_config.demo_provider,
@@ -140,7 +157,7 @@ fn native_acp_append_unique(models : Array[String], model : String) -> Unit {
 
 ///|
 fn NativeRuntime::acp_default_model(self : NativeRuntime) -> String? {
-  if self.provider_config.auth_mode == NativeAuthMode::ChatGPT {
+  if self.effective_provider_config().auth_mode == NativeAuthMode::ChatGPT {
     self.auth.visible_selected_model()
   } else {
     Some(self.provider_config.model)
@@ -158,7 +175,7 @@ fn NativeRuntime::acp_model_choices(
     }
     return Ok([self.provider_config.model])
   }
-  if self.provider_config.auth_mode == NativeAuthMode::ChatGPT {
+  if self.effective_provider_config().auth_mode == NativeAuthMode::ChatGPT {
     let visible = self.auth.visible_model_slugs()
     let models : Array[String] = []
     if allowlist.length() == 0 {
@@ -204,11 +221,16 @@ fn NativeRuntime::acp_model_options(
   if !models.contains(current_model) {
     return Err("stored ACP model is not available in the current model catalog")
   }
-  let provider = native_acp_model_provider_id(self.provider_config.protocol)
+  let provider = native_acp_model_provider_id(
+    self.effective_provider_config().protocol,
+  )
   let options : Array[Json] = []
   for model in models {
     options.push({
-      "value": native_acp_model_value(self.provider_config.protocol, model),
+      "value": native_acp_model_value(
+        self.effective_provider_config().protocol,
+        model,
+      ),
       "name": model,
     })
   }
@@ -220,13 +242,18 @@ fn NativeRuntime::acp_model_options(
         "category": Json::string("model"),
         "type": Json::string("select"),
         "currentValue": Json::string(
-          native_acp_model_value(self.provider_config.protocol, current_model),
+          native_acp_model_value(
+            self.effective_provider_config().protocol,
+            current_model,
+          ),
         ),
         "options": Json::array([
           Json::object({
             "group": Json::string(provider),
             "name": Json::string(
-              native_acp_model_provider_name(self.provider_config.protocol),
+              native_acp_model_provider_name(
+                self.effective_provider_config().protocol,
+              ),
             ),
             "options": Json::array(options),
           }),
@@ -252,7 +279,8 @@ fn NativeRuntime::acp_model_from_value(
     Err(error) => return Err(error)
   }
   for model in models {
-    if selected == native_acp_model_value(self.provider_config.protocol, model) {
+    if selected ==
+      native_acp_model_value(self.effective_provider_config().protocol, model) {
       return Ok(model)
     }
   }
