@@ -2,6 +2,7 @@
 async fn native_startup_expect_failure(
   args : Array[String],
   message : String,
+  exact~ : Bool = false,
 ) -> Unit {
   let executable = safety_native_worker_launcher().unwrap()
   let (status, stdout, stderr) = match
@@ -14,7 +15,11 @@ async fn native_startup_expect_failure(
   // A signal death is not a normal status 1, even if a diagnostic was printed.
   assert_eq(status, 1)
   assert_eq(stdout.text(), "")
-  assert_true(stderr.text().contains(message))
+  if exact {
+    assert_eq(stderr.text(), message)
+  } else {
+    assert_true(stderr.text().contains(message))
+  }
 }
 
 ///|
@@ -35,6 +40,13 @@ async test "CLI startup errors exit normally on stderr without changing a live l
       )
       assert_eq(@fs.read_file(data_dir + "/host.lock").text(), original)
     }
+    // ACP must not disclose the data directory or recorded lock owner.
+    native_startup_expect_failure(
+      ["acp", "--demo", "--data-dir", data_dir, "--workspace", workspace],
+      "native runtime could not start\n",
+      exact=true,
+    )
+    assert_eq(@fs.read_file(data_dir + "/host.lock").text(), original)
     native_startup_expect_failure(["web", "--port", "65536"], "--port")
     native_startup_expect_failure(["unknown-command"], "Unknown command")
   }
@@ -49,4 +61,24 @@ async test "non macOS desktop startup rejects the platform before app lookup" {
       "supported only on macOS",
     )
   }
+}
+
+///|
+async test "ACP invalid arguments keep stdout empty and stderr sanitized" {
+  // A known invalid value reliably exercises argument validation, without
+  // depending on how unknown options are handled or opening a data directory.
+  native_startup_expect_failure(
+    ["acp", "--hooks-dialect", "private-invalid-dialect"],
+    "native ACP arguments are invalid\n",
+    exact=true,
+  )
+}
+
+///|
+async test "malformed internal worker arguments exit normally on stderr" {
+  native_startup_expect_failure(
+    ["--internal-worker", "private-worker-argument"],
+    "invalid internal worker arguments\n",
+    exact=true,
+  )
 }
