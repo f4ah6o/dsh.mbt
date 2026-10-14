@@ -19,7 +19,15 @@ async fn desktop_handle_event(
       state.height = height
       state.dirty = true
     }
-    @platform.ScaleChanged | @platform.FocusChanged(_) => state.dirty = true
+    @platform.ScaleChanged => state.dirty = true
+    @platform.FrameCompleted => state.frame_completed_count += 1
+    @platform.FocusChanged(focused) => {
+      match (state.host.focus_changed)(state.window, focused) {
+        Ok(_) => ()
+        Err(error) => state.error_message = desktop_error_text(error)
+      }
+      state.dirty = true
+    }
     @platform.Input(@primitives.TextInput(text~)) =>
       if !state.settings_open {
         desktop_insert_text(state, text)
@@ -58,7 +66,7 @@ async fn desktop_handle_event(
       // terminal Destroyed event. Do not query metrics again in this pump.
       state.close_requested = true
       state.dirty = false
-      match state.host.destroy_window(state.window) {
+      match state.host.backend.destroy_window(state.window) {
         Ok(_) => ()
         Err(error) => state.error_message = desktop_error_text(error)
       }
@@ -76,7 +84,17 @@ async fn desktop_pump(
   state : DesktopState,
   force_poll : Bool,
 ) -> Result[Unit, String] {
-  let event = match state.host.next_event(timeout_ms=32) {
+  if !state.signal_requested &&
+    !state.close_requested &&
+    !state.done &&
+    @runtime.desktop_shutdown_requested() {
+    state.signal_requested = true
+    match state.host.backend.request_close(state.window) {
+      Ok(_) => ()
+      Err(error) => return Err(desktop_error_text(error))
+    }
+  }
+  let event = match state.host.backend.next_event(timeout_ms=32) {
     Ok(value) => value
     Err(error) => return Err(desktop_error_text(error))
   }
@@ -97,7 +115,7 @@ async fn desktop_pump(
     desktop_refresh(state)
   }
   if state.dirty && !state.done && !state.close_requested {
-    match state.host.window_metrics(state.window) {
+    match state.host.backend.window_metrics(state.window) {
       Ok((width, height, scale)) => {
         state.width = width
         state.height = height
@@ -130,15 +148,18 @@ async fn desktop_pump(
       settings_scroll=state.settings_scroll,
       settings_focus=state.settings_focus,
     )
-    match state.host.present(state.window, frame) {
+    match state.host.backend.present(state.window, frame) {
       Ok(_) => {
         state.render_count += 1
         state.dirty = false
       }
-      Err(error) => return Err(desktop_error_text(error))
+      Err(error) =>
+        if !(error.code() is @diagnostics.Busy) {
+          return Err(desktop_error_text(error))
+        }
     }
   }
-  // The host poll is a synchronous AppKit call, so explicitly yield to the
+  // The host poll is a synchronous native call, so explicitly yield to the
   // runtime task group after each bounded poll. Provider/tool effects run in
   // background tasks and otherwise could starve behind an interactive loop.
   @async.sleep(0)
@@ -163,7 +184,7 @@ fn desktop_post_click(
     (rect.left() + rect.right()) / 2.0,
     (rect.top() + rect.bottom()) / 2.0,
   )
-  match state.host.post_test_click(state.window, point) {
+  match (state.host.post_test_click)(state.window, point) {
     Ok(_) => Ok(())
     Err(error) => Err(desktop_error_text(error))
   }

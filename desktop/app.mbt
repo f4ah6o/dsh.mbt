@@ -1,5 +1,8 @@
 ///|
-async fn desktop_run(config : DesktopConfig) -> Result[Unit, String] {
+async fn desktop_run(
+  config : DesktopConfig,
+  start : () -> Result[Host, String],
+) -> Result[Unit, String] {
   let runtime = match
     @runtime.NativeDesktop::open(
       config.data_dir,
@@ -24,25 +27,30 @@ async fn desktop_run(config : DesktopConfig) -> Result[Unit, String] {
     Ok(value) => value
     Err(error) => return Err("dsh runtime could not start: " + error)
   }
-  let host = match @macos.Host::start() {
+  let host = match start() {
     Ok(value) => value
     Err(error) => {
       ignore(runtime.close())
-      return Err(
-        "macOS desktop host could not start: " + desktop_error_text(error),
-      )
+      return Err("native desktop host could not start: " + error)
     }
   }
   let mut window : @platform.WindowId? = None
   let mut offline_session : String? = None
   let result = @async.with_task_group() <| group => {
     let created = match
-      host.create_window("dsh — Native Assistant", 1120.0, 760.0) {
+      host.backend.create_window("dsh — Native Assistant", 1120.0, 760.0) {
       Ok(value) => value
       Err(error) =>
         return Err(
           "native window could not be created: " + desktop_error_text(error),
         )
+    }
+    match (host.initialize_window)(created) {
+      Err(error) => {
+        ignore(host.backend.destroy_window(created))
+        return Err(desktop_error_text(error))
+      }
+      Ok(_) => ()
     }
     window = Some(created)
     let state = desktop_state(runtime, host, created, group, config)
@@ -54,7 +62,7 @@ async fn desktop_run(config : DesktopConfig) -> Result[Unit, String] {
           Ok(())
         }
         Err(error) => {
-          ignore(host.request_close(created))
+          ignore(host.backend.request_close(created))
           for _ in 0..<3 {
             ignore(desktop_pump(state, false))
           }
@@ -71,7 +79,8 @@ async fn desktop_run(config : DesktopConfig) -> Result[Unit, String] {
           Err(error) => {
             state.error_message = error
             loop_result = Err(error)
-            ignore(host.request_close(created))
+            ignore(host.backend.request_close(created))
+            state.done = true
           }
         }
       }
@@ -85,10 +94,10 @@ async fn desktop_run(config : DesktopConfig) -> Result[Unit, String] {
     }
   }
   match window {
-    Some(created) => ignore(host.destroy_window(created))
+    Some(created) => ignore(host.backend.destroy_window(created))
     None => ()
   }
-  let stopped = host.stop()
+  let stopped = host.backend.stop()
   match result {
     Err(error) => {
       ignore(runtime.close())
@@ -98,7 +107,7 @@ async fn desktop_run(config : DesktopConfig) -> Result[Unit, String] {
   }
   match stopped {
     Err(error) =>
-      return Err("macOS host shutdown failed: " + desktop_error_text(error))
+      return Err("native host shutdown failed: " + desktop_error_text(error))
     Ok(_) => ()
   }
   if config.offline_e2e {
@@ -111,24 +120,35 @@ async fn desktop_run(config : DesktopConfig) -> Result[Unit, String] {
       Ok(_) => ()
     }
     println(
-      "DSH_DESKTOP_DEMO {\"nsevents\":true,\"tool_approval\":\"approved\",\"completed\":true,\"workspace_write\":true,\"reload\":\"passed\",\"japanese_frame\":\"passed\",\"frame\":\"\{config.frame_output}\"}",
+      "DSH_DESKTOP_DEMO {\"native_events\":true,\"tool_approval\":\"approved\",\"completed\":true,\"workspace_write\":true,\"reload\":\"passed\",\"japanese_frame\":\"passed\",\"frame\":\"\{config.frame_output}\"}",
     )
   }
   Ok(())
 }
 
 ///|
-async fn main {
+pub async fn run(start : () -> Result[Host, String]) -> Unit {
   let args = @env.args()
   let options = if args.length() > 1 { args[1:].to_owned() } else { [] }
   match desktop_parse_config(options) {
     Err("help") => println(desktop_usage())
     Err(error) =>
-      abort("desktop option error: " + error + "\n" + desktop_usage())
-    Ok(config) =>
-      match desktop_run(config) {
-        Ok(_) => ()
-        Err(error) => abort("desktop failed: " + error)
+      @runtime.desktop_fail(
+        "desktop option error: " + error + "\n" + desktop_usage(),
+      )
+    Ok(config) => {
+      // Gracefully settle tools, including workers in their own sessions,
+      // instead of cancelling main before NativeDesktop.close can run.
+      if !@runtime.desktop_signals_start() {
+        @runtime.desktop_fail("desktop could not install shutdown handlers")
       }
+      @async.with_task_group() <| group => {
+        group.add_defer(fn() { @runtime.desktop_signals_stop() })
+        match desktop_run(config, start) {
+          Ok(_) => ()
+          Err(error) => @runtime.desktop_fail("desktop failed: " + error)
+        }
+      }
+    }
   }
 }

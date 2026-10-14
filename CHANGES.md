@@ -16,6 +16,38 @@
 
 ### Migration
 
+## 0.1.24 - 2026-10-14
+
+### Added
+
+- Add a native Linux Wayland desktop using the shared gpui.mbt application. The raw Linux release binary includes its desktop payload and CLI helper, so `dsh desktop` works from the same single-file installation as `dsh web`.
+- Validate packaged Linux x86_64 and aarch64 binaries with an isolated Weston compositor: real keyboard and pointer input, Japanese text rendering, tool approval and durable workspace writes, persisted reload, resize/close, and shutdown with an active tool worker.
+
+### Changed
+
+- Share the desktop application between macOS and Linux while preserving platform-specific native hosts.
+
+### Fixed
+
+- When `dsh web` is started without `--port` and the default loopback port 3080 is occupied, select an OS-assigned loopback port and print the actual listening URL. An explicit `--port` remains strict; `--port 0` requests an ephemeral port. Other bind failures retain actionable diagnostics without being treated as port conflicts.
+- Report expected Linux desktop startup failures on stderr with exit status 1, including missing Wayland sessions, instead of aborting.
+- Cancel Linux payload extraction on SIGINT/SIGTERM before launching the GUI, and clean up private extracted files after normal or handled-signal desktop shutdown. Graceful desktop shutdown cancels and waits for active native tool workers.
+- Wait for asynchronous native frame completion after resize before validating the desktop lifecycle.
+- Keep external MCP worker PID ownership reserved through shutdown escalation, then reap the leader and briefly wait for its process group to disappear. Add a TERM-resistant descendant regression for the timeout cleanup race.
+
+### Deprecated
+
+### Removed
+
+### Security
+
+- Validate embedded payload bounds and corruption checks before execution, extract into a private directory with exclusive file creation, and execute the verified payload through its open descriptor. The checksum detects corruption; it is not an authenticity signature.
+
+### Migration
+
+- No data-format migration. Linux desktop support targets Ubuntu 24.04-compatible Wayland environments with the documented native runtime libraries; X11-only sessions and IME composition input are not supported in this release. Plain `dsh web` does not require desktop libraries.
+- Linux desktop extraction requires an executable temporary directory. If the default temporary directory is mounted `noexec`, set `TMPDIR` to a private executable location.
+
 ## 0.1.23 - 2026-10-14
 
 ### Added

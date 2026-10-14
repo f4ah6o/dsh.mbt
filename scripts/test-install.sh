@@ -132,11 +132,11 @@ chmod 755 "$outside_root/dsh"
   dsh --help
   if [ "$(uname -s)" = Linux ]; then
     desktop_status=0
-    dsh desktop --app-path /Applications/Dsh.app \
+    dsh desktop \
       > "$install_root/desktop-stdout" 2> "$install_root/desktop-stderr" || desktop_status=$?
     test "$desktop_status" -eq 1
     test ! -s "$install_root/desktop-stdout"
-    grep -q 'supported only on macOS; use dsh web' "$install_root/desktop-stderr"
+    grep -q 'no bundled Linux desktop' "$install_root/desktop-stderr"
   fi
   dsh --auth-status --data-dir "$install_root/data" \
     --workspace "$install_root/workspace" --json > "$install_root/auth-status.json"

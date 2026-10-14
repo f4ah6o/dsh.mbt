@@ -8,7 +8,7 @@ const portablePackages = [
   'verification/retry_math',
 ];
 const ownPackages = [
-  ...portablePackages, 'app', 'native', 'runtime', 'cmd/dsh', 'browser', 'browser/sw', 'desktop',
+  ...portablePackages, 'app', 'native', 'runtime', 'cmd/dsh', 'browser', 'browser/sw', 'desktop', 'desktop/linux', 'desktop/macos',
 ];
 
 function checkPackages(packages, target) {
@@ -131,8 +131,8 @@ function checkFfiInventory() {
     'dsh_fs_set_root_mode', 'dsh_fs_stat_fd', 'dsh_fs_stat_root', 'dsh_fs_unlink',
     'dsh_kill_process', 'dsh_kill_process_group', 'dsh_os_executable_path', 'dsh_os_flush_stderr',
     'dsh_os_flush_stdout', 'dsh_os_hard_worker_memory_supported', 'dsh_os_hostname',
-    'dsh_os_is_macos',
-    'dsh_os_pid', 'dsh_os_process_alive', 'dsh_os_process_group_alive', 'dsh_os_stdin_is_terminal',
+    'dsh_os_is_macos', 'dsh_os_is_linux', 'dsh_linux_desktop_launch',
+    'dsh_os_child_exit_state', 'dsh_os_pid', 'dsh_os_process_alive', 'dsh_os_process_group_alive', 'dsh_os_stdin_is_terminal',
     'dsh_os_timestamp', 'dsh_os_uid', 'dsh_service_address_in_use',
     'dsh_service_signals_install',
     'dsh_service_signals_requested', 'dsh_service_signals_restore',
@@ -166,7 +166,7 @@ function checkFfiInventory() {
     throw new Error('Native C FFI changed; update and review docs/ffi-boundary.md.\n' +
       'Expected: ' + auditedSymbols.join(', ') + '\nFound: ' + actual.join(', '));
   }
-  const cSources = ['runtime/host_os.c', 'runtime/oauth_os.c', 'runtime/signal_os.c']
+  const cSources = ['runtime/host_os.c', 'runtime/oauth_os.c', 'runtime/signal_os.c', 'runtime/linux_desktop_payload.c']
     .map(path => readFileSync(join(projectRoot, path), 'utf8')).join('\n');
   const missing = auditedSymbols.filter(symbol =>
     !new RegExp('\\b' + symbol + '\\s*\\(').test(cSources));
@@ -179,7 +179,7 @@ try {
   run('moon', ['fmt', '--check', ...ownPackages]);
   checkPackages(portablePackages, 'all');
   checkPackages(['app'], 'js');
-  checkPackages(['native', 'runtime', 'cmd/dsh', 'desktop'], 'native');
+  checkPackages(['native', 'runtime', 'cmd/dsh', 'desktop', 'desktop/linux', 'desktop/macos'], 'native');
   checkPackages(['browser', 'browser/sw'], 'js');
   checkPureMoonBitInventory();
   if (existsSync(join(projectRoot, 'web/moonbit/browser.js')) &&

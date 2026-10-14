@@ -129,7 +129,7 @@ async fn desktop_handle_key(
     return
   }
   state.focused = true
-  match desktop_insertable_key(key, modifiers) {
+  match desktop_key_input_text(key, modifiers, state.host.text_input_events) {
     Some(text) => {
       desktop_insert_text(state, text)
       return
@@ -137,26 +137,42 @@ async fn desktop_handle_key(
     None => ()
   }
   match key {
-    @primitives.Character(text) if modifiers.meta() && text.to_lower() == "v" =>
-      match state.host.read_clipboard() {
+    @primitives.Character(text) if desktop_shortcut_modifier(
+        modifiers,
+        state.host.control_shortcuts,
+      ) &&
+      text.to_lower() == "v" =>
+      match (state.host.read_clipboard)() {
         Ok(value) => desktop_insert_text(state, value)
         Err(error) => state.error_message = desktop_error_text(error)
       }
-    @primitives.Character(text) if modifiers.meta() && text.to_lower() == "a" => {
+    @primitives.Character(text) if desktop_shortcut_modifier(
+        modifiers,
+        state.host.control_shortcuts,
+      ) &&
+      text.to_lower() == "a" => {
       state.select_all = true
       state.cursor = state.draft.length()
       state.dirty = true
     }
-    @primitives.Character(text) if modifiers.meta() && text.to_lower() == "c" =>
+    @primitives.Character(text) if desktop_shortcut_modifier(
+        modifiers,
+        state.host.control_shortcuts,
+      ) &&
+      text.to_lower() == "c" =>
       if state.select_all {
-        match state.host.write_clipboard(desktop_draft_string(state.draft)) {
+        match (state.host.write_clipboard)(desktop_draft_string(state.draft)) {
           Ok(_) => state.status_message = "入力をコピーしました"
           Err(error) => state.error_message = desktop_error_text(error)
         }
       }
-    @primitives.Character(text) if modifiers.meta() && text.to_lower() == "x" =>
+    @primitives.Character(text) if desktop_shortcut_modifier(
+        modifiers,
+        state.host.control_shortcuts,
+      ) &&
+      text.to_lower() == "x" =>
       if state.select_all {
-        match state.host.write_clipboard(desktop_draft_string(state.draft)) {
+        match (state.host.write_clipboard)(desktop_draft_string(state.draft)) {
           Ok(_) => {
             state.draft = []
             state.cursor = 0

@@ -1,0 +1,10 @@
+import {
+  "moonbitlang/async",
+  "f4ah6o/dsh/desktop",
+  "f4ah6o/gpui/platform/macos" @native,
+  "f4ah6o/gpui/platform/testing",
+}
+
+supported_targets = "+native"
+
+pkgtype(kind: "executable")

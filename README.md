@@ -2,7 +2,7 @@
 
 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) の MoonBit 移植です。session、event log、agent / tool loop、承認、provider protocol、HTTP/MCP service、CLI、browser UI の product logic は MoonBit で動きます。native executable が唯一の product runtime です。Node.js は build/check/test tooling にだけ使い、browser JavaScript と service worker は MoonBit compiler の生成物です。
 
-**現在は最初の動作する移植版です。** browser / CLI と macOS native desktop app から会話し、workspace tool、session ごとの可視 task list、opt-in の外部 MCP stdio tool、workspace skill、限定的な opt-in command hook、設定した local language server による code navigation を実行して履歴を保存できます。Native executable は単一 workspace に属する ACP session の永続 list / resume と per-session model selection を備えた stdio agent としても動作します。`--enable-subagents` では bounded な foreground read-only child agent も使えます。Session v4 は明示的な read-only import に限って対応し、Cordis / npm plugin 互換、background / resumable subagent、live compaction などは未実装です。対応範囲と差分は[移植状況](docs/port-status.md)、native MCP server、ACP、workspace skill、hook、LSP、subagent、task list の設定・制約は[native runtime guide](docs/native-runtime.md)、今回の native / SIWC / iOS 実装は[実装状況](docs/implementation-status.md)を参照してください。
+**現在は最初の動作する移植版です。** browser / CLI と Linux / macOS native desktop app から会話し、workspace tool、session ごとの可視 task list、opt-in の外部 MCP stdio tool、workspace skill、限定的な opt-in command hook、設定した local language server による code navigation を実行して履歴を保存できます。Native executable は単一 workspace に属する ACP session の永続 list / resume と per-session model selection を備えた stdio agent としても動作します。`--enable-subagents` では bounded な foreground read-only child agent も使えます。Session v4 は明示的な read-only import に限って対応し、Cordis / npm plugin 互換、background / resumable subagent、live compaction などは未実装です。対応範囲と差分は[移植状況](docs/port-status.md)、native MCP server、ACP、workspace skill、hook、LSP、subagent、task list の設定・制約は[native runtime guide](docs/native-runtime.md)、今回の native / SIWC / iOS 実装は[実装状況](docs/implementation-status.md)を参照してください。
 
 ## Build and run
 
@@ -123,6 +123,21 @@ moon binstall f4ah6o/dsh/cmd/dsh
 ```
 
 どちらの coordinate も既定では `~/.local/bin` に install します。上の `PATH` 設定後、`dsh --help` で起動を確認できます。既存の `dsh` executable を更新または置き換えるには `moon binstall f4ah6o/dsh.mbt --force` を実行してください。Mooncakes package coordinate にも同じ `--force` を付けられます。公開 asset は Linux x86-64 / ARM64 と macOS Apple Silicon 向けです。
+
+### Linux native desktop
+
+Linux release の `dsh-linux-x86_64` / `dsh-linux-aarch64` は native desktop も同梱します。`moon binstall` で入れた同じ `dsh` から `dsh desktop` を起動できます。Wayland session と EGL/GLES、XKB、Pango/Fontconfig の system libraries が必要です。Ubuntu 24.04 では次を導入してください。
+
+```sh
+sudo apt-get install libwayland-client0 libwayland-cursor0 libwayland-egl1 \
+  libegl1 libgles2 libegl-mesa0 libgl1-mesa-dri libxkbcommon0 \
+  libpangoft2-1.0-0 libfontconfig1 fonts-noto-cjk
+dsh desktop --demo
+```
+
+画面、入力、保存・tool approval は GPUI の native Wayland backend と共通の desktop application を使います。browser は起動しません。通常の keyboard / Compose 入力と Ctrl+A/C/V/X に対応し、IME composition は未対応です。X11-only session では Wayland session に切り替えてください。GUI の system libraries は `dsh web` / CLI だけを使う場合は不要です。
+
+desktop は private temporary directory に展開して起動し、終了時に削除します。`TMPDIR` が `noexec` mount の場合は、実行可能な private temporary location を指定してください。source build と詳細な制約は [native desktop guide](docs/desktop.md) にあります。
 
 ### macOS native app
 

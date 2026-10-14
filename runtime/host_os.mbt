@@ -70,6 +70,9 @@ extern "C" fn c_process_alive(pid : Int32) -> Int32 = "dsh_os_process_alive"
 extern "C" fn c_process_group_alive(pgid : Int32) -> Int32 = "dsh_os_process_group_alive"
 
 ///|
+extern "C" fn c_child_exit_state(pid : Int32) -> Int32 = "dsh_os_child_exit_state"
+
+///|
 extern "C" fn c_hard_worker_memory_supported() -> Int32 = "dsh_os_hard_worker_memory_supported"
 
 ///|
@@ -895,4 +898,12 @@ extern "C" fn c_is_macos() -> Int32 = "dsh_os_is_macos"
 ///|
 fn native_os_is_macos() -> Bool {
   c_is_macos() == 1
+}
+
+///|
+extern "C" fn c_is_linux() -> Int32 = "dsh_os_is_linux"
+
+///|
+fn native_os_is_linux() -> Bool {
+  c_is_linux() == 1
 }

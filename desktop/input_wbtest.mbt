@@ -71,3 +71,21 @@ test "render boundary normalizes controls without changing prompt data" {
     "Title one next□",
   )
 }
+
+///|
+test "Wayland committed text does not double insert physical keys" {
+  let key = @primitives.Character("a")
+  let none = @primitives.Modifiers::none()
+  assert_eq(desktop_key_input_text(key, none, true), None)
+  assert_eq(desktop_key_input_text(@primitives.Space, none, true), None)
+  assert_eq(desktop_key_input_text(key, none, false), Some("a"))
+  let ctrl = @primitives.Modifiers::new(
+    shift=false,
+    control=true,
+    alt=false,
+    meta=false,
+  )
+  assert_true(desktop_shortcut_modifier(ctrl, true))
+  assert_false(desktop_shortcut_modifier(ctrl, false))
+  assert_eq(desktop_key_input_text(key, ctrl, false), None)
+}

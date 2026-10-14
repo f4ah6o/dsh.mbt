@@ -145,17 +145,22 @@ async fn native_desktop_resolve_candidates(
 
 ///|
 async fn native_desktop_launch(args : Array[String]) -> Result[Unit, String] {
-  if !native_os_is_macos() {
-    return Err(
-      "dsh desktop is supported only on macOS; use dsh web on this platform",
-    )
-  }
-  if !@fs.can_execute("/usr/bin/open") {
-    return Err("dsh desktop requires macOS LaunchServices (/usr/bin/open)")
-  }
   let options = match native_desktop_parse_launch_args(args) {
     Ok(value) => value
     Err(error) => return Err(error)
+  }
+  if native_os_is_linux() {
+    // The synchronous native supervisor owns forwarding and cleanup. Disable
+    // async's sigwait consumer before entering it so signals are not swallowed
+    // while the MoonBit event loop is suspended in the launcher.
+    @signal.set_global_cancellation_signals([])
+    return native_linux_desktop_launch(options)
+  }
+  if !native_os_is_macos() {
+    return Err("dsh desktop requires Linux or macOS")
+  }
+  if !@fs.can_execute("/usr/bin/open") {
+    return Err("dsh desktop requires macOS LaunchServices (/usr/bin/open)")
   }
   let home = @env.get_env_var("HOME")
   let app_path = match native_desktop_resolve_app_path(options.app_path, home) {
@@ -171,4 +176,40 @@ async fn native_desktop_launch(args : Array[String]) -> Result[Unit, String] {
   } else {
     Err("LaunchServices failed to open Dsh.app (exit status \{status})")
   }
+}
+
+///|
+#borrow(payload)
+extern "C" fn c_linux_desktop_launch(payload : Bytes, length : Int32) -> Int32 = "dsh_linux_desktop_launch"
+
+///|
+fn native_linux_desktop_launch(
+  options : NativeDesktopLaunchOptions,
+) -> Result[Unit, String] {
+  let mut payload = c_path(options.app_path.unwrap_or(""))
+  for argument in options.app_args {
+    payload = payload + c_path(argument)
+  }
+  let status = c_linux_desktop_launch(payload, payload.length())
+  if status >= 0 {
+    if status != 0 {
+      native_process_exit(status)
+    }
+    return Ok(())
+  }
+  Err(
+    match status {
+      -1 =>
+        "This dsh binary has no bundled Linux desktop. Install a packaged Linux release, build with scripts/build-desktop-linux.sh, or pass --app-path /absolute/path/to/dsh-desktop"
+      -2 =>
+        "The bundled Linux desktop payload is invalid or corrupted; reinstall the packaged release"
+      -3 =>
+        "Could not extract the Linux desktop into a private temporary directory; check TMPDIR permissions and available disk space"
+      -4 =>
+        "Linux desktop execution was denied; check --app-path permissions or set TMPDIR to a writable filesystem that permits execution (not a noexec mount)"
+      -5 =>
+        "Could not start the Linux desktop executable; check its architecture, dynamic loader and installed system libraries"
+      _ => "Could not wait for the Linux desktop process"
+    },
+  )
 }

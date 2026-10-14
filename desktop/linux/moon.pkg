@@ -1,0 +1,23 @@
+import {
+  "moonbitlang/async",
+  "moonbitlang/core/env",
+  "f4ah6o/dsh/desktop",
+  "f4ah6o/dsh/runtime",
+  "f4ah6o/gpui/ubuntu" @native,
+  "f4ah6o/gpui/platform/testing",
+  "f4ah6o/gpui/diagnostics",
+}
+
+supported_targets = "+native"
+
+pkgtype(kind: "executable")
+
+options(
+  link: {
+    "native": {
+      "cc": "script/linux_text_cc.py",
+      "cc-flags": "-O2",
+      "cc-link-flags": "-lwayland-client -lwayland-cursor -lwayland-egl -lEGL -lGLESv2 -lxkbcommon -lpthread -lm",
+    },
+  },
+)

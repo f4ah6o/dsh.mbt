@@ -1,9 +1,35 @@
-# Native macOS desktop app
+# Native desktop
+
+## Linux Wayland
+
+The Linux release CLI embeds a real GPUI Wayland/EGL desktop executable. `dsh desktop` extracts it and a private CLI worker into an owner-only temporary directory, launches the desktop, preserves argument boundaries and exit status, and removes the files after exit. It does not open a browser or download executable code. The embedded checksum detects corruption; release authenticity comes from the release distribution/checksum workflow.
+
+Supported baseline: Ubuntu 24.04, x86-64 and ARM64, with a Wayland compositor and EGL/GLES drivers (Mesa software rendering is valid). Install the runtime libraries and Japanese fonts listed in README. An X11-only login is not a Wayland host. Direct XKB/Compose keyboard input, pointer, scrolling and Ctrl+A/C/V/X are supported. Wayland IME composition is not yet implemented. Clipboard requires compositor support; unsupported capabilities are reported rather than simulated.
+
+Build from the recursive checkout with the pinned MoonBit toolchain:
+
+```sh
+sudo apt-get install libwayland-dev wayland-protocols libegl1-mesa-dev \
+  libgles2-mesa-dev libxkbcommon-dev libpango1.0-dev libfontconfig1-dev
+sh scripts/build.sh
+sh scripts/build-desktop-linux.sh --build
+python3 scripts/package-linux-desktop.py \
+  --cli _build/native/release/build/f4ah6o/dsh/cmd/dsh/dsh.exe \
+  --desktop _build/native/release/build/f4ah6o/dsh/desktop/linux/linux.exe \
+  --output release/dsh-linux-$(uname -m)
+release/dsh-linux-$(uname -m) desktop --demo
+```
+
+`sh scripts/build-desktop.sh run --demo` also dispatches to the Linux builder. An unbundled source CLI may use `dsh desktop --app-path /absolute/path/to/linux.exe`; it carries its own private CLI helper for native tool execution. Packaging preserves a single executable for `moon binstall`. Only the GUI child links Wayland/text libraries; the CLI/web host remains usable without GUI libraries.
+
+Release CI tests the actual packaged executable through a private authenticated Xvfb and nested Weston compositor, including genuine keyboard/pointer input, approval, a workspace write, persisted reload and GPU frame readback. A separate normal-shell pass covers resize and close. Tests also check termination and private-file cleanup. A build-only check does not establish GUI runtime success.
+
+## macOS
+
 
 `Dsh.app` is a native GPUI/AppKit/Metal conversation window backed by the same
 MoonBit runtime and durable session store as `dsh`, `dsh web`, and the local
-MCP service. It is available for macOS 13 or later on Apple Silicon. Linux and
-Windows desktop packages are not provided.
+MCP service. The app bundle is available for macOS 13 or later on Apple Silicon. Linux uses the embedded Wayland executable described above; Windows desktop packages are not provided.
 
 ## Install the release app
 
