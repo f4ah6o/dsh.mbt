@@ -163,9 +163,21 @@ async fn native_desktop_launch(args : Array[String]) -> Result[Unit, String] {
     return Err("dsh desktop requires macOS LaunchServices (/usr/bin/open)")
   }
   let home = @env.get_env_var("HOME")
-  let app_path = match native_desktop_resolve_app_path(options.app_path, home) {
-    Ok(value) => value
-    Err(error) => return Err(error)
+  let bundled = if options.app_path is None {
+    match native_macos_bundled_app(home) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+  } else {
+    None
+  }
+  let app_path = match bundled {
+    Some(path) => path
+    None =>
+      match native_desktop_resolve_app_path(options.app_path, home) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
   }
   let open_args = native_desktop_open_arguments(app_path, options.app_args)
   let status = @process.run("/usr/bin/open", open_args) catch {
@@ -212,4 +224,50 @@ fn native_linux_desktop_launch(
       _ => "Could not wait for the Linux desktop process"
     },
   )
+}
+
+///|
+#borrow(home, output)
+extern "C" fn c_macos_desktop_bundle(
+  home : Bytes,
+  output : FixedArray[Byte],
+  capacity : Int32,
+) -> Int32 = "dsh_macos_desktop_bundle"
+
+///|
+fn native_macos_bundled_app(home : String?) -> Result[String?, String] {
+  let output : FixedArray[Byte] = FixedArray::make(4096, b'\x00')
+  let status = c_macos_desktop_bundle(
+    c_path(home.unwrap_or("/")),
+    output,
+    output.length(),
+  )
+  if status == 0 {
+    return Ok(None)
+  }
+  if status < 0 {
+    return Err(
+      match status {
+        -2 =>
+          "The bundled macOS app payload is invalid or corrupted; obtain the packaged release again"
+        -3 =>
+          "Could not extract the macOS app into an owner-only HOME/Library/Caches/org.fu2hito.dsh/bundled-desktop directory; check HOME, permissions and available disk space"
+        _ =>
+          "The bundled macOS app or its existing cache failed signature or file-safety validation; check the specific cache directory before retrying"
+      },
+    )
+  }
+  let mut length = 0
+  while length < output.length() && output[length] != b'\x00' {
+    length += 1
+  }
+  if length == 0 || length == output.length() {
+    return Err(
+      "the extracted macOS app path is empty or exceeds the path limit",
+    )
+  }
+  let path = @utf8.decode(bytes_from_fixedarray(output, length)) catch {
+    _ => return Err("the extracted macOS app path is not valid UTF-8")
+  }
+  Ok(Some(path))
 }

@@ -112,3 +112,10 @@ For the hosted release build, the macOS CI job validates the app archive,
 signature, bundled dependencies, license notices, and declared deployment
 target. Metal window interaction requires an active macOS desktop and is
 verified locally with the scripts above.
+
+
+macOS の raw release CLI は、`moon binstall` の単一 executable に完全な署名済みアプリを含みます。`dsh desktop` は同梱版を優先して version/hash 別の owner-only cache (`~/Library/Caches/org.fu2hito.dsh/bundled-desktop/`) へ展開し、毎回署名を検証して、その正確な app path を LaunchServices で開きます。同時起動は抽出 lock で直列化し、別 version/hash の既存アプリを置き換えません。キャッシュの改変や不正な権限を検出した場合は停止します。CLI helper は payload のない別 executable のままアプリ内に保持します。
+
+`--app-path /absolute/path/to/Dsh.app` は同梱版より優先します。payload を含まない source build は従来の `/Applications/Dsh.app` / `~/Applications/Dsh.app` を参照します。release app と CLI は ad-hoc signed です。Developer ID signing / notarization は含まず、quarantine を削除したり Gatekeeper の判定を回避したりしません。
+
+macOS release の作成は app build → `scripts/package-macos-app.sh` → `scripts/package-macos-cli.sh` の順です。後者は専用の `MOON_CC` adapter で Mach-O resource section を作成してから最終署名を行います。`python3 scripts/test-macos-desktop-payload.py` は隔離した synthetic app を使い、抽出、同時実行、version 更新、署名、不正 archive / cache と quarantine 保持を確認します。

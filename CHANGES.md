@@ -4,6 +4,8 @@
 
 ### Added
 
+- Bundle the complete signed macOS Dsh.app in the raw Apple Silicon CLI release, so the same `moon binstall` installation can launch `dsh desktop`. Extract and verify it in an owner-only version/content cache while retaining the separate unbundled worker helper.
+
 ### Changed
 
 ### Fixed
@@ -15,6 +17,8 @@
 ### Removed
 
 ### Security
+
+- Validate macOS payload bounds, SHA-256 and archive paths/types before extraction, match the cache against an embedded file manifest and verify its signature before every launch, serialize concurrent extraction and preserve quarantine. Existing cache entries are never replaced automatically.
 
 ### Migration
 

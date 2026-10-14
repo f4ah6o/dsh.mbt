@@ -7,8 +7,8 @@ approval decisions, command scheduling, persistence formats, or UI state.
 
 ## Native C boundary
 
-The native executable links four C files: `runtime/host_os.c`,
-`runtime/oauth_os.c`, `runtime/signal_os.c`, and `runtime/linux_desktop_payload.c`. The reviewed C surface is limited
+The native executable links five C files: `runtime/host_os.c`,
+`runtime/oauth_os.c`, `runtime/signal_os.c`, `runtime/linux_desktop_payload.c`, and `runtime/macos_desktop_payload.c`. The reviewed C surface is limited
 to these `extern "C"` symbols:
 
 ```text
@@ -27,7 +27,7 @@ dsh_os_executable_path          dsh_os_flush_stdout
 dsh_os_hard_worker_memory_supported
 dsh_os_hostname                 dsh_os_pid
 dsh_os_is_macos                 dsh_os_is_linux
-dsh_linux_desktop_launch
+dsh_linux_desktop_launch         dsh_macos_desktop_bundle
 dsh_os_child_exit_state
 dsh_os_process_alive            dsh_os_process_group_alive
 dsh_os_stdin_is_terminal
@@ -71,6 +71,20 @@ child exit. It does not download code, interpret shell syntax, or implement UI
 state. MoonBit owns desktop argument parsing, platform selection, errors and
 graceful runtime shutdown. The existing signal/flush primitives are exposed to
 the shared UI through runtime wrappers; UI packages contain no direct FFI.
+
+`macos_desktop_payload.c` locates a bounded Mach-O resource section and validates
+its versioned envelope, SHA-256, and both central/local ZIP headers before
+extracting the complete signed app with Apple's `ditto`. Archive entries are
+bounded ASCII regular files/directories; absolute paths, aliases, symlinks,
+hard links, alternate-name extras, and special files are rejected. The private
+version/hash cache uses a per-content no-follow lock, exclusive atomic rename,
+owner/type checks, and an embedded exact path/type/mode/size/SHA-256 manifest plus strict recursive
+code-signature verification on every
+launch. Existing entries are never replaced. The helper preserves quarantine
+from the source CLI and never invokes Gatekeeper overrides. MoonBit still owns
+argument parsing, explicit app override, diagnostics, and LaunchServices launch.
+The build-only `MOON_CC` adapter adds the resource before the final CLI signature;
+the app retains its separate unbundled CLI helper.
 
 The C helpers do not parse user commands, provider or MCP messages, or session
 files, and do not decide which workspace operation is allowed. Return values

@@ -141,7 +141,7 @@ desktop は private temporary directory に展開して起動し、終了時に�
 
 ### macOS native app
 
-GitHub Release の `Dsh-macos-arm64.zip` に macOS 13+ / Apple Silicon 向けの `Dsh.app` を含めます。`/Applications` または `~/Applications` に置くと、`dsh desktop` から起動できます。インストール、source build、UI と現在の IME 制約は[native desktop guide](docs/desktop.md)を参照してください。release app は ad-hoc signed で、Developer ID signed / notarized ではありません。
+macOS 13+ / Apple Silicon の raw CLI release にも完全な `Dsh.app` を同梱します。`moon binstall` で入れた同じ `dsh` から `dsh desktop` を起動でき、最初の起動で署名を検証して `~/Library/Caches/org.fu2hito.dsh/bundled-desktop/` の version/hash 別専用ディレクトリへ展開します。GitHub Release の `Dsh-macos-arm64.zip` も引き続き配布します。`--app-path` は指定したアプリを優先します。インストール、source build、UI と現在の IME 制約は[native desktop guide](docs/desktop.md)を参照してください。release app は ad-hoc signed で、Developer ID signed / notarized ではありません。
 
 ## Browser UI and data
 
