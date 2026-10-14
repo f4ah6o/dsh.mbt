@@ -452,6 +452,7 @@ async test "Claude root and child hooks see substitution env without changing ex
     group.add_defer(() => @fs.rmdir(fixture, recursive=true))
     let workspace = fixture + "/workspace"
     @fs.mkdir(workspace)
+    let canonical_workspace = @fs.realpath(workspace)
     let config_path = fixture + "/hooks.json"
     let marker = workspace + "/hook-roots.txt"
     let command = "printf '%s|%s|%s|%s\\n' \"$CLAUDE_PROJECT_DIR\" \"$PWD\" ${CLAUDE_PLUGIN_ROOT} ${CLAUDE_PROJECT_DIR} >> " +
@@ -486,7 +487,7 @@ async test "Claude root and child hooks see substitution env without changing ex
     assert_eq(
       @fs.read_file(marker).text(),
       ("/configured-project|" +
-      workspace +
+      canonical_workspace +
       "|/plugin-root|/configured-project\n").repeat(3),
     )
     let empty_overrides = NativeHooks::load(
@@ -503,10 +504,10 @@ async test "Claude root and child hooks see substitution env without changing ex
     assert_eq(
       @fs.read_file(marker).text(),
       ("/configured-project|" +
-      workspace +
+      canonical_workspace +
       "|/plugin-root|/configured-project\n").repeat(3) +
       "|" +
-      workspace +
+      canonical_workspace +
       "||\n",
     )
   }
