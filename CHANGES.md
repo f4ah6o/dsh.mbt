@@ -16,6 +16,33 @@
 
 ### Migration
 
+## 0.1.23 - 2026-10-14
+
+### Added
+
+- Add subprocess regression coverage for CLI startup failures, exact sanitized ACP diagnostics, malformed internal-worker arguments, protected live locks, and recovery after the test-owned process exits uncleanly.
+
+### Changed
+
+- Lock-conflict diagnostics identify the recorded hostname/PID and explain safe next steps: verify and stop the owning dsh instance, or select a separate `--data-dir`.
+
+### Fixed
+
+- Expected native CLI startup, action, and shutdown errors now exit with status 1 on stderr instead of aborting and generating core dumps. ACP keeps its generic diagnostics and empty protocol stdout on startup failure.
+- `dsh desktop` checks the actual host platform before looking for macOS LaunchServices or `Dsh.app`. Linux reports that native desktop is macOS-only and directs users to `dsh web`, even when `/usr/bin/open` exists as an xdg-open alias.
+
+### Deprecated
+
+### Removed
+
+### Security
+
+- Preserve fail-closed single-writer locking. Live or reused PIDs, foreign-host owners, and unverifiable ownership are not bypassed; only a confirmed-dead same-host owner can be recovered automatically. No processes are killed and no ownership checks are bypassed by this fix.
+
+### Migration
+
+- No data-format migration. Upgrading does not stop an existing owner of a data directory and does not add a Linux native desktop GUI.
+
 ## 0.1.22 - 2026-10-14
 
 ### Added

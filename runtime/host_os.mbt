@@ -888,3 +888,11 @@ pub fn SafeRoot::verify_rs256(
   ) ==
   1
 }
+
+///|
+extern "C" fn c_is_macos() -> Int32 = "dsh_os_is_macos"
+
+///|
+fn native_os_is_macos() -> Bool {
+  c_is_macos() == 1
+}

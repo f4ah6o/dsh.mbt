@@ -33,7 +33,7 @@ start_installed_web() {
       unset DSH_NATIVE_WORKER_BIN
       PATH="$install_bin:/usr/bin:/bin"
       export PATH
-      dsh web --demo --data-dir "$server_data" --workspace "$server_workspace" \
+      exec dsh web --demo --data-dir "$server_data" --workspace "$server_workspace" \
         --assets-dir "$asset_override" --port 0
     ) > "$server_log" 2>&1 &
   else
@@ -42,7 +42,7 @@ start_installed_web() {
       unset DSH_NATIVE_WORKER_BIN
       PATH="$install_bin:/usr/bin:/bin"
       export PATH
-      dsh web --demo --data-dir "$server_data" --workspace "$server_workspace" --port 0
+      exec dsh web --demo --data-dir "$server_data" --workspace "$server_workspace" --port 0
     ) > "$server_log" 2>&1 &
   fi
   installed_web_pid=$!
@@ -130,6 +130,14 @@ chmod 755 "$outside_root/dsh"
   PATH="$install_bin:/usr/bin:/bin"
   export PATH
   dsh --help
+  if [ "$(uname -s)" = Linux ]; then
+    desktop_status=0
+    dsh desktop --app-path /Applications/Dsh.app \
+      > "$install_root/desktop-stdout" 2> "$install_root/desktop-stderr" || desktop_status=$?
+    test "$desktop_status" -eq 1
+    test ! -s "$install_root/desktop-stdout"
+    grep -q 'supported only on macOS; use dsh web' "$install_root/desktop-stderr"
+  fi
   dsh --auth-status --data-dir "$install_root/data" \
     --workspace "$install_root/workspace" --json > "$install_root/auth-status.json"
   grep -q '"state"' "$install_root/auth-status.json"
@@ -156,6 +164,30 @@ chmod 755 "$outside_root/dsh"
 )
 start_installed_web "embedded-web"
 verify_installed_web_assets "$server_url"
+# Reject a second writer gracefully without taking the first service's lock.
+cp "$server_data/host.lock" "$install_root/original-host.lock"
+conflict_status=0
+"$install_bin/dsh" web --demo --data-dir "$server_data" --workspace "$server_workspace" --port 0 \
+  > "$install_root/conflict-stdout" 2> "$install_root/conflict-stderr" || conflict_status=$?
+test "$conflict_status" -eq 1
+test ! -s "$install_root/conflict-stdout"
+grep -q -- '--data-dir PATH' "$install_root/conflict-stderr"
+cmp "$server_data/host.lock" "$install_root/original-host.lock"
+# The original owner is still serving after the rejected startup.
+curl -fsS "$server_url/api/metadata" > "$install_root/still-serving.json"
+grep -q '"ok":true' "$install_root/still-serving.json"
+# Simulate an unclean shutdown of this test's own child, leaving host.lock.
+kill -KILL "$installed_web_pid"
+wait "$installed_web_pid" 2>/dev/null || true
+installed_web_pid=
+test -f "$server_data/host.lock"
+start_installed_web "embedded-web"
+if cmp -s "$server_data/host.lock" "$install_root/original-host.lock"; then
+  echo "Restart failed to replace the confirmed-dead fixture owner's lock." >&2
+  exit 1
+fi
+curl -fsS "$server_url/api/metadata" > "$install_root/recovered-web.json"
+grep -q '"ok":true' "$install_root/recovered-web.json"
 stop_installed_web
 
 override_assets="$install_root/override-web"

@@ -25,6 +25,15 @@
 #endif
 #endif
 
+/* Do not infer macOS from /usr/bin/open: Linux may provide xdg-open there. */
+int dsh_os_is_macos(void) {
+#ifdef __APPLE__
+  return 1;
+#else
+  return 0;
+#endif
+}
+
 int dsh_fs_open_root(const char *path);
 int dsh_fs_root_matches(int root_fd, const char *path);
 

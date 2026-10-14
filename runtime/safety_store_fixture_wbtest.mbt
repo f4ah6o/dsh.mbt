@@ -221,3 +221,61 @@ async test "native store recovers only a dead local lock owner" {
     assert_eq(string_field(remote_lock, "token"), Some("remote-owner"))
   }
 }
+
+///|
+async test "native store preserves live reused invalid and malformed lock owners" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-store-uncertain-lock")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let hostname = os_hostname().unwrap()
+    // A live PID with an old timestamp might have been reused. Legacy locks
+    // cannot prove process identity; neither age nor PID alone allows takeover.
+    for pid in [os_pid(), 0, -1] {
+      let data_dir = fixture + "/pid-" + pid.to_string()
+      @fs.mkdir(data_dir)
+      let original = Json::object({
+        "pid": Json::number(pid.to_double()),
+        "hostname": Json::string(hostname),
+        "token": "unverified-owner",
+        "created_at": "2000-01-01T00:00:00Z",
+      }).stringify()
+      @fs.write_file(data_dir + "/host.lock", original)
+      match NativeStore::open(data_dir) {
+        Ok(store) => {
+          ignore(store.close())
+          fail("uncertain owner was recovered")
+        }
+        Err(error) => assert_true(error.contains("--data-dir PATH"))
+      }
+      assert_eq(@fs.read_file(data_dir + "/host.lock").text(), original)
+      assert_false(@fs.exists(data_dir + "/host.recovery"))
+    }
+    let malformed = fixture + "/malformed"
+    @fs.mkdir(malformed)
+    @fs.write_file(malformed + "/host.lock", "not-json")
+    assert_true(NativeStore::open(malformed) is Err(_))
+    assert_eq(@fs.read_file(malformed + "/host.lock").text(), "not-json")
+  }
+}
+
+///|
+async test "native store leaves a competing stale recovery untouched" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-store-recovery-lock")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let original = Json::object({
+      "pid": 2147483647,
+      "hostname": Json::string(os_hostname().unwrap()),
+      "token": "dead-owner",
+      "created_at": "2000-01-01T00:00:00Z",
+    }).stringify()
+    @fs.write_file(fixture + "/host.lock", original)
+    @fs.write_file(fixture + "/host.recovery", "competing-recovery")
+    assert_true(NativeStore::open(fixture) is Err(_))
+    assert_eq(@fs.read_file(fixture + "/host.lock").text(), original)
+    assert_eq(
+      @fs.read_file(fixture + "/host.recovery").text(),
+      "competing-recovery",
+    )
+  }
+}
