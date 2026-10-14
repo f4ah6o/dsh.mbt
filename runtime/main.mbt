@@ -635,6 +635,7 @@ pub async fn run_cli() -> Unit {
         source_root,
         port,
         assets_dir=native_option(args, "--assets-dir"),
+        auto_port=native_option(args, "--port") is None,
       ) {
       Err(error) => {
         ignore(runtime.close())

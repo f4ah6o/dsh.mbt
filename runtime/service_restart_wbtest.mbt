@@ -98,3 +98,39 @@ test "native service listener rebinds a fixed port after TIME_WAIT" {
     None => ()
   }
 }
+
+///|
+test "implicit port conflict selects a distinct loopback listener" {
+  let mut failure = None
+  @async.run_async_main(async fn() {
+    try {
+      let original = native_service_listener(@socket.Addr::parse("127.0.0.1:0"))
+      defer original.close()
+      let fallback = native_service_start_listener(
+        original.addr,
+        auto_port=true,
+      )
+      defer fallback.close()
+      assert_true(fallback.addr.port() != original.addr.port())
+      assert_true(fallback.addr.port() > 0)
+      let explicit_failed = try {
+        let duplicate = native_service_start_listener(original.addr)
+        duplicate.close()
+        false
+      } catch {
+        @os_error.OSError(errno, ..) => c_service_address_in_use(errno)
+        _ => false
+      }
+      assert_true(explicit_failed)
+      // Error classification must not turn unrelated errors into port retries.
+      assert_true(!c_service_address_in_use(0))
+      assert_true(!c_service_address_in_use(13)) // EACCES on supported POSIX hosts
+    } catch {
+      error => failure = Some(error.to_string())
+    }
+  })
+  match failure {
+    Some(error) => fail(error)
+    None => ()
+  }
+}

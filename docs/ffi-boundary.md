@@ -32,6 +32,7 @@ dsh_os_child_exit_state
 dsh_os_process_alive            dsh_os_process_group_alive
 dsh_os_stdin_is_terminal
 dsh_os_timestamp                dsh_os_uid
+dsh_service_address_in_use
 dsh_service_signals_install     dsh_service_signals_requested
 dsh_service_signals_restore
 ```
@@ -56,7 +57,9 @@ so a host init that does not reap orphan descendants can exhaust the bound.
 `oauth_os.c` supplies entropy, Unix time, and launching a validated authorization
 URL in the host browser. `signal_os.c` installs and restores minimal SIGINT /
 SIGTERM handlers and reports the requested signal; MoonBit owns shutdown and
-task-drain behavior.
+task-drain behavior. It also compares an OS error code with the platform's
+address-in-use constant; MoonBit decides whether an implicit default port may
+fall back, performs the loopback bind, and reports the selected endpoint.
 
 `linux_desktop_payload.c` supplies a synchronous Linux process-supervision primitive.
 It opens `/proc/self/exe` once, validates a bounded versioned trailer, copies the

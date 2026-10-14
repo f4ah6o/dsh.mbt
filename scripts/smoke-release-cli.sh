@@ -6,6 +6,7 @@ if [ "$#" -ne 1 ]; then
   exit 2
 fi
 
+DSH_SCRIPT_ROOT=$(CDPATH= cd "$(dirname "$0")" && pwd)
 DSH_BINARY=$1
 case "$DSH_BINARY" in
   /*) ;;
@@ -75,3 +76,5 @@ for asset in kumo-standalone.css yami-kumo-components.css yami-kumo-shell.css; d
 done
 
 echo "Packaged dsh served its embedded browser document, MoonBit JavaScript, and styles outside the checkout."
+
+python3 "$DSH_SCRIPT_ROOT/test-web-listener.py" "$DSH_BINARY"
