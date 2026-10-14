@@ -57,3 +57,11 @@ int dsh_service_signals_install(void) { return -ENOTSUP; }
 int dsh_service_signals_requested(void) { return 0; }
 int dsh_service_signals_restore(void) { return 0; }
 #endif
+
+int dsh_service_address_in_use(int error) {
+#if defined(_WIN32)
+  return error == 10048; /* WSAEADDRINUSE */
+#else
+  return error == EADDRINUSE;
+#endif
+}
