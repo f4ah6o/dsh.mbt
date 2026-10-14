@@ -1,6 +1,6 @@
 ///|
 #export_name("client_set_draft")
-pub fn client_set_draft(handle : Int, value : String) -> String {
+pub fn client_set_draft(handle : Int32, value : String) -> String {
   match get_client(handle) {
     Some(state) => {
       state.set_draft(value)
@@ -12,7 +12,7 @@ pub fn client_set_draft(handle : Int, value : String) -> String {
 
 ///|
 #export_name("client_set_selection")
-pub fn client_set_selection(handle : Int, value : String) -> String {
+pub fn client_set_selection(handle : Int32, value : String) -> String {
   match get_client(handle) {
     Some(state) => {
       state.set_selected_session(if value == "" { None } else { Some(value) })
@@ -24,7 +24,7 @@ pub fn client_set_selection(handle : Int, value : String) -> String {
 
 ///|
 #export_name("client_set_scroll_anchor")
-pub fn client_set_scroll_anchor(handle : Int, value : String) -> String {
+pub fn client_set_scroll_anchor(handle : Int32, value : String) -> String {
   match get_client(handle) {
     Some(state) => {
       state.set_scroll_anchor(if value == "" { None } else { Some(value) })
@@ -36,7 +36,7 @@ pub fn client_set_scroll_anchor(handle : Int, value : String) -> String {
 
 ///|
 #export_name("client_set_follow_latest")
-pub fn client_set_follow_latest(handle : Int, value : String) -> String {
+pub fn client_set_follow_latest(handle : Int32, value : String) -> String {
   match get_client(handle) {
     Some(state) => {
       state.set_follow_latest(value == "true")
@@ -48,7 +48,7 @@ pub fn client_set_follow_latest(handle : Int, value : String) -> String {
 
 ///|
 #export_name("client_set_text_view")
-pub fn client_set_text_view(handle : Int, value : String) -> String {
+pub fn client_set_text_view(handle : Int32, value : String) -> String {
   match get_client(handle) {
     Some(state) => {
       state.set_text_view(value == "true")
@@ -60,7 +60,7 @@ pub fn client_set_text_view(handle : Int, value : String) -> String {
 
 ///|
 #export_name("client_persisted_state")
-pub fn client_persisted_state(handle : Int) -> String {
+pub fn client_persisted_state(handle : Int32) -> String {
   match get_client(handle) {
     Some(state) => state.preferences_json().stringify()
     None => "{}"
@@ -69,7 +69,7 @@ pub fn client_persisted_state(handle : Int) -> String {
 
 ///|
 #export_name("client_restore_preferences")
-pub fn client_restore_preferences(handle : Int, raw : String) -> String {
+pub fn client_restore_preferences(handle : Int32, raw : String) -> String {
   match get_client(handle) {
     Some(state) =>
       Json::object({

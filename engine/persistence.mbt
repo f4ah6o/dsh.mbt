@@ -83,7 +83,7 @@ fn Engine::restore_impl(self : Engine, snapshot : Json) -> Result[Unit, String] 
     self.effects.clear()
     self.queued.clear()
     self.next_session = next_session
-    self.next_effect = Int::max(next_effect, self.next_effect)
+    self.next_effect = Int32::max(next_effect, self.next_effect)
     for id in order {
       let session = loaded.get(id).unwrap()
       self.sessions.set(id, session)
@@ -115,7 +115,7 @@ fn Engine::restore_impl(self : Engine, snapshot : Json) -> Result[Unit, String] 
 }
 
 ///|
-fn effect_index(id : String) -> Int raise EngineError {
+fn effect_index(id : String) -> Int32 raise EngineError {
   if !id.has_prefix("effect-") || id.length() <= 7 || id.length() > 16 {
     raise Invalid("Invalid persisted effect id")
   }
@@ -199,9 +199,9 @@ fn restore_session(
   value : Json,
   tools : Array[Tool],
   effect_ids : Map[String, Bool],
-  next_effect : Int,
+  next_effect : Int32,
 ) -> Session raise EngineError {
-  if json_field(value, "source_format") == Some("deepseek-session-v4".to_json()) {
+  if json_field(value, "source_format") == Some("deepseek-session-v4") {
     return restore_imported_session(value)
   }
   if session_capacity_length(value) > SESSION_CAPACITY {
@@ -235,7 +235,7 @@ fn restore_session(
   let mut pending_todo_call : String? = None
   let mut prompt_context_count = 0
   let mut prompt_context_length = 0
-  let mut expected_subagent_context : (Int, Int)? = None
+  let mut expected_subagent_context : (Int32, Int32)? = None
   let mut stop_subagent_context_count = 0
   let mut stop_subagent_context_length = 0
   let mut late_subagent_context_admission = false
@@ -722,9 +722,9 @@ fn restore_session(
             _ => {
               let mut exponential = initial_delay_ms
               for _ in 0..<(retry - 1) {
-                exponential = Int::min(exponential * 2, max_delay_ms)
+                exponential = Int32::min(exponential * 2, max_delay_ms)
               }
-              Int::min(exponential, max_delay_ms)
+              Int32::min(exponential, max_delay_ms)
             }
           }
           if delay_ms != expected_delay {
@@ -2139,7 +2139,7 @@ fn restore_session(
 fn validate_hook_prompt_context(
   data : Json,
   source : Json,
-) -> (Int, Int) raise EngineError {
+) -> (Int32, Int32) raise EngineError {
   let source_fields = fields(source)
   if source_fields.length() != 1 ||
     !["hooks-claude-code", "hooks-codex"].contains(

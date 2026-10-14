@@ -1,10 +1,10 @@
 ///|
 priv struct ImportedCall {
-  turn : Int
-  step : Int
+  turn : Int32
+  step : Int32
   name : String
   arguments : String
-  mut call_seq : Int?
+  mut call_seq : Int32?
   mut started : Bool
   mut settled : Bool
 }
@@ -22,10 +22,10 @@ priv struct InboxReplay {
 priv struct ImportedCompaction {
   id : String
   command : Json?
-  turn : Int?
-  mut summary_seq : Int?
-  mut summary_span : Array[Int]
-  mut checkpoint_seq : Int?
+  turn : Int32?
+  mut summary_seq : Int32?
+  mut summary_span : Array[Int32]
+  mut checkpoint_seq : Int32?
 }
 
 ///|
@@ -46,8 +46,8 @@ priv struct ImportedWorkflowAgent {
 ///|
 priv struct ImportedWorkflowRun {
   owner_call_id : String
-  mut next_agent_seq : Int
-  agents : Map[Int, ImportedWorkflowAgent]
+  mut next_agent_seq : Int32
+  agents : Map[Int32, ImportedWorkflowAgent]
   mut ended : Bool
 }
 
@@ -60,39 +60,39 @@ priv struct ImportedSubagentCatalog {
 ///|
 priv struct ImportedRetryChain {
   retry_id : String
-  retry : Int
+  retry : Int32
 }
 
 ///|
 priv struct ImportedRetrySchedule {
-  turn : Int
-  step : Int
+  turn : Int32
+  step : Int32
 }
 
 ///|
 priv struct V4Replay {
-  mut turn : Int
-  mut step : Int
+  mut turn : Int32
+  mut step : Int32
   snapshot : Bool
   mut status : Status
   mut open_turn : Bool
   mut open_step : Bool
   seeded : Bool
   mut title : String
-  mut seed_marker : Int?
+  mut seed_marker : Int32?
   mut fork_closing : Bool
   mut request_header : Json?
   mut request_context_seen : Bool
-  mut surface : Array[Int]
-  mut protected_head : Int?
+  mut surface : Array[Int32]
+  mut protected_head : Int32?
   mut compaction : ImportedCompaction?
-  mut pending_prune : Array[Int]?
+  mut pending_prune : Array[Int32]?
   mut admitted_prompt : Bool
   mut assistant_seen : Bool
   mut terminal_step_without_assistant : Bool
-  source_types : Map[Int, String]
-  source_records : Map[Int, Json]
-  user_messages : Map[Int, Bool]
+  source_types : Map[Int32, String]
+  source_records : Map[Int32, Json]
+  user_messages : Map[Int32, Bool]
   message_ids : Map[String, Bool]
   calls : Map[String, ImportedCall]
   call_order : Array[String]

@@ -32,7 +32,7 @@ priv struct NativeRootHookOutcome {
 }
 
 ///|
-const NATIVE_SESSION_START_PENDING_INBOX_LIMIT : Int = 64
+const NATIVE_SESSION_START_PENDING_INBOX_LIMIT : Int32 = 64
 
 ///|
 /// Immutable host-level provider settings. API-key bytes are read into an
@@ -44,7 +44,7 @@ priv struct NativeProviderConfig {
   base_url : String?
   generation : String
   demo_provider : Bool
-  max_retries : Int
+  max_retries : Int32
 }
 
 ///|
@@ -53,7 +53,7 @@ fn native_provider_config(
   mode_override : String,
   model_override : String,
   base_url_override : String,
-  max_retries : Int,
+  max_retries : Int32,
 ) -> Result[NativeProviderConfig, String] {
   if max_retries < 0 || max_retries > 5 {
     return Err("--max-retries must be an integer between 0 and 5")
@@ -130,18 +130,18 @@ async fn NativeRuntime::open(
   workspace : String,
   allow_shell : Bool,
   demo_provider : Bool,
-  mode_override? : String = "",
-  model_override? : String = "",
-  base_url_override? : String = "",
-  max_retries? : Int = 5,
-  mcp_config_path? : String? = None,
-  enable_skills? : Bool = false,
-  skill_dirs? : Array[String] = [],
-  hooks_config_path? : String? = None,
-  lsp_config_path? : String? = None,
-  enable_subagents? : Bool = false,
-  hooks_dialect? : String = "claude-code",
-  hooks_model? : String = "",
+  mode_override~ : String = "",
+  model_override~ : String = "",
+  base_url_override~ : String = "",
+  max_retries~ : Int32 = 5,
+  mcp_config_path~ : String? = None,
+  enable_skills~ : Bool = false,
+  skill_dirs~ : Array[String] = [],
+  hooks_config_path~ : String? = None,
+  lsp_config_path~ : String? = None,
+  enable_subagents~ : Bool = false,
+  hooks_dialect~ : String = "claude-code",
+  hooks_model~ : String = "",
 ) -> Result[NativeRuntime, String] {
   let provider_config = match
     native_provider_config(
@@ -510,8 +510,8 @@ async fn NativeRuntime::record_native_hook_invoked(
   point : String,
   handler_id : String,
   matcher : String?,
-  dialect? : String = "claude-code",
-  control? : NativeJobControl? = None,
+  dialect~ : String = "claude-code",
+  control~ : NativeJobControl? = None,
 ) -> Result[@engine.NativeHookInvocationCheckpoint, String] {
   @async.protect_from_cancel(async fn() {
     self.gate.acquire()
@@ -549,9 +549,9 @@ async fn NativeRuntime::record_native_hook_result(
   self : NativeRuntime,
   checkpoint : @engine.NativeHookInvocationCheckpoint,
   decision : String,
-  exit_code : Int?,
+  exit_code : Int32?,
   stderr_summary : String?,
-  duration_ms : Int,
+  duration_ms : Int32,
 ) -> Result[Unit, String] {
   @async.protect_from_cancel(async fn() {
     self.gate.acquire()
@@ -648,7 +648,7 @@ async fn NativeRuntime::invoke(
 fn NativeRuntime::validate_user_prompt_locked(
   self : NativeRuntime,
   input : Json,
-) -> Result[(String, String, Int), String] {
+) -> Result[(String, String, Int32), String] {
   let (session_id, prompt) = match
     @engine.EngineCommand::from_json("session_send", input) {
     Ok(@engine.EngineCommand::SendPrompt(session_id, prompt)) =>
@@ -659,7 +659,7 @@ fn NativeRuntime::validate_user_prompt_locked(
     Err(error) => return Err(error)
   }
   let session = match
-    self.api.invoke("session_get", { "session_id": session_id.to_json() }) {
+    self.api.invoke("session_get", { "session_id": session_id }) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -695,7 +695,7 @@ fn NativeRuntime::validate_user_prompt_locked(
 fn NativeRuntime::current_turn_id(
   self : NativeRuntime,
   session_id : String,
-) -> Result[Int, String] {
+) -> Result[Int32, String] {
   let session = match
     self.api.invoke("session_get", { "session_id": Json::string(session_id) }) {
     Ok(value) => value
@@ -712,7 +712,7 @@ fn NativeRuntime::current_turn_id(
 fn native_engine_current_turn_id(
   engine : @engine.Engine,
   session_id : String,
-) -> Result[Int, String] {
+) -> Result[Int32, String] {
   let session = match
     engine.invoke("session_get", { "session_id": Json::string(session_id) }) {
     Ok(value) => value
@@ -730,10 +730,10 @@ async fn NativeRuntime::run_user_prompt_hook_controlled(
   control : NativeJobControl,
   session_id : String,
   prompt : String,
-  turn_id : Int,
-  attach_task? : Bool = true,
-  payload_prompt? : String? = None,
-  sink? : NativeHookEventSink? = None,
+  turn_id : Int32,
+  attach_task~ : Bool = true,
+  payload_prompt~ : String? = None,
+  sink~ : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let outcome : Ref[Result[NativeHookOutcome, String]?] = Ref(None)
   let task_result = @async.handle_cancellation(async fn() {
@@ -851,7 +851,7 @@ async fn NativeRuntime::prepare_session_start_contexts(
     return Ok(contexts.copy())
   }
   if self.session_start_pending.get(session_id) is None &&
-    self.session_start_pending.keys().length() >=
+    self.session_start_pending.keys().count() >=
     NATIVE_SESSION_START_PENDING_INBOX_LIMIT {
     self.gate.release()
     return Err("native SessionStart pending inbox limit reached")
@@ -907,8 +907,8 @@ async fn NativeRuntime::run_root_send_hooks_controlled(
   control : NativeJobControl,
   session_id : String,
   prompt : String,
-  turn_id : Int,
-  attach_task? : Bool = true,
+  turn_id : Int32,
+  attach_task~ : Bool = true,
 ) -> Result[NativeRootHookOutcome, String] {
   let start_contexts = match
     self.prepare_session_start_contexts(control, session_id) {
@@ -1164,7 +1164,7 @@ fn native_safe_session(value : Json) -> Json {
       events.any(event => string_field(event, "type") == Some("tool/result"))
     _ => false
   }
-  let mut approval_revision : Int? = None
+  let mut approval_revision : Int32? = None
   let safe_events : Array[Json] = []
   match object_field(value, "events") {
     Some(Json::Array(events)) =>
@@ -1180,27 +1180,25 @@ fn native_safe_session(value : Json) -> Json {
         }
         if kind == "tool/result/pruned" {
           safe_events.push({
-            "type": kind.to_json(),
+            "type": kind,
             "turn_id": object_field(event, "turn_id").unwrap_or(Json::null()),
-            "data": {
-              "call_id": string_field(data, "call_id").unwrap_or("").to_json(),
-            },
+            "data": { "call_id": string_field(data, "call_id").unwrap_or("") },
           })
         } else if string_field(data, "error") is Some(error) &&
           error.length() <= 512 {
           safe_events.push({
-            "type": kind.to_json(),
+            "type": kind,
             "turn_id": object_field(event, "turn_id").unwrap_or(Json::null()),
-            "data": { "error": error.to_json() },
+            "data": { "error": error },
           })
         }
       }
     _ => ()
   }
   if approval_revision is Some(revision) {
-    result["approval_revision"] = revision.to_json()
+    result["approval_revision"] = Json(revision)
   }
-  result["has_tool_results"] = has_tool_results.to_json()
+  result["has_tool_results"] = Json(has_tool_results)
   result["events"] = Json::array(safe_events)
   Json::object(result)
 }
@@ -1209,7 +1207,7 @@ fn native_safe_session(value : Json) -> Json {
 async fn NativeRuntime::remote_snapshot(
   self : NativeRuntime,
   identity_key : String,
-  selected_session? : String? = None,
+  selected_session~ : String? = None,
 ) -> Result[Json, String] {
   self.gate.acquire()
   defer self.gate.release()
@@ -1231,7 +1229,7 @@ async fn NativeRuntime::remote_snapshot(
       continue
     }
     let detail = match
-      self.api.invoke("session_get", { "session_id": session_id.to_json() }) {
+      self.api.invoke("session_get", { "session_id": session_id }) {
       Ok(value) => native_safe_session(value)
       Err(_) => continue
     }
@@ -1244,8 +1242,7 @@ async fn NativeRuntime::remote_snapshot(
   }
   let selected = match selected_session {
     Some(session_id) =>
-      match
-        self.api.invoke("session_get", { "session_id": session_id.to_json() }) {
+      match self.api.invoke("session_get", { "session_id": session_id }) {
         Ok(value) if string_field(value, "id") == Some(session_id) =>
           native_safe_session(value)
         _ => Json::null()
@@ -1254,13 +1251,13 @@ async fn NativeRuntime::remote_snapshot(
   }
   Ok({
     "protocol_version": 1,
-    "server_id": self.state.server_id.to_json(),
-    "workspace_id": self.state.workspace_id.to_json(),
-    "identity_key": identity_key.to_json(),
-    "auth_revision": self.state.auth_revision.to_json(),
-    "epoch": self.state.epoch.to_json(),
-    "revision": self.state.revision.to_json(),
-    "cursor": cursor.to_json(),
+    "server_id": self.state.server_id,
+    "workspace_id": self.state.workspace_id,
+    "identity_key": identity_key,
+    "auth_revision": self.state.auth_revision,
+    "epoch": self.state.epoch,
+    "revision": self.state.revision,
+    "cursor": cursor,
     "auth": self.auth.status(),
     "projection": {
       "sessions": Json::array(summaries),
@@ -1284,7 +1281,7 @@ async fn NativeRuntime::remote_session(
     return Err("caller identity is no longer authorized")
   }
   let detail = match
-    self.api.invoke("session_get", { "session_id": session_id.to_json() }) {
+    self.api.invoke("session_get", { "session_id": session_id }) {
     Ok(value) => native_safe_session(value)
     Err(error) => return Err(error)
   }
@@ -1298,12 +1295,12 @@ async fn NativeRuntime::remote_session(
   }
   Ok({
     "protocol_version": 1,
-    "workspace_id": self.state.workspace_id.to_json(),
-    "identity_key": identity_key.to_json(),
-    "auth_revision": self.state.auth_revision.to_json(),
-    "epoch": self.state.epoch.to_json(),
-    "revision": self.state.revision.to_json(),
-    "cursor": cursor.to_json(),
+    "workspace_id": self.state.workspace_id,
+    "identity_key": identity_key,
+    "auth_revision": self.state.auth_revision,
+    "epoch": self.state.epoch,
+    "revision": self.state.revision,
+    "cursor": cursor,
     "projection": { "session": detail },
   })
 }
@@ -1314,23 +1311,23 @@ fn native_receipt(
   command_id : String,
   fingerprint : String,
   status : String,
-  accepted_revision : Int?,
+  accepted_revision : Int32?,
   result : Json?,
   error : String?,
 ) -> Json {
   {
     "protocol_version": 1,
-    "workspace_id": workspace_id.to_json(),
-    "command_id": command_id.to_json(),
-    "payload_fingerprint": fingerprint.to_json(),
-    "status": status.to_json(),
+    "workspace_id": workspace_id,
+    "command_id": command_id,
+    "payload_fingerprint": fingerprint,
+    "status": status,
     "accepted_revision": match accepted_revision {
-      Some(value) => value.to_json()
+      Some(value) => value
       None => Json::null()
     },
     "result": result.unwrap_or(Json::null()),
     "error": match error {
-      Some(value) => value.to_json()
+      Some(value) => value
       None => Json::null()
     },
   }
@@ -1355,7 +1352,7 @@ fn native_receipt_owner(receipt : Json) -> String {
 fn native_receipt_with_owner(receipt : Json, identity_key : String) -> Json {
   match receipt {
     Json::Object(fields) => {
-      fields["owner_identity_key"] = identity_key.to_json()
+      fields["owner_identity_key"] = Json(identity_key)
       Json::object(fields)
     }
     _ => receipt
@@ -1374,8 +1371,8 @@ fn native_mark_unfinished_receipts_uncertain(
     if string_field(receipt, "status") == Some("accepted") {
       match receipt {
         Json::Object(fields) => {
-          fields["status"] = "uncertain".to_json()
-          fields["error"] = "host restarted before the accepted command had a durable outcome".to_json()
+          fields["status"] = "uncertain"
+          fields["error"] = "host restarted before the accepted command had a durable outcome"
           recovered.push(Json::object(fields))
         }
         _ => recovered.push(receipt)
@@ -1500,7 +1497,7 @@ async fn NativeRuntime::accept_remote_command(
   self : NativeRuntime,
   command : @protocol.RemoteCommand,
   identity_key : String,
-  acp_activity_session_id? : String = "",
+  acp_activity_session_id~ : String = "",
 ) -> Result[
   (Json, Array[@engine.EngineEffect], Bool, NativeJobControl?),
   String,
@@ -1596,7 +1593,7 @@ async fn NativeRuntime::accept_remote_command(
         "tool_approve", "session_send", "session_cancel", "session_prune_tool_results",
         "session_fork",
       ].contains(command.operation) {
-      input_fields["session_id"] = session_id.to_json()
+      input_fields["session_id"] = Json(session_id)
     }
   }
   let input = Json::object(input_fields)
@@ -1794,7 +1791,7 @@ async fn NativeRuntime::accept_remote_prompt_command(
     Json::Object(fields) => {
       let copy = fields.copy()
       match command.session_id {
-        Some(session_id) => copy["session_id"] = session_id.to_json()
+        Some(session_id) => copy["session_id"] = Json(session_id)
         None => ()
       }
       native_hook_prompt_input(Json::object(copy), [])
@@ -2103,7 +2100,7 @@ fn NativeRuntime::approval_matches_locked(
     None => return false
   }
   let current = match
-    self.api.invoke("session_get", { "session_id": session_id.to_json() }) {
+    self.api.invoke("session_get", { "session_id": session_id }) {
     Ok(value) => value
     Err(_) => return false
   }
@@ -2115,7 +2112,7 @@ fn NativeRuntime::approval_matches_locked(
   if requested_call == None || requested_call != string_field(input, "call_id") {
     return false
   }
-  let mut current_revision : Int? = None
+  let mut current_revision : Int32? = None
   match object_field(current, "events") {
     Some(Json::Array(events)) =>
       for event in events {
@@ -2171,9 +2168,9 @@ async fn NativeRuntime::finish_receipt(
       string_field(previous, "command_id") == Some(command_id) {
       let replacement = match previous {
         Json::Object(fields) => {
-          fields["status"] = status.to_json()
+          fields["status"] = Json(status)
           fields["error"] = error
-            .map(value => value.to_json())
+            .map(value => Json(value))
             .unwrap_or(Json::null())
           Json::object(fields)
         }
@@ -2275,7 +2272,7 @@ async fn[X] NativeRuntime::mcp_handle(
   }
   let mut prompt_session_id : String? = None
   let mut prompt_text : String? = None
-  let mut prompt_turn_id : Int? = None
+  let mut prompt_turn_id : Int32? = None
   let mut prompt_dispatch_line = if tool_name == "session_send" {
     match native_mcp_prompt_request(line) {
       Some(input) =>
@@ -2687,8 +2684,8 @@ fn native_provider_failure(error : String) -> Json {
   } else {
     error
   }
-  let failure = { "code": code.to_json(), "message": message.to_json() }
-  { "ok": false, "error": message.to_json(), "failure": failure }
+  let failure = { "code": code, "message": message }
+  { "ok": false, "error": message, "failure": failure }
 }
 
 ///|
@@ -2707,10 +2704,10 @@ fn native_failure_is_retryable(result : Json) -> Json? {
 }
 
 ///|
-const NATIVE_PROVIDER_STREAM_DELTA_CAPACITY : Int = 4096
+const NATIVE_PROVIDER_STREAM_DELTA_CAPACITY : Int32 = 4096
 
 ///|
-fn native_provider_utf16_units(value : String) -> Int {
+fn native_provider_utf16_units(value : String) -> Int32 {
   let mut units = 0
   for character in value {
     units += if character.to_int() > 0xFFFF { 2 } else { 1 }
@@ -2786,7 +2783,7 @@ async fn NativeRuntime::project_provider_delta(
 async fn NativeRuntime::run_provider_effect(
   self : NativeRuntime,
   effect : @engine.EngineEffect,
-  control? : NativeJobControl? = None,
+  control~ : NativeJobControl? = None,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
   if effect.kind() != @engine.EffectType::Provider {
     return Err("effect is not a provider request")
@@ -2955,7 +2952,7 @@ async fn NativeRuntime::run_effects(
   self : NativeRuntime,
   effects : Array[@engine.EngineEffect],
   command_id : String,
-  accepted_revision : Int,
+  accepted_revision : Int32,
 ) -> Result[Unit, String] {
   if effects.is_empty() {
     return Ok(())
@@ -3028,9 +3025,9 @@ async fn NativeRuntime::run_command_job(
   self : NativeRuntime,
   command_id : String,
   identity_key : String,
-  accepted_revision : Int,
+  accepted_revision : Int32,
   effects : Array[@engine.EngineEffect],
-  control? : NativeJobControl? = None,
+  control~ : NativeJobControl? = None,
 ) -> Unit {
   let outcome = @async.handle_cancellation(async fn() {
     match control {
@@ -3120,7 +3117,7 @@ async fn NativeRuntime::complete_tool_with_prompt_hook(
   self : NativeRuntime,
   effect : @engine.EngineEffect,
   result : Json,
-  control? : NativeJobControl? = None,
+  control~ : NativeJobControl? = None,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
   let session_id = effect.session_id().as_string()
   let typed_session_id = match @engine.SessionId::new(session_id) {
@@ -3244,7 +3241,7 @@ async fn NativeRuntime::settle_post_tool_prompt_hook(
   checkpoint : @engine.NativePostToolPromptHookCheckpoint,
   contexts : Array[String]?,
   reason : String,
-  control? : NativeJobControl? = None,
+  control~ : NativeJobControl? = None,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
   self.gate.acquire()
   defer self.gate.release()
@@ -3281,8 +3278,8 @@ async fn NativeRuntime::settle_post_tool_prompt_hook(
 async fn NativeRuntime::run_stop_hook_controlled(
   self : NativeRuntime,
   session_id : String,
-  turn_id : Int,
-  sink? : NativeHookEventSink? = None,
+  turn_id : Int32,
+  sink~ : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let outcome : Ref[Result[NativeHookOutcome, String]?] = Ref(None)
   let task_result = @async.handle_cancellation(async fn() {
@@ -3616,7 +3613,7 @@ async fn NativeRuntime::finish_tool_effect(
   effect : @engine.EngineEffect,
   session_id : String,
   tool_result : Json,
-  control? : NativeJobControl? = None,
+  control~ : NativeJobControl? = None,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
   let name = string_field(effect.request(), "name").unwrap_or("")
   let turn_id = match self.current_turn_id(session_id) {
@@ -3708,8 +3705,8 @@ async fn NativeRuntime::finish_tool_effect(
 async fn NativeRuntime::run_tool_effect(
   self : NativeRuntime,
   effect : @engine.EngineEffect,
-  control? : NativeJobControl? = None,
-  subagent_timeout_ms? : Int = NATIVE_SUBAGENT_MAX_RUN_MS,
+  control~ : NativeJobControl? = None,
+  subagent_timeout_ms~ : Int32 = NATIVE_SUBAGENT_MAX_RUN_MS,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
   if effect.kind() != @engine.EffectType::Tool {
     return Err("effect is not a tool")
@@ -3856,11 +3853,7 @@ fn native_demo_function_call_response(
     "content": "",
     "reasoning": "",
     "tool_calls": [
-      {
-        "id": call_id.to_json(),
-        "name": name.to_json(),
-        "arguments": arguments.stringify().to_json(),
-      },
+      { "id": call_id, "name": name, "arguments": arguments.stringify() },
     ],
     "finish_reason": "tool_calls",
     "usage": { "input_tokens": 1, "output_tokens": 1, "total_tokens": 2 },
@@ -4042,7 +4035,7 @@ async fn verify_native_demo_reload(
   data_dir : String,
   workspace : String,
   demo_id : String,
-  mcp_config_path? : String? = None,
+  mcp_config_path~ : String? = None,
 ) -> Result[Unit, String] {
   let runtime = match
     NativeRuntime::open(data_dir, workspace, false, false, mcp_config_path~) {

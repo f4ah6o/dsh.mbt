@@ -30,7 +30,7 @@ fn max_tokens_response(text : String) -> Json {
 }
 
 ///|
-fn event_type_count(session : Json, kind : String) -> Int raise EngineError {
+fn event_type_count(session : Json, kind : String) -> Int32 raise EngineError {
   array_value(required_field(session, "events"), "events", 32768)
   .filter(event => required_string(event, "type") == kind)
   .length()

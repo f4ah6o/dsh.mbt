@@ -4,8 +4,8 @@
 /// source archive is within the original append-only importer subset.
 fn v4_legacy_projection_supported(events : Array[Event]) -> Bool {
   try {
-    let prior_types : Map[Int, String] = Map([])
-    let prior_records : Map[Int, Json] = Map([])
+    let prior_types : Map[Int32, String] = Map([])
+    let prior_records : Map[Int32, Json] = Map([])
     let mut open_turn = false
     let mut open_step = false
     let mut has_request_header = false
@@ -34,7 +34,7 @@ fn v4_legacy_projection_supported(events : Array[Event]) -> Bool {
             return false
           }
           if is_v4_surface_event(kind) &&
-            fields(record).get("surfaceOp") != Some("append".to_json()) {
+            fields(record).get("surfaceOp") != Some("append") {
             return false
           }
           match fields(record).get("sourceEventSeqs") {

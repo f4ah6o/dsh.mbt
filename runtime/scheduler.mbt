@@ -5,7 +5,7 @@
 priv struct NativeScheduler {
   gate : @async.Mutex
   active : Map[String, NativeJobControl]
-  cancelled_through : Map[String, Int]
+  cancelled_through : Map[String, Int32]
   slots : @async.Semaphore
 }
 
@@ -13,7 +13,7 @@ priv struct NativeScheduler {
 priv struct NativeJobControl {
   session_id : String
   command_id : String
-  accepted_revision : Int
+  accepted_revision : Int32
   cancelled : Ref[Bool]
   task : Ref[@async.Task[Result[Unit, String]]?]
 }
@@ -22,7 +22,7 @@ priv struct NativeJobControl {
 priv struct NativeReadGroup {
   queue : @aqueue.Queue[NativeEffectWork]
   gate : @async.Mutex
-  pending : Ref[Int]
+  pending : Ref[Int32]
   deferred : Ref[Array[@engine.EngineEffect]]
 }
 
@@ -38,7 +38,7 @@ priv suberror NativeSchedulerFailure {
 }
 
 ///|
-const NATIVE_EFFECT_WORKERS : Int = 4
+const NATIVE_EFFECT_WORKERS : Int32 = 4
 
 ///|
 fn NativeScheduler::new() -> NativeScheduler {
@@ -55,7 +55,7 @@ async fn NativeScheduler::begin(
   self : NativeScheduler,
   session_id : String,
   command_id : String,
-  accepted_revision : Int,
+  accepted_revision : Int32,
 ) -> Result[NativeJobControl, String] {
   for ;; {
     self.gate.acquire()
@@ -107,7 +107,7 @@ fn NativeScheduler::new_control(
   self : NativeScheduler,
   session_id : String,
   command_id : String,
-  accepted_revision : Int,
+  accepted_revision : Int32,
 ) -> NativeJobControl {
   let cancelled_through = self.cancelled_through.get(session_id).unwrap_or(-1)
   {
@@ -188,7 +188,7 @@ async fn NativeScheduler::attach_task(
 async fn NativeScheduler::cancel_through(
   self : NativeScheduler,
   session_id : String,
-  accepted_revision : Int,
+  accepted_revision : Int32,
 ) -> Unit {
   self.gate.acquire()
   defer self.gate.release()
@@ -350,7 +350,7 @@ async fn native_read_group_worker(
 ///|
 fn native_effect_suffix(
   effects : Array[@engine.EngineEffect],
-  start : Int,
+  start : Int32,
 ) -> Array[@engine.EngineEffect] {
   let output : Array[@engine.EngineEffect] = []
   for index = start; index < effects.length(); index = index + 1 {

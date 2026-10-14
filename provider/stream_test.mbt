@@ -252,8 +252,8 @@ test "Messages deltas preserve interleaved block arrival order and final channel
     ],
   )
   let result = value(decoder.finish())
-  assert_eq(at(result, "content"), "AB".to_json())
-  assert_eq(at(result, "reasoning"), "考".to_json())
+  assert_eq(at(result, "content"), "AB")
+  assert_eq(at(result, "reasoning"), "考")
 }
 
 ///|
@@ -391,10 +391,7 @@ test "tool arguments require a JSON object and duplicate IDs never become execut
               "index": 0,
               "id": "c1",
               "type": "function",
-              "function": {
-                "name": "read_file",
-                "arguments": arguments.to_json(),
-              },
+              "function": { "name": "read_file", "arguments": arguments },
             },
           ],
         },

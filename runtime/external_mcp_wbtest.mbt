@@ -1,5 +1,5 @@
 ///|
-fn native_mcp_test_response(id : Int, result : Json) -> Json {
+fn native_mcp_test_response(id : Int32, result : Json) -> Json {
   {
     "jsonrpc": Json::string("2.0"),
     "id": Json::number(id.to_double()),
@@ -12,7 +12,7 @@ fn native_mcp_test_server_script(
   schema : Json,
   counter_path : String,
   is_error : Json?,
-  tool_call_behavior? : String? = None,
+  tool_call_behavior~ : String? = None,
 ) -> String {
   let initialize = native_mcp_test_response(1, {
     "protocolVersion": Json::string("2025-06-18"),
@@ -69,7 +69,7 @@ fn native_mcp_test_server_script(
 fn native_mcp_test_config(
   workspace : String,
   script_path : String,
-  tool_timeout_ms? : Int = 60000,
+  tool_timeout_ms~ : Int32 = 60000,
 ) -> Json {
   {
     "servers": Json::array([
@@ -85,7 +85,7 @@ fn native_mcp_test_server_entry(
   name : String,
   workspace : String,
   script_path : String,
-  tool_timeout_ms : Int,
+  tool_timeout_ms : Int32,
 ) -> Json {
   {
     "name": Json::string(name),
@@ -132,7 +132,7 @@ fn native_mcp_test_provider_tool_response(
 }
 
 ///|
-fn native_mcp_test_deep_json(depth : Int) -> Json {
+fn native_mcp_test_deep_json(depth : Int32) -> Json {
   if depth == 0 {
     Json::string("leaf")
   } else {

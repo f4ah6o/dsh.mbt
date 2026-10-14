@@ -3,13 +3,13 @@
 /// an interrupted connection. The server scopes deduplication to its verified
 /// principal and workspace, and computes the receipt fingerprint.
 pub(all) struct RemoteCommand {
-  protocol_version : Int
+  protocol_version : Int32
   workspace_id : String
   command_id : String
   session_id : String?
   operation : String
   input : Json
-  approval_revision : Int?
+  approval_revision : Int32?
 }
 
 ///|

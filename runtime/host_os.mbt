@@ -2,29 +2,29 @@
 /// Thin native-only adapters for primitives missing from the portable async
 /// filesystem. Paths passed to C are NUL-terminated UTF-8 byte strings.
 #borrow(path)
-extern "C" fn c_open_root(path : Bytes) -> Int = "dsh_fs_open_root"
+extern "C" fn c_open_root(path : Bytes) -> Int32 = "dsh_fs_open_root"
 
 ///|
-extern "C" fn c_close(fd : Int) -> Int = "dsh_fs_close"
+extern "C" fn c_close(fd : Int32) -> Int32 = "dsh_fs_close"
 
 ///|
-extern "C" fn c_set_root_mode(fd : Int, mode : Int) -> Int = "dsh_fs_set_root_mode"
+extern "C" fn c_set_root_mode(fd : Int32, mode : Int32) -> Int32 = "dsh_fs_set_root_mode"
 
 ///|
-extern "C" fn c_pid() -> Int = "dsh_os_pid"
+extern "C" fn c_pid() -> Int32 = "dsh_os_pid"
 
 ///|
-extern "C" fn c_uid() -> Int = "dsh_os_uid"
+extern "C" fn c_uid() -> Int32 = "dsh_os_uid"
 
 ///|
 #borrow(buffer)
 extern "C" fn c_executable_path(
   buffer : FixedArray[Byte],
-  capacity : Int,
-) -> Int = "dsh_os_executable_path"
+  capacity : Int32,
+) -> Int32 = "dsh_os_executable_path"
 
 ///|
-extern "C" fn c_flush_stdout() -> Int = "dsh_os_flush_stdout"
+extern "C" fn c_flush_stdout() -> Int32 = "dsh_os_flush_stdout"
 
 ///|
 fn native_flush_stdout() -> Unit {
@@ -32,7 +32,7 @@ fn native_flush_stdout() -> Unit {
 }
 
 ///|
-extern "C" fn c_flush_stderr() -> Int = "dsh_os_flush_stderr"
+extern "C" fn c_flush_stderr() -> Int32 = "dsh_os_flush_stderr"
 
 ///|
 fn native_flush_stderr() -> Unit {
@@ -40,126 +40,126 @@ fn native_flush_stderr() -> Unit {
 }
 
 ///|
-extern "C" fn c_stdin_is_terminal() -> Int = "dsh_os_stdin_is_terminal"
+extern "C" fn c_stdin_is_terminal() -> Int32 = "dsh_os_stdin_is_terminal"
 
 ///|
 #borrow(path)
-extern "C" fn c_root_matches(root : Int, path : Bytes) -> Int = "dsh_fs_root_matches"
+extern "C" fn c_root_matches(root : Int32, path : Bytes) -> Int32 = "dsh_fs_root_matches"
 
 ///|
 #borrow(root_path, relative_path)
 extern "C" fn c_mapping_matches(
-  root : Int,
+  root : Int32,
   root_path : Bytes,
   relative_path : Bytes,
-  is_directory : Int,
-) -> Int = "dsh_fs_mapping_matches"
+  is_directory : Int32,
+) -> Int32 = "dsh_fs_mapping_matches"
 
 ///|
 #borrow(buffer)
-extern "C" fn c_hostname(buffer : FixedArray[Byte], capacity : Int) -> Int = "dsh_os_hostname"
+extern "C" fn c_hostname(buffer : FixedArray[Byte], capacity : Int32) -> Int32 = "dsh_os_hostname"
 
 ///|
 #borrow(buffer)
-extern "C" fn c_timestamp(buffer : FixedArray[Byte], capacity : Int) -> Int = "dsh_os_timestamp"
+extern "C" fn c_timestamp(buffer : FixedArray[Byte], capacity : Int32) -> Int32 = "dsh_os_timestamp"
 
 ///|
-extern "C" fn c_process_alive(pid : Int) -> Int = "dsh_os_process_alive"
+extern "C" fn c_process_alive(pid : Int32) -> Int32 = "dsh_os_process_alive"
 
 ///|
-extern "C" fn c_process_group_alive(pgid : Int) -> Int = "dsh_os_process_group_alive"
+extern "C" fn c_process_group_alive(pgid : Int32) -> Int32 = "dsh_os_process_group_alive"
 
 ///|
-extern "C" fn c_hard_worker_memory_supported() -> Int = "dsh_os_hard_worker_memory_supported"
+extern "C" fn c_hard_worker_memory_supported() -> Int32 = "dsh_os_hard_worker_memory_supported"
 
 ///|
-extern "C" fn c_kill_process_group(pid : Int, signal_number : Int) -> Int = "dsh_kill_process_group"
+extern "C" fn c_kill_process_group(pid : Int32, signal_number : Int32) -> Int32 = "dsh_kill_process_group"
 
 ///|
-extern "C" fn c_kill_process(pid : Int, signal_number : Int) -> Int = "dsh_kill_process"
+extern "C" fn c_kill_process(pid : Int32, signal_number : Int32) -> Int32 = "dsh_kill_process"
 
 ///|
 #borrow(payload)
-extern "C" fn c_exec_worker(payload : Bytes, length : Int) -> Int = "dsh_exec_worker"
+extern "C" fn c_exec_worker(payload : Bytes, length : Int32) -> Int32 = "dsh_exec_worker"
 
 ///|
 #borrow(path)
-extern "C" fn c_open_file(root : Int, path : Bytes) -> Int = "dsh_fs_open_file"
+extern "C" fn c_open_file(root : Int32, path : Bytes) -> Int32 = "dsh_fs_open_file"
 
 ///|
 #borrow(out)
-extern "C" fn c_stat_fd(fd : Int, out : FixedArray[Int64]) -> Int = "dsh_fs_stat_fd"
+extern "C" fn c_stat_fd(fd : Int32, out : FixedArray[Int64]) -> Int32 = "dsh_fs_stat_fd"
 
 ///|
 #borrow(out)
-extern "C" fn c_stat_root(fd : Int, out : FixedArray[Int64]) -> Int = "dsh_fs_stat_root"
+extern "C" fn c_stat_root(fd : Int32, out : FixedArray[Int64]) -> Int32 = "dsh_fs_stat_root"
 
 ///|
 #borrow(buffer)
 extern "C" fn c_read_fd(
-  fd : Int,
+  fd : Int32,
   buffer : FixedArray[Byte],
-  capacity : Int,
-) -> Int = "dsh_fs_read_fd"
+  capacity : Int32,
+) -> Int32 = "dsh_fs_read_fd"
 
 ///|
 #borrow(root_path, path, data, expected)
 extern "C" fn c_atomic_write(
-  root : Int,
+  root : Int32,
   root_path : Bytes,
   path : Bytes,
   data : Bytes,
-  length : Int,
-  mode : Int,
-  create_parents : Int,
-  has_expected : Int,
-  force_mode : Int,
+  length : Int32,
+  mode : Int32,
+  create_parents : Int32,
+  has_expected : Int32,
+  force_mode : Int32,
   expected : FixedArray[Int64],
-) -> Int = "dsh_fs_atomic_write"
+) -> Int32 = "dsh_fs_atomic_write"
 
 ///|
 #borrow(path, data)
 extern "C" fn c_create_exclusive(
-  root : Int,
+  root : Int32,
   path : Bytes,
   data : Bytes,
-  length : Int,
-  mode : Int,
-) -> Int = "dsh_fs_create_exclusive"
+  length : Int32,
+  mode : Int32,
+) -> Int32 = "dsh_fs_create_exclusive"
 
 ///|
 #borrow(path)
-extern "C" fn c_unlink(root : Int, path : Bytes) -> Int = "dsh_fs_unlink"
+extern "C" fn c_unlink(root : Int32, path : Bytes) -> Int32 = "dsh_fs_unlink"
 
 ///|
 #borrow(path, buffer)
 extern "C" fn c_list_dir(
-  root : Int,
+  root : Int32,
   path : Bytes,
   buffer : FixedArray[Byte],
-  capacity : Int,
-) -> Int = "dsh_fs_list_dir"
+  capacity : Int32,
+) -> Int32 = "dsh_fs_list_dir"
 
 ///|
 #borrow(data, output)
 extern "C" fn c_sha256(
   data : Bytes,
-  length : Int,
+  length : Int32,
   output : FixedArray[Byte],
-) -> Int = "dsh_crypto_sha256"
+) -> Int32 = "dsh_crypto_sha256"
 
 ///|
 #borrow(modulus, exponent, message, signature)
 extern "C" fn c_verify_rs256(
   modulus : Bytes,
-  modulus_len : Int,
+  modulus_len : Int32,
   exponent : Bytes,
-  exponent_len : Int,
+  exponent_len : Int32,
   message : Bytes,
-  message_len : Int,
+  message_len : Int32,
   signature : Bytes,
-  signature_len : Int,
-) -> Int = "dsh_crypto_verify_rs256"
+  signature_len : Int32,
+) -> Int32 = "dsh_crypto_verify_rs256"
 
 ///|
 #borrow(path)
@@ -168,7 +168,7 @@ fn c_path(path : String) -> Bytes {
 }
 
 ///|
-fn bytes_from_fixedarray(buffer : FixedArray[Byte], length : Int) -> Bytes {
+fn bytes_from_fixedarray(buffer : FixedArray[Byte], length : Int32) -> Bytes {
   let bytes : Array[Byte] = []
   for index = 0; index < length; index = index + 1 {
     bytes.push(buffer[index])
@@ -207,23 +207,23 @@ pub fn FileVersion::inode(self : FileVersion) -> Int64 {
 }
 
 ///|
-pub fn FileVersion::permission(self : FileVersion) -> Int {
+pub fn FileVersion::permission(self : FileVersion) -> Int32 {
   (self.fields[7] & 0o777).to_int()
 }
 
 ///|
-pub fn FileVersion::owner_uid(self : FileVersion) -> Int {
+pub fn FileVersion::owner_uid(self : FileVersion) -> Int32 {
   self.fields[8].to_int()
 }
 
 ///|
-pub fn FileVersion::owner_gid(self : FileVersion) -> Int {
+pub fn FileVersion::owner_gid(self : FileVersion) -> Int32 {
   self.fields[9].to_int()
 }
 
 ///|
 pub struct SafeRoot {
-  priv fd : Int
+  priv fd : Int32
   priv path : String
   priv mut closed : Bool
 }
@@ -288,7 +288,7 @@ pub fn SafeRoot::create_exclusive(
   self : SafeRoot,
   relative_path : String,
   content : String,
-  permission? : Int = 0o600,
+  permission~ : Int32 = 0o600,
 ) -> Result[Unit, String] {
   match self.create_exclusive_code(relative_path, content, permission~) {
     Ok(_) => Ok(())
@@ -301,8 +301,8 @@ pub fn SafeRoot::create_exclusive_code(
   self : SafeRoot,
   relative_path : String,
   content : String,
-  permission? : Int = 0o600,
-) -> Result[Unit, Int] {
+  permission~ : Int32 = 0o600,
+) -> Result[Unit, Int32] {
   match self.ensure_open() {
     Err(_) => return Err(9)
     Ok(_) => ()
@@ -372,12 +372,12 @@ pub fn SafeRoot::unlink_missing_ok(
 }
 
 ///|
-pub fn os_pid() -> Int {
+pub fn os_pid() -> Int32 {
   c_pid()
 }
 
 ///|
-pub fn os_uid() -> Int {
+pub fn os_uid() -> Int32 {
   c_uid()
 }
 
@@ -415,12 +415,12 @@ pub fn os_hostname() -> Result[String, String] {
 }
 
 ///|
-pub fn os_process_alive(pid : Int) -> Bool {
+pub fn os_process_alive(pid : Int32) -> Bool {
   c_process_alive(pid) != 0
 }
 
 ///|
-pub fn os_process_group_alive(pgid : Int) -> Bool {
+pub fn os_process_group_alive(pgid : Int32) -> Bool {
   c_process_group_alive(pgid) != 0
 }
 
@@ -430,17 +430,17 @@ pub fn os_hard_worker_memory_supported() -> Bool {
 }
 
 ///|
-pub fn os_kill_process_group(pid : Int, signal_number : Int) -> Bool {
+pub fn os_kill_process_group(pid : Int32, signal_number : Int32) -> Bool {
   c_kill_process_group(pid, signal_number) == 0
 }
 
 ///|
-pub fn os_kill_process(pid : Int, signal_number : Int) -> Bool {
+pub fn os_kill_process(pid : Int32, signal_number : Int32) -> Bool {
   c_kill_process(pid, signal_number) == 0
 }
 
 ///|
-fn native_exec_worker(payload : Bytes) -> Int {
+fn native_exec_worker(payload : Bytes) -> Int32 {
   c_exec_worker(payload, payload.length())
 }
 
@@ -503,7 +503,7 @@ fn SafeRoot::verify_mapping(
 }
 
 ///|
-fn os_error(operation : String, code : Int) -> String {
+fn os_error(operation : String, code : Int32) -> String {
   operation + " failed (OS error " + code.to_string() + ")"
 }
 
@@ -511,7 +511,7 @@ fn os_error(operation : String, code : Int) -> String {
 fn SafeRoot::open_regular(
   self : SafeRoot,
   relative_path : String,
-) -> Result[Int, String] {
+) -> Result[Int32, String] {
   match self.ensure_open() {
     Err(error) => return Err(error)
     Ok(_) => ()
@@ -531,7 +531,7 @@ fn SafeRoot::open_regular(
 }
 
 ///|
-fn SafeRoot::stat(_self : SafeRoot, fd : Int) -> Result[FileVersion, String] {
+fn SafeRoot::stat(_self : SafeRoot, fd : Int32) -> Result[FileVersion, String] {
   let fields : FixedArray[Int64] = FixedArray::make(10, 0)
   let status = c_stat_fd(fd, fields)
   if status != 0 {
@@ -545,7 +545,7 @@ fn SafeRoot::stat(_self : SafeRoot, fd : Int) -> Result[FileVersion, String] {
 pub fn SafeRoot::read_text(
   self : SafeRoot,
   relative_path : String,
-  max_bytes? : Int = 1048576,
+  max_bytes~ : Int32 = 1048576,
 ) -> Result[(String, FileVersion), String] {
   if max_bytes < 0 || max_bytes > 33554432 {
     return Err("invalid workspace read limit")
@@ -598,7 +598,7 @@ pub fn SafeRoot::read_text(
 pub fn SafeRoot::read_text_optional(
   self : SafeRoot,
   relative_path : String,
-  max_bytes? : Int = 1048576,
+  max_bytes~ : Int32 = 1048576,
 ) -> Result[(String, FileVersion)?, String] {
   if max_bytes < 0 || max_bytes > 33554432 {
     return Err("invalid workspace read limit")
@@ -661,7 +661,7 @@ pub fn SafeRoot::read_text_optional(
 pub fn SafeRoot::read_protected_text(
   self : SafeRoot,
   relative_path : String,
-  max_bytes? : Int = 1048576,
+  max_bytes~ : Int32 = 1048576,
 ) -> Result[String?, String] {
   match self.read_text_optional(relative_path, max_bytes~) {
     Err(error) => Err(error)
@@ -736,8 +736,8 @@ pub fn SafeRoot::write_atomic(
   relative_path : String,
   content : String,
   expected? : FileVersion,
-  create_parents? : Bool = false,
-  permission? : Int = 0o644,
+  create_parents~ : Bool = false,
+  permission~ : Int32 = 0o644,
 ) -> Result[Unit, String] {
   match expected {
     Some(version) =>
@@ -768,10 +768,10 @@ pub fn SafeRoot::write_atomic_bounded(
   self : SafeRoot,
   relative_path : String,
   content : String,
-  max_bytes : Int,
+  max_bytes : Int32,
   expected? : FileVersion,
-  create_parents? : Bool = false,
-  permission? : Int = 0o644,
+  create_parents~ : Bool = false,
+  permission~ : Int32 = 0o644,
 ) -> Result[Unit, String] {
   if max_bytes < 0 || max_bytes > 33554432 {
     return Err("invalid atomic write limit")

@@ -1,5 +1,5 @@
 ///|
-const NATIVE_MCP_LINE_LIMIT : Int = 1048576
+const NATIVE_MCP_LINE_LIMIT : Int32 = 1048576
 
 ///|
 const NATIVE_MCP_TOO_LARGE : String = "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32700,\"message\":\"MCP line exceeds the 1 MiB limit\"}}"

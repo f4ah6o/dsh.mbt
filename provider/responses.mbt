@@ -72,15 +72,11 @@ fn prepare_responses_impl(
         if kind == "custom" {
           {
             "type": "custom_tool_call_output",
-            "call_id": id.to_json(),
-            "output": content.to_json(),
+            "call_id": id,
+            "output": content,
           }
         } else {
-          {
-            "type": "function_call_output",
-            "call_id": id.to_json(),
-            "output": content.to_json(),
-          }
+          { "type": "function_call_output", "call_id": id, "output": content }
         },
       )
       continue
@@ -89,16 +85,13 @@ fn prepare_responses_impl(
       reject("INVALID_REQUEST", "unsupported message role " + role)
     }
     if !content.is_empty() {
-      input.push({ "role": role.to_json(), "content": content.to_json() })
+      input.push({ "role": role, "content": content })
     } else if !content_blocks.is_empty() {
       let response_blocks : Array[Json] = content_blocks.map(block => {
-        "type": "input_text".to_json(),
-        "text": text_field(object(block, "text content block"), "text").to_json(),
+        "type": "input_text",
+        "text": text_field(object(block, "text content block"), "text"),
       })
-      input.push({
-        "role": role.to_json(),
-        "content": Json::array(response_blocks),
-      })
+      input.push({ "role": role, "content": Json::array(response_blocks) })
     }
     for raw_call in calls {
       let call = object(raw_call, "tool call")
@@ -126,16 +119,16 @@ fn prepare_responses_impl(
         if kind == "custom" {
           {
             "type": "custom_tool_call",
-            "call_id": id.to_json(),
-            "name": name.to_json(),
-            "input": arguments.to_json(),
+            "call_id": id,
+            "name": name,
+            "input": arguments,
           }
         } else {
           {
             "type": "function_call",
-            "call_id": id.to_json(),
-            "name": name.to_json(),
-            "arguments": arguments.to_json(),
+            "call_id": id,
+            "name": name,
+            "arguments": arguments,
           }
         },
       )
@@ -162,8 +155,8 @@ fn prepare_responses_impl(
     ignore(object(schema, "tool input_schema"))
     definitions.push({
       "type": "function",
-      "name": name.to_json(),
-      "description": description.to_json(),
+      "name": name,
+      "description": description,
       "parameters": schema,
     })
   }
@@ -179,20 +172,20 @@ fn prepare_responses_impl(
   }
 
   let body : Map[String, Json] = {
-    "model": model.to_json(),
+    "model": model,
     "input": Json::array(input),
-    "store": false.to_json(),
-    "stream": true.to_json(),
+    "store": false,
+    "stream": true,
   }
   if !system.is_empty() {
-    body["instructions"] = system.to_json()
+    body["instructions"] = Json(system)
   }
   {
-    "url": "https://api.openai.com/v1/responses".to_json(),
-    "path": "/v1/responses".to_json(),
+    "url": "https://api.openai.com/v1/responses",
+    "path": "/v1/responses",
     "headers": {
-      "content-type": "application/json".to_json(),
-      "accept": "text/event-stream".to_json(),
+      "content-type": "application/json",
+      "accept": "text/event-stream",
     },
     "body": Json::object(body),
   }
@@ -211,10 +204,7 @@ pub fn decode_models(response : Json) -> Result[Array[Json], String] {
       if optional_text(model, "visibility").unwrap_or("") == "list" {
         let slug = identity(model, "slug")
         let display_name = identity(model, "display_name")
-        visible.push({
-          "slug": slug.to_json(),
-          "display_name": display_name.to_json(),
-        })
+        visible.push({ "slug": slug, "display_name": display_name })
       }
     }
     Ok(visible)
@@ -331,10 +321,5 @@ fn decoded_custom_call(
     reject("STREAM_LIMIT", "custom tool input exceeds 65536 code units")
   }
   seen[id] = true
-  {
-    "id": id.to_json(),
-    "name": name.to_json(),
-    "kind": "custom".to_json(),
-    "arguments": input.to_json(),
-  }
+  { "id": id, "name": name, "kind": "custom", "arguments": input }
 }

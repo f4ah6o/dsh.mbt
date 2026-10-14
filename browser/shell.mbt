@@ -53,9 +53,9 @@ fn html_button(
   label : String,
   class_name : String,
   variant : @yami_kumo.ButtonVariant,
-  disabled? : Bool = false,
-  button_type? : String = "button",
-  extra_attrs? : Array[@yami_kumo.Attribute] = [],
+  disabled~ : Bool = false,
+  button_type~ : String = "button",
+  extra_attrs~ : Array[@yami_kumo.Attribute] = [],
 ) -> @yami_kumo.Html {
   let attributes = [html_id(id), action_attribute(action)]
   attributes.append(extra_attrs)

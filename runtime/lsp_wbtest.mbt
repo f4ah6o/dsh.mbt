@@ -1,7 +1,7 @@
 ///|
 fn native_lsp_test_server_config(
   script_path : String,
-  timeout_ms? : Int = 60000,
+  timeout_ms~ : Int32 = 60000,
 ) -> Json {
   {
     "command": Json::string("/usr/bin/python3"),
@@ -14,7 +14,7 @@ fn native_lsp_test_server_config(
 ///|
 fn native_lsp_test_config(
   script_path : String,
-  timeout_ms? : Int = 60000,
+  timeout_ms~ : Int32 = 60000,
 ) -> Json {
   {
     "servers": {
@@ -27,12 +27,12 @@ fn native_lsp_test_config(
 fn native_lsp_test_python_server_script(
   counter_path : String,
   target_uri : String,
-  behavior? : String = "normal",
-  child_pid_path? : String = "",
-  child_ready_path? : String = "",
-  child_release_path? : String = "",
-  child_escape_path? : String = "",
-  transcript_path? : String = "",
+  behavior~ : String = "normal",
+  child_pid_path~ : String = "",
+  child_ready_path~ : String = "",
+  child_release_path~ : String = "",
+  child_escape_path~ : String = "",
+  transcript_path~ : String = "",
 ) -> String {
   let location : Json = {
     "uri": Json::string(target_uri),
@@ -240,8 +240,8 @@ async fn native_lsp_test_release_child(
 fn native_lsp_test_tool_request(
   operation : String,
   file_path : String,
-  line : Int,
-  character : Int,
+  line : Int32,
+  character : Int32,
 ) -> Json {
   {
     "name": Json::string("lsp"),

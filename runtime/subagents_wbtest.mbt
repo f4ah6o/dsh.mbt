@@ -8,8 +8,8 @@ fn native_subagent_openai_text_stream_with_reason(
   content : String,
   finish_reason : String,
 ) -> String {
-  let escaped = content.to_json().stringify()
-  let reason = finish_reason.to_json().stringify()
+  let escaped = Json(content).stringify()
+  let reason = Json(finish_reason).stringify()
   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\{escaped}},\"finish_reason\":null}]}\r\n\r\n" +
   "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\{reason}}]}\r\n\r\n" +
   "data: [DONE]\r\n\r\n"
@@ -57,7 +57,7 @@ async fn native_subagent_parent_tool_effect(
   session_id : String,
   call_id : String,
   prompt : String,
-  child_prompt? : String = "Complete the fixture child task.",
+  child_prompt~ : String = "Complete the fixture child task.",
 ) -> @engine.EngineEffect {
   runtime
   .invoke("session_create", { "id": session_id, "title": "Subagent fixture" })
@@ -107,11 +107,11 @@ async fn native_subagent_provider_server_gated_index(
   responses : Array[NativeFixtureHttpResponse],
   bodies : Ref[Array[String]],
   auth_ok : Ref[Bool],
-  gate_index : Int,
+  gate_index : Int32,
   release : @async.Semaphore,
-  ignored_connections? : Ref[Int]? = None,
-  ignored_connection_errors? : Ref[Array[String]]? = None,
-  response_errors? : Ref[Array[String]]? = None,
+  ignored_connections~ : Ref[Int32]? = None,
+  ignored_connection_errors~ : Ref[Array[String]]? = None,
+  response_errors~ : Ref[Array[String]]? = None,
 ) -> Unit {
   let mut index = 0
   let mut ignored = 0
@@ -2338,7 +2338,7 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
       .text()
       .split("\n")
       .filter(line => !line.is_empty())
-      .length(),
+      .count(),
       1,
     )
     assert_eq(
@@ -2346,7 +2346,7 @@ async test "native SubagentStart remains detached, injects context, and Stop onl
       .text()
       .split("\n")
       .filter(line => !line.is_empty())
-      .length(),
+      .count(),
       1,
     )
   }
@@ -2576,7 +2576,7 @@ async test "native child Stop denial cannot exceed the existing three-step limit
       .text()
       .split("\n")
       .filter(line => !line.is_empty())
-      .length(),
+      .count(),
       3,
     )
     let (completed, trailing) = runtime
@@ -2671,7 +2671,7 @@ async test "native child Stop continuation keeps max-token completion sticky" {
       .text()
       .split("\n")
       .filter(line => !line.is_empty())
-      .length(),
+      .count(),
       2,
     )
     let (completed, trailing) = runtime

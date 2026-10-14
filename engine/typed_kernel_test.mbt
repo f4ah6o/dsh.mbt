@@ -120,8 +120,8 @@ test "typed commands drive the engine and typed effects/events match compatibili
   assert_true(
     match forked {
       Object(fields) =>
-        fields.get("parent_session_id") == Some("typed-session".to_json()) &&
-        fields.get("status") == Some("idle".to_json())
+        fields.get("parent_session_id") == Some("typed-session") &&
+        fields.get("status") == Some("idle")
       _ => false
     },
   )
@@ -224,7 +224,7 @@ test "custom tool calls retain kind and settle as explicit errors without dispat
   }
   assert_true(
     match serialized_call {
-      Object(fields) => fields.get("kind") == Some("custom".to_json())
+      Object(fields) => fields.get("kind") == Some("custom")
       _ => false
     },
   )
@@ -242,7 +242,7 @@ test "custom tool calls retain kind and settle as explicit errors without dispat
   )
   assert_true(
     match result {
-      Object(fields) => fields.get("is_error") == Some(true.to_json())
+      Object(fields) => fields.get("is_error") == Some(true)
       _ => false
     },
   )
@@ -274,7 +274,7 @@ test "custom tool calls retain kind and settle as explicit errors without dispat
   )
   assert_true(
     match restored_session {
-      Object(fields) => fields.get("status") == Some("completed".to_json())
+      Object(fields) => fields.get("status") == Some("completed")
       _ => false
     },
   )
@@ -293,8 +293,8 @@ test "event kind compatibility preserves imported and future wire tags" {
 ///|
 test "QuickCheck verifies repeated typed send and settlement operation sequences" {
   @quickcheck.check(
-    (sample : Int) => {
-      let turns = Int::abs(sample % 8) + 1
+    (sample : Int32) => {
+      let turns = Int32::abs(sample % 8) + 1
       let engine = @engine.Engine::new([])
       if engine.apply(
           typed_test_command("session_create", { "id": "quickcheck" }),
@@ -329,8 +329,8 @@ test "QuickCheck verifies repeated typed send and settlement operation sequences
       match engine.invoke("session_get", { "session_id": "quickcheck" }) {
         Ok(Object(fields)) =>
           valid &&
-          fields.get("turn_id") == Some(turns.to_json()) &&
-          fields.get("status") == Some("completed".to_json())
+          fields.get("turn_id") == Some(Json(turns)) &&
+          fields.get("status") == Some("completed")
         _ => false
       }
     },

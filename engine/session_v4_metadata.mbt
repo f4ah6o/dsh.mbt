@@ -3,7 +3,7 @@ fn replay_v4_metadata(
   replay : V4Replay,
   kind : String,
   data : Json,
-  line_number : Int,
+  line_number : Int32,
 ) -> Unit raise EngineError {
   match kind {
     "tool/ptc-dispatch-start" => {

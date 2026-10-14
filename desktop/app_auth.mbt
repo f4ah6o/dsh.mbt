@@ -16,12 +16,12 @@ fn desktop_auth_connected(auth : Json) -> Bool {
 }
 
 ///|
-fn desktop_auth_model_count(auth : Json) -> Int {
+fn desktop_auth_model_count(auth : Json) -> Int32 {
   desktop_json_array(auth, "models").length()
 }
 
 ///|
-fn desktop_auth_model_slug(auth : Json, index : Int) -> String {
+fn desktop_auth_model_slug(auth : Json, index : Int32) -> String {
   let models = desktop_json_array(auth, "models")
   if index < 0 || index >= models.length() {
     return ""
@@ -30,7 +30,7 @@ fn desktop_auth_model_slug(auth : Json, index : Int) -> String {
 }
 
 ///|
-fn desktop_auth_focus_count(auth : Json) -> Int {
+fn desktop_auth_focus_count(auth : Json) -> Int32 {
   if desktop_auth_connected(auth) {
     4 + desktop_auth_model_count(auth)
   } else {
@@ -39,7 +39,11 @@ fn desktop_auth_focus_count(auth : Json) -> Int {
 }
 
 ///|
-fn desktop_auth_next_focus(auth : Json, current : Int, reverse : Bool) -> Int {
+fn desktop_auth_next_focus(
+  auth : Json,
+  current : Int32,
+  reverse : Bool,
+) -> Int32 {
   let count = desktop_auth_focus_count(auth)
   if count <= 0 {
     return 0
@@ -61,7 +65,7 @@ fn desktop_auth_next_focus(auth : Json, current : Int, reverse : Bool) -> Int {
 fn desktop_auth_scroll_for_focus(
   state : DesktopState,
   auth : Json,
-  focus : Int,
+  focus : Int32,
 ) -> Unit {
   if !desktop_auth_connected(auth) || focus < 4 {
     return
@@ -98,10 +102,10 @@ fn desktop_auth_clamp_settings_controls(
 ///|
 fn desktop_auth_bounded_settings_controls(
   auth : Json,
-  settings_focus : Int,
-  settings_scroll : Int,
+  settings_focus : Int32,
+  settings_scroll : Int32,
   height : Double,
-) -> (Int, Int) {
+) -> (Int32, Int32) {
   (
     settings_focus.max(0).min(desktop_auth_focus_count(auth) - 1),
     desktop_settings_clamp_scroll(
@@ -115,12 +119,12 @@ fn desktop_auth_bounded_settings_controls(
 ///|
 fn desktop_auth_settings_pointer_target(
   auth : Json,
-  settings_focus : Int,
-  settings_scroll : Int,
+  settings_focus : Int32,
+  settings_scroll : Int32,
   width : Double,
   height : Double,
   position : @primitives.Point,
-) -> (Int, Int, Int?) {
+) -> (Int32, Int32, Int32?) {
   let (bounded_focus, bounded_scroll) = desktop_auth_bounded_settings_controls(
     auth, settings_focus, settings_scroll, height,
   )

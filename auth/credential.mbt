@@ -13,7 +13,7 @@ pub struct Credential {
   priv access_token : String
   priv refresh_token : String?
   priv scopes : Array[String]
-  priv expires_at : Int
+  priv expires_at : Int32
 }
 
 ///|
@@ -86,7 +86,7 @@ pub fn Credential::identity_for_native(self : Credential) -> String {
 
 ///|
 /// Access-token expiry used by the native refresh coordinator.
-pub fn Credential::expires_at_for_native(self : Credential) -> Int {
+pub fn Credential::expires_at_for_native(self : Credential) -> Int32 {
   self.expires_at
 }
 
@@ -102,11 +102,11 @@ pub fn Credential::access_token_for_transport(self : Credential) -> String {
 pub fn Credential::public_summary(self : Credential) -> Json {
   let account : Map[String, Json] = Map([])
   match self.email {
-    Some(value) => account["email"] = value.to_json()
+    Some(value) => account["email"] = Json(value)
     None => ()
   }
   match self.profile_id {
-    Some(value) => account["profile_id"] = value.to_json()
+    Some(value) => account["profile_id"] = Json(value)
     None => ()
   }
   {
@@ -121,7 +121,7 @@ pub fn Credential::public_summary(self : Credential) -> Json {
     } else {
       "disabled"
     },
-    "scopes": Json::array(self.scopes.map(scope => scope.to_json())),
+    "scopes": Json::array(self.scopes.map(scope => Json(scope))),
     "models": Json::array([]),
   }
 }
@@ -136,21 +136,21 @@ pub fn Credential::storage_json(self : Credential) -> Json {
     "client_id": self.client_id,
     "subject": self.subject,
     "email": match self.email {
-      Some(value) => value.to_json()
+      Some(value) => value
       None => Json::null()
     },
     "profile_id": match self.profile_id {
-      Some(value) => value.to_json()
+      Some(value) => value
       None => Json::null()
     },
     "id_token": self.id_token,
     "access_token": self.access_token,
     "refresh_token": match self.refresh_token {
-      Some(value) => value.to_json()
+      Some(value) => value
       None => Json::null()
     },
-    "scopes": Json::array(self.scopes.map(scope => scope.to_json())),
-    "expires_at": self.expires_at.to_json(),
+    "scopes": Json::array(self.scopes.map(scope => Json(scope))),
+    "expires_at": self.expires_at,
   }
 }
 
@@ -229,7 +229,7 @@ pub fn Credential::refresh_request(self : Credential) -> Result[Json, String] {
 pub fn Credential::accept_refresh(
   self : Credential,
   token_response : Json,
-  now_seconds : Int,
+  now_seconds : Int32,
 ) -> Result[Credential, String] {
   try {
     let tokens = auth_object(token_response, "refresh response")
@@ -271,7 +271,7 @@ pub fn Credential::accept_refresh(
 /// delete a usable credential.
 pub fn classify_refresh_error(
   code : String,
-  http_status : Int,
+  http_status : Int32,
 ) -> RefreshDisposition {
   match code {
     "invalid_grant"

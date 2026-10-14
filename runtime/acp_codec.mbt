@@ -1,20 +1,20 @@
 ///|
-const NATIVE_ACP_PROTOCOL_VERSION : Int = 1
+const NATIVE_ACP_PROTOCOL_VERSION : Int32 = 1
 
 ///|
-const NATIVE_ACP_LINE_LIMIT : Int = 1048576
+const NATIVE_ACP_LINE_LIMIT : Int32 = 1048576
 
 ///|
-const NATIVE_ACP_MAX_JSON_NODES : Int = 8192
+const NATIVE_ACP_MAX_JSON_NODES : Int32 = 8192
 
 ///|
-const NATIVE_ACP_MAX_JSON_TEXT : Int = 262144
+const NATIVE_ACP_MAX_JSON_TEXT : Int32 = 262144
 
 ///|
-const NATIVE_ACP_MAX_PROMPT_CHARS : Int = 16384
+const NATIVE_ACP_MAX_PROMPT_CHARS : Int32 = 16384
 
 ///|
-const NATIVE_ACP_UPDATE_CHUNK_CHARS : Int = 4096
+const NATIVE_ACP_UPDATE_CHUNK_CHARS : Int32 = 4096
 
 ///|
 priv struct NativeAcpFrame {
@@ -96,15 +96,15 @@ fn NativeAcpFramer::finish(self : NativeAcpFramer) -> Array[NativeAcpFrame] {
 
 ///|
 priv struct NativeAcpJsonBudget {
-  mut nodes : Int
-  mut text : Int
+  mut nodes : Int32
+  mut text : Int32
 }
 
 ///|
 /// Copy one parsed JSON value under explicit depth, node, and text budgets.
 fn native_acp_copy_bounded_json(
   value : Json,
-  depth : Int,
+  depth : Int32,
   budget : NativeAcpJsonBudget,
 ) -> Result[Json, String] {
   if depth > 24 {
@@ -292,7 +292,7 @@ fn native_acp_rpc_success(id : Json, result : Json) -> String {
 }
 
 ///|
-fn native_acp_rpc_error(id : Json, code : Int, message : String) -> String {
+fn native_acp_rpc_error(id : Json, code : Int32, message : String) -> String {
   Json::object({
     "jsonrpc": Json::string("2.0"),
     "id": id,

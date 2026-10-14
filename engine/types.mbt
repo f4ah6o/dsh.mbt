@@ -7,8 +7,8 @@ pub struct Engine {
   priv order : Array[String]
   priv effects : Map[String, Effect]
   priv queued : Array[String]
-  priv mut next_session : Int
-  priv mut next_effect : Int
+  priv mut next_session : Int32
+  priv mut next_effect : Int32
   priv config_error : String?
 }
 
@@ -18,8 +18,8 @@ pub struct Engine {
 /// cannot be constructed or edited by callers.
 pub struct NativeStopHookCheckpoint {
   priv session_id : String
-  priv turn_id : Int
-  priv event_seq : Int
+  priv turn_id : Int32
+  priv event_seq : Int32
 }
 
 ///|
@@ -27,9 +27,9 @@ pub struct NativeStopHookCheckpoint {
 /// SubagentStart inbox batch through UserPromptSubmit.
 pub struct NativeSubagentPromptHookCheckpoint {
   priv session_id : String
-  priv turn_id : Int
-  priv step : Int
-  priv generation : Int
+  priv turn_id : Int32
+  priv step : Int32
+  priv generation : Int32
   priv initial : Bool
   priv prompt : String
   priv contexts : Array[String]
@@ -40,10 +40,10 @@ pub struct NativeSubagentPromptHookCheckpoint {
 /// through the next UserPromptSubmit hook before the following provider step.
 pub struct NativePostToolPromptHookCheckpoint {
   priv session_id : String
-  priv turn_id : Int
-  priv step : Int
-  priv generation : Int
-  priv event_seq : Int
+  priv turn_id : Int32
+  priv step : Int32
+  priv generation : Int32
+  priv event_seq : Int32
   priv contexts : Array[String]
 }
 
@@ -53,10 +53,10 @@ pub struct NativePostToolPromptHookCheckpoint {
 /// with this exact open invocation.
 pub struct NativeHookInvocationCheckpoint {
   priv session_id : String
-  priv turn_id : Int
+  priv turn_id : Int32
   priv point : String
   priv handler_id : String
-  priv event_seq : Int
+  priv event_seq : Int32
 }
 
 ///|
@@ -135,10 +135,10 @@ priv struct Approval {
 
 ///|
 priv struct Event {
-  seq : Int
+  seq : Int32
   kind : EngineEventKind
-  turn_id : Int
-  step : Int
+  turn_id : Int32
+  step : Int32
   data : Json
 }
 
@@ -147,19 +147,19 @@ priv struct Session {
   id : String
   title : String
   system_prompt : String
-  max_steps : Int
+  max_steps : Int32
   mut imported : Bool
   mut fork_source : ForkSource?
   mut status : Status
-  mut turn_id : Int
-  mut step : Int
+  mut turn_id : Int32
+  mut step : Int32
   events : Array[Event]
   calls : Array[ToolCall]
   used_calls : Map[String, Bool]
   /// First call whose durable result has not entered model history.
-  mut cursor : Int
+  mut cursor : Int32
   /// First call not yet admitted to execution.
-  mut schedule_cursor : Int
+  mut schedule_cursor : Int32
   /// The current consecutive read-only call group is open for replenishment.
   mut parallel_group : Bool
   /// Host effects currently executing for read-only calls, keyed by effect id.
@@ -170,23 +170,23 @@ priv struct Session {
   mut open_step : Bool
   /// Latest validated whole-list todo/write snapshot; cleared at turn/start.
   mut todos : Array[Json]?
-  mut retry_count : Int
-  mut retry_max_retries : Int?
-  mut retry_initial_delay_ms : Int?
-  mut retry_max_delay_ms : Int?
+  mut retry_count : Int32
+  mut retry_max_retries : Int32?
+  mut retry_initial_delay_ms : Int32?
+  mut retry_max_delay_ms : Int32?
   mut pending_retry_id : String?
   /// Sticky max-token ending retained across same-turn Stop-hook continuations.
   mut sticky_max_tokens : Bool
   /// A completed provider step is paused while the native Stop hook runs.
   mut stop_hook_pending : Bool
-  mut stop_hook_event_seq : Int?
+  mut stop_hook_event_seq : Int32?
   /// The next-step message is staged before UserPromptSubmit runs.
   mut stop_continuation_text : String?
   /// Start inbox claimed together with a staged Stop continuation.
   mut stop_continuation_hook_contexts : Array[String]
   mut stop_continuation_admitted : Bool
-  mut stop_prompt_context_count : Int
-  mut stop_prompt_context_length : Int
+  mut stop_prompt_context_count : Int32
+  mut stop_prompt_context_length : Int32
   /// Ephemeral SubagentStart context waiting for the next provider request.
   pending_hook_contexts : Array[String]
   /// Source tag for transient hook context queued by the active native dialect.
@@ -196,15 +196,15 @@ priv struct Session {
   /// One claimed batch is immutable while its UserPromptSubmit command runs.
   mut subagent_prompt_hook_active : Bool
   mut subagent_prompt_hook_initial : Bool
-  mut subagent_prompt_hook_generation : Int
+  mut subagent_prompt_hook_generation : Int32
   mut subagent_prompt_hook_contexts : Array[String]
   mut subagent_prompt_hook_prompt : String?
   /// Root tool completions opt into deferred PostToolUse prompt admission.
   mut post_tool_prompt_hook_admission : Bool
   /// PostToolUse contexts claimed at the next root pre-step boundary.
   mut post_tool_prompt_hook_active : Bool
-  mut post_tool_prompt_hook_generation : Int
-  mut post_tool_prompt_hook_event_seq : Int?
+  mut post_tool_prompt_hook_generation : Int32
+  mut post_tool_prompt_hook_event_seq : Int32?
   mut post_tool_prompt_hook_contexts : Array[String]
   mut post_tool_prompt_hook_messages : Array[Json]
   /// Ephemeral child PostToolUse inbox messages retain one message per call.
@@ -217,10 +217,10 @@ priv struct Session {
 ///|
 priv struct ForkSource {
   parent_session_id : String
-  source_event_count : Int
+  source_event_count : Int32
   source_status : String
-  source_turn_id : Int
-  source_step : Int
+  source_turn_id : Int32
+  source_step : Int32
   effect_map : Array[(String, String)]
 }
 
@@ -229,8 +229,8 @@ priv struct Effect {
   id : String
   kind : EffectKind
   session_id : String
-  turn_id : Int
-  step : Int
+  turn_id : Int32
+  step : Int32
   call_id : String?
   request : Json
 }
@@ -281,7 +281,7 @@ fn fresh_session(
   id : String,
   title : String,
   system_prompt : String,
-  max_steps : Int,
+  max_steps : Int32,
 ) -> Session {
   {
     id,

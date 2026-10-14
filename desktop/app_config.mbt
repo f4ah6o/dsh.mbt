@@ -7,7 +7,7 @@ priv struct DesktopConfig {
   mode : String
   model : String
   base_url : String
-  max_retries : Int
+  max_retries : Int32
   mcp_config_path : String?
   hooks_config_path : String?
   lsp_config_path : String?
@@ -30,7 +30,7 @@ priv struct DesktopState {
   mut sessions : Array[Json]
   mut selected_id : String
   mut draft : Array[Char]
-  mut cursor : Int
+  mut cursor : Int32
   mut select_all : Bool
   mut status_message : String
   mut error_message : String
@@ -44,12 +44,12 @@ priv struct DesktopState {
   mut scale : Double
   mut last_poll : Int64
   mut settings_open : Bool
-  mut settings_focus : Int
-  mut settings_scroll : Int
+  mut settings_focus : Int32
+  mut settings_scroll : Int32
   mut auth_busy : Bool
   mut auth_error : String
-  mut render_count : Int
-  mut click_count : Int
+  mut render_count : Int32
+  mut click_count : Int32
   mut resize_seen : Bool
   mut resize_armed : Bool
   mut resize_baseline_width : Double
@@ -60,7 +60,7 @@ priv struct DesktopState {
 }
 
 ///|
-fn desktop_parse_int(value : String) -> Int? {
+fn desktop_parse_int(value : String) -> Int32? {
   if value.is_empty() {
     return None
   }

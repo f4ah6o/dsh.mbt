@@ -51,9 +51,9 @@ async fn NativeHookEventSink::record_result(
   self : NativeHookEventSink,
   checkpoint : @engine.NativeHookInvocationCheckpoint,
   decision : String,
-  exit_code : Int?,
+  exit_code : Int32?,
   stderr_summary : String?,
-  duration_ms : Int,
+  duration_ms : Int32,
 ) -> Result[Unit, String] {
   let recorded = match self {
     Root(runtime, _, _) =>
@@ -109,7 +109,7 @@ async fn native_run_hook_diagnostic(
   }
   let started = @async.now()
   let capture = native_run_hook_command(tools, hook, payload, dialect~)
-  let duration_ms = Int::max(0, (@async.now() - started).to_int())
+  let duration_ms = Int32::max(0, (@async.now() - started).to_int())
   let execution = match capture {
     Ok(value) => Completed(value)
     Err(error) => Failed(error)
@@ -127,7 +127,7 @@ async fn native_run_hook_diagnostic(
         native_hook_diagnostic_decision(value, event)
       }
       let summary = native_hook_stderr_summary(value.stderr)
-      let exit_code : Int? = if value.exit_code < 0 {
+      let exit_code : Int32? = if value.exit_code < 0 {
         None
       } else {
         Some(value.exit_code)
@@ -173,7 +173,7 @@ async fn native_run_hook_diagnostic(
 fn native_hook_payload(
   dialect : String,
   model : String,
-  turn_id : Int,
+  turn_id : Int32,
   event : String,
   project_dir : String,
   session_id : String,
@@ -236,7 +236,7 @@ fn native_hook_codex_command(input : Json) -> String {
 fn native_user_prompt_payload(
   dialect : String,
   model : String,
-  turn_id : Int,
+  turn_id : Int32,
   project_dir : String,
   session_id : String,
   prompt : String,
@@ -524,8 +524,8 @@ async fn NativeHooks::run_point(
   call_id : String,
   tool_input : Json,
   tool_response : String?,
-  turn_id : Int,
-  sink? : NativeHookEventSink? = None,
+  turn_id : Int32,
+  sink~ : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let blocked_reasons : Array[String] = []
   let additional_contexts : Array[String] = []
@@ -649,8 +649,8 @@ async fn NativeHooks::before_user_prompt(
   tools : NativeTools,
   session_id : String,
   prompt : String,
-  turn_id? : Int = 0,
-  sink? : NativeHookEventSink? = None,
+  turn_id~ : Int32 = 0,
+  sink~ : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   self.run_point(
     tools,
@@ -670,7 +670,7 @@ async fn NativeHooks::before_user_prompt(
 fn native_stop_payload(
   dialect : String,
   model : String,
-  turn_id : Int,
+  turn_id : Int32,
   project_dir : String,
   session_id : String,
 ) -> Result[String, String] {
@@ -710,8 +710,8 @@ async fn NativeHooks::before_stop(
   self : NativeHooks,
   tools : NativeTools,
   session_id : String,
-  turn_id? : Int = 0,
-  sink? : NativeHookEventSink? = None,
+  turn_id~ : Int32 = 0,
+  sink~ : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let payload = match
     native_stop_payload(
@@ -784,8 +784,8 @@ async fn NativeHooks::before_tool(
   tools : NativeTools,
   session_id : String,
   request : Json,
-  turn_id? : Int = 0,
-  sink? : NativeHookEventSink? = None,
+  turn_id~ : Int32 = 0,
+  sink~ : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let tool_name = string_field(request, "name").unwrap_or("")
   let call_id = string_field(request, "call_id").unwrap_or("")
@@ -811,8 +811,8 @@ async fn NativeHooks::after_tool(
   session_id : String,
   request : Json,
   result : Json,
-  turn_id? : Int = 0,
-  sink? : NativeHookEventSink? = None,
+  turn_id~ : Int32 = 0,
+  sink~ : NativeHookEventSink? = None,
 ) -> Result[NativeHookOutcome, String] {
   let tool_name = string_field(request, "name").unwrap_or("")
   let call_id = string_field(request, "call_id").unwrap_or("")

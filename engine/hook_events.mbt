@@ -1,21 +1,21 @@
 ///|
-const NATIVE_HOOK_RESULT_SUMMARY_MAX_UNITS : Int = 501
+const NATIVE_HOOK_RESULT_SUMMARY_MAX_UNITS : Int32 = 501
 
 ///|
-const NATIVE_HOOK_EVENT_CLOSURE_RESERVE : Int = 40
+const NATIVE_HOOK_EVENT_CLOSURE_RESERVE : Int32 = 40
 
 ///|
 priv struct PendingNativeHookInvocation {
-  turn_id : Int
+  turn_id : Int32
   point : String
   dialect : String
   handler_id : String
-  event_seq : Int
+  event_seq : Int32
 }
 
 ///|
 fn native_hook_invocation_key(
-  turn_id : Int,
+  turn_id : Int32,
   point : String,
   handler_id : String,
 ) -> String {
@@ -129,7 +129,7 @@ fn native_hook_valid_point(point : String) -> Bool {
 fn native_hook_valid_handler_id(
   handler_id : String,
   point : String,
-  dialect? : String = "claude-code",
+  dialect~ : String = "claude-code",
 ) -> Bool {
   let prefix = "\{dialect}:\{point}:"
   if !handler_id.has_prefix(prefix) || handler_id.length() > 128 {
@@ -157,7 +157,7 @@ pub fn Engine::record_native_hook_invoked(
   point : String,
   handler_id : String,
   matcher : String?,
-  dialect? : String = "claude-code",
+  dialect~ : String = "claude-code",
 ) -> Result[NativeHookInvocationCheckpoint, String] {
   if !native_hook_valid_point(point) ||
     !["claude-code", "codex"].contains(dialect) ||
@@ -221,9 +221,9 @@ pub fn Engine::record_native_hook_result(
   self : Engine,
   checkpoint : NativeHookInvocationCheckpoint,
   decision : String,
-  exit_code : Int?,
+  exit_code : Int32?,
   stderr_summary : String?,
-  duration_ms : Int,
+  duration_ms : Int32,
 ) -> Result[Json, String] {
   if !["approve", "allow", "block", "deny", "ask", "stop", "pass"].contains(
       decision,

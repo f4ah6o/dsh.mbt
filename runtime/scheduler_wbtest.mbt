@@ -2,11 +2,7 @@
 fn native_scheduler_tool_calls(tools : Array[(String, String, Json)]) -> Json {
   let calls : Array[Json] = []
   for (id, name, arguments) in tools {
-    calls.push({
-      "id": id.to_json(),
-      "name": name.to_json(),
-      "arguments": arguments.stringify().to_json(),
-    })
+    calls.push({ "id": id, "name": name, "arguments": arguments.stringify() })
   }
   {
     "ok": true,

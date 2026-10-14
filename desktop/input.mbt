@@ -1,5 +1,5 @@
 ///|
-fn desktop_limit_prompt(text : String, maximum : Int) -> String {
+fn desktop_limit_prompt(text : String, maximum : Int32) -> String {
   let output = StringBuilder()
   let mut count = 0
   for character in text {
@@ -15,10 +15,10 @@ fn desktop_limit_prompt(text : String, maximum : Int) -> String {
 ///|
 fn desktop_insert_at(
   draft : Array[Char],
-  cursor : Int,
+  cursor : Int32,
   replace_all : Bool,
   text : String,
-) -> (Array[Char], Int) {
+) -> (Array[Char], Int32) {
   let base = if replace_all { [] } else { draft }
   let bounded = desktop_limit_prompt(text, 16000)
   let inserted : Array[Char] = []

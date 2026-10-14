@@ -6,12 +6,12 @@ fn native_runtime_command(
   prompt : String,
 ) -> @protocol.RemoteCommand raise {
   let command : Json = {
-    "protocol_version": @protocol.PROTOCOL_VERSION.to_json(),
-    "workspace_id": workspace_id.to_json(),
-    "command_id": command_id.to_json(),
-    "session_id": session_id.to_json(),
-    "operation": "session_send".to_json(),
-    "input": { "prompt": prompt.to_json() },
+    "protocol_version": @protocol.PROTOCOL_VERSION,
+    "workspace_id": workspace_id,
+    "command_id": command_id,
+    "session_id": session_id,
+    "operation": "session_send",
+    "input": { "prompt": prompt },
     "approval_revision": Json::null(),
   }
   match @protocol.RemoteCommand::parse(command.stringify()) {
@@ -39,16 +39,16 @@ fn native_runtime_approval_command(
   session_id : String,
   command_id : String,
   call_id : String,
-  approval_revision : Int,
+  approval_revision : Int32,
 ) -> @protocol.RemoteCommand raise {
   let command : Json = {
-    "protocol_version": @protocol.PROTOCOL_VERSION.to_json(),
-    "workspace_id": workspace_id.to_json(),
-    "command_id": command_id.to_json(),
-    "session_id": session_id.to_json(),
-    "operation": "tool_approve".to_json(),
-    "input": { "call_id": call_id.to_json(), "approved": true },
-    "approval_revision": approval_revision.to_json(),
+    "protocol_version": @protocol.PROTOCOL_VERSION,
+    "workspace_id": workspace_id,
+    "command_id": command_id,
+    "session_id": session_id,
+    "operation": "tool_approve",
+    "input": { "call_id": call_id, "approved": true },
+    "approval_revision": approval_revision,
   }
   match @protocol.RemoteCommand::parse(command.stringify()) {
     Ok(value) => value
@@ -64,11 +64,11 @@ fn native_runtime_unscoped_command(
   input : Json,
 ) -> @protocol.RemoteCommand raise {
   let command : Json = {
-    "protocol_version": @protocol.PROTOCOL_VERSION.to_json(),
-    "workspace_id": workspace_id.to_json(),
-    "command_id": command_id.to_json(),
+    "protocol_version": @protocol.PROTOCOL_VERSION,
+    "workspace_id": workspace_id,
+    "command_id": command_id,
     "session_id": Json::null(),
-    "operation": operation.to_json(),
+    "operation": operation,
     "input": input,
     "approval_revision": Json::null(),
   }
@@ -87,11 +87,11 @@ fn native_runtime_session_operation_command(
   input : Json,
 ) -> @protocol.RemoteCommand raise {
   let command : Json = {
-    "protocol_version": @protocol.PROTOCOL_VERSION.to_json(),
-    "workspace_id": workspace_id.to_json(),
-    "command_id": command_id.to_json(),
-    "session_id": session_id.to_json(),
-    "operation": operation.to_json(),
+    "protocol_version": @protocol.PROTOCOL_VERSION,
+    "workspace_id": workspace_id,
+    "command_id": command_id,
+    "session_id": session_id,
+    "operation": operation,
     "input": input,
     "approval_revision": Json::null(),
   }
@@ -454,18 +454,18 @@ async test "native MCP carrier checkpoints gpui protocol operations" {
       @async.protect_from_cancel(() => ignore(runtime.close()))
     })
     let line = Json::object({
-      "jsonrpc": "2.0".to_json(),
-      "id": "native-mcp-create".to_json(),
-      "method": "tools/call".to_json(),
+      "jsonrpc": "2.0",
+      "id": "native-mcp-create",
+      "method": "tools/call",
       "params": Json::object({
         "_meta": Json::object({
-          "io.modelcontextprotocol/protocolVersion": "2026-07-28".to_json(),
+          "io.modelcontextprotocol/protocolVersion": "2026-07-28",
           "io.modelcontextprotocol/clientCapabilities": Json::empty_object(),
         }),
-        "name": "session_create".to_json(),
+        "name": "session_create",
         "arguments": Json::object({
-          "id": "mcp-checkpointed-session".to_json(),
-          "title": "MCP checkpoint".to_json(),
+          "id": "mcp-checkpointed-session",
+          "title": "MCP checkpoint",
         }),
       }),
     }).stringify()
@@ -595,7 +595,7 @@ async test "native runtime marks accepted receipts uncertain after restart witho
       first.state.workspace_id,
       completed_command_id,
       "session_create",
-      { "id": session_id.to_json(), "title": "Prior completed session" },
+      { "id": session_id, "title": "Prior completed session" },
     )
     let (completed_accepted, completed_effects, completed_should_start, _) = first
       .accept_remote_command(completed_command, identity_key)

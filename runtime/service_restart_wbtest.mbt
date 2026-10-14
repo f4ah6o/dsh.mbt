@@ -1,5 +1,5 @@
 ///|
-async fn native_service_restart_request(port : Int) -> Unit {
+async fn native_service_restart_request(port : Int32) -> Unit {
   let client = @socket.Tcp::connect(
     @socket.Addr::parse("127.0.0.1:" + port.to_string()),
   )

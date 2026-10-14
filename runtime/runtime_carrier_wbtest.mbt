@@ -1,6 +1,6 @@
 ///|
 priv struct NativeFixtureHttpResponse {
-  code : Int
+  code : Int32
   reason : String
   body : String
   retry_after : String?
@@ -12,7 +12,7 @@ priv suberror NativeFixtureProviderFailure {
 }
 
 ///|
-const NATIVE_FIXTURE_MAX_EMPTY_PROVIDER_CONNECTIONS : Int = 32
+const NATIVE_FIXTURE_MAX_EMPTY_PROVIDER_CONNECTIONS : Int32 = 32
 
 ///|
 let native_fixture_provider_env_gate : @async.Mutex = @async.Mutex::Mutex()
@@ -24,10 +24,7 @@ fn native_fixture_openai_tool_stream(
   content : String,
 ) -> String {
   let arguments = Json::string(
-    Json::object({
-      "file_path": file_path.to_json(),
-      "content": content.to_json(),
-    }).stringify(),
+    Json::object({ "file_path": Json(file_path), "content": content }).stringify(),
   ).stringify()
   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"tool_calls\":[{\"index\":0,\"id\":\"\{call_id}\",\"type\":\"function\",\"function\":{\"name\":\"write\",\"arguments\":\{arguments}}}]},\"finish_reason\":null}]}\r\n\r\n" +
   "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\r\n\r\n" +
@@ -71,7 +68,7 @@ fn native_fixture_openai_calls_stream(
 
 ///|
 fn native_fixture_openai_text_stream(content : String) -> String {
-  let escaped = content.to_json().stringify()
+  let escaped = Json(content).stringify()
   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\{escaped}},\"finish_reason\":null}]}\r\n\r\n" +
   "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\r\n\r\n" +
   "data: [DONE]\r\n\r\n"
@@ -84,15 +81,15 @@ fn native_fixture_mcp_line(
   arguments : Json,
 ) -> String {
   Json::object({
-    "jsonrpc": "2.0".to_json(),
-    "id": request_id.to_json(),
-    "method": "tools/call".to_json(),
+    "jsonrpc": "2.0",
+    "id": request_id,
+    "method": "tools/call",
     "params": Json::object({
       "_meta": Json::object({
-        "io.modelcontextprotocol/protocolVersion": "2026-07-28".to_json(),
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
         "io.modelcontextprotocol/clientCapabilities": Json::empty_object(),
       }),
-      "name": operation.to_json(),
+      "name": operation,
       "arguments": arguments,
     }),
   }).stringify()
@@ -117,7 +114,7 @@ async fn native_fixture_handle_provider_request(
   auth_ok : Ref[Bool],
   response : NativeFixtureHttpResponse,
   release : @async.Semaphore?,
-  ignored_connections : Ref[Int]?,
+  ignored_connections : Ref[Int32]?,
   ignored_connection_errors : Ref[Array[String]]?,
   response_errors : Ref[Array[String]]?,
 ) -> Bool {
@@ -193,9 +190,9 @@ async fn native_fixture_provider_server(
   bodies : Ref[Array[String]],
   auth_ok : Ref[Bool],
   first_release : @async.Semaphore?,
-  ignored_connections? : Ref[Int]? = None,
-  ignored_connection_errors? : Ref[Array[String]]? = None,
-  response_errors? : Ref[Array[String]]? = None,
+  ignored_connections~ : Ref[Int32]? = None,
+  ignored_connection_errors~ : Ref[Array[String]]? = None,
+  response_errors~ : Ref[Array[String]]? = None,
 ) -> Unit {
   let mut index = 0
   let mut ignored = 0
@@ -233,7 +230,7 @@ async fn native_fixture_mcp_provider_request(
   bodies : Ref[Array[String]],
   auth_ok : Ref[Bool],
   release : @async.Semaphore,
-  ignored_connections : Ref[Int]?,
+  ignored_connections : Ref[Int32]?,
   ignored_connection_errors : Ref[Array[String]]?,
   response_errors : Ref[Array[String]]?,
 ) -> Bool? {
@@ -306,7 +303,7 @@ async fn native_fixture_mcp_provider_server(
   bodies : Ref[Array[String]],
   auth_ok : Ref[Bool],
   release : @async.Semaphore,
-  response_errors? : Ref[Array[String]]? = None,
+  response_errors~ : Ref[Array[String]]? = None,
 ) -> Unit {
   let ignored_connections = Ref(0)
   let ignored_connection_errors = Ref([])

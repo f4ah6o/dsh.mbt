@@ -2,9 +2,9 @@
 fn replay_v4_event(
   replay : V4Replay,
   record : Json,
-  source_seq : Int,
-  line_number : Int,
-) -> (Int, Int) raise EngineError {
+  source_seq : Int32,
+  line_number : Int32,
+) -> (Int32, Int32) raise EngineError {
   let kind = required_string(record, "type", max=128)
   let data = required_field(record, "data")
   let values = fields(data)
@@ -533,12 +533,12 @@ fn replay_v4_event(
 ///|
 fn validate_v4_references(
   record : Json,
-  source_seq : Int,
-  prior_types : Map[Int, String],
+  source_seq : Int32,
+  prior_types : Map[Int32, String],
 ) -> Unit raise EngineError {
   let kind = required_string(record, "type", max=128)
   let is_append_result = kind == "tool/result" &&
-    fields(record).get("surfaceOp") == Some("append".to_json())
+    fields(record).get("surfaceOp") == Some("append")
   match fields(record).get("sourceEventSeqs") {
     None => ()
     Some(encoded) =>
@@ -562,8 +562,8 @@ fn validate_v4_references(
 ///|
 fn require_v4_calls_settled(
   replay : V4Replay,
-  turn : Int,
-  step : Int,
+  turn : Int32,
+  step : Int32,
 ) -> Unit raise EngineError {
   for id in replay.call_order {
     match replay.calls.get(id) {
@@ -647,7 +647,7 @@ fn validate_v4_fork_result(
   error : Json?,
   call : ImportedCall,
   call_id : String,
-  source_seq : Int,
+  source_seq : Int32,
 ) -> Unit raise EngineError {
   let encoded_refs = fields(record).get("sourceEventSeqs")
   let content = array_value(
@@ -709,8 +709,8 @@ fn validate_v4_fork_result(
 ///|
 fn validate_v4_title(
   data : Json,
-  before_seq : Int,
-  user_messages : Map[Int, Bool],
+  before_seq : Int32,
+  user_messages : Map[Int32, Bool],
 ) -> String raise EngineError {
   for key, _ in fields(data) {
     if key != "title" && key != "messageSeqs" && key != "source" {
@@ -748,8 +748,8 @@ fn validate_v4_title(
 ///|
 fn validate_turn_step(
   data : Json,
-  expected_turn : Int,
-  expected_step : Int,
+  expected_turn : Int32,
+  expected_step : Int32,
 ) -> Unit raise EngineError {
   if int_value(required_field(data, "turn"), "turn", 1, 1000000) !=
     expected_turn ||

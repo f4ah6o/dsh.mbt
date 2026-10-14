@@ -23,7 +23,7 @@ fn v4_lines(jsonl : String) -> Array[String] raise EngineError {
 
 ///|
 #warnings("-deprecated")
-fn v4_parse_line(line : String, line_number : Int) -> Json raise EngineError {
+fn v4_parse_line(line : String, line_number : Int32) -> Json raise EngineError {
   let parsed = @json.parse(line, max_nesting_depth=20) catch {
     _ => raise Invalid("Invalid JSON in Session v4 line \{line_number}")
   }
@@ -111,9 +111,9 @@ fn validate_safe_number(value : Json, label : String) -> Unit raise EngineError 
 ///|
 fn validate_v4_event_envelope(
   record : Json,
-  expected_seq : Int,
+  expected_seq : Int32,
   physical : Bool,
-  line_number : Int,
+  line_number : Int32,
 ) -> Unit raise EngineError {
   let values = fields(record)
   for key, _ in values {
@@ -180,7 +180,7 @@ fn known_v4_event(kind : String) -> Bool {
 ///|
 fn validate_supported_v4_event(
   kind : String,
-  line_number : Int,
+  line_number : Int32,
 ) -> Unit raise EngineError {
   if kind == "image/offload" ||
     kind == "feedback/message-put" ||
@@ -211,7 +211,7 @@ fn validate_supported_v4_event(
 fn validate_v4_surface(
   record : Json,
   kind : String,
-  expected_seq : Int,
+  expected_seq : Int32,
 ) -> Unit raise EngineError {
   let values = fields(record)
   let surface = kind == "system/message" ||
@@ -248,7 +248,7 @@ fn validate_v4_surface(
     Some(Json::Object(operation)) => {
       if !surface ||
         operation.length() != 3 ||
-        operation.get("op") != Some("replace".to_json()) ||
+        operation.get("op") != Some("replace") ||
         operation.get("startSeq") is None ||
         operation.get("endSeq") is None {
         raise Invalid("Session v4 surfaceOp replacement is malformed")
@@ -287,11 +287,11 @@ fn validate_v4_surface(
 ///|
 fn v4_source_sequences(
   value : Json,
-  before : Int,
-) -> Array[Int] raise EngineError {
+  before : Int32,
+) -> Array[Int32] raise EngineError {
   let encoded = array_value(value, "sourceEventSeqs", 32768)
-  let expanded : Array[Int] = []
-  let seen : Map[Int, Bool] = Map([])
+  let expanded : Array[Int32] = []
+  let seen : Map[Int32, Bool] = Map([])
   for item in encoded {
     match item {
       Json::Array(range) => {

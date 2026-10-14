@@ -5,7 +5,7 @@
 const NATIVE_ENVELOPE_SCHEMA : String = "dsh.native-host-v1"
 
 ///|
-const SNAPSHOT_LIMIT : Int = 33554432
+const SNAPSHOT_LIMIT : Int32 = 33554432
 
 ///|
 /// ACP owns only the sessions it creates. This adjunct registry records the
@@ -28,8 +28,8 @@ priv struct NativeState {
   workspace_id : String
   identity_key : String
   epoch : String
-  revision : Int
-  auth_revision : Int
+  revision : Int32
+  auth_revision : Int32
   external_mcp_catalog_hash : String?
   lsp_catalog_hash : String?
 }
@@ -70,7 +70,7 @@ fn string_field(value : Json, name : String) -> String? {
 }
 
 ///|
-fn int_field(value : Json, name : String) -> Int? {
+fn int_field(value : Json, name : String) -> Int32? {
   match object_field(value, name) {
     Some(Json::Number(number, ..)) if number >= 0.0 &&
       number <= 2147483647.0 &&
@@ -88,7 +88,7 @@ fn json_string(value : Json?) -> String {
 }
 
 ///|
-fn json_int(value : Json?) -> Int {
+fn json_int(value : Json?) -> Int32 {
   match value {
     Some(Json::Number(number, ..)) if number >= 0.0 &&
       number <= 2147483647.0 &&
@@ -98,7 +98,7 @@ fn json_int(value : Json?) -> Int {
 }
 
 ///|
-fn native_acp_timestamp_digit(character : Char) -> Int {
+fn native_acp_timestamp_digit(character : Char) -> Int32 {
   match character {
     '0' => 0
     '1' => 1
@@ -253,7 +253,7 @@ fn native_acp_stored_sessions_json(
 }
 
 ///|
-fn random_hex(byte_count : Int) -> Result[String, String] {
+fn random_hex(byte_count : Int32) -> Result[String, String] {
   match @env.rand(byte_count) {
     None => Err("operating system secure random source is unavailable")
     Some(bytes) => {
@@ -302,7 +302,7 @@ fn is_hex_digit(value : Char) -> Bool {
 }
 
 ///|
-fn host_id_char(value : String, index : Int) -> Char {
+fn host_id_char(value : String, index : Int32) -> Char {
   value[index].to_char().unwrap_or('!')
 }
 

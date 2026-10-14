@@ -302,7 +302,7 @@ fn Engine::create_session(
   requested_id : String?,
   title : String,
   system_prompt : String,
-  requested_max_steps : Int?,
+  requested_max_steps : Int32?,
 ) -> Session raise EngineError {
   if self.order.length() >= 32 {
     raise Invalid("Session count limit reached")
@@ -541,7 +541,7 @@ fn Session::model_messages(self : Session) -> Array[Json] {
 }
 
 ///|
-fn Session::stream_revision(self : Session) -> Int {
+fn Session::stream_revision(self : Session) -> Int32 {
   let mut result = 0
   for event in self.events {
     if event.kind == EngineEventKind::AssistantStreamDelta {
@@ -576,7 +576,7 @@ fn Session::stream_projection(
       continue
     }
     match event.data {
-      Json::Object(data) if data.get("effect_id") == Some(effect_id.to_json()) => {
+      Json::Object(data) if data.get("effect_id") == Some(Json(effect_id)) => {
         found = true
         match data.get("content") {
           Some(Json::String(text)) => content.write_string(text)
@@ -703,7 +703,7 @@ fn Engine::emit_effect(
 }
 
 ///|
-fn Session::hook_context_admission_stats(self : Session) -> (Int, Int) {
+fn Session::hook_context_admission_stats(self : Session) -> (Int32, Int32) {
   let mut count = 0
   let mut total_length = 0
   for event in self.events {
@@ -775,7 +775,7 @@ fn Session::hook_context_admission_stats(self : Session) -> (Int, Int) {
 fn Engine::start_step(
   self : Engine,
   session : Session,
-  skip_pending_hook_contexts? : Bool = false,
+  skip_pending_hook_contexts~ : Bool = false,
 ) -> Unit {
   if !skip_pending_hook_contexts && session.post_tool_prompt_hook_admission {
     session.post_tool_prompt_hook_admission = false
@@ -1038,7 +1038,7 @@ fn Engine::terminate(
     let call = session.calls[session.cursor]
     if call.stage == Pending {
       session.begin_tool(call)
-      session.schedule_cursor = Int::max(
+      session.schedule_cursor = Int32::max(
         session.schedule_cursor,
         session.cursor + 1,
       )

@@ -55,7 +55,7 @@ fn text_content_blocks(
       if text.is_empty() {
         []
       } else {
-        [{ "type": "text".to_json(), "text": text.to_json() }]
+        [{ "type": "text", "text": text }]
       }
     Array(raw_blocks) => {
       if raw_blocks.is_empty() {
@@ -71,7 +71,7 @@ fn text_content_blocks(
           )
         }
         let text = text_field(block, "text")
-        blocks.push({ "type": "text".to_json(), "text": text.to_json() })
+        blocks.push({ "type": "text", "text": text })
       }
       blocks
     }
@@ -146,7 +146,7 @@ fn boolean(value : Json, where_ : String) -> Bool raise ProviderError {
 }
 
 ///|
-fn integer(value : Json, where_ : String) -> Int raise ProviderError {
+fn integer(value : Json, where_ : String) -> Int32 raise ProviderError {
   match value {
     Number(number, ..) => {
       if number < 0.0 ||
@@ -236,7 +236,7 @@ fn update_usage(
     let (wire, normalized) = pair
     match fields.get(wire) {
       None => ()
-      Some(value) => usage[normalized] = integer(value, wire).to_json()
+      Some(value) => usage[normalized] = Json(integer(value, wire))
     }
   }
   if mode == "openai" {
@@ -247,7 +247,9 @@ fn update_usage(
         match details.get("cached_tokens") {
           None => ()
           Some(value) =>
-            usage["cache_read_input_tokens"] = integer(value, "cached_tokens").to_json()
+            usage["cache_read_input_tokens"] = Json(
+              integer(value, "cached_tokens"),
+            )
         }
       }
     }
@@ -259,7 +261,9 @@ fn update_usage(
         match details.get("cached_tokens") {
           None => ()
           Some(value) =>
-            usage["cache_read_input_tokens"] = integer(value, "cached_tokens").to_json()
+            usage["cache_read_input_tokens"] = Json(
+              integer(value, "cached_tokens"),
+            )
         }
       }
     }
@@ -284,13 +288,13 @@ fn result_json(
     reject("EMPTY_RESPONSE", "provider returned no content")
   }
   let result : Map[String, Json] = {
-    "ok": true.to_json(),
-    "content": content.to_json(),
+    "ok": true,
+    "content": content,
     "tool_calls": Json::array(if reason == "length" { [] } else { calls }),
-    "finish_reason": reason.to_json(),
+    "finish_reason": reason,
   }
   if !reasoning.is_empty() {
-    result["reasoning"] = reasoning.to_json()
+    result["reasoning"] = Json(reasoning)
   }
   if !usage.is_empty() {
     result["usage"] = Json::object(usage.copy())

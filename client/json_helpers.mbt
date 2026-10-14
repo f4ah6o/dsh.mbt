@@ -15,7 +15,7 @@ fn json_optional_string_field(value : Json, key : String) -> String? {
 }
 
 ///|
-fn json_int_field(value : Json, key : String) -> Int {
+fn json_int_field(value : Json, key : String) -> Int32 {
   match json_field(value, key) {
     Some(Json::Number(number, ..)) if number.to_int().to_double() == number =>
       number.to_int()
@@ -24,7 +24,7 @@ fn json_int_field(value : Json, key : String) -> Int {
 }
 
 ///|
-fn json_optional_int_field(value : Json, key : String) -> Int? {
+fn json_optional_int_field(value : Json, key : String) -> Int32? {
   match json_field(value, key) {
     Some(Json::Number(number, ..)) if number >= 0.0 &&
       number <= 2147483647.0 &&

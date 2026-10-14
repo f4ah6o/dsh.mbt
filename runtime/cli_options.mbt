@@ -463,7 +463,7 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
 }
 
 ///|
-fn native_cli_retry_limit(args : Array[String]) -> Result[Int, String] {
+fn native_cli_retry_limit(args : Array[String]) -> Result[Int32, String] {
   match native_option(args, "--max-retries") {
     None => Ok(5)
     Some(value) =>
@@ -531,7 +531,7 @@ fn native_cli_prune_input(
   args : Array[String],
   session_id : String,
 ) -> Result[Json, String] {
-  let fields : Map[String, Json] = { "session_id": session_id.to_json() }
+  let fields : Map[String, Json] = { "session_id": session_id }
   for
     (argument, field, minimum) in [
       ("--threshold-chars", "threshold_chars", 1),
@@ -558,7 +558,7 @@ fn native_cli_prune_input(
               " and 262144",
             )
         }
-        fields[field] = parsed.to_json()
+        fields[field] = Json(parsed)
       }
     }
   }
@@ -583,7 +583,7 @@ async fn native_cli_import_action(
     Err(error) => return Err(error)
   }
   let (imported, effects) = match
-    runtime.invoke("session_import", { "jsonl": jsonl.to_json() }) {
+    runtime.invoke("session_import", { "jsonl": jsonl }) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -615,7 +615,7 @@ async fn native_cli_prune_action(
 }
 
 ///|
-fn native_cli_approval_revision_number(session : Json) -> Int? {
+fn native_cli_approval_revision_number(session : Json) -> Int32? {
   match native_cli_approval_revision(session) {
     Json::Number(value, ..) if value >= 0.0 => Some(value.to_int())
     _ => None

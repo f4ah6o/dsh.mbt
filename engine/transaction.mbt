@@ -2,14 +2,14 @@
 /// The initial port publishes complete session views through a bounded API.
 /// Keep the canonical serialized session below 256 Ki UTF-16 code units; a
 /// maximum of 32 sessions also keeps complete snapshots below host limits.
-const SESSION_CAPACITY : Int = 262144
+const SESSION_CAPACITY : Int32 = 262144
 
 ///|
 /// `todos: null` is fixed presentation metadata introduced after v1 snapshots
 /// were already allowed up to SESSION_CAPACITY. Exclude only that optional
 /// 13-unit serialized field from admission accounting; actual todo arrays count
 /// in full and public/storage serialization is unchanged.
-fn session_capacity_length(value : Json) -> Int {
+fn session_capacity_length(value : Json) -> Int32 {
   match value {
     Json::Object(items) =>
       match items.get("todos") {
@@ -26,13 +26,13 @@ fn session_capacity_length(value : Json) -> Int {
 
 ///|
 /// Maximum text/reasoning carried by one durable provider flush event.
-const STREAM_DELTA_CAPACITY : Int = 4096
+const STREAM_DELTA_CAPACITY : Int32 = 4096
 
 ///|
-const MAX_PROVIDER_RETRIES : Int = 5
+const MAX_PROVIDER_RETRIES : Int32 = 5
 
 ///|
-const MAX_PROVIDER_RETRY_DELAY_MS : Int = 10000
+const MAX_PROVIDER_RETRY_DELAY_MS : Int32 = 10000
 
 ///|
 const CAPACITY_ERROR : String = "Session capacity reached; create a new session"
@@ -167,7 +167,7 @@ fn Engine::adopt(self : Engine, candidate : Engine) -> Unit {
 /// provider/tool error itself goes through this admission transaction.
 fn Engine::within_capacity(
   self : Engine,
-  simulate_retry? : Bool = true,
+  simulate_retry~ : Bool = true,
 ) -> Bool {
   for _, session in self.sessions {
     let projected = native_hook_result_capacity_projection(session)
@@ -257,7 +257,7 @@ pub fn Engine::invoke(
 }
 
 ///|
-fn engine_hook_context_utf16_units(value : String) -> Int {
+fn engine_hook_context_utf16_units(value : String) -> Int32 {
   let mut units = 0
   for character in value {
     units += if character.to_int() > 0xFFFF { 2 } else { 1 }
@@ -274,7 +274,7 @@ pub fn Engine::inject_hook_contexts(
   self : Engine,
   session_id : String,
   contexts : Array[String],
-  source_kind? : String = "hooks-claude-code",
+  source_kind~ : String = "hooks-claude-code",
 ) -> Result[Bool, String] {
   if contexts.is_empty() {
     return Ok(true)
@@ -389,7 +389,7 @@ pub fn Engine::apply_session_send_with_hook_contexts(
   prompt : String,
   initial_contexts : Array[String],
   additional_contexts : Array[String],
-  source_kind? : String = "hooks-claude-code",
+  source_kind~ : String = "hooks-claude-code",
 ) -> Result[Json, String] {
   if !["hooks-claude-code", "hooks-codex"].contains(source_kind) {
     return Err("Unknown native hook context source")

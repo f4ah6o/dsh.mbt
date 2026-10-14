@@ -1,16 +1,16 @@
 ///|
-const NATIVE_HOOK_CONFIG_LIMIT : Int = 65536
+const NATIVE_HOOK_CONFIG_LIMIT : Int32 = 65536
 
 ///|
-const NATIVE_HOOK_MAX_GROUPS : Int = 16
+const NATIVE_HOOK_MAX_GROUPS : Int32 = 16
 
 ///|
-const NATIVE_HOOK_MAX_COMMANDS : Int = 32
+const NATIVE_HOOK_MAX_COMMANDS : Int32 = 32
 
 ///|
 priv struct NativeHookCommand {
   command : String
-  timeout_ms : Int
+  timeout_ms : Int32
 }
 
 ///|
@@ -32,7 +32,7 @@ priv struct NativeHooks {
   dialect : String
   model : String
   project_dir : String
-  mut handler_counter : Int
+  mut handler_counter : Int32
 }
 
 ///|
@@ -380,7 +380,7 @@ fn native_hook_parse_codex_groups(
 ///|
 fn native_hook_parse_config(
   value : Json,
-  dialect? : String = "claude-code",
+  dialect~ : String = "claude-code",
 ) -> Result[
   (
     Array[NativeHookGroup],
@@ -574,8 +574,8 @@ async fn native_hook_read_config(path : String) -> Result[String, String] {
 async fn NativeHooks::load(
   path : String?,
   project_dir : String,
-  dialect? : String = "claude-code",
-  model? : String = "",
+  dialect~ : String = "claude-code",
+  model~ : String = "",
 ) -> Result[NativeHooks, String] {
   if dialect != "claude-code" && dialect != "codex" {
     return Err("hooks dialect must be claude-code or codex")

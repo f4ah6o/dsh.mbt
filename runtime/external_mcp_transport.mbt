@@ -137,7 +137,7 @@ async fn NativeMcpServer::close(self : NativeMcpServer) -> Unit {
       // brief pre-session window and targets the owned leader PID.
       ignore(os_kill_process(self.pid, 15))
     }
-    let first_wait : Int? = @async.with_timeout_opt(500, () => {
+    let first_wait : Int32? = @async.with_timeout_opt(500, () => {
       @process.wait_pid(self.pid)
     }) catch {
       _ => None
@@ -146,7 +146,7 @@ async fn NativeMcpServer::close(self : NativeMcpServer) -> Unit {
       if !os_kill_process_group(self.pid, 9) && os_process_alive(self.pid) {
         ignore(os_kill_process(self.pid, 9))
       }
-      let _ : Int? = @async.with_timeout_opt(1000, () => {
+      let _ : Int32? = @async.with_timeout_opt(1000, () => {
         @process.wait_pid(self.pid)
       }) catch {
         _ => None
@@ -169,7 +169,7 @@ async fn NativeMcpServer::close_protected(self : NativeMcpServer) -> Unit {
 }
 
 ///|
-fn native_mcp_response_id_matches(value : Json?, expected : Int) -> Bool {
+fn native_mcp_response_id_matches(value : Json?, expected : Int32) -> Bool {
   match value {
     Some(Json::Number(number, ..)) =>
       number == expected.to_double() && number.to_int().to_double() == number
@@ -180,7 +180,7 @@ fn native_mcp_response_id_matches(value : Json?, expected : Int) -> Bool {
 ///|
 async fn NativeMcpServer::read_response(
   self : NativeMcpServer,
-  expected_id : Int,
+  expected_id : Int32,
 ) -> Result[NativeMcpRpcResponse, String] {
   let mut notifications = 0
   while true {
@@ -261,7 +261,7 @@ async fn NativeMcpServer::read_response(
 ///|
 async fn NativeMcpServer::rpc_once(
   self : NativeMcpServer,
-  id : Int,
+  id : Int32,
   rpc_method : String,
   params : Json,
 ) -> Result[NativeMcpRpcResponse, String] {
@@ -282,7 +282,7 @@ async fn NativeMcpServer::request(
   self : NativeMcpServer,
   rpc_method : String,
   params : Json,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Result[NativeMcpRpcResponse, String] {
   self.gate.acquire()
   defer self.gate.release()

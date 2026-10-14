@@ -8,7 +8,7 @@ fn is_v4_surface_event(kind : String) -> Bool {
 }
 
 ///|
-fn v4_surface_position(surface : Array[Int], seq : Int) -> Int? {
+fn v4_surface_position(surface : Array[Int32], seq : Int32) -> Int32? {
   for index in 0..<surface.length() {
     if surface[index] == seq {
       return Some(index)
@@ -19,10 +19,10 @@ fn v4_surface_position(surface : Array[Int], seq : Int) -> Int? {
 
 ///|
 fn v4_surface_replacement_indices(
-  surface : Array[Int],
-  start_seq : Int,
-  end_seq : Int,
-) -> (Int, Int)? {
+  surface : Array[Int32],
+  start_seq : Int32,
+  end_seq : Int32,
+) -> (Int32, Int32)? {
   let start = v4_surface_position(surface, start_seq)
   let end = v4_surface_position(surface, end_seq)
   match (start, end) {
@@ -59,7 +59,7 @@ fn v4_json_fields_equal_except(
 fn validate_v4_tool_result_replacement(
   replay : V4Replay,
   record : Json,
-  removed : Array[Int],
+  removed : Array[Int32],
 ) -> Unit raise EngineError {
   if removed.length() != 1 ||
     replay.source_types.get(removed[0]) != Some("tool/result") {
@@ -93,9 +93,9 @@ fn validate_v4_compact_checkpoint(
   replay : V4Replay,
   record : Json,
   data : Json,
-  source_seq : Int,
+  source_seq : Int32,
   replacing : Bool,
-  removed : Array[Int],
+  removed : Array[Int32],
 ) -> Unit raise EngineError {
   let source = required_field(data, "source")
   if required_string(source, "kind", max=64) != "compact-checkpoint" {
@@ -139,7 +139,7 @@ fn apply_v4_surface(
   replay : V4Replay,
   record : Json,
   kind : String,
-  source_seq : Int,
+  source_seq : Int32,
 ) -> Unit raise EngineError {
   if !is_v4_surface_event(kind) {
     return
@@ -194,7 +194,7 @@ fn apply_v4_surface(
             "Session v4 replacement range is not on the current surface",
           )
       }
-      let removed : Array[Int] = []
+      let removed : Array[Int32] = []
       for index in first..<=last {
         removed.push(replay.surface[index])
       }
@@ -239,7 +239,7 @@ fn apply_v4_surface(
           removed,
         )
       }
-      let updated : Array[Int] = []
+      let updated : Array[Int32] = []
       for index in 0..<first {
         updated.push(replay.surface[index])
       }

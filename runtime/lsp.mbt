@@ -1,47 +1,47 @@
 ///|
-const NATIVE_LSP_CONFIG_LIMIT : Int = 1048576
+const NATIVE_LSP_CONFIG_LIMIT : Int32 = 1048576
 
 ///|
-const NATIVE_LSP_MAX_SERVERS : Int = 8
+const NATIVE_LSP_MAX_SERVERS : Int32 = 8
 
 ///|
-const NATIVE_LSP_MAX_EXTENSIONS : Int = 128
+const NATIVE_LSP_MAX_EXTENSIONS : Int32 = 128
 
 ///|
-const NATIVE_LSP_MAX_MESSAGE_BYTES : Int = 4194304
+const NATIVE_LSP_MAX_MESSAGE_BYTES : Int32 = 4194304
 
 ///|
-const NATIVE_LSP_MAX_HEADER_BYTES : Int = 65536
+const NATIVE_LSP_MAX_HEADER_BYTES : Int32 = 65536
 
 ///|
-const NATIVE_LSP_MAX_DOCUMENT_BYTES : Int = 4194304
+const NATIVE_LSP_MAX_DOCUMENT_BYTES : Int32 = 4194304
 
 ///|
-const NATIVE_LSP_MAX_NOTIFICATIONS : Int = 64
+const NATIVE_LSP_MAX_NOTIFICATIONS : Int32 = 64
 
 ///|
-const NATIVE_LSP_MAX_QUEUED_MESSAGES : Int = 64
+const NATIVE_LSP_MAX_QUEUED_MESSAGES : Int32 = 64
 
 ///|
-const NATIVE_LSP_MAX_RESULT_CHARS : Int = 16000
+const NATIVE_LSP_MAX_RESULT_CHARS : Int32 = 16000
 
 ///|
-const NATIVE_LSP_MAX_LOCATIONS : Int = 100
+const NATIVE_LSP_MAX_LOCATIONS : Int32 = 100
 
 ///|
-const NATIVE_LSP_STARTUP_TIMEOUT_MS : Int = 10000
+const NATIVE_LSP_STARTUP_TIMEOUT_MS : Int32 = 10000
 
 ///|
-const NATIVE_LSP_DEFAULT_TOOL_TIMEOUT_MS : Int = 60000
+const NATIVE_LSP_DEFAULT_TOOL_TIMEOUT_MS : Int32 = 60000
 
 ///|
-const NATIVE_LSP_SHUTDOWN_TIMEOUT_MS : Int = 2000
+const NATIVE_LSP_SHUTDOWN_TIMEOUT_MS : Int32 = 2000
 
 ///|
-const NATIVE_LSP_CPU_LIMIT_SECONDS : Int = 3600
+const NATIVE_LSP_CPU_LIMIT_SECONDS : Int32 = 3600
 
 ///|
-const NATIVE_LSP_MEMORY_LIMIT_MIB : Int = 8192
+const NATIVE_LSP_MEMORY_LIMIT_MIB : Int32 = 8192
 
 ///|
 priv struct NativeLspServerConfig {
@@ -53,12 +53,12 @@ priv struct NativeLspServerConfig {
   initialization_options : Json
   configuration : Json
   settings_revision : String?
-  tool_timeout_ms : Int
+  tool_timeout_ms : Int32
 }
 
 ///|
 priv struct NativeLspRoute {
-  server_index : Int
+  server_index : Int32
   language_id : String
 }
 
@@ -96,7 +96,7 @@ fn native_lsp_json_string(value : Json?) -> String? {
 }
 
 ///|
-fn native_lsp_json_depth_bounded(text : String, limit : Int) -> Bool {
+fn native_lsp_json_depth_bounded(text : String, limit : Int32) -> Bool {
   let mut depth = 0
   let mut in_string = false
   let mut escaped = false
@@ -127,7 +127,7 @@ fn native_lsp_json_depth_bounded(text : String, limit : Int) -> Bool {
 }
 
 ///|
-fn native_lsp_valid_identifier(value : String, maximum : Int) -> Bool {
+fn native_lsp_valid_identifier(value : String, maximum : Int32) -> Bool {
   if value.is_empty() || value.length() > maximum {
     return false
   }
@@ -229,7 +229,7 @@ fn native_lsp_parse_extension_map(
 ///|
 fn native_lsp_bounded_json(
   value : Json,
-  depth : Int,
+  depth : Int32,
   budget : NativeMcpSchemaBudget,
 ) -> Result[Json, String] {
   if depth > 24 {
@@ -669,9 +669,9 @@ fn native_lsp_extension(path : String) -> String? {
 ///|
 fn native_lsp_position(
   document : String,
-  one_based_line : Int,
-  one_based_character : Int,
-) -> Result[(Int, Int), String] {
+  one_based_line : Int32,
+  one_based_character : Int32,
+) -> Result[(Int32, Int32), String] {
   let lines = document.split("\n").to_array()
   let line_index = one_based_line - 1
   if line_index < 0 || line_index >= lines.length() {
@@ -778,8 +778,8 @@ async fn NativeLspPool::execute_routed(
   tools : NativeTools,
   operation : String,
   path : String,
-  line : Int,
-  character : Int,
+  line : Int32,
+  character : Int32,
   route : NativeLspRoute,
 ) -> Json {
   let route_gate = self.config_gates[route.server_index]

@@ -39,21 +39,21 @@ fn StreamBlock::new(kind : String) -> StreamBlock {
 pub struct StreamDecoder {
   mode : String
   line : StringBuilder
-  mut line_units : Int
+  mut line_units : Int32
   data : StringBuilder
-  mut data_units : Int
+  mut data_units : Int32
   mut has_data : Bool
   mut event : String
   mut ignore_lf : Bool
   mut at_start : Bool
-  mut total_units : Int
+  mut total_units : Int32
   mut failure : String?
   mut closed : Bool
   mut terminal : Bool
   mut started : Bool
   mut reason : String?
-  blocks : Map[Int, StreamBlock]
-  block_order : Array[Int]
+  blocks : Map[Int32, StreamBlock]
+  block_order : Array[Int32]
   content : StringBuilder
   reasoning : StringBuilder
   pending_deltas : Array[Json]
@@ -295,7 +295,7 @@ fn StreamDecoder::record_delta(
 }
 
 ///|
-fn block_index(raw : Map[String, Json]) -> Int raise ProviderError {
+fn block_index(raw : Map[String, Json]) -> Int32 raise ProviderError {
   let index = integer(field(raw, "index"), "block index")
   if index > 1023 {
     reject("STREAM_LIMIT", "block index exceeds 1023")

@@ -2,16 +2,16 @@
 // Native-only HTTPS transport for OpenAI Responses and account model discovery.
 
 ///|
-const NATIVE_PROVIDER_TOTAL_TIMEOUT_MS : Int = 120000
+const NATIVE_PROVIDER_TOTAL_TIMEOUT_MS : Int32 = 120000
 
 ///|
-const NATIVE_PROVIDER_IDLE_TIMEOUT_MS : Int = 30000
+const NATIVE_PROVIDER_IDLE_TIMEOUT_MS : Int32 = 30000
 
 ///|
-const NATIVE_PROVIDER_BODY_LIMIT : Int = 16777216
+const NATIVE_PROVIDER_BODY_LIMIT : Int32 = 16777216
 
 ///|
-const NATIVE_PROVIDER_REQUEST_LIMIT : Int = 16777216
+const NATIVE_PROVIDER_REQUEST_LIMIT : Int32 = 16777216
 
 ///|
 fn native_provider_mime_essence(content_type : String) -> String {
@@ -43,7 +43,7 @@ priv enum NativeProviderRead {
 
 ///|
 async fn[T] native_provider_with_deadline(
-  timeout_ms : Int,
+  timeout_ms : Int32,
   action : async () -> T,
 ) -> T? {
   @async.with_timeout_opt(timeout_ms, action)
@@ -52,7 +52,7 @@ async fn[T] native_provider_with_deadline(
 ///|
 async fn native_provider_read_chunk(
   client : @http.Client,
-  already_read : Int,
+  already_read : Int32,
 ) -> NativeProviderRead {
   native_provider_read_chunk_with_timeout(
     client,
@@ -64,8 +64,8 @@ async fn native_provider_read_chunk(
 ///|
 async fn native_provider_read_chunk_with_timeout(
   client : @http.Client,
-  already_read : Int,
-  timeout_ms : Int,
+  already_read : Int32,
+  timeout_ms : Int32,
 ) -> NativeProviderRead {
   match
     native_provider_with_deadline(timeout_ms, async fn() {
@@ -156,8 +156,8 @@ async fn native_provider_receive_responses_stream(
 
 ///|
 fn native_provider_body_limit_exceeded(
-  already_read : Int,
-  next_chunk_bytes : Int,
+  already_read : Int32,
+  next_chunk_bytes : Int32,
 ) -> Bool {
   already_read < 0 ||
   next_chunk_bytes < 0 ||
@@ -172,7 +172,7 @@ fn native_provider_timeout_failure(message : String) -> Json {
 ///|
 fn native_provider_is_failure_json(value : Json) -> Bool {
   match value {
-    Object(fields) => fields.get("ok") == Some(false.to_json())
+    Object(fields) => fields.get("ok") == Some(false)
     _ => false
   }
 }
@@ -355,7 +355,7 @@ async fn native_run_api_key_inner(
   }
   let request = match request {
     Object(fields) => {
-      fields["stream"] = true.to_json()
+      fields["stream"] = true
       Json::object(fields)
     }
     _ => return Err("INVALID_REQUEST: provider request must be an object")
@@ -702,7 +702,7 @@ fn native_provider_base_url(
 ///|
 async fn native_provider_read_limited(
   client : @http.Client,
-  limit : Int,
+  limit : Int32,
 ) -> Result[Bytes, String] {
   let bytes : Array[Byte] = []
   for ;; {
@@ -727,7 +727,7 @@ async fn native_provider_read_limited(
 
 ///|
 fn native_provider_http_failure(
-  status : Int,
+  status : Int32,
   headers : @http.Headers,
   label : String,
 ) -> Json {
@@ -756,38 +756,35 @@ fn native_provider_http_failure(
 fn native_provider_failure_json(
   code : String,
   message : String,
-  status? : Int,
-  retry_after_ms? : Int? = None,
-  request_id? : String? = None,
+  status? : Int32,
+  retry_after_ms~ : Int32? = None,
+  request_id~ : String? = None,
 ) -> Json {
   let safe_message = native_provider_clip(message, 512)
-  let failure : Map[String, Json] = {
-    "code": code.to_json(),
-    "message": safe_message.to_json(),
-  }
+  let failure : Map[String, Json] = { "code": code, "message": safe_message }
   match status {
     Some(value) if value >= 100 && value <= 599 =>
-      failure["status"] = value.to_json()
+      failure["status"] = Json(value)
     _ => ()
   }
   match retry_after_ms {
-    Some(value) if value >= 0 => failure["retry_after_ms"] = value.to_json()
+    Some(value) if value >= 0 => failure["retry_after_ms"] = Json(value)
     _ => ()
   }
   match request_id {
     Some(value) if native_provider_valid_request_id(value) =>
-      failure["request_id"] = value.to_json()
+      failure["request_id"] = Json(value)
     _ => ()
   }
   Json::object({
-    "ok": false.to_json(),
-    "error": safe_message.to_json(),
+    "ok": false,
+    "error": safe_message,
     "failure": Json::object(failure),
   })
 }
 
 ///|
-fn native_provider_clip(value : String, max_chars : Int) -> String {
+fn native_provider_clip(value : String, max_chars : Int32) -> String {
   let clipped = StringBuilder()
   let mut count = 0
   for character in value {
@@ -864,7 +861,7 @@ fn native_provider_valid_request_id(value : String) -> Bool {
 /// Parse the numeric Retry-After form. Oversized delays are represented just
 /// beyond the engine's ten-second cap, which preserves the server instruction
 /// while preventing it from bypassing the bounded retry policy.
-fn native_provider_retry_after(value : String?) -> Int? {
+fn native_provider_retry_after(value : String?) -> Int32? {
   let text = match value {
     Some(value) => value.trim().to_owned()
     None => return None

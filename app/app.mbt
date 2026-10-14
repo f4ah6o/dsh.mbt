@@ -4,19 +4,19 @@
 let current : Ref[@api.HarnessApi?] = Ref(None)
 
 ///|
-let incarnation : Ref[Int] = Ref(0)
+let incarnation : Ref[Int32] = Ref(0)
 
 ///|
-let streams : Map[Int, @provider.StreamDecoder] = Map([])
+let streams : Map[Int32, @provider.StreamDecoder] = Map([])
 
 ///|
-let next_stream : Ref[Int] = Ref(0)
+let next_stream : Ref[Int32] = Ref(0)
 
 ///|
 fn response(result : Result[Json, String]) -> String {
   let value : Json = match result {
     Ok(result) => { "ok": true, "result": result }
-    Err(error) => { "ok": false, "error": error.to_json() }
+    Err(error) => { "ok": false, "error": Json(error) }
   }
   value.stringify()
 }
@@ -245,7 +245,7 @@ pub fn decode_response(mode : String, raw : String) -> String {
 
 ///|
 #export_name("stream_start")
-pub fn stream_start(mode : String) -> Int {
+pub fn stream_start(mode : String) -> Int32 {
   if streams.length() >= 128 || next_stream.val >= 2147483646 {
     return -1
   }
@@ -257,7 +257,7 @@ pub fn stream_start(mode : String) -> Int {
 
 ///|
 #export_name("stream_feed")
-pub fn stream_feed(handle : Int, chunk : String) -> String {
+pub fn stream_feed(handle : Int32, chunk : String) -> String {
   match streams.get(handle) {
     None => response(Err("unknown stream handle"))
     Some(stream) =>
@@ -270,7 +270,7 @@ pub fn stream_feed(handle : Int, chunk : String) -> String {
 
 ///|
 #export_name("stream_take_deltas")
-pub fn stream_take_deltas(handle : Int) -> String {
+pub fn stream_take_deltas(handle : Int32) -> String {
   match streams.get(handle) {
     None => response(Err("unknown stream handle"))
     Some(stream) => response(Ok(Json::array(stream.take_deltas())))
@@ -279,7 +279,7 @@ pub fn stream_take_deltas(handle : Int) -> String {
 
 ///|
 #export_name("stream_finish")
-pub fn stream_finish(handle : Int) -> String {
+pub fn stream_finish(handle : Int32) -> String {
   match streams.get(handle) {
     None => response(Err("unknown stream handle"))
     Some(stream) => {
@@ -291,13 +291,13 @@ pub fn stream_finish(handle : Int) -> String {
 
 ///|
 #export_name("stream_abort")
-pub fn stream_abort(handle : Int) -> Unit {
+pub fn stream_abort(handle : Int32) -> Unit {
   streams.remove(handle)
 }
 
 ///|
 #export_name("render_ui")
-pub fn render_ui(raw : String, width : Int, height : Int) -> String {
+pub fn render_ui(raw : String, width : Int32, height : Int32) -> String {
   match parse(raw) {
     Ok(value) => @ui.render(value, width, height)
     Err(_) => @ui.render(Json::empty_object(), width, height)
@@ -306,7 +306,7 @@ pub fn render_ui(raw : String, width : Int, height : Int) -> String {
 
 ///|
 #export_name("measure_ui")
-pub fn measure_ui(raw : String, width : Int) -> Int {
+pub fn measure_ui(raw : String, width : Int32) -> Int32 {
   match parse(raw) {
     Ok(value) => @ui.measure(value, width)
     Err(_) => @ui.measure(Json::empty_object(), width)

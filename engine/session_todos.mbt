@@ -1,13 +1,13 @@
 ///|
 /// Keep model-supplied task lists small enough for snapshots and every
 /// presentation surface to carry without truncation.
-const TODO_MAX_ITEMS : Int = 64
+const TODO_MAX_ITEMS : Int32 = 64
 
 ///|
-const TODO_MAX_CONTENT : Int = 512
+const TODO_MAX_CONTENT : Int32 = 512
 
 ///|
-const TODO_MAX_TOTAL_CONTENT : Int = 8192
+const TODO_MAX_TOTAL_CONTENT : Int32 = 8192
 
 ///|
 fn todo_ecmascript_whitespace(character : Char) -> Bool {

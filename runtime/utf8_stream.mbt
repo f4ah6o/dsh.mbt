@@ -37,9 +37,9 @@ fn utf8_is_incomplete_tail(bytes : BytesView) -> Bool {
   }
   let lead = bytes[0].to_int()
   let expected = match lead {
-    0xC2..=0xDF => 2
-    0xE0..=0xEF => 3
-    0xF0..=0xF4 => 4
+    0xC2..<=0xDF => 2
+    0xE0..<=0xEF => 3
+    0xF0..<=0xF4 => 4
     _ => return false
   }
   if len >= expected {

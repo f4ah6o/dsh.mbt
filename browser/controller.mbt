@@ -3,10 +3,10 @@ priv struct BrowserApp {
   client : RemoteClient
   mut sessions : Array[Json]
   mut id : String
-  mut selection : Int
+  mut selection : Int32
   mut snapshot : Json
   mut mutation : Bool
-  mut frame : Int?
+  mut frame : Int32?
   mut transcript_key : String
   mut status_key : String
   mut action_error : String
@@ -14,8 +14,8 @@ priv struct BrowserApp {
   mut connection_message : String
   mut draft_scope : String
   mut recovering : Bool
-  mut auth_poll : Int?
-  mut receipt_poll : Int?
+  mut auth_poll : Int32?
+  mut receipt_poll : Int32?
   mut receipt_poll_running : Bool
   mut auth_models_loading : Bool
   mut auth_models_error : Bool
@@ -150,7 +150,7 @@ fn clear_connection_error(app : BrowserApp) -> Unit {
 }
 
 ///|
-fn sync_from_client(app : BrowserApp, restore_draft? : Bool = false) -> Unit {
+fn sync_from_client(app : BrowserApp, restore_draft~ : Bool = false) -> Unit {
   let client_state = app.client.state()
   let previous_scope = app.draft_scope
   let projection = json_object(field(client_state, "projection"))
@@ -788,7 +788,7 @@ fn active_metadata_key(app : BrowserApp) -> String {
 ///|
 async fn refresh_workspace_metadata(
   app : BrowserApp,
-  force? : Bool = false,
+  force~ : Bool = false,
 ) -> Unit {
   let now = browser_now_epoch()
   if app.metadata_in_flight ||
@@ -819,7 +819,7 @@ async fn refresh_workspace_metadata(
 }
 
 ///|
-fn apply_panel_state(app : BrowserApp, focus? : Bool = false) -> Unit {
+fn apply_panel_state(app : BrowserApp, focus~ : Bool = false) -> Unit {
   let mobile_sidebar = browser_media_matches("(max-width: 820px)")
   let mobile_context = browser_media_matches("(max-width: 1180px)")
   if app.mobile_sidebar_open && app.context_panel_open {
@@ -947,7 +947,7 @@ fn panel_focusable_elements(panel_id : String) -> Array[BrowserValue] {
 }
 
 ///|
-fn focus_panel_item(panel_id : String, index : Int) -> Unit {
+fn focus_panel_item(panel_id : String, index : Int32) -> Unit {
   let focusable = panel_focusable_elements(panel_id)
   if index >= 0 && index < focusable.length() {
     browser_node_focus(focusable[index])
@@ -1133,7 +1133,7 @@ fn has_pending_receipt(app : BrowserApp) -> Bool {
 }
 
 ///|
-fn schedule_receipt_check(app : BrowserApp, delay? : Int = 6_000) -> Unit {
+fn schedule_receipt_check(app : BrowserApp, delay~ : Int32 = 6_000) -> Unit {
   match app.receipt_poll {
     Some(timer) => browser_clear_timeout(timer)
     None => ()
@@ -1174,7 +1174,7 @@ async fn reconcile_receipts(app : BrowserApp) -> Unit {
 }
 
 ///|
-async fn refresh_auth_catalog(app : BrowserApp, force? : Bool = false) -> Unit {
+async fn refresh_auth_catalog(app : BrowserApp, force~ : Bool = false) -> Unit {
   let auth = app_auth(app)
   let key = auth_model_refresh_key(auth)
   match key {
@@ -1238,8 +1238,8 @@ async fn refresh_auth_catalog(app : BrowserApp, force? : Bool = false) -> Unit {
 ///|
 async fn refresh_snapshot(
   app : BrowserApp,
-  reconnect? : Bool = true,
-  refresh_auth_models? : Bool = true,
+  reconnect~ : Bool = true,
+  refresh_auth_models~ : Bool = true,
 ) -> Result[Json, String] {
   app.client.begin_connect()
   sync_from_client(app)
@@ -1349,7 +1349,7 @@ async fn run_command(
   operation : String,
   session_id : String?,
   input : Json,
-  approval_revision? : Int = -1,
+  approval_revision~ : Int32 = -1,
 ) -> Result[Json, String] {
   let receipt = match
     app.client.command(operation, session_id, input, approval_revision~) {
@@ -1386,7 +1386,7 @@ async fn run_command(
 async fn select_session(
   app : BrowserApp,
   id : String,
-  explicit? : Bool = false,
+  explicit~ : Bool = false,
 ) -> Unit {
   if explicit {
     app.selection += 1
@@ -1465,7 +1465,7 @@ async fn create_session(
 fn mutate(
   app : BrowserApp,
   action : async () -> Result[Unit, String],
-  fence_selection? : Bool = false,
+  fence_selection~ : Bool = false,
 ) -> Unit {
   if app.mutation {
     return
@@ -1518,7 +1518,7 @@ fn approve_tool(app : BrowserApp, approved : Bool) -> Unit {
         Some(app.id),
         Json::object({
           "call_id": Json::string(call_id),
-          "approved": approved.to_json(),
+          "approved": Json(approved),
         }),
         approval_revision=revision,
       ) {

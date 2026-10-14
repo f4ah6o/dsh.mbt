@@ -1,17 +1,17 @@
 ///|
-const NATIVE_HTTP_BODY_LIMIT : Int = 1048576
+const NATIVE_HTTP_BODY_LIMIT : Int32 = 1048576
 
 ///|
-const NATIVE_HTTP_CONNECTION_LIMIT : Int = 64
+const NATIVE_HTTP_CONNECTION_LIMIT : Int32 = 64
 
 ///|
-extern "C" fn c_service_signals_install() -> Int = "dsh_service_signals_install"
+extern "C" fn c_service_signals_install() -> Int32 = "dsh_service_signals_install"
 
 ///|
-extern "C" fn c_service_signals_requested() -> Int = "dsh_service_signals_requested"
+extern "C" fn c_service_signals_requested() -> Int32 = "dsh_service_signals_requested"
 
 ///|
-extern "C" fn c_service_signals_restore() -> Int = "dsh_service_signals_restore"
+extern "C" fn c_service_signals_restore() -> Int32 = "dsh_service_signals_restore"
 
 ///|
 fn native_configure_service_signal_policy(args : Array[String]) -> Unit {
@@ -28,10 +28,10 @@ fn native_configure_service_signal_policy(args : Array[String]) -> Unit {
 priv struct NativeService {
   runtime : NativeRuntime
   web_root : String?
-  requested_port : Int
+  requested_port : Int32
   tailnet_host : String?
   tailnet_owner : String?
-  tailnet_port : Int
+  tailnet_port : Int32
 }
 
 ///|
@@ -39,7 +39,7 @@ fn service_tailnet_config_from_settings(
   host : String?,
   users : String?,
   raw_port : String?,
-) -> Result[(String, String, Int)?, String] {
+) -> Result[(String, String, Int32)?, String] {
   let port = match service_tailnet_port_from_setting(raw_port) {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -84,7 +84,7 @@ fn service_tailnet_config_from_settings(
 }
 
 ///|
-fn service_tailnet_config_from_env() -> Result[(String, String, Int)?, String] {
+fn service_tailnet_config_from_env() -> Result[(String, String, Int32)?, String] {
   service_tailnet_config_from_settings(
     @env.get_env_var("DSH_TAILNET_HOST"),
     @env.get_env_var("DSH_TAILNET_ALLOWED_USERS"),
@@ -93,7 +93,9 @@ fn service_tailnet_config_from_env() -> Result[(String, String, Int)?, String] {
 }
 
 ///|
-fn service_tailnet_port_from_setting(raw_port : String?) -> Result[Int, String] {
+fn service_tailnet_port_from_setting(
+  raw_port : String?,
+) -> Result[Int32, String] {
   match raw_port {
     None => Ok(443)
     Some(value) if value.length() <= 5 =>
@@ -109,8 +111,8 @@ fn service_tailnet_port_from_setting(raw_port : String?) -> Result[Int, String] 
 async fn NativeService::new(
   runtime : NativeRuntime,
   source_root : String,
-  requested_port : Int,
-  assets_dir? : String? = None,
+  requested_port : Int32,
+  assets_dir~ : String? = None,
 ) -> Result[NativeService, String] {
   if requested_port < 0 || requested_port > 65535 {
     return Err("HTTP port must be between 0 and 65535")
@@ -277,7 +279,7 @@ async fn NativeService::handle(
   request : @http.Request,
   connection : @http.ServerConnection,
   group : @async.TaskGroup[Unit],
-  port : Int,
+  port : Int32,
 ) -> Unit {
   let (path, query) = match request.path.split_once("?") {
     Some((path, query)) => (path.to_owned(), query.to_owned())
@@ -312,7 +314,7 @@ async fn NativeService::handle(
 fn NativeService::request_identity(
   self : NativeService,
   request : @http.Request,
-  port : Int,
+  port : Int32,
 ) -> Result[(String, Bool), String] {
   let (identity, is_local_request) = match
     service_request_identity(
@@ -339,10 +341,10 @@ fn service_request_identity(
   host_header : String,
   origin : String?,
   tailscale_login : String?,
-  port : Int,
+  port : Int32,
   tailnet_host : String?,
   tailnet_owner : String?,
-  tailnet_port : Int,
+  tailnet_port : Int32,
   local_identity : String,
 ) -> Result[(String, Bool), String] {
   let expected_ip = "127.0.0.1:" + port.to_string()
@@ -399,7 +401,7 @@ async fn NativeService::handle_head(
   self : NativeService,
   path : String,
   connection : @http.ServerConnection,
-  port : Int,
+  port : Int32,
 ) -> Unit {
   match self.static_asset(path) {
     None => self.respond_json(connection, 404, { "error": "not found" })
@@ -434,14 +436,11 @@ async fn NativeService::handle_get(
   query : String,
   connection : @http.ServerConnection,
   group : @async.TaskGroup[Unit],
-  port : Int,
+  port : Int32,
   identity_key : String,
 ) -> Unit {
   if path == "/api/metadata" {
-    self.respond_json(connection, 200, {
-      "ok": true.to_json(),
-      "result": self.metadata(),
-    })
+    self.respond_json(connection, 200, { "ok": true, "result": self.metadata() })
     return
   }
   if path == "/api/v1/snapshot" {
@@ -682,10 +681,10 @@ async fn NativeService::metadata(self : NativeService) -> Json {
     provider_config.model
   }
   {
-    "project": native_workspace_basename(self.runtime.tools.workspace).to_json(),
+    "project": native_workspace_basename(self.runtime.tools.workspace),
     "repository": self.runtime.tools.repository_metadata(),
-    "provider": service_provider_label(provider_config).to_json(),
-    "model": service_model_display_name(model).to_json(),
+    "provider": service_provider_label(provider_config),
+    "model": service_model_display_name(model),
   }
 }
 
@@ -1082,8 +1081,8 @@ fn service_event(
       ),
       "epoch": object_field(snapshot, "epoch").unwrap_or(Json::null()),
       "revision": object_field(snapshot, "revision").unwrap_or(Json::null()),
-      "cursor": current.to_json(),
-      "kind": kind.to_json(),
+      "cursor": current,
+      "kind": kind,
       "projection": projection,
     },
   )
@@ -1094,7 +1093,7 @@ async fn NativeService::serve_static(
   self : NativeService,
   path : String,
   connection : @http.ServerConnection,
-  port : Int,
+  port : Int32,
 ) -> Unit {
   match self.static_asset(path) {
     None => self.respond_json(connection, 404, { "error": "not found" })
@@ -1173,7 +1172,7 @@ fn NativeService::cache_control(self : NativeService, path : String) -> String {
 ///|
 fn NativeService::content_security_policy(
   self : NativeService,
-  port : Int,
+  port : Int32,
 ) -> String {
   ignore(self)
   "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; " +
@@ -1185,9 +1184,9 @@ fn NativeService::content_security_policy(
 async fn NativeService::respond_json(
   self : NativeService,
   connection : @http.ServerConnection,
-  status : Int,
+  status : Int32,
   body : Json,
-  extra_headers? : @http.Headers = {},
+  extra_headers~ : @http.Headers = {},
 ) -> Unit {
   ignore(self)
   let reason = match status {
@@ -1281,7 +1280,7 @@ fn service_decode_component(value : String) -> String {
 }
 
 ///|
-fn service_hex_value(value : Byte) -> Int? {
+fn service_hex_value(value : Byte) -> Int32? {
   let value = value.to_int()
   if value >= 48 && value <= 57 {
     Some(value - 48)
@@ -1295,7 +1294,7 @@ fn service_hex_value(value : Byte) -> Int? {
 }
 
 ///|
-fn service_parse_int(value : String) -> Int? {
+fn service_parse_int(value : String) -> Int32? {
   if value.is_empty() || value.length() > 10 {
     return None
   }

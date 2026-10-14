@@ -142,7 +142,7 @@ fn native_lsp_workspace_location_path(
   uri : String,
   workspace : String,
   root : SafeRoot,
-  blocked_path? : String? = None,
+  blocked_path~ : String? = None,
 ) -> String? {
   let absolute_path = match native_lsp_local_file_uri_path(uri) {
     Some(value) => value
@@ -169,7 +169,7 @@ fn native_lsp_workspace_location_path(
 }
 
 ///|
-fn native_lsp_wire_coordinate(value : Json?) -> Int? {
+fn native_lsp_wire_coordinate(value : Json?) -> Int32? {
   match value {
     Some(Json::Number(number, ..)) if number >= 0.0 &&
       number <= 10000000.0 &&
@@ -224,7 +224,7 @@ fn native_lsp_location_fields(value : Json) -> Result[(String, Json), String] {
 }
 
 ///|
-fn native_lsp_range_start(range : Json) -> (Int, Int) {
+fn native_lsp_range_start(range : Json) -> (Int32, Int32) {
   let start = object_field(range, "start").unwrap_or(Json::null())
   (
     native_lsp_wire_coordinate(object_field(start, "line")).unwrap_or(0),
@@ -239,7 +239,7 @@ fn native_lsp_cap_result(text : String, label : String) -> String {
     return text
   }
   let suffix = "\n… " + label + " truncated (limit 16000 characters)."
-  let limit = Int::max(0, NATIVE_LSP_MAX_RESULT_CHARS - suffix.length())
+  let limit = Int32::max(0, NATIVE_LSP_MAX_RESULT_CHARS - suffix.length())
   let builder = StringBuilder()
   for index in 0..<limit {
     builder.write_char(chars[index])
@@ -253,7 +253,7 @@ fn native_lsp_render_locations(
   payload : Json,
   workspace : String,
   root : SafeRoot,
-  blocked_path? : String? = None,
+  blocked_path~ : String? = None,
 ) -> Result[String, String] {
   let values = match payload {
     Json::Null => []
@@ -380,7 +380,7 @@ fn native_lsp_project_result(
   payload : Json,
   workspace : String,
   root : SafeRoot,
-  blocked_path? : String? = None,
+  blocked_path~ : String? = None,
 ) -> Result[String, String] {
   if operation == "hover" {
     match native_lsp_hover_text(payload) {

@@ -2,10 +2,10 @@
 /// The process capture cap is 16 KiB per stream and config admits at most 32
 /// Stop commands. Keep their joined UTF-16 reason within that input envelope;
 /// the stricter serialized session bound is enforced by transaction admission.
-const STOP_HOOK_MERGED_REASON_MAX_UNITS : Int = 524350
+const STOP_HOOK_MERGED_REASON_MAX_UNITS : Int32 = 524350
 
 ///|
-fn stop_hook_utf16_units(value : String) -> Int {
+fn stop_hook_utf16_units(value : String) -> Int32 {
   let mut units = 0
   for character in value {
     units += if character.to_int() > 0xFFFF { 2 } else { 1 }
@@ -14,7 +14,7 @@ fn stop_hook_utf16_units(value : String) -> Int {
 }
 
 ///|
-fn stop_hook_prefix_utf16(value : String, maximum : Int) -> String {
+fn stop_hook_prefix_utf16(value : String, maximum : Int32) -> String {
   let output = StringBuilder()
   let mut units = 0
   for character in value {
@@ -83,7 +83,7 @@ fn Engine::settle_stop_candidate(
   self : Engine,
   candidate : Engine,
   session_id : String,
-  capacity_reason? : String = "session_capacity",
+  capacity_reason~ : String = "session_capacity",
 ) -> Result[Json, String] {
   if candidate.within_capacity() {
     self.adopt(candidate)
@@ -373,7 +373,7 @@ pub fn Engine::block_stop_continuation(
       prefix
     } else {
       let separator = ": "
-      let remaining = Int::max(
+      let remaining = Int32::max(
         0,
         8192 - stop_hook_utf16_units(prefix + separator),
       )

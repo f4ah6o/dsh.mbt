@@ -41,7 +41,7 @@ fn array_member(value : Json, key : String) -> Array[Json] {
 }
 
 ///|
-fn bounded_width(width : Int) -> Double {
+fn bounded_width(width : Int32) -> Double {
   if width < 1 {
     1.0
   } else {
@@ -91,7 +91,7 @@ fn size(width : Double, height : Double) -> @primitives.Size {
 }
 
 ///|
-fn rgb(red : Int, green : Int, blue : Int) -> @primitives.Color {
+fn rgb(red : Int32, green : Int32, blue : Int32) -> @primitives.Color {
   match @primitives.Color::rgba(red, green, blue, 255) {
     Ok(value) => value
     Err(_) => abort("transcript palette is valid")
@@ -110,7 +110,7 @@ fn point_dimension(value : Double) -> @layout.Dimension {
 /// Conservative host-font wrapping in Unicode scalars. Surrogate pairs are
 /// never split, and combining marks / joiner continuations stay with their
 /// base. Exact shaping and caret metrics remain the host font's responsibility.
-pub fn wrap_text(source : String, columns : Int) -> Array[String] {
+pub fn wrap_text(source : String, columns : Int32) -> Array[String] {
   let text = source
     .replace_all(old="\r\n", new="\n")
     .replace_all(old="\r", new="\n")
@@ -294,7 +294,7 @@ fn document_height(blocks : Array[Block]) -> Double {
 ///|
 /// Native scroll-container extent. The Canvas itself only allocates a bitmap
 /// for its visible viewport, even when the transcript is long.
-pub fn measure(snapshot : Json, width : Int) -> Int {
+pub fn measure(snapshot : Json, width : Int32) -> Int32 {
   document_height(transcript_blocks(snapshot, bounded_width(width))).to_int()
 }
 
@@ -378,7 +378,7 @@ fn add_text(
 /// Render a snapshot using real gpui flex layout, ElementTree backgrounds,
 /// ScrollState and SceneSnapshot text. `_ui_scroll_top` is a host-only copied
 /// presentation value and never modifies the harness session.
-pub fn render(snapshot : Json, width : Int, height : Int) -> String {
+pub fn render(snapshot : Json, width : Int32, height : Int32) -> String {
   let width = bounded_width(width)
   let height = bounded_width(height)
   let viewport = rect(0.0, 0.0, width, height)

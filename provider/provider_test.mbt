@@ -288,7 +288,7 @@ test "rejected historical arguments remain replayable for model self-correction"
           "role": "assistant",
           "content": "",
           "tool_calls": [
-            { "id": "a", "name": "read_file", "arguments": arguments.to_json() },
+            { "id": "a", "name": "read_file", "arguments": arguments },
           ],
         },
         {
@@ -340,10 +340,7 @@ test "rejected historical arguments remain replayable for model self-correction"
             {
               "id": "a",
               "type": "function",
-              "function": {
-                "name": "read_file",
-                "arguments": arguments.to_json(),
-              },
+              "function": { "name": "read_file", "arguments": arguments },
             },
           ],
         )

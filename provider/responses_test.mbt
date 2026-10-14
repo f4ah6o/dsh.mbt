@@ -456,10 +456,10 @@ fn responses_text_stream_fixture(text : String) -> String {
 fn responses_empty_terminal_fixture(
   text : String,
   done_text : String,
-  done_count : Int,
-  add_index : Int,
-  delta_index : Int,
-  done_index : Int,
+  done_count : Int32,
+  add_index : Int32,
+  delta_index : Int32,
+  done_index : Int32,
   completed_id : String,
   post_done_delta : Bool,
   done_status : String,
@@ -569,7 +569,7 @@ test "Responses reconstructs empty terminal output from validated done items" {
   assert_true(decoder.has_completed_result())
   let result = responses_value(decoder.finish())
   assert_true(!decoder.has_completed_result())
-  assert_true(responses_field(result, "content") == text.to_json())
+  assert_true(responses_field(result, "content") == Json(text))
 }
 
 ///|
@@ -663,7 +663,7 @@ test "Responses finalization rejects trailing SSE data in the same chunk" {
 }
 
 ///|
-fn split_at_character(value : String, offset : Int) -> (String, String) {
+fn split_at_character(value : String, offset : Int32) -> (String, String) {
   let before = StringBuilder()
   let after = StringBuilder()
   let mut index = 0
@@ -720,7 +720,7 @@ test "QuickCheck verifies arbitrary Unicode text over every decoded-string SSE s
         } else {
           match decoder.finish() {
             Ok(Object(fields)) =>
-              valid = fields.get("content") == Some(text.to_json())
+              valid = fields.get("content") == Some(Json(text))
             _ => valid = false
           }
         }

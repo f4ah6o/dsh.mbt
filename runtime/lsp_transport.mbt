@@ -1,14 +1,14 @@
 ///|
 priv struct NativeLspFramer {
-  max_message_bytes : Int
+  max_message_bytes : Int32
   mut buffered : Array[Byte]
-  mut separator_state : Int
-  mut body_start : Int?
-  mut body_length : Int
+  mut separator_state : Int32
+  mut body_start : Int32?
+  mut body_length : Int32
 }
 
 ///|
-fn NativeLspFramer::new(max_message_bytes : Int) -> NativeLspFramer {
+fn NativeLspFramer::new(max_message_bytes : Int32) -> NativeLspFramer {
   {
     max_message_bytes,
     buffered: [],
@@ -19,7 +19,7 @@ fn NativeLspFramer::new(max_message_bytes : Int) -> NativeLspFramer {
 }
 
 ///|
-fn native_lsp_hex_value(character : Char) -> Int? {
+fn native_lsp_hex_value(character : Char) -> Int32? {
   if character >= '0' && character <= '9' {
     Some(character.to_int() - '0'.to_int())
   } else if character >= 'a' && character <= 'f' {
@@ -32,7 +32,9 @@ fn native_lsp_hex_value(character : Char) -> Int? {
 }
 
 ///|
-fn native_lsp_parse_content_length(header : Array[Byte]) -> Result[Int, String] {
+fn native_lsp_parse_content_length(
+  header : Array[Byte],
+) -> Result[Int32, String] {
   for byte in header {
     if byte.to_int() > 127 {
       return Err("LSP header contains non-ASCII bytes")
@@ -41,7 +43,7 @@ fn native_lsp_parse_content_length(header : Array[Byte]) -> Result[Int, String] 
   let text = @utf8.decode(Bytes::from_array(header[:])) catch {
     _ => return Err("LSP header is not valid ASCII")
   }
-  let mut found : Int? = None
+  let mut found : Int32? = None
   for line in text.split("\r\n") {
     let parts = line.split(":").to_array()
     if parts.length() < 2 {
@@ -165,14 +167,14 @@ priv struct NativeLspServer {
   config : NativeLspServerConfig
   workspace : String
   workspace_uri : String
-  pid : Int
+  pid : Int32
   reader : @process.ReadFromProcess
   writer : @process.WriteToProcess
   gate : @async.Mutex
   close_gate : @async.Mutex
   framer : NativeLspFramer
   mut queued_messages : Array[Json]
-  mut next_id : Int
+  mut next_id : Int32
   mut capabilities : Json
   mut initialized : Bool
   mut poisoned : Bool
@@ -180,7 +182,7 @@ priv struct NativeLspServer {
 }
 
 ///|
-fn native_lsp_response_id_matches(value : Json?, expected : Int) -> Bool {
+fn native_lsp_response_id_matches(value : Json?, expected : Int32) -> Bool {
   match value {
     Some(Json::Number(number, ..)) =>
       number == expected.to_double() && number.to_int().to_double() == number
@@ -298,7 +300,7 @@ fn native_lsp_configuration_response(
 ///|
 async fn NativeLspServer::read_response(
   self : NativeLspServer,
-  expected_id : Int,
+  expected_id : Int32,
 ) -> Result[NativeLspRpcResponse, String] {
   let mut notifications = 0
   while true {
@@ -388,7 +390,7 @@ async fn NativeLspServer::read_response(
 ///|
 async fn NativeLspServer::rpc_once(
   self : NativeLspServer,
-  id : Int,
+  id : Int32,
   rpc_method : String,
   params : Json,
 ) -> Result[NativeLspRpcResponse, String] {
@@ -412,7 +414,7 @@ async fn NativeLspServer::request(
   self : NativeLspServer,
   rpc_method : String,
   params : Json,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Result[Json, String] {
   if self.closed || self.poisoned {
     return Err("LSP server is unavailable")
@@ -690,11 +692,11 @@ async fn NativeLspServer::query(
   uri : String,
   document : String,
   language_id : String,
-  line : Int,
-  character : Int,
+  line : Int32,
+  character : Int32,
   root : SafeRoot,
   blocked_path : String?,
-  timeout_ms : Int,
+  timeout_ms : Int32,
 ) -> Result[String, String] {
   self.gate.acquire()
   defer self.gate.release()
@@ -794,7 +796,7 @@ async fn NativeLspServer::terminate_group(self : NativeLspServer) -> Unit {
   if !os_kill_process_group(self.pid, 15) && os_process_alive(self.pid) {
     ignore(os_kill_process(self.pid, 15))
   }
-  let first_wait : Int? = @async.with_timeout_opt(500, () => {
+  let first_wait : Int32? = @async.with_timeout_opt(500, () => {
     @process.wait_pid(self.pid)
   }) catch {
     _ => None
@@ -803,7 +805,7 @@ async fn NativeLspServer::terminate_group(self : NativeLspServer) -> Unit {
     if !os_kill_process_group(self.pid, 9) && os_process_alive(self.pid) {
       ignore(os_kill_process(self.pid, 9))
     }
-    let _ : Int? = @async.with_timeout_opt(1000, () => {
+    let _ : Int32? = @async.with_timeout_opt(1000, () => {
       @process.wait_pid(self.pid)
     }) catch {
       _ => None
@@ -858,7 +860,7 @@ async fn NativeLspServer::shutdown(self : NativeLspServer) -> Unit {
           match self.notify("exit", Json::null()) {
             Err(_) => false
             Ok(_) => {
-              let first_wait : Int? = @async.with_timeout_opt(500, () => {
+              let first_wait : Int32? = @async.with_timeout_opt(500, () => {
                 @process.wait_pid(self.pid)
               }) catch {
                 _ => None

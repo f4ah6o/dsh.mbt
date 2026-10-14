@@ -23,11 +23,11 @@ fn native_hook_remote_prompt_command(
   input : Json,
 ) -> @protocol.RemoteCommand raise {
   let command : Json = {
-    "protocol_version": @protocol.PROTOCOL_VERSION.to_json(),
-    "workspace_id": workspace_id.to_json(),
-    "command_id": command_id.to_json(),
-    "session_id": session_id.to_json(),
-    "operation": "session_send".to_json(),
+    "protocol_version": @protocol.PROTOCOL_VERSION,
+    "workspace_id": workspace_id,
+    "command_id": command_id,
+    "session_id": session_id,
+    "operation": "session_send",
     "input": input,
     "approval_revision": Json::null(),
   }
@@ -1287,15 +1287,12 @@ async fn native_hook_prepare_approved_demo_write(
   session_id : String,
 ) -> @engine.EngineEffect {
   let (_, create_effects) = runtime
-    .invoke("session_create", {
-      "id": session_id.to_json(),
-      "title": "Hook integration",
-    })
+    .invoke("session_create", { "id": session_id, "title": "Hook integration" })
     .unwrap()
   assert_true(create_effects.is_empty())
   let (_, provider_effects) = runtime
     .invoke("session_send", {
-      "session_id": session_id.to_json(),
+      "session_id": session_id,
       "prompt": "Use the approved workspace write",
     })
     .unwrap()
@@ -1309,15 +1306,15 @@ async fn native_hook_prepare_approved_demo_write(
     .unwrap()
   assert_true(approval_effects.is_empty())
   let (approval, _) = runtime
-    .invoke("session_get", { "session_id": session_id.to_json() })
+    .invoke("session_get", { "session_id": session_id })
     .unwrap()
   assert_eq(string_field(approval, "status"), Some("awaiting_approval"))
   let pending = object_field(approval, "pending_approval").unwrap()
   let call_id = string_field(pending, "call_id").unwrap()
   let (_, tool_effects) = runtime
     .invoke("tool_approve", {
-      "session_id": session_id.to_json(),
-      "call_id": call_id.to_json(),
+      "session_id": session_id,
+      "call_id": call_id,
       "approved": true,
     })
     .unwrap()
@@ -1424,7 +1421,7 @@ async test "native PreToolUse and PostToolUse receive bounded payloads after app
       .contains("Wrote 26 bytes to native-demo.txt."),
     )
     let (after_write, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_true(native_hook_has_successful_write_result(after_write))
     let display_messages = native_hook_test_array(
@@ -1492,7 +1489,7 @@ async test "native PreToolUse and PostToolUse receive bounded payloads after app
       @async.protect_from_cancel(() => ignore(reopened.close()))
     })
     let (restored, _) = reopened
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_true(native_hook_has_successful_write_result(restored))
     assert_true(
@@ -1601,7 +1598,7 @@ async test "PostToolUse contexts reach a real follow-up request and survive rece
     let session_id = "native-hook-context-http"
     let (_, create_effects) = runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "PostToolUse context",
       })
       .unwrap()
@@ -1652,8 +1649,8 @@ async test "PostToolUse contexts reach a real follow-up request and survive rece
         ["hook one", "hook two"],
       )
     }
-    let last_tool_result_index : Ref[Int] = Ref(-1)
-    let first_context_index : Ref[Int] = Ref(-1)
+    let last_tool_result_index : Ref[Int32] = Ref(-1)
+    let first_context_index : Ref[Int32] = Ref(-1)
     for index, message in provider_messages {
       if string_field(message, "role") == Some("tool") {
         last_tool_result_index.val = index
@@ -1669,7 +1666,7 @@ async test "PostToolUse contexts reach a real follow-up request and survive rece
     let receipt = runtime.find_receipt(command_id, identity).unwrap().unwrap()
     assert_eq(string_field(receipt, "status"), Some("completed"))
     let (completed, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_true(
       native_hook_test_array(
@@ -1712,7 +1709,7 @@ async test "PostToolUse contexts reach a real follow-up request and survive rece
     assert_true(replay_effects.is_empty())
     assert_false(replay_started)
     let (restored_session, _) = reopened
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_true(
       native_hook_test_array(
@@ -1744,7 +1741,7 @@ async test "native runtime without hooks keeps the original tool event stream" {
     let (_, trailing) = runtime.run_tool_effect(effect).unwrap()
     assert_eq(trailing.length(), 1)
     let (session, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_true(native_hook_has_successful_write_result(session))
     assert_false(session.stringify().contains("effect-known"))
@@ -1800,7 +1797,7 @@ async test "SessionStart context is claimed before UserPromptSubmit and prompt c
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "SessionStart order",
       })
       .unwrap(),
@@ -1844,7 +1841,7 @@ async test "SessionStart context is claimed before UserPromptSubmit and prompt c
       Some("from SessionStartOriginal user request"),
     )
     let (denied_session, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(int_field(denied_session, "turn_id"), Some(0))
     assert_true(
@@ -1901,7 +1898,7 @@ async test "SessionStart context is claimed before UserPromptSubmit and prompt c
     ignore(
       runtime
       .invoke("session_create", {
-        "id": accepted_session_id.to_json(),
+        "id": accepted_session_id,
         "title": "SessionStart accepted order",
       })
       .unwrap(),
@@ -1993,7 +1990,7 @@ async test "SessionStart uses resume for sessions restored when the runtime open
     ignore(
       initial
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "SessionStart resume",
       })
       .unwrap(),
@@ -2021,7 +2018,7 @@ async test "SessionStart uses resume for sessions restored when the runtime open
     assert_false(@fs.exists(workspace + "/session-start-payloads.jsonl"))
     let (_, effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
+        "session_id": session_id,
         "prompt": "Continue the restored session.",
       })
       .unwrap()
@@ -2081,7 +2078,7 @@ async test "UserPromptSubmit injects grouped source context before provider admi
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "Prompt hook context",
       })
       .unwrap(),
@@ -2170,7 +2167,7 @@ async test "UserPromptSubmit injects grouped source context before provider admi
     assert_false(replay_started)
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
     let (completed_session, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(native_hook_context_messages(completed_session).length(), 1)
     assert_true(native_hook_has_context_event(completed_session))
@@ -2347,15 +2344,15 @@ async test "PostToolUse context runs UserPromptSubmit before root follow-up and 
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "PostToolUse prompt hook",
       })
       .unwrap(),
     )
     let (_, initial_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
-        "prompt": "Read target.txt and report its contents.".to_json(),
+        "session_id": session_id,
+        "prompt": "Read target.txt and report its contents.",
       })
       .unwrap()
     let initial_provider = native_effect_by_kind(
@@ -2471,15 +2468,15 @@ async test "astral PostToolUse prompt denial is bounded, durable, and reusable" 
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "PostToolUse astral denial",
       })
       .unwrap(),
     )
     let (_, initial_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
-        "prompt": "Read target.txt and report its contents.".to_json(),
+        "session_id": session_id,
+        "prompt": "Read target.txt and report its contents.",
       })
       .unwrap()
     let initial_provider = native_effect_by_kind(
@@ -2508,7 +2505,7 @@ async test "astral PostToolUse prompt denial is bounded, durable, and reusable" 
     assert_eq(@fs.read_file(workspace + "/post-count.txt").text(), "p")
 
     let (blocked, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(string_field(blocked, "status"), Some("failed"))
     assert_eq(int_field(blocked, "turn_id"), Some(1))
@@ -2588,7 +2585,7 @@ async test "astral PostToolUse prompt denial is bounded, durable, and reusable" 
       @async.protect_from_cancel(() => ignore(reopened.close()))
     })
     let (restored, restored_effects) = reopened
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(string_field(restored, "status"), Some("failed"))
     assert_true(restored_effects.is_empty())
@@ -2603,14 +2600,14 @@ async test "astral PostToolUse prompt denial is bounded, durable, and reusable" 
     )
     let (_, fresh_effects) = reopened
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
-        "prompt": "Fresh prompt after the PostToolUse denial".to_json(),
+        "session_id": session_id,
+        "prompt": "Fresh prompt after the PostToolUse denial",
       })
       .unwrap()
     assert_eq(fresh_effects.length(), 1)
     assert_true(fresh_effects[0].kind() == @engine.EffectType::Provider)
     let (cancelled, cancel_effects) = reopened
-      .invoke("session_cancel", { "session_id": session_id.to_json() })
+      .invoke("session_cancel", { "session_id": session_id })
       .unwrap()
     assert_eq(string_field(cancelled, "status"), Some("cancelled"))
     assert_true(cancel_effects.is_empty())
@@ -2929,15 +2926,15 @@ async test "UserPromptSubmit trusted context reaches direct and MCP session_send
     ignore(
       runtime
       .invoke("session_create", {
-        "id": direct_session.to_json(),
+        "id": direct_session,
         "title": "Direct prompt context",
       })
       .unwrap(),
     )
     let (direct_result, direct_effects) = runtime
       .invoke("session_send", {
-        "session_id": direct_session.to_json(),
-        "prompt": "direct context boundary".to_json(),
+        "session_id": direct_session,
+        "prompt": "direct context boundary",
       })
       .unwrap()
     assert_eq(native_hook_context_messages(direct_result).length(), 1)
@@ -2957,14 +2954,14 @@ async test "UserPromptSubmit trusted context reaches direct and MCP session_send
     )
     assert_eq(
       native_hook_test_required_field(direct_messages[1], "source"),
-      Json::object({ "kind": "hooks-claude-code".to_json() }),
+      Json::object({ "kind": "hooks-claude-code" }),
     )
 
     let mcp_session = "prompt-hook-mcp-context"
     ignore(
       runtime
       .invoke("session_create", {
-        "id": mcp_session.to_json(),
+        "id": mcp_session,
         "title": "MCP prompt context",
       })
       .unwrap(),
@@ -2975,11 +2972,9 @@ async test "UserPromptSubmit trusted context reaches direct and MCP session_send
           "prompt-hook-mcp-context-send",
           "session_send",
           {
-            "session_id": mcp_session.to_json(),
-            "prompt": "MCP context boundary".to_json(),
-            "additional_contexts": Json::array([
-              "forged external context".to_json(),
-            ]),
+            "session_id": mcp_session,
+            "prompt": "MCP context boundary",
+            "additional_contexts": Json::array(["forged external context"]),
           },
         ),
         group,
@@ -3033,7 +3028,7 @@ async test "UserPromptSubmit trusted context reaches direct and MCP session_send
     )
     assert_eq(
       native_hook_test_required_field(context_event, "source"),
-      Json::object({ "kind": "hooks-claude-code".to_json() }),
+      Json::object({ "kind": "hooks-claude-code" }),
     )
     assert_eq(
       native_hook_test_array(
@@ -3077,7 +3072,7 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "Prompt hook denial",
       })
       .unwrap(),
@@ -3105,7 +3100,7 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
     assert_true(control is None)
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
     let (unchanged, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(int_field(unchanged, "turn_id"), Some(0))
 
@@ -3142,7 +3137,7 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
     assert_true(
       runtime.invoke("session_send", {
-        "session_id": session_id.to_json(),
+        "session_id": session_id,
         "prompt": Json::string("p".repeat(16385)),
         "additional_contexts": Json::array([Json::string("forged")]),
       })
@@ -3151,9 +3146,9 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
     assert_true(
       runtime.invoke("session_send", {
-        "session_id": session_id.to_json(),
-        "prompt": "closed schema preflight".to_json(),
-        "unexpected": true.to_json(),
+        "session_id": session_id,
+        "prompt": "closed schema preflight",
+        "unexpected": true,
       })
       is Err(_),
     )
@@ -3162,9 +3157,9 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
     let invalid_mcp = runtime
       .mcp_handle(
         native_fixture_mcp_line("prompt-hook-invalid-args", "session_send", {
-          "session_id": session_id.to_json(),
-          "prompt": "closed MCP schema preflight".to_json(),
-          "unexpected": true.to_json(),
+          "session_id": session_id,
+          "prompt": "closed MCP schema preflight",
+          "unexpected": true,
         }),
         group,
       )
@@ -3175,8 +3170,8 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
     let bad_jsonrpc_fields = native_hook_test_fields(
       @json.parse(
         native_fixture_mcp_line("prompt-hook-bad-jsonrpc", "session_send", {
-          "session_id": session_id.to_json(),
-          "prompt": "bad jsonrpc must not run hooks".to_json(),
+          "session_id": session_id,
+          "prompt": "bad jsonrpc must not run hooks",
         }),
       ),
     )
@@ -3192,8 +3187,8 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
           "prompt-hook-missing-metadata",
           "session_send",
           {
-            "session_id": session_id.to_json(),
-            "prompt": "missing metadata must not run hooks".to_json(),
+            "session_id": session_id,
+            "prompt": "missing metadata must not run hooks",
           },
         ),
       ),
@@ -3214,10 +3209,7 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
     let duplicate_id = native_fixture_mcp_line(
       "prompt-hook-duplicate-id",
       "session_send",
-      {
-        "session_id": session_id.to_json(),
-        "prompt": "duplicate id must not run hooks".to_json(),
-      },
+      { "session_id": session_id, "prompt": "duplicate id must not run hooks" },
     ).replace(
       old="\"id\":\"prompt-hook-duplicate-id\"",
       new="\"id\":\"prompt-hook-duplicate-id\",\"id\":\"prompt-hook-duplicate-id\"",
@@ -3229,13 +3221,13 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
 
     let notification = Json::object({
-      "jsonrpc": "2.0".to_json(),
-      "method": "tools/call".to_json(),
+      "jsonrpc": "2.0",
+      "method": "tools/call",
       "params": Json::object({
-        "name": "session_send".to_json(),
+        "name": "session_send",
         "arguments": Json::object({
-          "session_id": session_id.to_json(),
-          "prompt": "notification must not execute hooks".to_json(),
+          "session_id": session_id,
+          "prompt": "notification must not execute hooks",
         }),
       }),
     }).stringify()
@@ -3278,7 +3270,7 @@ async test "MCP session_cancel interrupts a running UserPromptSubmit command" {
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "Prompt hook MCP cancellation",
       })
       .unwrap(),
@@ -3287,7 +3279,7 @@ async test "MCP session_cancel interrupts a running UserPromptSubmit command" {
       "prompt-hook-mcp-send",
       "session_send",
       {
-        "session_id": session_id.to_json(),
+        "session_id": session_id,
         "prompt": "wait for cancellation before provider admission",
       },
     )
@@ -3309,7 +3301,7 @@ async test "MCP session_cancel interrupts a running UserPromptSubmit command" {
     let cancel_line = native_fixture_mcp_line(
       "prompt-hook-mcp-cancel",
       "session_cancel",
-      { "session_id": session_id.to_json() },
+      { "session_id": session_id },
     )
     let cancel_response = match
       @async.with_timeout_opt(500, async fn() {
@@ -3338,7 +3330,7 @@ async test "MCP session_cancel interrupts a running UserPromptSubmit command" {
     )
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
     let (session, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(string_field(session, "status"), Some("cancelled"))
     assert_eq(int_field(session, "turn_id"), Some(0))
@@ -3382,7 +3374,7 @@ async test "direct session_cancel interrupts a running UserPromptSubmit command"
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "Prompt hook direct cancellation",
       })
       .unwrap(),
@@ -3390,8 +3382,8 @@ async test "direct session_cancel interrupts a running UserPromptSubmit command"
     let send_task = group.spawn(
       async fn() {
         runtime.invoke("session_send", {
-          "session_id": session_id.to_json(),
-          "prompt": "direct-cancel while prompt hook waits".to_json(),
+          "session_id": session_id,
+          "prompt": "direct-cancel while prompt hook waits",
         })
       },
       no_wait=true,
@@ -3409,7 +3401,7 @@ async test "direct session_cancel interrupts a running UserPromptSubmit command"
 
     let (_, cancel_effects) = match
       @async.with_timeout_opt(500, async fn() {
-        runtime.invoke("session_cancel", { "session_id": session_id.to_json() })
+        runtime.invoke("session_cancel", { "session_id": session_id })
       }) {
       Some(Ok(value)) => value
       Some(Err(error)) => fail(error)
@@ -3425,7 +3417,7 @@ async test "direct session_cancel interrupts a running UserPromptSubmit command"
     assert_true(send_result is Err(_))
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
     let (session, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(string_field(session, "status"), Some("cancelled"))
     assert_eq(int_field(session, "turn_id"), Some(0))
@@ -3435,8 +3427,8 @@ async test "direct session_cancel interrupts a running UserPromptSubmit command"
 
     let (_, follow_up_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
-        "prompt": "fresh direct send after cancellation".to_json(),
+        "session_id": session_id,
+        "prompt": "fresh direct send after cancellation",
       })
       .unwrap()
     assert_eq(follow_up_effects.length(), 1)
@@ -3471,7 +3463,7 @@ async test "remote UserPromptSubmit owner cancellation settles the receipt witho
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "Remote prompt hook owner cancellation",
       })
       .unwrap(),
@@ -3485,7 +3477,7 @@ async test "remote UserPromptSubmit owner cancellation settles the receipt witho
       runtime.state.workspace_id,
       session_id,
       command_id,
-      { "prompt": "remote-owner cancellation before admission".to_json() },
+      { "prompt": "remote-owner cancellation before admission" },
     )
     let send_task = group.spawn(
       async fn() { runtime.accept_remote_command(send, identity) },
@@ -3521,7 +3513,7 @@ async test "remote UserPromptSubmit owner cancellation settles the receipt witho
       runtime.state.workspace_id,
       session_id,
       command_id,
-      { "prompt": "remote-owner cancellation before admission".to_json() },
+      { "prompt": "remote-owner cancellation before admission" },
     )
     let (replayed, effects, started, control) = runtime
       .accept_remote_command(replay, identity)
@@ -3534,8 +3526,8 @@ async test "remote UserPromptSubmit owner cancellation settles the receipt witho
 
     let (_, follow_up_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
-        "prompt": "fresh send after remote owner cleanup".to_json(),
+        "session_id": session_id,
+        "prompt": "fresh send after remote owner cleanup",
       })
       .unwrap()
     assert_eq(follow_up_effects.length(), 1)
@@ -3577,7 +3569,7 @@ async test "remote session_cancel rejects a running UserPromptSubmit prompt" {
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "Remote prompt hook cancellation",
       })
       .unwrap(),
@@ -3591,7 +3583,7 @@ async test "remote session_cancel rejects a running UserPromptSubmit prompt" {
       runtime.state.workspace_id,
       session_id,
       command_id,
-      { "prompt": "remote explicit cancellation before admission".to_json() },
+      { "prompt": "remote explicit cancellation before admission" },
     )
     let send_task = group.spawn(
       async fn() { runtime.accept_remote_command(send, identity).unwrap() },
@@ -3655,7 +3647,7 @@ async test "remote session_cancel rejects a running UserPromptSubmit prompt" {
       runtime.state.workspace_id,
       session_id,
       command_id,
-      { "prompt": "remote explicit cancellation before admission".to_json() },
+      { "prompt": "remote explicit cancellation before admission" },
     )
     let (replayed, replay_effects, replay_started, replay_control) = runtime
       .accept_remote_command(replay, identity)
@@ -3668,8 +3660,8 @@ async test "remote session_cancel rejects a running UserPromptSubmit prompt" {
 
     let (_, follow_up_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
-        "prompt": "fresh send after remote explicit cancellation".to_json(),
+        "session_id": session_id,
+        "prompt": "fresh send after remote explicit cancellation",
       })
       .unwrap()
     assert_eq(follow_up_effects.length(), 1)
@@ -3704,7 +3696,7 @@ async test "UserPromptSubmit owner cancellation cleans the process and frees the
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "Prompt hook owner cancellation",
       })
       .unwrap(),
@@ -3712,8 +3704,8 @@ async test "UserPromptSubmit owner cancellation cleans the process and frees the
     let send_task = group.spawn(
       async fn() {
         runtime.invoke("session_send", {
-          "session_id": session_id.to_json(),
-          "prompt": "cancel-owner before provider admission".to_json(),
+          "session_id": session_id,
+          "prompt": "cancel-owner before provider admission",
         })
       },
       no_wait=true,
@@ -3737,21 +3729,21 @@ async test "UserPromptSubmit owner cancellation cleans the process and frees the
     assert_false(@fs.exists(workspace + "/hook-child-alive"))
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
     let (unchanged, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(int_field(unchanged, "turn_id"), Some(0))
 
     let (_, effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
-        "prompt": "fresh owner send after cleanup".to_json(),
+        "session_id": session_id,
+        "prompt": "fresh owner send after cleanup",
       })
       .unwrap()
     assert_eq(effects.length(), 1)
     assert_true(effects[0].kind() == @engine.EffectType::Provider)
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "xy")
     let (session, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(int_field(session, "turn_id"), Some(1))
   }
@@ -3823,7 +3815,7 @@ async test "native owner task cancellation during PreToolUse cannot dispatch a t
     assert_false(@fs.exists(workspace + "/hook-post-count.txt"))
     let session_id = "hook-pre-cancel-session"
     let (cancelled, cancel_effects) = runtime
-      .invoke("session_cancel", { "session_id": session_id.to_json() })
+      .invoke("session_cancel", { "session_id": session_id })
       .unwrap()
     assert_eq(string_field(cancelled, "status"), Some("cancelled"))
     assert_true(cancel_effects.is_empty())
@@ -3843,7 +3835,7 @@ async test "native owner task cancellation during PreToolUse cannot dispatch a t
       @async.protect_from_cancel(() => ignore(reopened.close()))
     })
     let (recovered, _) = reopened
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(string_field(recovered, "status"), Some("cancelled"))
     assert_eq(
@@ -3896,15 +3888,12 @@ async test "native pending PostToolUse result cannot reorder parallel reads" {
     })
     let session_id = "hook-read-order-session"
     runtime
-    .invoke("session_create", {
-      "id": session_id.to_json(),
-      "title": "Hook read order",
-    })
+    .invoke("session_create", { "id": session_id, "title": "Hook read order" })
     .unwrap()
     |> ignore
     let (_, provider_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
+        "session_id": session_id,
         "prompt": "Read two files",
       })
       .unwrap()
@@ -3983,7 +3972,7 @@ async test "native pending PostToolUse result cannot reorder parallel reads" {
     let b_completion = @async.with_timeout_opt(10000, () => b_finished.acquire())
     if b_completion is None {
       let (latest, _) = runtime
-        .invoke("session_get", { "session_id": session_id.to_json() })
+        .invoke("session_get", { "session_id": session_id })
         .unwrap()
       let b_known = native_hook_has_event(
         latest,
@@ -4016,7 +4005,7 @@ async test "native pending PostToolUse result cannot reorder parallel reads" {
       )
     }
     let (during_a, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_true(@fs.exists(workspace + "/hook-b-finished"))
     assert_true(
@@ -4032,7 +4021,7 @@ async test "native pending PostToolUse result cannot reorder parallel reads" {
     assert_eq(task.wait(), Ok(()))
     runtime.scheduler.finish(control)
     let (finished, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     let invoked_events = native_hook_diagnostic_events(finished, "hook/invoked")
     let result_events = native_hook_diagnostic_events(finished, "hook/result")
@@ -4044,10 +4033,7 @@ async test "native pending PostToolUse result cannot reorder parallel reads" {
         native_hook_diagnostic_field(result, "handlerId") == Some(handler_id)
       })
       assert_eq(paired.length(), 1)
-      assert_eq(
-        native_hook_diagnostic_field(invoked, "matcher"),
-        Some("read".to_json()),
-      )
+      assert_eq(native_hook_diagnostic_field(invoked, "matcher"), Some("read"))
       assert_true(
         int_field(paired[0], "seq").unwrap() >
         int_field(invoked, "seq").unwrap(),
@@ -4096,10 +4082,7 @@ async test "native PreToolUse denial prevents tool work and receipt replay does 
     })
     let session_id = "hook-deny-session"
     runtime
-    .invoke("session_create", {
-      "id": session_id.to_json(),
-      "title": "Hook denial",
-    })
+    .invoke("session_create", { "id": session_id, "title": "Hook denial" })
     .unwrap()
     |> ignore
     let command_time = native_auth_now().to_int64() * 1000L
@@ -4125,7 +4108,7 @@ async test "native PreToolUse denial prevents tool work and receipt replay does 
       control=send_control,
     )
     let (approval, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     let pending = object_field(approval, "pending_approval").unwrap()
     let call_id = string_field(pending, "call_id").unwrap()
@@ -4156,7 +4139,7 @@ async test "native PreToolUse denial prevents tool work and receipt replay does 
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
     assert_false(@fs.exists(workspace + "/native-demo.txt"))
     let (denied_session, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_true(denied_session.stringify().contains("fixture denial"))
     let invoked_events = native_hook_diagnostic_events(
@@ -4176,20 +4159,14 @@ async test "native PreToolUse denial prevents tool work and receipt replay does 
     )
     assert_eq(
       native_hook_diagnostic_field(invoked, "point"),
-      Some("PreToolUse".to_json()),
+      Some("PreToolUse"),
     )
     assert_eq(
       native_hook_diagnostic_field(invoked, "dialect"),
-      Some("claude-code".to_json()),
+      Some("claude-code"),
     )
-    assert_eq(
-      native_hook_diagnostic_field(invoked, "matcher"),
-      Some("write".to_json()),
-    )
-    assert_eq(
-      native_hook_diagnostic_field(result, "decision"),
-      Some("block".to_json()),
-    )
+    assert_eq(native_hook_diagnostic_field(invoked, "matcher"), Some("write"))
+    assert_eq(native_hook_diagnostic_field(result, "decision"), Some("block"))
     assert_eq(
       native_hook_diagnostic_field(result, "exitCode"),
       Some(Json::number(0.0)),
@@ -4259,29 +4236,23 @@ async test "native hook diagnostics record timeout, signal, and output overflow 
     let hooks = Json::object({
       "PreToolUse": Json::array([
         Json::object({
-          "matcher": "read".to_json(),
+          "matcher": "read",
           "hooks": Json::array([
             Json::object({
-              "type": "command".to_json(),
-              "command": "printf 'failure note' >&2; exit 7".to_json(),
+              "type": "command",
+              "command": "printf 'failure note' >&2; exit 7",
             }),
             Json::object({
-              "type": "command".to_json(),
-              "command": "head -c 17000 /dev/zero".to_json(),
+              "type": "command",
+              "command": "head -c 17000 /dev/zero",
             }),
             Json::object({
-              "type": "command".to_json(),
-              "command": "sleep 5".to_json(),
+              "type": "command",
+              "command": "sleep 5",
               "timeout": Json::number(1.0),
             }),
-            Json::object({
-              "type": "command".to_json(),
-              "command": "kill -KILL $$".to_json(),
-            }),
-            Json::object({
-              "type": "command".to_json(),
-              "command": "exit 143".to_json(),
-            }),
+            Json::object({ "type": "command", "command": "kill -KILL $$" }),
+            Json::object({ "type": "command", "command": "exit 143" }),
           ]),
         }),
       ]),
@@ -4301,14 +4272,14 @@ async test "native hook diagnostics record timeout, signal, and output overflow 
     ignore(
       runtime
       .invoke("session_create", {
-        "id": session_id.to_json(),
+        "id": session_id,
         "title": "Hook diagnostic failures",
       })
       .unwrap(),
     )
     let (_, provider_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
+        "session_id": session_id,
         "prompt": "Read the fixture file",
       })
       .unwrap()
@@ -4334,7 +4305,7 @@ async test "native hook diagnostics record timeout, signal, and output overflow 
     let (_, next_effects) = runtime.run_tool_effect(tool).unwrap()
     assert_eq(next_effects.length(), 1)
     let (session, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     let invoked = native_hook_diagnostic_events(session, "hook/invoked")
     let results = native_hook_diagnostic_events(session, "hook/result")
@@ -4347,10 +4318,7 @@ async test "native hook diagnostics record timeout, signal, and output overflow 
         native_hook_diagnostic_field(invocation, "handlerId"),
         native_hook_diagnostic_field(result, "handlerId"),
       )
-      assert_eq(
-        native_hook_diagnostic_field(result, "decision"),
-        Some("pass".to_json()),
-      )
+      assert_eq(native_hook_diagnostic_field(result, "decision"), Some("pass"))
       if index == 0 {
         assert_eq(
           native_hook_diagnostic_field(result, "exitCode"),
@@ -4358,7 +4326,7 @@ async test "native hook diagnostics record timeout, signal, and output overflow 
         )
         assert_eq(
           native_hook_diagnostic_field(result, "stderrSummary"),
-          Some("failure note".to_json()),
+          Some("failure note"),
         )
       } else if index == 1 {
         assert_eq(
@@ -4372,9 +4340,7 @@ async test "native hook diagnostics record timeout, signal, and output overflow 
         assert_true(native_hook_diagnostic_field(result, "exitCode") is None)
         assert_eq(
           native_hook_diagnostic_field(result, "stderrSummary"),
-          Some(
-            "hook timed out, was cancelled, or could not be started".to_json(),
-          ),
+          Some("hook timed out, was cancelled, or could not be started"),
         )
       } else if index == 3 {
         assert_true(native_hook_diagnostic_field(result, "exitCode") is None)
@@ -4423,10 +4389,7 @@ async test "native session cancellation checkpoints the completed tool result an
     })
     let session_id = "hook-post-cancel-session"
     runtime
-    .invoke("session_create", {
-      "id": session_id.to_json(),
-      "title": "Hook cancellation",
-    })
+    .invoke("session_create", { "id": session_id, "title": "Hook cancellation" })
     .unwrap()
     |> ignore
     let command_time = native_auth_now().to_int64() * 1000L
@@ -4453,7 +4416,7 @@ async test "native session cancellation checkpoints the completed tool result an
       control=send_control,
     )
     let (approval, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     let pending = object_field(approval, "pending_approval").unwrap()
     let call_id = string_field(pending, "call_id").unwrap()
@@ -4536,7 +4499,7 @@ async test "native session cancellation checkpoints the completed tool result an
       "durable native tool result",
     )
     let (session, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_true(native_hook_has_successful_write_result(session))
     assert_true(native_hook_context_messages(session).is_empty())
@@ -4585,7 +4548,7 @@ async test "native session cancellation checkpoints the completed tool result an
     )
     assert_eq(@fs.read_file(workspace + "/hook-post-count.txt").text(), "x")
     let (restored, _) = reopened
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_true(native_hook_has_successful_write_result(restored))
     assert_true(native_hook_context_messages(restored).is_empty())
@@ -4641,14 +4604,14 @@ async test "native oversized known outcome closes before PostToolUse runs" {
     let session_id = "hook-outcome-capacity-session"
     runtime
     .invoke("session_create", {
-      "id": session_id.to_json(),
+      "id": session_id,
       "title": "Hook outcome capacity",
     })
     .unwrap()
     |> ignore
     let (_, first_provider_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
+        "session_id": session_id,
         "prompt": "Build up bounded history",
       })
       .unwrap()
@@ -4662,7 +4625,7 @@ async test "native oversized known outcome closes before PostToolUse runs" {
 
     let (_, second_provider_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
+        "session_id": session_id,
         "prompt": "q".repeat(16000),
       })
       .unwrap()
@@ -4678,7 +4641,7 @@ async test "native oversized known outcome closes before PostToolUse runs" {
 
     let (_, final_provider_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
+        "session_id": session_id,
         "prompt": "Read the large file",
       })
       .unwrap()
@@ -4711,7 +4674,7 @@ async test "native oversized known outcome closes before PostToolUse runs" {
     )
     assert_false(@fs.exists(workspace + "/hook-post-count.txt"))
     let (closed, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(string_field(closed, "status"), Some("failed"))
     assert_false(
@@ -4773,7 +4736,7 @@ async test "Stop denial stages a same-turn UserPromptSubmit continuation before 
     assert_true(runtime.run_effects(provider_effects, command_id, 1) is Ok(_))
 
     let (session, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(string_field(session, "status"), Some("completed"))
     assert_eq(int_field(session, "turn_id"), Some(1))
@@ -4792,7 +4755,7 @@ async test "Stop denial stages a same-turn UserPromptSubmit continuation before 
     assert_eq(
       diagnostic_invocations
       .filter(event => {
-        native_hook_diagnostic_field(event, "point") == Some("Stop".to_json())
+        native_hook_diagnostic_field(event, "point") == Some("Stop")
       })
       .length(),
       2,
@@ -4800,8 +4763,7 @@ async test "Stop denial stages a same-turn UserPromptSubmit continuation before 
     assert_eq(
       diagnostic_invocations
       .filter(event => {
-        native_hook_diagnostic_field(event, "point") ==
-        Some("UserPromptSubmit".to_json())
+        native_hook_diagnostic_field(event, "point") == Some("UserPromptSubmit")
       })
       .length(),
       1,
@@ -4843,7 +4805,7 @@ async test "Stop denial stages a same-turn UserPromptSubmit continuation before 
     )
     let stop_payloads = @fs.read_file(workspace + "/stop-payloads.jsonl").text()
     assert_eq(
-      stop_payloads.split("\n").filter(line => !line.is_empty()).length(),
+      stop_payloads.split("\n").filter(line => !line.is_empty()).count(),
       2,
     )
     for line in stop_payloads.split("\n") {
@@ -4871,7 +4833,7 @@ async test "Stop denial stages a same-turn UserPromptSubmit continuation before 
     }
     let prompt_payloads = @fs.read_file(workspace + "/prompt-payloads.jsonl").text()
     assert_eq(
-      prompt_payloads.split("\n").filter(line => !line.is_empty()).length(),
+      prompt_payloads.split("\n").filter(line => !line.is_empty()).count(),
       2,
     )
     assert_true(prompt_payloads.contains("continue after review"))
@@ -4997,7 +4959,7 @@ async test "Stop children preserve the provider job owner through cancellation a
     )
     let (_, provider_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
+        "session_id": session_id,
         "prompt": "Complete, then continue after a Stop denial.",
       })
       .unwrap()
@@ -5029,7 +4991,7 @@ async test "Stop children preserve the provider job owner through cancellation a
     assert_eq(@fs.read_file(workspace + "/prompt-hook-count").text(), "xx")
     assert_false(run_done.val)
     let (_, cancel_effects) = runtime
-      .invoke("session_cancel", { "session_id": session_id.to_json() })
+      .invoke("session_cancel", { "session_id": session_id })
       .unwrap()
     assert_true(cancel_effects.is_empty())
     let fresh = runtime.scheduler
@@ -5103,7 +5065,7 @@ async test "oversized astral UserPromptSubmit denial closes the continuation and
     assert_true(runtime.run_effects(provider_effects, command_id, 1) is Ok(_))
 
     let (blocked, _) = runtime
-      .invoke("session_get", { "session_id": session_id.to_json() })
+      .invoke("session_get", { "session_id": session_id })
       .unwrap()
     assert_eq(string_field(blocked, "status"), Some("failed"))
     assert_eq(int_field(blocked, "turn_id"), Some(1))
@@ -5161,19 +5123,19 @@ async test "oversized astral UserPromptSubmit denial closes the continuation and
       .text()
       .split("\n")
       .filter(line => !line.is_empty())
-      .length(),
+      .count(),
       2,
     )
 
     let (_, fresh_effects) = runtime
       .invoke("session_send", {
-        "session_id": session_id.to_json(),
+        "session_id": session_id,
         "prompt": "Fresh prompt after the blocked continuation",
       })
       .unwrap()
     assert_eq(fresh_effects.length(), 1)
     let (cancelled, cancel_effects) = runtime
-      .invoke("session_cancel", { "session_id": session_id.to_json() })
+      .invoke("session_cancel", { "session_id": session_id })
       .unwrap()
     assert_eq(string_field(cancelled, "status"), Some("cancelled"))
     assert_true(cancel_effects.is_empty())

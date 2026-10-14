@@ -28,21 +28,21 @@ priv struct ResponsesFunctionCall {
   name : String
   is_custom : Bool
   arguments : StringBuilder
-  mut arguments_units : Int
+  mut arguments_units : Int32
   mut settled : Bool
 }
 
 ///|
 struct ResponsesStreamDecoder {
   line : StringBuilder
-  mut line_units : Int
+  mut line_units : Int32
   data : StringBuilder
-  mut data_units : Int
+  mut data_units : Int32
   mut has_data : Bool
   mut event : String
   mut ignore_lf : Bool
   mut at_start : Bool
-  mut total_units : Int
+  mut total_units : Int32
   mut failure : String?
   mut closed : Bool
   mut terminal : Bool
@@ -53,15 +53,15 @@ struct ResponsesStreamDecoder {
   mut response_id : String?
   output_items : Map[String, String]
   output_item_order : Array[String]
-  output_indices : Map[String, Int]
+  output_indices : Map[String, Int32]
   completed_output_items : Map[String, Json]
   calls : Map[String, ResponsesFunctionCall]
   call_ids : Map[String, Bool]
   call_order : Array[String]
   content : StringBuilder
-  mut content_units : Int
+  mut content_units : Int32
   reasoning : StringBuilder
-  mut reasoning_units : Int
+  mut reasoning_units : Int32
   pending_events : Array[ResponsesEvent]
 }
 

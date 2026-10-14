@@ -1,20 +1,20 @@
 ///|
-const NATIVE_SKILL_FILE_LIMIT : Int = 65536
+const NATIVE_SKILL_FILE_LIMIT : Int32 = 65536
 
 ///|
-const NATIVE_SKILL_BODY_LIMIT : Int = 60000
+const NATIVE_SKILL_BODY_LIMIT : Int32 = 60000
 
 ///|
-const NATIVE_SKILL_DESCRIPTION_LIMIT : Int = 4096
+const NATIVE_SKILL_DESCRIPTION_LIMIT : Int32 = 4096
 
 ///|
-const NATIVE_SKILL_CATALOG_LIMIT : Int = 64
+const NATIVE_SKILL_CATALOG_LIMIT : Int32 = 64
 
 ///|
-const NATIVE_SKILL_MODEL_CATALOG_LIMIT : Int = 16
+const NATIVE_SKILL_MODEL_CATALOG_LIMIT : Int32 = 16
 
 ///|
-const NATIVE_SKILL_PATH_LIMIT : Int = 4096
+const NATIVE_SKILL_PATH_LIMIT : Int32 = 4096
 
 ///|
 priv struct NativeSkill {
@@ -276,9 +276,9 @@ fn native_skill_numeric_scalar(value : String) -> Bool {
 ///|
 fn native_skill_scan_numeric_digits(
   chars : Array[Char],
-  start : Int,
-  radix : Int,
-) -> (Int, Int, Bool) {
+  start : Int32,
+  radix : Int32,
+) -> (Int32, Int32, Bool) {
   let mut index = start
   let mut count = 0
   let mut previous_digit = false
@@ -305,7 +305,7 @@ fn native_skill_scan_numeric_digits(
 }
 
 ///|
-fn native_skill_numeric_digit(character : Char, radix : Int) -> Bool {
+fn native_skill_numeric_digit(character : Char, radix : Int32) -> Bool {
   if character >= '0' && character <= '9' {
     character.to_int() - '0'.to_int() < radix
   } else if radix > 10 && character >= 'a' && character <= 'f' {
@@ -425,7 +425,7 @@ fn native_skill_parse(
 }
 
 ///|
-fn native_skill_source_for_root(index : Int) -> String {
+fn native_skill_source_for_root(index : Int32) -> String {
   if index == 0 {
     "project-dsh"
   } else if index == 1 {

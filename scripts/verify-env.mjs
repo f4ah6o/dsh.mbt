@@ -10,7 +10,7 @@ const dependencyPaths = ['vendor/gpui', 'vendor/hotpath', 'tools/turtles'];
 const yamiKumoPackage = 'f4ah6o/yami_kumo';
 const yamiKumoVersion = '0.1.0';
 // This is the build/runner release distributed with .moonbit-version.
-const expectedBuildVersion = '0.1.20260920';
+const expectedBuildVersion = '0.1.20261012';
 
 export function capture(command, args, cwd = projectRoot) {
   const result = spawnSync(command, args, {

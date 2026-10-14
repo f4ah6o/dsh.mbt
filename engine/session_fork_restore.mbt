@@ -2,9 +2,9 @@
 fn Session::restore_fork_marker(
   self : Session,
   data : Json,
-  event_index : Int,
-  turn_id : Int,
-  step : Int,
+  event_index : Int32,
+  turn_id : Int32,
+  step : Int32,
   open_turn : Bool,
 ) -> Unit raise EngineError {
   if open_turn ||

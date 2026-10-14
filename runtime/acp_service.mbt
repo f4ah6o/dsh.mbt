@@ -3,7 +3,7 @@ const NATIVE_ACP_AGENT_VERSION : String = "0.1.11"
 
 ///|
 priv struct NativeAcpRpcError {
-  code : Int
+  code : Int32
   message : String
 }
 
@@ -14,8 +14,8 @@ priv struct NativeAcpPendingPermission {
   session_id : String
   native_session_id : String
   call_id : String
-  generation : Int
-  revision : Int
+  generation : Int32
+  revision : Int32
   response : Ref[Json?]
   resolved : Ref[Bool]
   ready : @async.Semaphore
@@ -26,8 +26,8 @@ priv struct NativeAcpSession {
   session_id : String
   native_session_id : String
   event_gate : @async.Mutex
-  mut last_event_seq : Int
-  mut prompt_generation : Int
+  mut last_event_seq : Int32
+  mut prompt_generation : Int32
   mut prompt_active : Bool
   mut resuming : Bool
   mut cancelled : Bool
@@ -83,7 +83,7 @@ priv struct NativeAcpService {
   pending_permissions : Map[String, NativeAcpPendingPermission]
   model_allowlist : Array[String]
   model_config_error : String?
-  mut next_request_id : Int
+  mut next_request_id : Int32
   mut initialized : Bool
   mut closed : Bool
 }
@@ -92,7 +92,7 @@ priv struct NativeAcpService {
 priv struct NativeAcpPreparedPrompt {
   session : NativeAcpSession
   text : String
-  generation : Int
+  generation : Int32
   done : NativeAcpCompletion
 }
 
@@ -744,7 +744,7 @@ async fn NativeAcpService::run_prompt_turn(
         self.runtime,
         Some(session.native_session_id),
         "tool_approve",
-        { "call_id": call_id.to_json(), "approved": approved.to_json() },
+        { "call_id": call_id, "approved": approved },
         Some(revision),
         acp_activity_session_id=session.native_session_id,
       ) {
@@ -991,8 +991,8 @@ async fn NativeAcpService::request_permission(
   session : NativeAcpSession,
   approval : Json,
   call_id : String,
-  revision : Int,
-  generation : Int,
+  revision : Int32,
+  generation : Int32,
 ) -> Result[(NativeAcpPermissionDecision, NativeAcpPendingPermission), String] {
   let id = Json::number(self.next_request_id.to_double())
   let key = native_acp_id_key(id).unwrap()
@@ -1074,7 +1074,7 @@ fn native_acp_permission_matches(
   session : NativeAcpSession,
   pending : NativeAcpPendingPermission,
   state : Json,
-  generation : Int,
+  generation : Int32,
 ) -> Bool {
   if pending.native_session_id != session.native_session_id ||
     pending.session_id != session.session_id ||

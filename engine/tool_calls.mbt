@@ -1,21 +1,21 @@
 ///|
 /// Read-only calls may overlap only within this bounded rolling pool. Writes
 /// and shell effects remain single-call barriers.
-const MAX_PARALLEL_TOOL_EFFECTS : Int = 4
+const MAX_PARALLEL_TOOL_EFFECTS : Int32 = 4
 
 ///|
-const MAX_POST_TOOL_CONTEXTS : Int = 32
+const MAX_POST_TOOL_CONTEXTS : Int32 = 32
 
 ///|
-const MAX_POST_TOOL_CONTEXT_ITEM_LENGTH : Int = 4096
+const MAX_POST_TOOL_CONTEXT_ITEM_LENGTH : Int32 = 4096
 
 ///|
-const MAX_POST_TOOL_CONTEXT_TOTAL_LENGTH : Int = 16384
+const MAX_POST_TOOL_CONTEXT_TOTAL_LENGTH : Int32 = 16384
 
 ///|
 fn hook_context_message(
   contexts : Array[String],
-  source_kind? : String = "hooks-claude-code",
+  source_kind~ : String = "hooks-claude-code",
 ) -> Json {
   let content : Array[Json] = contexts.map(context => {
     Json::object({ "type": Json::string("text"), "text": Json::string(context) })
@@ -36,7 +36,7 @@ fn post_tool_context_message(
 }
 
 ///|
-fn Session::active_tool_effect_count(self : Session) -> Int {
+fn Session::active_tool_effect_count(self : Session) -> Int32 {
   let mut count = 0
   for _, _ in self.active_tool_effects {
     count += 1
@@ -55,7 +55,7 @@ fn Session::call_by_id(self : Session, id : String) -> ToolCall? {
 }
 
 ///|
-fn Session::call_index(self : Session, id : String) -> Int? {
+fn Session::call_index(self : Session, id : String) -> Int32? {
   let mut index = 0
   for call in self.calls {
     if call.id == id {

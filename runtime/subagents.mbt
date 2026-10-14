@@ -1,26 +1,26 @@
 ///|
-const NATIVE_SUBAGENT_MAX_PROMPT_UNITS : Int = 4096
+const NATIVE_SUBAGENT_MAX_PROMPT_UNITS : Int32 = 4096
 
 ///|
-const NATIVE_SUBAGENT_MAX_DESCRIPTION_UNITS : Int = 128
+const NATIVE_SUBAGENT_MAX_DESCRIPTION_UNITS : Int32 = 128
 
 ///|
-const NATIVE_SUBAGENT_MAX_TRANSCRIPT_UNITS : Int = 16384
+const NATIVE_SUBAGENT_MAX_TRANSCRIPT_UNITS : Int32 = 16384
 
 ///|
-const NATIVE_SUBAGENT_MAX_PARENT_TURN_CALLS : Int = 2
+const NATIVE_SUBAGENT_MAX_PARENT_TURN_CALLS : Int32 = 2
 
 ///|
-const NATIVE_SUBAGENT_MAX_CHILD_STEPS : Int = 3
+const NATIVE_SUBAGENT_MAX_CHILD_STEPS : Int32 = 3
 
 ///|
-const NATIVE_SUBAGENT_MAX_CHILD_TOOL_CALLS : Int = 8
+const NATIVE_SUBAGENT_MAX_CHILD_TOOL_CALLS : Int32 = 8
 
 ///|
-const NATIVE_SUBAGENT_MAX_RUN_MS : Int = 90000
+const NATIVE_SUBAGENT_MAX_RUN_MS : Int32 = 90000
 
 ///|
-const NATIVE_SUBAGENT_STOP_HOOK_TIMEOUT_MS : Int = 1000
+const NATIVE_SUBAGENT_STOP_HOOK_TIMEOUT_MS : Int32 = 1000
 
 ///|
 priv struct NativeSubagentProviderBinding {
@@ -49,7 +49,7 @@ fn native_subagent_arguments(request : Json) -> Result[Json, String] {
 }
 
 ///|
-fn native_subagent_calls_in_turn(session : Json) -> Int {
+fn native_subagent_calls_in_turn(session : Json) -> Int32 {
   let turn = int_field(session, "turn_id").unwrap_or(-1)
   let events = match object_field(session, "events") {
     Some(Json::Array(values)) => values
@@ -77,7 +77,7 @@ fn native_subagent_calls_in_turn(session : Json) -> Int {
 }
 
 ///|
-fn native_subagent_child_tool_count(session : Json) -> Int {
+fn native_subagent_child_tool_count(session : Json) -> Int32 {
   let events = match object_field(session, "events") {
     Some(Json::Array(values)) => values
     _ => return 0
@@ -118,12 +118,15 @@ fn native_subagent_terminal_turn(session : Json) -> (String?, String?) {
 }
 
 ///|
-fn native_subagent_bound_text(value : String, maximum : Int) -> String {
+fn native_subagent_bound_text(value : String, maximum : Int32) -> String {
   if native_provider_utf16_units(value) <= maximum {
     return value
   }
   let suffix = "…[truncated]"
-  let content_limit = Int::max(0, maximum - native_provider_utf16_units(suffix))
+  let content_limit = Int32::max(
+    0,
+    maximum - native_provider_utf16_units(suffix),
+  )
   let result = StringBuilder()
   let mut units = 0
   for character in value {
@@ -384,7 +387,7 @@ async fn NativeRuntime::subagent_complete_provider(
   effect : @engine.EngineEffect,
   binding : NativeSubagentProviderBinding,
   child_id : String,
-  control? : NativeJobControl? = None,
+  control~ : NativeJobControl? = None,
 ) -> Result[Unit, String] {
   if effect.kind() != @engine.EffectType::Provider {
     return Err("child effect is not a provider request")
@@ -490,7 +493,7 @@ async fn NativeRuntime::complete_subagent_provider_result(
   effect : @engine.EngineEffect,
   result : Json,
   child_id : String,
-  control? : NativeJobControl? = None,
+  control~ : NativeJobControl? = None,
 ) -> Result[Unit, String] {
   if !self.hooks.has_stop() {
     return child.complete_effect(effect.id(), result).map(_ => ())
@@ -622,7 +625,7 @@ async fn NativeRuntime::start_and_drive_subagent(
   child_id : String,
   prompt : String,
   binding : NativeSubagentProviderBinding,
-  control? : NativeJobControl? = None,
+  control~ : NativeJobControl? = None,
 ) -> Result[Json, String] {
   if control is Some(value) && value.cancelled.val {
     return Err("native command was cancelled")
@@ -650,7 +653,7 @@ async fn NativeRuntime::resolve_subagent_prompt_hook(
   child : @engine.Engine,
   child_id : String,
   checkpoint : @engine.NativeSubagentPromptHookCheckpoint,
-  control? : NativeJobControl? = None,
+  control~ : NativeJobControl? = None,
 ) -> Result[Json, String] {
   if control is Some(value) && value.cancelled.val {
     return Err("native command was cancelled")
@@ -828,7 +831,7 @@ async fn NativeRuntime::drive_subagent(
   child : @engine.Engine,
   child_id : String,
   binding : NativeSubagentProviderBinding,
-  control? : NativeJobControl? = None,
+  control~ : NativeJobControl? = None,
 ) -> Result[Json, String] {
   for ;; {
     if control is Some(value) && value.cancelled.val {
@@ -891,8 +894,8 @@ async fn NativeRuntime::drive_subagent(
 async fn NativeRuntime::run_subagent_tool(
   self : NativeRuntime,
   effect : @engine.EngineEffect,
-  control? : NativeJobControl? = None,
-  run_timeout_ms? : Int = NATIVE_SUBAGENT_MAX_RUN_MS,
+  control~ : NativeJobControl? = None,
+  run_timeout_ms~ : Int32 = NATIVE_SUBAGENT_MAX_RUN_MS,
 ) -> Json {
   let request = effect.request()
   let parent_session_id = effect.session_id().as_string()
@@ -974,9 +977,9 @@ async fn NativeRuntime::run_subagent_tool(
     Err(error) => return tool_error("cannot create child session: " + error)
   }
   ignore(created)
-  let timeout_ms = Int::max(
+  let timeout_ms = Int32::max(
     1,
-    Int::min(run_timeout_ms, NATIVE_SUBAGENT_MAX_RUN_MS),
+    Int32::min(run_timeout_ms, NATIVE_SUBAGENT_MAX_RUN_MS),
   )
   let phase = Ref("SessionStart")
   let outcome = @async.with_task_group() <| group => {

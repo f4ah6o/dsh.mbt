@@ -128,8 +128,8 @@ fn validate_v4_developer_header(
   replay : V4Replay,
   data : Json,
   message : Json,
-  source_seq : Int,
-  line_number : Int,
+  source_seq : Int32,
+  line_number : Int32,
 ) -> Unit raise EngineError {
   let content = project_v4_content(
     required_field(message, "content"),
@@ -198,7 +198,7 @@ fn validate_v4_developer_header(
 ///|
 fn validate_v4_attempt_stream(
   value : Json,
-  _line_number : Int,
+  _line_number : Int32,
 ) -> Unit raise EngineError {
   let stream = array_value(value, "assistant/attempt stream", 32768)
   for entry in stream {

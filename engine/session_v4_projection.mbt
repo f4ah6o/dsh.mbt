@@ -3,7 +3,7 @@ fn project_v4_content(
   value : Json,
   allow_tool_calls : Bool,
   allow_tool_changes : Bool,
-  line_number : Int,
+  line_number : Int32,
 ) -> ProjectedContent raise EngineError {
   let output : ProjectedContent = {
     text: "",
@@ -71,7 +71,7 @@ fn replay_inbox_splice(
   data : Json,
   open_turn : Bool,
   _open_step : Bool,
-  line_number : Int,
+  line_number : Int32,
 ) -> Unit raise EngineError {
   let target = required_string(data, "target", max=32)
   if target != "next-turn" && target != "next-step" {
@@ -140,8 +140,8 @@ fn archive_v4_inbox_claims(inbox : InboxReplay) -> Unit {
 ///|
 fn splice_v4_array(
   queue : Array[Json],
-  start : Int,
-  removed : Int,
+  start : Int32,
+  removed : Int32,
   inserted : Array[Json],
 ) -> Array[Json] {
   let result : Array[Json] = []
@@ -161,7 +161,7 @@ fn splice_v4_array(
 fn validate_inbox_message(
   message : Json,
   inbox : InboxReplay,
-  line_number : Int,
+  line_number : Int32,
 ) -> Unit raise EngineError {
   if required_string(message, "role", max=16) != "user" {
     raise Invalid("Session v4 inbox contains a non-user message")
@@ -190,7 +190,7 @@ fn validate_inbox_message(
 fn validate_claimed_message(
   replay : V4Replay,
   data : Json,
-  _line_number : Int,
+  _line_number : Int32,
 ) -> Unit raise EngineError {
   let inbox = replay.inbox
   let id = required_string(data, "id", max=128)
@@ -261,8 +261,8 @@ fn imported_record(event : Event) -> Json? {
 fn project_v4_message(
   kind : String,
   record : Json,
-  source_seq : Int,
-  preserve_empty_source_arrays? : Bool = false,
+  source_seq : Int32,
+  preserve_empty_source_arrays~ : Bool = false,
 ) -> Json? {
   try {
     let data = required_field(record, "data")
@@ -327,8 +327,8 @@ fn project_v4_message(
 
 ///|
 fn imported_messages(events : Array[Event]) -> Array[Json] {
-  let surface : Array[Int] = []
-  let records : Map[Int, Json] = Map([])
+  let surface : Array[Int32] = []
+  let records : Map[Int32, Json] = Map([])
   for event in events {
     match imported_record(event) {
       None => ()
@@ -360,7 +360,7 @@ fn imported_messages(events : Array[Event]) -> Array[Json] {
                         surface, start_seq, end_seq,
                       ) {
                       Some((first, last)) => {
-                        let updated : Array[Int] = []
+                        let updated : Array[Int32] = []
                         for index in 0..<first {
                           updated.push(surface[index])
                         }
@@ -545,8 +545,7 @@ fn imported_pending_inbox(events : Array[Event]) -> Json {
                       start <= queue.length() &&
                       removed >= 0 &&
                       removed <= queue.length() - start {
-                      if json_field(data, "outcome") !=
-                        Some("canceled".to_json()) {
+                      if json_field(data, "outcome") != Some("canceled") {
                         for index in start..<(start + removed) {
                           if target == "next-turn" {
                             claimed_turn.push(queue[index])

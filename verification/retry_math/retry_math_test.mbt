@@ -9,10 +9,10 @@ test "capped exponential delay respects boundary cases" {
 ///|
 test "QuickCheck verifies bounded retry delays over the valid policy domain" {
   @quickcheck.check(
-    (input : (Int, Int)) => {
+    (input : (Int32, Int32)) => {
       let (base, retry) = input
-      let normalized_base = Int::abs(base % 10001)
-      let normalized_retry = Int::abs(retry % 5) + 1
+      let normalized_base = Int32::abs(base % 10001)
+      let normalized_retry = Int32::abs(retry % 5) + 1
       let result = @retry_math.capped_exponential_delay(
         normalized_base, normalized_retry, 10000,
       )

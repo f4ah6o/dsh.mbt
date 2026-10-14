@@ -199,7 +199,7 @@ async test "native CLI product imports the pinned Session v4 catalog inertly and
     for archive_path in archives {
       let archive = @fs.read_file(archive_path).text()
       let (imported, effects) = match
-        runtime.invoke("session_import", { "jsonl": archive.to_json() }) {
+        runtime.invoke("session_import", { "jsonl": archive }) {
         Ok(value) => value
         Err(error) => fail(archive_path + ": " + error)
       }
@@ -224,7 +224,7 @@ async test "native CLI product imports the pinned Session v4 catalog inertly and
     })
     for (session_id, status) in imported_ids {
       let (session, effects) = restored
-        .invoke("session_get", { "session_id": session_id.to_json() })
+        .invoke("session_get", { "session_id": session_id })
         .unwrap()
       assert_true(effects.is_empty())
       assert_eq(
