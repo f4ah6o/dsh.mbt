@@ -26,7 +26,7 @@ priv struct DesktopConfig {
 ///|
 priv struct DesktopState {
   runtime : @runtime.NativeDesktop
-  host : @macos.Host
+  host : Host
   window : @platform.WindowId
   group : @async.TaskGroup[Result[Unit, String]]
   config : DesktopConfig
@@ -42,6 +42,7 @@ priv struct DesktopState {
   mut focused : Bool
   mut dirty : Bool
   mut done : Bool
+  mut signal_requested : Bool
   mut close_requested : Bool
   mut width : Double
   mut height : Double
@@ -52,6 +53,7 @@ priv struct DesktopState {
   mut settings_scroll : Int32
   mut auth_busy : Bool
   mut auth_error : String
+  mut frame_completed_count : Int32
   mut render_count : Int32
   mut click_count : Int32
   mut resize_seen : Bool
@@ -84,7 +86,7 @@ fn desktop_parse_int(value : String) -> Int32? {
 ///|
 fn desktop_state(
   runtime : @runtime.NativeDesktop,
-  host : @macos.Host,
+  host : Host,
   window : @platform.WindowId,
   group : @async.TaskGroup[Result[Unit, String]],
   config : DesktopConfig,
@@ -107,11 +109,13 @@ fn desktop_state(
     focused: true,
     dirty: true,
     done: false,
+    signal_requested: false,
     close_requested: false,
     width: 1120.0,
     height: 760.0,
     scale: 1.0,
     last_poll: 0L,
+    frame_completed_count: 0,
     render_count: 0,
     click_count: 0,
     resize_seen: false,

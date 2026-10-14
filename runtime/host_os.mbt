@@ -896,3 +896,11 @@ extern "C" fn c_is_macos() -> Int32 = "dsh_os_is_macos"
 fn native_os_is_macos() -> Bool {
   c_is_macos() == 1
 }
+
+///|
+extern "C" fn c_is_linux() -> Int32 = "dsh_os_is_linux"
+
+///|
+fn native_os_is_linux() -> Bool {
+  c_is_linux() == 1
+}

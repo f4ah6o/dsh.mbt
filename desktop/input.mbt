@@ -65,3 +65,26 @@ fn desktop_insertable_key(
     _ => None
   }
 }
+
+///|
+fn desktop_key_input_text(
+  key : @primitives.Key,
+  modifiers : @primitives.Modifiers,
+  text_input_events : Bool,
+) -> String? {
+  // Wayland supplies both physical KeyPressed and committed TextInput.
+  // Only the committed text may mutate the composer on that backend.
+  if text_input_events {
+    None
+  } else {
+    desktop_insertable_key(key, modifiers)
+  }
+}
+
+///|
+fn desktop_shortcut_modifier(
+  modifiers : @primitives.Modifiers,
+  control_shortcuts : Bool,
+) -> Bool {
+  modifiers.meta() || (control_shortcuts && modifiers.control())
+}

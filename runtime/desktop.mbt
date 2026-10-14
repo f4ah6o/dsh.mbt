@@ -361,3 +361,32 @@ pub async fn NativeDesktop::close(self : NativeDesktop) -> Result[Unit, String] 
   }
   self.runtime.close()
 }
+
+///|
+/// The UI pump owns graceful shutdown so native tools can be cancelled and drained.
+pub fn desktop_signals_start() -> Bool {
+  @signal.set_global_cancellation_signals([])
+  c_service_signals_install() == 0
+}
+
+///|
+pub fn desktop_shutdown_requested() -> Bool {
+  c_service_signals_requested() != 0
+}
+
+///|
+pub fn desktop_signals_stop() -> Unit {
+  ignore(c_service_signals_restore())
+}
+
+///|
+/// Flush opt-in native E2E requests without embedding OS FFI in the UI package.
+pub fn desktop_flush_output() -> Unit {
+  native_flush_stdout()
+}
+
+///|
+/// Expected desktop startup failures must remain visible in release builds.
+pub fn desktop_fail(message : String) -> Unit {
+  native_cli_fatal(message)
+}

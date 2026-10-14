@@ -34,6 +34,14 @@ int dsh_os_is_macos(void) {
 #endif
 }
 
+int dsh_os_is_linux(void) {
+#ifdef __linux__
+  return 1;
+#else
+  return 0;
+#endif
+}
+
 int dsh_fs_open_root(const char *path);
 int dsh_fs_root_matches(int root_fd, const char *path);
 

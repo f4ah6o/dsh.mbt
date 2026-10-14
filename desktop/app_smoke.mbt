@@ -10,6 +10,9 @@ async fn desktop_wait_status(
       Err(error) => return Err(error)
       Ok(_) => ()
     }
+    if state.done {
+      return Err("native window closed while awaiting session status")
+    }
     if desktop_json_string(desktop_selected_session(state.snapshot), "status") ==
       status {
       return Ok(())
@@ -117,11 +120,9 @@ fn desktop_frame_has_settings(
 
 ///|
 async fn desktop_run_smoke(state : DesktopState) -> Result[Unit, String] {
-  for _ in 0..<3 {
-    match desktop_pump(state, true) {
-      Ok(_) => ()
-      Err(error) => return Err(error)
-    }
+  match desktop_flush_frame(state) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
   }
   if state.render_count < 1 {
     return Err("initial native window frame was not presented")
@@ -133,7 +134,7 @@ async fn desktop_run_smoke(state : DesktopState) -> Result[Unit, String] {
   state.resize_baseline_width = previous_width
   state.resize_baseline_height = previous_height
   match
-    state.host.set_size(
+    state.host.backend.set_size(
       state.window,
       previous_width + 60.0,
       previous_height + 40.0,
@@ -151,7 +152,7 @@ async fn desktop_run_smoke(state : DesktopState) -> Result[Unit, String] {
   if !state.resize_seen || state.render_count <= previous_frames {
     return Err("native resize did not produce a second frame")
   }
-  match state.host.request_close(state.window) {
+  match state.host.backend.request_close(state.window) {
     Ok(_) => ()
     Err(error) => return Err(desktop_error_text(error))
   }
@@ -237,13 +238,11 @@ async fn desktop_run_offline_e2e(
   }
   state.cursor = state.draft.length()
   state.dirty = true
-  for _ in 0..<3 {
-    match desktop_pump(state, true) {
-      Ok(_) => ()
-      Err(error) => return Err(error)
-    }
+  match desktop_flush_frame(state) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
   }
-  let frame = match @testing.capture_frame(state.host, state.window) {
+  let frame = match (state.host.capture_frame)(state.window) {
     Ok(value) => value
     Err(error) => return Err(desktop_error_text(error))
   }
@@ -264,6 +263,21 @@ async fn desktop_run_offline_e2e(
   match desktop_wait_status(state, "awaiting_approval", 20000) {
     Ok(_) => ()
     Err(error) => return Err(error)
+  }
+  match @env.get_env_var("DSH_DESKTOP_E2E_TEXT") {
+    Some(expected) => {
+      let messages = desktop_json_array(
+        desktop_selected_session(state.snapshot),
+        "messages",
+      )
+      if !messages.any(message => {
+          desktop_json_string(message, "role") == "user" &&
+          desktop_json_string(message, "content") == expected
+        }) {
+        return Err("real keyboard input did not produce the expected prompt")
+      }
+    }
+    None => ()
   }
   if state.click_count < 1 || !state.send_seen || !state.approval_seen {
     return Err("send click did not reach the native session approval state")
@@ -289,14 +303,11 @@ async fn desktop_run_offline_e2e(
     return Err("approved demo did not write the expected workspace file")
   }
   state.dirty = true
-  for _ in 0..<3 {
-    match desktop_pump(state, true) {
-      Ok(_) => ()
-      Err(error) => return Err(error)
-    }
+  match desktop_flush_frame(state) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
   }
-  let transcript_frame = match
-    @testing.capture_frame(state.host, state.window) {
+  let transcript_frame = match (state.host.capture_frame)(state.window) {
     Ok(value) => value
     Err(error) => return Err(desktop_error_text(error))
   }
@@ -314,13 +325,11 @@ async fn desktop_run_offline_e2e(
   state.settings_focus = 1
   state.focused = false
   state.dirty = true
-  for _ in 0..<3 {
-    match desktop_pump(state, true) {
-      Ok(_) => ()
-      Err(error) => return Err(error)
-    }
+  match desktop_flush_frame(state) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
   }
-  let settings_frame = match @testing.capture_frame(state.host, state.window) {
+  let settings_frame = match (state.host.capture_frame)(state.window) {
     Ok(value) => value
     Err(error) => return Err(desktop_error_text(error))
   }
@@ -334,7 +343,7 @@ async fn desktop_run_offline_e2e(
       return Err("owned GPUI frame contains no ChatGPT Settings heading")
     Err(error) => return Err(error)
   }
-  match state.host.request_close(state.window) {
+  match state.host.backend.request_close(state.window) {
     Ok(_) => ()
     Err(error) => return Err(desktop_error_text(error))
   }
@@ -349,4 +358,25 @@ async fn desktop_run_offline_e2e(
     return Err("native window did not complete close and destroy lifecycle")
   }
   Ok(session_id)
+}
+
+///|
+async fn desktop_flush_frame(state : DesktopState) -> Result[Unit, String] {
+  let target = state.render_count + 1
+  state.dirty = true
+  let deadline = @async.now() + 10000L
+  while @async.now() < deadline {
+    match desktop_pump(state, false) {
+      Err(error) => return Err(error)
+      Ok(_) => ()
+    }
+    if state.done {
+      return Err("native window closed before frame completion")
+    }
+    if state.render_count >= target &&
+      (!state.host.asynchronous_frames || state.frame_completed_count >= target) {
+      return Ok(())
+    }
+  }
+  Err("native frame did not complete before the deadline")
 }

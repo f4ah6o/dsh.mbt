@@ -7,8 +7,8 @@ approval decisions, command scheduling, persistence formats, or UI state.
 
 ## Native C boundary
 
-The native executable links three C files: `runtime/host_os.c`,
-`runtime/oauth_os.c`, and `runtime/signal_os.c`. The reviewed C surface is limited
+The native executable links four C files: `runtime/host_os.c`,
+`runtime/oauth_os.c`, `runtime/signal_os.c`, and `runtime/linux_desktop_payload.c`. The reviewed C surface is limited
 to these `extern "C"` symbols:
 
 ```text
@@ -26,7 +26,8 @@ dsh_kill_process_group          dsh_os_flush_stderr
 dsh_os_executable_path          dsh_os_flush_stdout
 dsh_os_hard_worker_memory_supported
 dsh_os_hostname                 dsh_os_pid
-dsh_os_is_macos
+dsh_os_is_macos                 dsh_os_is_linux
+dsh_linux_desktop_launch
 dsh_os_process_alive            dsh_os_process_group_alive
 dsh_os_stdin_is_terminal
 dsh_os_timestamp                dsh_os_uid
@@ -36,7 +37,7 @@ dsh_service_signals_restore
 
 `host_os.c` wraps dirfd-relative file operations, no-follow opens, metadata,
 atomic writes, process spawning and termination, terminal and process facts,
-a compile-time macOS platform flag,
+compile-time macOS/Linux platform flags,
 stdout/stderr flushing, and the low-level SHA-256 / RS256 primitives used by
 MoonBit authentication code. Its filesystem walk rejects absolute paths and
 `.` / `..` components as a syscall-level guard; MoonBit still owns workspace
@@ -51,12 +52,24 @@ URL in the host browser. `signal_os.c` installs and restores minimal SIGINT /
 SIGTERM handlers and reports the requested signal; MoonBit owns shutdown and
 task-drain behavior.
 
+`linux_desktop_payload.c` supplies a synchronous Linux process-supervision primitive.
+It opens `/proc/self/exe` once, validates a bounded versioned trailer, copies the
+native companion and CLI worker into an owner-only temporary directory using
+exclusive no-follow file creation, and runs the companion with separate argv.
+The trailer checksum detects accidental corruption, not authenticity. Signals
+are forwarded, exit status is preserved, and extracted files are removed after
+child exit. It does not download code, interpret shell syntax, or implement UI
+state. MoonBit owns desktop argument parsing, platform selection, errors and
+graceful runtime shutdown. The existing signal/flush primitives are exposed to
+the shared UI through runtime wrappers; UI packages contain no direct FFI.
+
 The C helpers do not parse user commands, provider or MCP messages, or session
 files, and do not decide which workspace operation is allowed. Return values
 are primitive statuses, bytes, descriptors, or metadata for MoonBit to check.
 No product protocol or approval logic is embedded in a C helper.
 
-`runtime/host_os.mbt`, `runtime/oauth.mbt`, and `runtime/service.mbt` contain the
+`runtime/host_os.mbt`, `runtime/oauth.mbt`, `runtime/service.mbt`, and
+`runtime/desktop_launch.mbt` contain the
 MoonBit declarations. `scripts/check.mjs` compares every discovered native C
 extern against the explicit allow-list above and confirms each symbol has a C
 definition. Any change fails the check until this document and the list are

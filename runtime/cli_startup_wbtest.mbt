@@ -53,13 +53,39 @@ async test "CLI startup errors exit normally on stderr without changing a live l
 }
 
 ///|
-async test "non macOS desktop startup rejects the platform before app lookup" {
-  if !native_os_is_macos() {
-    native_startup_expect_failure(["desktop"], "use dsh web")
+async test "Linux unbundled desktop startup gives installation guidance" {
+  if native_os_is_linux() {
+    native_startup_expect_failure(["desktop"], "no bundled Linux desktop")
+  } else if !native_os_is_macos() {
+    native_startup_expect_failure(["desktop"], "requires Linux or macOS")
+  }
+}
+
+///|
+async test "Linux desktop validates explicit app paths without browser fallback" {
+  if native_os_is_linux() {
     native_startup_expect_failure(
-      ["desktop", "--app-path", "/Applications/Dsh.app"],
-      "supported only on macOS",
+      ["desktop", "--app-path"],
+      "requires a nonempty absolute path",
     )
+    native_startup_expect_failure(
+      ["desktop", "--app-path", "relative-app"],
+      "must be an absolute path",
+    )
+    let fixture = @fs.tmpdir(prefix="dsh-linux-desktop-startup")
+    @async.with_task_group() <| group => {
+      group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+      native_startup_expect_failure(
+        ["desktop", "--app-path", fixture + "/missing"],
+        "Could not start the Linux desktop executable",
+      )
+      let app = fixture + "/not-executable"
+      @fs.write_file(app, "not an executable", permission=0o600)
+      native_startup_expect_failure(
+        ["desktop", "--app-path", app],
+        "Linux desktop execution was denied",
+      )
+    }
   }
 }
 

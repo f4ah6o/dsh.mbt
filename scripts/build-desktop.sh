@@ -1,9 +1,14 @@
 #!/usr/bin/env bash
+# README and release jobs also invoke this entrypoint through sh.
+[ -n "${BASH_VERSION:-}" ] || exec bash "$0" "$@"
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT_DIR"
 
+if [[ "$(uname -s)" == Linux ]]; then
+  exec sh "$ROOT_DIR/scripts/build-desktop-linux.sh" "$@"
+fi
 if [[ "$(uname -s)" != Darwin ]]; then
   echo "Dsh.app requires macOS and Xcode command-line tools." >&2
   exit 2
@@ -44,16 +49,16 @@ APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/dsh-desktop"
 GPUI_DYLIB="$APP_BUNDLE/Contents/Frameworks/libgpui_macos.dylib"
 MOON_TARGET_ROOT="$ROOT_DIR/_build/desktop-macos13"
 MOON_BUILD_ROOT="$MOON_TARGET_ROOT/native/$BUILD_KIND/build/f4ah6o/dsh"
-DESKTOP_BINARY="$MOON_BUILD_ROOT/desktop/desktop.exe"
+DESKTOP_BINARY="$MOON_BUILD_ROOT/desktop/macos/macos.exe"
 CLI_BINARY="$MOON_BUILD_ROOT/cmd/dsh/dsh.exe"
 mkdir -p "$BUILD_ROOT"
 
 if [[ "$BUILD_KIND" == release ]]; then
   MACOSX_DEPLOYMENT_TARGET=13.0 moon build --target native --release \
-    --target-dir "$MOON_TARGET_ROOT" --frozen desktop cmd/dsh
+    --target-dir "$MOON_TARGET_ROOT" --frozen desktop/macos cmd/dsh
 else
   MACOSX_DEPLOYMENT_TARGET=13.0 moon build --target native \
-    --target-dir "$MOON_TARGET_ROOT" --frozen desktop cmd/dsh
+    --target-dir "$MOON_TARGET_ROOT" --frozen desktop/macos cmd/dsh
 fi
 if [[ ! -x "$DESKTOP_BINARY" || ! -x "$CLI_BINARY" ]]; then
   echo "MoonBit did not produce the desktop executable and bundled CLI helper." >&2
@@ -178,7 +183,7 @@ case "$MODE" in
       --env "GPUI_MACOS_LIBRARY=$GPUI_DYLIB" \
       --stdout "$APP_STDOUT" --stderr "$APP_STDERR" \
       --args --offline-e2e "$@"
-    if ! rg -q '"nsevents":true' "$APP_STDOUT"; then
+    if ! rg -q '"native_events":true' "$APP_STDOUT"; then
       cat "$APP_STDOUT" "$APP_STDERR" >&2
       echo "LaunchServices native offline E2E did not emit its success marker." >&2
       exit 1

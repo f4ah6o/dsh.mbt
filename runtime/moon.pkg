@@ -23,5 +23,10 @@ import {
 supported_targets = "+native"
 
 options(
-  "native-stub": [ "host_os.c", "oauth_os.c", "signal_os.c" ],
+  "native-stub": [
+    "host_os.c",
+    "oauth_os.c",
+    "signal_os.c",
+    "linux_desktop_payload.c",
+  ],
 )

@@ -5,6 +5,7 @@ on:
     paths:
       - ".github/workflows/publish-native.yml"
       - "scripts/**"
+      - "script/**"
       - "cmd/**"
       - "runtime/**"
       - "native/**"
@@ -57,7 +58,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libssl-dev pkg-config
+          sudo apt-get install -y libssl-dev pkg-config libwayland-dev wayland-protocols \
+            libegl1-mesa-dev libgles2-mesa-dev libxkbcommon-dev libpango1.0-dev \
+            libfontconfig1-dev libgl1-mesa-dri libegl-mesa0 \
+            weston xvfb xauth xdotool x11-utils fonts-noto-cjk
       - name: Resolve dependencies
         run: |
           moon update
@@ -69,6 +73,12 @@ jobs:
           else
             sh scripts/build.sh
           fi
+      - name: Build the native Linux Wayland desktop and test its payload launcher
+        if: runner.os == 'Linux'
+        run: |
+          sh scripts/build-desktop-linux.sh --build
+          DSH_LINUX_DESKTOP_CLI="$PWD/_build/native/release/build/f4ah6o/dsh/cmd/dsh/dsh.exe" python3 scripts/test-linux-desktop-payload.py
+          python3 scripts/test-smoke-release-linux.py
       - name: Package raw release asset
         shell: bash
         run: |
@@ -85,11 +95,28 @@ jobs:
             exit 1
           fi
           mkdir -p release
-          cp "$binaries" "release/dsh-${{ matrix.platform }}"
+          if [ "$RUNNER_OS" = Linux ]; then
+            python3 scripts/package-linux-desktop.py --cli "$binaries" \
+              --desktop _build/native/release/build/f4ah6o/dsh/desktop/linux/linux.exe \
+              --output "release/dsh-${{ matrix.platform }}"
+          else
+            cp "$binaries" "release/dsh-${{ matrix.platform }}"
+          fi
           chmod 755 "release/dsh-${{ matrix.platform }}"
           test -s "release/dsh-${{ matrix.platform }}"
       - name: Smoke test the packaged CLI and embedded browser assets
         run: sh scripts/smoke-release-cli.sh "release/dsh-${{ matrix.platform }}"
+      - name: Validate packaged Linux GUI with real compositor input and GPU frames
+        if: runner.os == 'Linux'
+        run: python3 scripts/smoke-release-linux.py "release/dsh-${{ matrix.platform }}" "_build/linux-gui-evidence"
+      - name: Retain Linux native GUI evidence
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-gui-evidence-${{ matrix.platform }}
+          path: _build/linux-gui-evidence/
+          if-no-files-found: warn
+          retention-days: 7
       - name: Build and package the macOS app
         if: matrix.platform == 'darwin-aarch64'
         run: |
