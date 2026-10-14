@@ -28,6 +28,7 @@ dsh_os_hard_worker_memory_supported
 dsh_os_hostname                 dsh_os_pid
 dsh_os_is_macos                 dsh_os_is_linux
 dsh_linux_desktop_launch
+dsh_os_child_exit_state
 dsh_os_process_alive            dsh_os_process_group_alive
 dsh_os_stdin_is_terminal
 dsh_os_timestamp                dsh_os_uid
@@ -46,7 +47,12 @@ The process trampoline pins and verifies the workspace before changing
 directory, applies resource limits, then closes every inherited descriptor
 above stdin/stdout/stderr before executing the requested program. This also
 contains transient pipe descriptors inherited during concurrent native
-spawns.
+spawns. The MCP shutdown path uses `waitid(WNOWAIT | WNOHANG)` to
+observe an owned child without reaping it: its PID reserves the process-group
+identity until TERM grace and final KILL finish. Negative/non-child results do
+not authorize signaling. The async process API remains the sole reaper; later
+bounded group-disappearance checks are read-only. Those checks include zombies,
+so a host init that does not reap orphan descendants can exhaust the bound.
 `oauth_os.c` supplies entropy, Unix time, and launching a validated authorization
 URL in the host browser. `signal_os.c` installs and restores minimal SIGINT /
 SIGTERM handlers and reports the requested signal; MoonBit owns shutdown and

@@ -17,6 +17,7 @@
 #if defined(__APPLE__) || defined(__linux__)
 #include <dirent.h>
 #include <signal.h>
+#include <sys/wait.h>
 #include <dlfcn.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -643,6 +644,20 @@ int dsh_os_process_alive(int pid) {
   return errno != ESRCH;
 }
 
+/* Observe only an owned child, retaining its PID reservation until the sole
+ * async reaper runs. A negative result never authorizes group signaling. */
+int dsh_os_child_exit_state(int pid) {
+  if (pid <= 0) return -EINVAL;
+  siginfo_t info;
+  memset(&info, 0, sizeof(info));
+  int result;
+  do {
+    result = waitid(P_PID, (id_t)pid, &info, WEXITED | WNOHANG | WNOWAIT);
+  } while (result < 0 && errno == EINTR);
+  if (result < 0) return -errno;
+  return info.si_pid == pid ? 1 : 0;
+}
+
 int dsh_os_process_group_alive(int pgid) {
   if (pgid <= 0) return 1;
   if (kill(-(pid_t)pgid, 0) == 0 || errno == EPERM) return 1;
@@ -959,6 +974,7 @@ int dsh_os_hostname(uint8_t *buffer, int capacity) { (void)buffer; (void)capacit
 int dsh_os_timestamp(uint8_t *buffer, int capacity) { (void)buffer; (void)capacity; return -ENOTSUP; }
 int dsh_os_process_alive(int pid) { (void)pid; return 1; }
 int dsh_os_process_group_alive(int pgid) { (void)pgid; return 1; }
+int dsh_os_child_exit_state(int pid) { (void)pid; return -ENOTSUP; }
 int dsh_os_hard_worker_memory_supported(void) { return 0; }
 int dsh_kill_process_group(int pid, int signal_number) { (void)pid; (void)signal_number; return ENOTSUP; }
 int dsh_kill_process(int pid, int signal_number) { (void)pid; (void)signal_number; return ENOTSUP; }

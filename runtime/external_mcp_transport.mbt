@@ -131,31 +131,31 @@ async fn NativeMcpServer::close(self : NativeMcpServer) -> Unit {
       return
     }
     self.poisoned = true
-    if !os_kill_process_group(self.pid, 15) && os_process_alive(self.pid) {
-      // Close can race the worker's first instruction. The early C setsid()
-      // makes later signals group-scoped; this fallback only covers that
-      // brief pre-session window and targets the owned leader PID.
-      ignore(os_kill_process(self.pid, 15))
+    // Retain the owned leader, including its zombie, until the final signal.
+    // Reaping first would allow a later group signal to target a reused PID.
+    if c_child_exit_state(self.pid) >= 0 {
+      if !os_kill_process_group(self.pid, 15) {
+        // The worker may not have reached setsid() yet.
+        ignore(os_kill_process(self.pid, 15))
+      }
+      @async.sleep(500)
+      if c_child_exit_state(self.pid) >= 0 {
+        if !os_kill_process_group(self.pid, 9) {
+          ignore(os_kill_process(self.pid, 9))
+        }
+      }
     }
-    let first_wait : Int32? = @async.with_timeout_opt(500, () => {
+    let _ : Int32? = @async.with_timeout_opt(1000, () => {
       @process.wait_pid(self.pid)
     }) catch {
       _ => None
     }
-    if first_wait is None {
-      if !os_kill_process_group(self.pid, 9) && os_process_alive(self.pid) {
-        ignore(os_kill_process(self.pid, 9))
-      }
-      let _ : Int32? = @async.with_timeout_opt(1000, () => {
-        @process.wait_pid(self.pid)
-      }) catch {
-        _ => None
-      }
-    } else if os_process_group_alive(self.pid) {
-      @async.sleep(500)
-      if os_process_group_alive(self.pid) {
-        ignore(os_kill_process_group(self.pid, 9))
-      }
+    // SIGKILL delivery and orphan adoption/reaping are asynchronous. Wait
+    // up to one second for disappearance; never signal again after reap.
+    let mut polls = 0
+    while os_process_group_alive(self.pid) && polls < 100 {
+      @async.sleep(10)
+      polls += 1
     }
     self.writer.close()
     self.reader.close()

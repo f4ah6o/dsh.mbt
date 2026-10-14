@@ -33,6 +33,7 @@
 - Report expected Linux desktop startup failures on stderr with exit status 1, including missing Wayland sessions, instead of aborting.
 - Cancel Linux payload extraction on SIGINT/SIGTERM before launching the GUI, and clean up private extracted files after normal or handled-signal desktop shutdown. Graceful desktop shutdown cancels and waits for active native tool workers.
 - Wait for asynchronous native frame completion after resize before validating the desktop lifecycle.
+- Keep external MCP worker PID ownership reserved through shutdown escalation, then reap the leader and briefly wait for its process group to disappear. Add a TERM-resistant descendant regression for the timeout cleanup race.
 
 ### Deprecated
 

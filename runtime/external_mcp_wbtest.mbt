@@ -806,6 +806,62 @@ async test "external MCP timeout is unknown, never replayed, and kills descendan
 }
 
 ///|
+async test "external MCP timeout kills TERM-resistant descendants before returning" {
+  let fixture = @fs.tmpdir(prefix="dsh-external-mcp-timeout")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let counter = fixture + "/calls"
+    let behavior = "sh -c 'trap \"\" TERM; printf x >> \"" +
+      counter +
+      "\"; sleep 30' &\nwait\n"
+    let script = native_mcp_test_server_script(
+      native_mcp_test_schema("fixture"),
+      counter,
+      None,
+      tool_call_behavior=Some(behavior),
+    )
+    let script_path = fixture + "/server.sh"
+    @fs.write_file(script_path, script)
+    let config_path = fixture + "/mcp.json"
+    @fs.write_file(
+      config_path,
+      native_mcp_test_config(workspace, script_path, tool_timeout_ms=100).stringify(),
+    )
+    let root = SafeRoot::open(workspace).unwrap()
+    let (device, inode) = root.identity().unwrap()
+    root.close()
+    let pool = NativeMcpPool::open(
+      Some(config_path),
+      safety_native_worker_launcher().unwrap(),
+      workspace,
+      device,
+      inode,
+    ).unwrap()
+    group.add_defer(() => @async.protect_from_cancel(() => pool.close()))
+    let pid = pool.servers[0].pid
+    let public_name = string_field(pool.descriptors[0], "name").unwrap()
+    let request : Json = {
+      "name": Json::string(public_name),
+      "arguments": Json::empty_object(),
+    }
+    let result = pool.execute(request)
+    assert_eq(object_field(result, "ok"), Some(Json::boolean(false)))
+    assert_true(
+      string_field(result, "error")
+      .unwrap_or("")
+      .contains("remote outcome is unknown"),
+    )
+    assert_eq(@fs.read_file(counter).text(), "x")
+    let retry = pool.execute(request)
+    assert_eq(object_field(retry, "ok"), Some(Json::boolean(false)))
+    assert_eq(@fs.read_file(counter).text(), "x")
+    assert_false(os_process_group_alive(pid))
+  }
+}
+
+///|
 async test "external MCP EOF after dispatch reports an unknown outcome without replay" {
   let fixture = @fs.tmpdir(prefix="dsh-external-mcp-eof")
   @async.with_task_group() <| group => {
@@ -1018,4 +1074,11 @@ async test "external MCP startup cancellation closes earlier and current servers
     assert_false(os_process_group_alive(first_pid))
     assert_false(os_process_group_alive(second_pid))
   }
+}
+
+///|
+test "external MCP child observation rejects invalid and non-child PIDs" {
+  assert_true(c_child_exit_state(0) < 0)
+  assert_true(c_child_exit_state(-1) < 0)
+  assert_true(c_child_exit_state(os_pid()) < 0)
 }
