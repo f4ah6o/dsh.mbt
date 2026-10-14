@@ -46,6 +46,55 @@ class ProtocolTests(unittest.TestCase):
             with self.subTest(evidence=evidence), self.assertRaises(RuntimeError):
                 smoke.verify_window(*evidence, 1120, 760)
 
+    def test_repeated_position_still_sends_two_real_clicks_without_sync(self):
+        with tempfile.TemporaryDirectory() as directory:
+            harness = smoke.Harness.__new__(smoke.Harness)
+            harness.output = Path(directory)
+            harness.input_compositor = mock.Mock()
+            harness.input_compositor.poll.return_value = None
+            geometry = 'WINDOW=2097157\nX=20\nY=30\nWIDTH=1120\nHEIGHT=760\n'
+            pointer = 'X=1052\nY=755\nSCREEN=0\nWINDOW=2097157\n'
+            def command(args):
+                if args[1] == 'getwindowgeometry':
+                    return mock.Mock(stdout=geometry)
+                if args[1] == 'getmouselocation':
+                    return mock.Mock(stdout=pointer)
+                if args[1] == 'getwindowfocus':
+                    return mock.Mock(stdout='2097157\n')
+                return mock.Mock(stdout='')
+            with mock.patch.object(harness, 'command', side_effect=command) as invoke:
+                harness.move_and_click('2097157', 1032, 725)
+                harness.move_and_click('2097157', 1032, 725)
+            calls = [call.args[0] for call in invoke.call_args_list]
+            self.assertEqual(calls.count(['xdotool', 'click', '1']), 2)
+            self.assertEqual(calls.count(['xdotool', 'mousemove', '--window', '2097157', '1032', '725']), 2)
+            self.assertFalse(any('--sync' in command for command in calls))
+            checks = [json.loads(line) for line in (harness.output / 'input-pointer-verification.jsonl').read_text().splitlines()]
+            self.assertEqual(len(checks), 2)
+            self.assertTrue(all(check['matched'] for check in checks))
+
+    def test_pointer_mismatch_never_sends_click(self):
+        with tempfile.TemporaryDirectory() as directory:
+            for pointer in ['X=1031\nY=725\nWINDOW=2097157\n',
+                            'X=1032\nY=725\nWINDOW=42\n']:
+                harness = smoke.Harness.__new__(smoke.Harness)
+                harness.output = Path(directory)
+                harness.input_compositor = mock.Mock()
+                harness.input_compositor.poll.return_value = None
+                def command(args):
+                    if args[1] == 'getwindowgeometry':
+                        return mock.Mock(stdout='WINDOW=2097157\nX=0\nY=0\nWIDTH=1120\nHEIGHT=760\n')
+                    return mock.Mock(stdout=pointer)
+                def bounded_check(predicate, timeout, label):
+                    self.assertEqual(timeout, 2)
+                    self.assertFalse(predicate())
+                    raise RuntimeError('Timed out waiting for ' + label)
+                with mock.patch.object(harness, 'command', side_effect=command) as invoke, \
+                     mock.patch.object(smoke, 'wait_for', side_effect=bounded_check), \
+                     self.assertRaises(RuntimeError):
+                    harness.move_and_click('2097157', 1032, 725)
+                self.assertNotIn(mock.call(['xdotool', 'click', '1']), invoke.call_args_list)
+
     def test_click_bounds(self):
         self.assertEqual(smoke.parse_click('DSH_DESKTOP_INPUT {"x":1119.9,"y":759.9}'), (1119, 759))
         for x, y in [(-1, 4), (1120, 0), (0, 760), (True, 0), ('2', 0), (float('nan'), 0), (0, float('inf'))]:

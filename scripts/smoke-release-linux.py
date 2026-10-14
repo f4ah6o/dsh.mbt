@@ -270,13 +270,43 @@ class Harness:
         require(self.command(['xdotool', 'getwindowfocus']).stdout.strip() == window,
                 'Private Weston focus verification failed')
         def click(x, y):
-            self.command(['xdotool', 'mousemove', '--sync', '--window', window,
-                          str(x), str(y), 'click', '1'])
+            self.move_and_click(window, x, y)
         if first:
             click(400, 650)
             self.command(['xdotool', 'key', '--clearmodifiers', 'ctrl+a'])
             self.command(['xdotool', 'type', '--clearmodifiers', '--delay', '20', '--', EXPECTED_TEXT])
         click(*coordinates)
+
+    def move_and_click(self, window, x, y):
+        require(0 <= x < WIDTH and 0 <= y < HEIGHT, 'Unsafe input coordinate')
+        geometry = self.command(['xdotool', 'getwindowgeometry', '--shell', window]).stdout
+        fields = dict(re.findall(r'^(WINDOW|X|Y|WIDTH|HEIGHT)=(-?\d+)$', geometry, re.MULTILINE))
+        require(all(key in fields for key in ('WINDOW', 'X', 'Y', 'WIDTH', 'HEIGHT')),
+                'Incomplete input window geometry')
+        require(int(fields['WINDOW']) == int(window) and int(fields['WIDTH']) == WIDTH
+                and int(fields['HEIGHT']) == HEIGHT, 'Input window geometry changed')
+        target = (int(fields['X']) + x, int(fields['Y']) + y)
+        # xdotool 3.x --sync waits for movement away from the old position,
+        # including when the target already equals it. Send and Allow occupy
+        # the same coordinates. Verify arrival instead of waiting for movement.
+        # https://github.com/jordansissel/xdotool/blob/v3.20160805.1/cmd_mousemove.c#L206-L208
+        self.command(['xdotool', 'mousemove', '--window', window, str(x), str(y)])
+        def arrived():
+            require(self.input_compositor.poll() is None, 'Owned input compositor exited')
+            pointer = self.command(['xdotool', 'getmouselocation', '--shell']).stdout
+            actual = dict(re.findall(r'^(X|Y|WINDOW)=(-?\d+)$', pointer, re.MULTILINE))
+            require(all(key in actual for key in ('X', 'Y', 'WINDOW')), 'Incomplete pointer location')
+            matched = ((int(actual['X']), int(actual['Y'])) == target
+                       and int(actual['WINDOW']) == int(window))
+            with (self.output / 'input-pointer-verification.jsonl').open('a') as stream:
+                stream.write(json.dumps({'window': int(window), 'relative_target': [x, y],
+                                         'root_target': target, 'pointer': actual, 'matched': matched}) + '\n')
+            return matched
+        wait_for(arrived, 2, 'pointer arrival in verified Weston window')
+        require(self.command(['xdotool', 'getwindowfocus']).stdout.strip() == window,
+                'Private Weston focus changed before click')
+        # No --window here: xdotool click uses genuine XTest button events.
+        self.command(['xdotool', 'click', '1'])
 
     def app(self, label, flags):
         root = self.output / label
