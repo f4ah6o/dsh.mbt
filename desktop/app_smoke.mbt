@@ -149,7 +149,17 @@ async fn desktop_run_smoke(state : DesktopState) -> Result[Unit, String] {
       Err(error) => return Err(error)
     }
   }
-  if !state.resize_seen || state.render_count <= previous_frames {
+  if !state.resize_seen {
+    return Err("native resize did not produce a resized event")
+  }
+  // A Resized event marks the scene dirty, but an earlier asynchronous frame
+  // can still make present return Busy. Keep pumping until a newly submitted
+  // frame completes rather than treating the resize notification as a frame.
+  match desktop_flush_frame(state) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  if state.render_count <= previous_frames {
     return Err("native resize did not produce a second frame")
   }
   match state.host.backend.request_close(state.window) {
