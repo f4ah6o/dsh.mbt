@@ -24,6 +24,7 @@ priv struct AuthEndpoints {
   token : String
   discovery : String
   models : String
+  responses : String
   test_mode : Bool
 }
 
@@ -34,6 +35,7 @@ fn AuthEndpoints::production() -> AuthEndpoints {
     token: @auth.TOKEN_ENDPOINT,
     discovery: "https://auth.openai.com/.well-known/openid-configuration",
     models: "https://api.openai.com/v1/models",
+    responses: "https://api.openai.com/v1/responses",
     test_mode: false,
   }
 }
@@ -1847,6 +1849,7 @@ fn native_auth_endpoint_allowed(
         endpoint.has_prefix("https://auth.openai.com/") &&
         !endpoint.contains("?")
       "models" => endpoint == "https://api.openai.com/v1/models"
+      "responses" => endpoint == "https://api.openai.com/v1/responses"
       _ => false
     }
   }
