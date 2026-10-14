@@ -47,6 +47,32 @@ def parse_click(line):
     return int(value['x']), int(value['y'])
 
 
+def logged_window(log, width, height):
+    outputs = {tuple(map(int, match)) for match in re.findall(
+        r'x11 output (\d+)x(\d+), window id (\d+)\b', log)}
+    require(len(outputs) == 1, 'Expected exactly one compositor-logged X11 output')
+    actual_width, actual_height, window = next(iter(outputs))
+    require((actual_width, actual_height) == (width, height) and window > 0,
+            'Compositor-logged output geometry/ID mismatch')
+    return window
+
+
+def verify_window(log, tree, info, width, height, require_viewable=True):
+    window = logged_window(log, width, height)
+    tree_ids = {int(value, 16) for value in re.findall(r'^\s*(0x[0-9a-fA-F]+)\s', tree, re.MULTILINE)}
+    require(window in tree_ids, 'Logged Weston window is absent from owned X root tree')
+    identity = re.search(r'xwininfo: Window id: (0x[0-9a-fA-F]+)\b', info)
+    require(identity is not None and int(identity[1], 16) == window,
+            'Inspected Weston window ID mismatch')
+    for label, expected in [('Width', width), ('Height', height)]:
+        match = re.search(r'^\s*' + label + r':\s*(\d+)\s*$', info, re.MULTILINE)
+        require(match is not None and int(match[1]) == expected, 'Unexpected Weston input ' + label.lower())
+    if require_viewable:
+        require(re.search(r'^\s*Map State:\s*IsViewable\s*$', info, re.MULTILINE) is not None,
+                'Logged Weston window is not viewable')
+    return window
+
+
 def marker(log, name, expected):
     matches = [json.loads(line[len(name) + 1:]) for line in log.splitlines()
                if line.startswith(name + ' ')]
@@ -194,26 +220,51 @@ class Harness:
         self.env['WAYLAND_DISPLAY'] = socket
         if shell == 'kiosk':
             def discover():
-                result = self.command(['xdotool', 'search', '--onlyvisible', '--name',
-                                       '^Weston Compositor'], check=False)
-                ids = result.stdout.split()
-                if len(ids) != 1:
-                    return None
-                candidate = int(ids[0])
-                tree = self.command(['xwininfo', '-root', '-tree']).stdout
-                require(re.search(r'\b' + re.escape(hex(candidate)) + r'\b', tree) is not None,
-                        'Weston window is absent from owned X root tree')
+                require(weston.poll() is None, 'Owned Weston exited during window discovery')
                 log = (self.output / (label + '-weston.log')).read_text(errors='replace')
-                logged = re.search(r'x11 output .*?window id (\d+)', log)
-                require(logged is None or int(logged[1]) == candidate, 'Weston window ID mismatch')
-                geometry = self.command(['xdotool', 'getwindowgeometry', '--shell', str(candidate)]).stdout
-                require(f'WIDTH={WIDTH}\n' in geometry and f'HEIGHT={HEIGHT}\n' in geometry,
-                        'Unexpected Weston input geometry')
+                tree = self.command(['xwininfo', '-root', '-tree'], check=False)
+                diagnostics = {'monotonic': time.monotonic(), 'compositor_pid': weston.pid,
+                               'display': self.env['DISPLAY'], 'compositor_log': log,
+                               'tree': {'stdout': tree.stdout, 'stderr': tree.stderr,
+                                        'returncode': tree.returncode}}
+                candidate = None
+                try:
+                    candidate = logged_window(log, width, height)
+                    info = self.command(['xwininfo', '-id', str(candidate)], check=False)
+                    diagnostics['window'] = {'id': candidate, 'stdout': info.stdout,
+                                             'stderr': info.stderr, 'returncode': info.returncode}
+                    require(tree.returncode == 0 and info.returncode == 0,
+                            'Private X window inspection failed')
+                    require(weston.poll() is None, 'Owned Weston exited during window inspection')
+                    candidate = verify_window(log, tree.stdout, info.stdout, width, height, require_viewable=False)
+                    diagnostics['verified'] = True
+                except RuntimeError as error:
+                    diagnostics['error'] = str(error)
+                    candidate = None
+                # Preserve all observations, including transient unmapped windows
+                # and the final successful ID; never depend on window-title uniqueness.
+                with (self.output / (label + '-window-discovery.jsonl')).open('a') as stream:
+                    stream.write(json.dumps(diagnostics) + '\n')
+                require(weston.poll() is None, 'Owned Weston exited during window discovery')
                 return candidate
             self.window = wait_for(discover, 15, 'verified private Weston X window')
+            self.input_compositor = weston
+            self.input_compositor_log = self.output / (label + '-weston.log')
         return weston
 
     def input_click(self, coordinates, first):
+        # Weston may defer mapping until its first client/frame. Discovery need
+        # not wait for that, but no OS input is allowed until mapping is proven.
+        require(self.input_compositor.poll() is None, 'Owned input compositor exited')
+        log = self.input_compositor_log.read_text(errors='replace')
+        tree = self.command(['xwininfo', '-root', '-tree'])
+        info = self.command(['xwininfo', '-id', str(self.window)])
+        diagnostics = {'window': self.window, 'tree': tree.stdout, 'info': info.stdout}
+        with (self.output / 'input-window-verification.jsonl').open('a') as stream:
+            stream.write(json.dumps(diagnostics) + '\n')
+        require(verify_window(log, tree.stdout, info.stdout, WIDTH, HEIGHT) == self.window,
+                'Input target changed since private compositor discovery')
+        require(self.input_compositor.poll() is None, 'Owned input compositor exited')
         window = str(self.window)
         self.command(['xdotool', 'windowfocus', '--sync', window])
         require(self.command(['xdotool', 'getwindowfocus']).stdout.strip() == window,

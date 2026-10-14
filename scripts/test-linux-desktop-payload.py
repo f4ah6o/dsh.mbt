@@ -4,6 +4,7 @@ import importlib.util
 import os
 from pathlib import Path
 import signal
+import select
 import struct
 import subprocess
 import sys
@@ -44,6 +45,8 @@ GUI = r'''
 #include <unistd.h>
 #include <sys/wait.h>
 int main(int argc, char **argv) {
+  const char *marker = getenv("TEST_GUI_MARKER");
+  if (marker) { FILE *f = fopen(marker, "w"); if (!f) return 93; fclose(f); }
   const char *helper = getenv("DSH_NATIVE_WORKER_BIN");
   struct stat st; if (!helper || stat(helper, &st) || (st.st_mode & 0777) != 0700) return 88;
   printf("helper=%s\n", helper);
@@ -55,6 +58,56 @@ int main(int argc, char **argv) {
   pid_t p = fork(); if (!p) { execl(helper, helper, "--helper-probe", NULL); _exit(89); }
   int s; waitpid(p, &s, 0); if (s) return 90;
   return 37;
+}
+'''
+
+
+# Linked into the fixture CLI only. Owned pipes gate the first extraction write
+# for a selected file, so shutdown lands before fork without timing assumptions.
+EXTRACTION_SHIM = r'''
+#define _GNU_SOURCE 1
+#include <errno.h>
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <sys/types.h>
+ssize_t __real_write(int, const void *, size_t);
+pid_t __real_fork(void);
+static void mark(const char *key) {
+  const char *path = getenv(key);
+  if (!path) return;
+  int fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (fd < 0) _exit(94);
+  close(fd);
+}
+pid_t __wrap_fork(void) {
+  mark("TEST_FORK_MARKER");
+  return __real_fork();
+}
+ssize_t __wrap_write(int fd, const void *buffer, size_t count) {
+  static int paused;
+  const char *target = getenv("TEST_PAUSE_FILE");
+  if (target && !paused) {
+    char name[64], path[4096];
+    snprintf(name, sizeof(name), "/proc/self/fd/%d", fd);
+    ssize_t n = readlink(name, path, sizeof(path) - 1);
+    if (n > 0) {
+      path[n] = '\0';
+      const char *base = strrchr(path, '/');
+      if (base && !strcmp(base + 1, target)) {
+        paused = 1;
+        int ready = atoi(getenv("TEST_READY_FD"));
+        int release = atoi(getenv("TEST_RELEASE_FD"));
+        if (__real_write(ready, "R", 1) != 1) _exit(95);
+        char byte; ssize_t result;
+        do { result = read(release, &byte, 1); } while (result < 0 && errno == EINTR);
+        if (result != 1) _exit(96);
+      }
+    }
+  }
+  return __real_write(fd, buffer, count);
 }
 '''
 
@@ -136,6 +189,50 @@ class PayloadTests(unittest.TestCase):
             finally:
                 if process.poll() is None: process.kill(); process.wait()
                 process.stdout.close()
+
+    def test_shutdown_during_extraction_never_launches_gui(self):
+        shim = self.dir / "extraction-shim.c"
+        shim.write_text(EXTRACTION_SHIM)
+        gated_cli = self.dir / "gated-cli"
+        subprocess.run(["cc", "-Wall", "-Wextra", "-Werror",
+                        str(self.dir / "cli.c"), str(ROOT / "runtime/linux_desktop_payload.c"),
+                        str(shim), "-Wl,--wrap=write", "-Wl,--wrap=fork", "-o", str(gated_cli)], check=True)
+        packager.package(gated_cli, self.gui, self.output)
+        for target in ("dsh", "dsh-desktop"):
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                with self.subTest(file=target, signal=sig):
+                    ready_read, ready_write = os.pipe()
+                    release_read, release_write = os.pipe()
+                    fork_marker = self.dir / f"fork-{target}-{sig}"
+                    gui_marker = self.dir / f"gui-{target}-{sig}"
+                    env = dict(self.env, TEST_PAUSE_FILE=target,
+                               TEST_READY_FD=str(ready_write), TEST_RELEASE_FD=str(release_read),
+                               TEST_FORK_MARKER=str(fork_marker), TEST_GUI_MARKER=str(gui_marker))
+                    process = subprocess.Popen([str(self.output)], env=env,
+                                               pass_fds=(ready_write, release_read),
+                                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+                    os.close(ready_write)
+                    os.close(release_read)
+                    try:
+                        self.assertTrue(select.select([ready_read], [], [], 10)[0],
+                                        "fixture did not reach the extraction gate")
+                        self.assertEqual(os.read(ready_read, 1), b"R")
+                        self.assertTrue(list(self.extract.iterdir()))
+                        process.send_signal(sig)
+                        os.write(release_write, b"G")
+                        stdout, stderr = process.communicate(timeout=10)
+                        self.assertEqual(process.returncode, 128 + sig, (stdout, stderr))
+                        self.assertFalse(fork_marker.exists(), "shutdown must prevent the GUI fork")
+                        self.assertFalse(gui_marker.exists(), "GUI executed after shutdown")
+                        self.assert_clean()
+                    finally:
+                        os.close(ready_read)
+                        os.close(release_write)
+                        if process.poll() is None:
+                            process.kill()
+                            process.wait(timeout=5)
+                        process.stdout.close()
+                        process.stderr.close()
 
     def test_helper_survives_original_removal_and_symlink_launch(self):
         link = self.dir / "launch link"

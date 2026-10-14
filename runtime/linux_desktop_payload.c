@@ -29,13 +29,34 @@ static int read_at(int fd, void *out, size_t n, off_t at) {
     p += k; n -= (size_t)k; at += k; }
   return 0;
 }
+static volatile sig_atomic_t child_pid;
+static volatile sig_atomic_t received_signal;
+
+/* Extraction keeps shutdown signals blocked. Consume them synchronously so a
+ * cancellation aborts copying instead of starting a GUI only to kill it later.
+ * The same drain before restoring dispositions prevents an already-pending
+ * signal from bypassing the supervisor's normal 128 + signal return after cleanup. */
+static int shutdown_requested(const sigset_t *signals) {
+  const struct timespec immediate = {0, 0};
+  for (;;) {
+    int sig = sigtimedwait(signals, NULL, &immediate);
+    if (sig > 0) {
+      if (!received_signal) received_signal = sig;
+    } else if (errno != EINTR) {
+      break;
+    }
+  }
+  return received_signal != 0;
+}
+
 static int copy_part(int source, off_t at, uint64_t size, int dir_fd, const char *path,
-                     uint64_t *hash) {
+                     uint64_t *hash, const sigset_t *signals) {
   int out = openat(dir_fd, path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0700);
   if (out < 0) return -1;
   unsigned char buf[65536]; int result = 0;
   *hash = UINT64_C(14695981039346656037);
   while (size) {
+    if (shutdown_requested(signals)) { result = -1; break; }
     size_t n = size < sizeof(buf) ? (size_t)size : sizeof(buf);
     if (read_at(source, buf, n, at)) { result = -1; break; }
     for (size_t i = 0; i < n; i++) { *hash ^= buf[i]; *hash *= UINT64_C(1099511628211); }
@@ -43,7 +64,7 @@ static int copy_part(int source, off_t at, uint64_t size, int dir_fd, const char
     while (written < n) { ssize_t k = write(out, buf + written, n - written);
       if (k < 0 && errno == EINTR) continue;
       if (k <= 0) { result = -1; break; } written += (size_t)k; }
-    if (result) break;
+    if (result || shutdown_requested(signals)) { result = -1; break; }
     at += (off_t)n; size -= n;
   }
   if (!result && fchmod(out, 0700)) result = -1;
@@ -51,8 +72,6 @@ static int copy_part(int source, off_t at, uint64_t size, int dir_fd, const char
   return result;
 }
 extern char **environ;
-static volatile sig_atomic_t child_pid;
-static volatile sig_atomic_t received_signal;
 static void forward_signal(int sig) {
   int saved = errno; received_signal = sig;
   if (child_pid > 0) kill(-child_pid, sig == SIGHUP || sig == SIGQUIT ? SIGTERM : sig);
@@ -116,9 +135,9 @@ int dsh_linux_desktop_launch(const unsigned char *payload, int length) {
   if (asprintf(&gui, "%s/dsh-desktop", dir) < 0 ||
       asprintf(&helper, "%s/dsh", dir) < 0) { result = -3; goto done; }
   uint64_t hash;
-  if (copy_part(source, 0, base_size, dir_fd, "dsh", &hash)) { result = -3; goto done; }
+  if (copy_part(source, 0, base_size, dir_fd, "dsh", &hash, &blocked)) { result = -3; goto done; }
   if (!argv[0][0]) {
-    if (copy_part(source, (off_t)base_size, gui_size, dir_fd, "dsh-desktop", &hash)) { result = -3; goto done; }
+    if (copy_part(source, (off_t)base_size, gui_size, dir_fd, "dsh-desktop", &hash, &blocked)) { result = -3; goto done; }
     if (hash != expected) goto done;
     gui_fd = openat(dir_fd, "dsh-desktop", O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
     if (gui_fd < 0) { result = -3; goto done; }
@@ -136,8 +155,14 @@ int dsh_linux_desktop_launch(const unsigned char *payload, int length) {
     if (strncmp(environ[i], "DSH_NATIVE_WORKER_BIN=", 22)) environment[env_index++] = environ[i];
   }
   environment[env_index] = worker_environment;
+  if (shutdown_requested(&blocked)) goto done;
   int errors[2]; if (pipe2(errors, O_CLOEXEC)) { result = -3; goto done; }
   pid_t supervisor = getpid();
+  if (shutdown_requested(&blocked)) {
+    close(errors[0]); close(errors[1]); goto done;
+  }
+  /* Signals arriving after this check remain blocked until child_pid is
+   * published, then the installed handler forwards them to the child. */
   pid_t pid = fork();
   if (pid == 0) {
     close(errors[0]);
@@ -185,6 +210,7 @@ done:
   if (handlers_set) {
     sigprocmask(SIG_BLOCK, &blocked, NULL);
     child_pid = 0;
+    if (shutdown_requested(&blocked)) result = 128 + received_signal;
     for (int i = 0; i < 4; i++) sigaction(signals[i], &old[i], NULL);
     sigprocmask(SIG_SETMASK, &oldmask, NULL);
   }

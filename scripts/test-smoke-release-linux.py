@@ -13,6 +13,39 @@ spec.loader.exec_module(smoke)
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_window_selected_by_owned_log_id_despite_duplicate_titles(self):
+        log = '[07:04:18.911] x11 output 1120x760, window id 2097157\n'
+        tree = ('     0x200005 "Weston Compositor": () 1120x760+0+0\n'
+                '     0x200006 "Weston Compositor": () 1120x760+0+0\n')
+        info = ('xwininfo: Window id: 0x200005 "Weston Compositor"\n'
+                '  Width: 1120\n  Height: 760\n  Map State: IsViewable\n')
+        self.assertEqual(smoke.verify_window(log, tree, info, 1120, 760), 2097157)
+        unmapped = info.replace('IsViewable', 'IsUnMapped')
+        self.assertEqual(smoke.verify_window(log, tree, unmapped, 1120, 760,
+                                            require_viewable=False), 2097157)
+        with self.assertRaises(RuntimeError):
+            smoke.verify_window(log, tree, unmapped, 1120, 760)
+        self.assertEqual(smoke.verify_window(log, tree.replace('Weston Compositor', 'arbitrary title'),
+                                           info.replace('Weston Compositor', 'arbitrary title'), 1120, 760), 2097157)
+
+    def test_window_rejects_missing_or_mismatched_evidence(self):
+        log = 'x11 output 1120x760, window id 2097157\n'
+        tree = '  0x200005 "Weston Compositor": () 1120x760+0+0\n'
+        info = 'xwininfo: Window id: 0x200005 "Weston Compositor"\n  Width: 1120\n  Height: 760\n  Map State: IsViewable\n'
+        cases = [('', tree, info),
+                 (log + 'x11 output 1120x760, window id 2097158\n', tree, info),
+                 (log.replace('1120x760', '1280x900'), tree, info),
+                 (log, tree.replace('0x200005', '0x200006'), info),
+                 (log, tree, info.replace('0x200005', '0x200006')),
+                 (log, tree, info.replace('Width: 1120', 'Width: 1119')),
+                 (log, tree, info.replace('Height: 760', 'Height: 759')),
+                 (log, tree, info.replace('  Width: 1120\n', '')),
+                 (log, tree, info.replace('IsViewable', 'IsUnMapped')),
+                 (log, tree, info.replace('  Map State: IsViewable\n', ''))]
+        for evidence in cases:
+            with self.subTest(evidence=evidence), self.assertRaises(RuntimeError):
+                smoke.verify_window(*evidence, 1120, 760)
+
     def test_click_bounds(self):
         self.assertEqual(smoke.parse_click('DSH_DESKTOP_INPUT {"x":1119.9,"y":759.9}'), (1119, 759))
         for x, y in [(-1, 4), (1120, 0), (0, 760), (True, 0), ('2', 0), (float('nan'), 0), (0, float('inf'))]:
