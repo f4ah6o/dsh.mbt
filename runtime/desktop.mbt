@@ -26,6 +26,8 @@ pub async fn NativeDesktop::open(
   enable_subagents~ : Bool = false,
   hooks_dialect~ : String = "claude-code",
   hooks_model~ : String = "",
+  hooks_plugin_root~ : String? = None,
+  hooks_project_dir~ : String? = None,
 ) -> Result[NativeDesktop, String] {
   // A packaged Dsh.app carries the CLI as a private helper because native
   // tool effects re-enter the executable with --internal-worker.
@@ -66,6 +68,8 @@ pub async fn NativeDesktop::open(
       enable_subagents~,
       hooks_dialect~,
       hooks_model~,
+      hooks_plugin_root~,
+      hooks_project_dir~,
     ) {
     Err(error) => Err(error)
     Ok(runtime) => Ok({ runtime, })

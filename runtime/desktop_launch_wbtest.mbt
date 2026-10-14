@@ -2,14 +2,16 @@
 test "desktop launcher consumes app path but preserves argv boundaries" {
   let parsed = native_desktop_parse_launch_args([
     "--demo", "--app-path", "/Applications/Dsh Builds/Dsh.app", "--workspace", "/tmp/work space; still one argument",
-    "--", "--provider-flag", "two words",
+    "--hooks-config", "/tmp/hooks.json", "--hooks-plugin-root", "/tmp/plugin root",
+    "--hooks-project-dir", "/tmp/project root", "--", "--provider-flag", "two words",
   ])
   match parsed {
     Ok(options) => {
       assert_eq(options.app_path, Some("/Applications/Dsh Builds/Dsh.app"))
       assert_eq(options.app_args, [
-        "--demo", "--workspace", "/tmp/work space; still one argument", "--provider-flag",
-        "two words",
+        "--demo", "--workspace", "/tmp/work space; still one argument", "--hooks-config",
+        "/tmp/hooks.json", "--hooks-plugin-root", "/tmp/plugin root", "--hooks-project-dir",
+        "/tmp/project root", "--provider-flag", "two words",
       ])
       assert_eq(
         native_desktop_open_arguments(
@@ -18,7 +20,9 @@ test "desktop launcher consumes app path but preserves argv boundaries" {
         ),
         [
           "-n", "-a", "/Applications/Dsh Builds/Dsh.app", "--args", "--demo", "--workspace",
-          "/tmp/work space; still one argument", "--provider-flag", "two words",
+          "/tmp/work space; still one argument", "--hooks-config", "/tmp/hooks.json",
+          "--hooks-plugin-root", "/tmp/plugin root", "--hooks-project-dir", "/tmp/project root",
+          "--provider-flag", "two words",
         ],
       )
     }

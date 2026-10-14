@@ -98,6 +98,7 @@ async fn native_run_hook_diagnostic(
   matcher : String?,
   dialect : String,
   sink : NativeHookEventSink?,
+  project_dir~ : String? = None,
 ) -> Result[NativeHookExecution, String] {
   let checkpoint = match sink {
     Some(value) =>
@@ -108,7 +109,13 @@ async fn native_run_hook_diagnostic(
     None => None
   }
   let started = @async.now()
-  let capture = native_run_hook_command(tools, hook, payload, dialect~)
+  let capture = native_run_hook_command(
+    tools,
+    hook,
+    payload,
+    dialect~,
+    project_dir~,
+  )
   let duration_ms = Int32::max(0, (@async.now() - started).to_int())
   let execution = match capture {
     Ok(value) => Completed(value)
@@ -354,7 +361,13 @@ async fn NativeHooks::before_session_start(
     for hook in group.commands {
       ignore(self.next_handler_id("SessionStart"))
       let capture = match
-        native_run_hook_command(tools, hook, payload, dialect=self.dialect) {
+        native_run_hook_command(
+          tools,
+          hook,
+          payload,
+          dialect=self.dialect,
+          project_dir=Some(self.claude_project_dir),
+        ) {
         Ok(value) => value
         Err(_) => continue
       }
@@ -443,7 +456,13 @@ async fn NativeHooks::before_subagent_start(
     for hook in group.commands {
       ignore(self.next_handler_id("SubagentStart"))
       let capture = match
-        native_run_hook_command(tools, hook, payload, dialect=self.dialect) {
+        native_run_hook_command(
+          tools,
+          hook,
+          payload,
+          dialect=self.dialect,
+          project_dir=Some(self.claude_project_dir),
+        ) {
         Ok(value) => value
         Err(_) => continue
       }
@@ -477,7 +496,15 @@ async fn NativeHooks::after_subagent_stop(
     }
     for hook in group.commands {
       ignore(self.next_handler_id("SubagentStop"))
-      ignore(native_run_hook_command(tools, hook, payload))
+      ignore(
+        native_run_hook_command(
+          tools,
+          hook,
+          payload,
+          dialect=self.dialect,
+          project_dir=Some(self.claude_project_dir),
+        ),
+      )
     }
   }
 }
@@ -576,6 +603,7 @@ async fn NativeHooks::run_point(
           group.matcher,
           self.dialect,
           sink,
+          project_dir=Some(self.claude_project_dir),
         ) {
         Ok(value) => value
         Err(error) => return Err(error)
@@ -739,6 +767,7 @@ async fn NativeHooks::before_stop(
           None,
           self.dialect,
           sink,
+          project_dir=Some(self.claude_project_dir),
         ) {
         Ok(value) => value
         Err(error) => return Err(error)

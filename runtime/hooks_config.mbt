@@ -8,6 +8,9 @@ const NATIVE_HOOK_MAX_GROUPS : Int32 = 16
 const NATIVE_HOOK_MAX_COMMANDS : Int32 = 32
 
 ///|
+const NATIVE_HOOK_OPTION_VALUE_LIMIT : Int32 = 4096
+
+///|
 priv struct NativeHookCommand {
   command : String
   timeout_ms : Int32
@@ -32,7 +35,110 @@ priv struct NativeHooks {
   dialect : String
   model : String
   project_dir : String
+  claude_project_dir : String
   mut handler_counter : Int32
+}
+
+///|
+fn native_hook_validate_substitution_option(
+  option : String,
+  value : String?,
+) -> Result[Unit, String] {
+  match value {
+    None => Ok(())
+    Some(text) if text.contains("\u0000") => Err(option + " cannot contain NUL")
+    Some(text) if text.length() > NATIVE_HOOK_OPTION_VALUE_LIMIT =>
+      Err(option + " must be at most 4096 characters")
+    Some(_) => Ok(())
+  }
+}
+
+///|
+fn native_hook_validate_options(
+  path : String?,
+  dialect : String,
+  model : String,
+  plugin_root : String?,
+  project_dir_override : String?,
+) -> Result[Unit, String] {
+  match path {
+    Some("") => return Err("--hooks-config requires a nonempty path")
+    Some(value) if value.contains("\u0000") =>
+      return Err("--hooks-config cannot contain NUL")
+    Some(value) if value.length() > NATIVE_HOOK_OPTION_VALUE_LIMIT =>
+      return Err("--hooks-config must be at most 4096 characters")
+    _ => ()
+  }
+  match
+    native_hook_validate_substitution_option("--hooks-plugin-root", plugin_root) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  match
+    native_hook_validate_substitution_option(
+      "--hooks-project-dir", project_dir_override,
+    ) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  if dialect != "claude-code" && dialect != "codex" {
+    return Err("hooks dialect must be claude-code or codex")
+  }
+  if (plugin_root is Some(_) || project_dir_override is Some(_)) &&
+    dialect == "codex" {
+    return Err(
+      "--hooks-plugin-root and --hooks-project-dir require --hooks-dialect claude-code",
+    )
+  }
+  if (plugin_root is Some(_) || project_dir_override is Some(_)) && path is None {
+    return Err(
+      "--hooks-plugin-root and --hooks-project-dir require --hooks-config",
+    )
+  }
+  if model != "" && dialect != "codex" {
+    return Err("--hooks-model requires --hooks-dialect codex")
+  }
+  if (dialect == "codex" || model != "") && path is None {
+    return Err("--hooks-dialect and --hooks-model require --hooks-config")
+  }
+  Ok(())
+}
+
+///|
+fn native_hook_substitute_command(
+  command : String,
+  plugin_root : String?,
+  project_dir : String?,
+) -> Result[String, String] {
+  // The raw command is capped at 8192 characters and plugin_root at 4096,
+  // so this first-stage expansion is bounded to about 1.6 million
+  // characters. Measure the project expansion before joining it: a plugin
+  // root may itself contain many project tokens, and joining those directly
+  // could otherwise allocate hundreds of millions of characters.
+  let after_plugin = match plugin_root {
+    Some(value) => command.split("${CLAUDE_PLUGIN_ROOT}").to_array().join(value)
+    None => command
+  }
+  match project_dir {
+    Some(value) => {
+      let pieces = after_plugin.split("${CLAUDE_PROJECT_DIR}").to_array()
+      let project_token_length = "${CLAUDE_PROJECT_DIR}".length()
+      let final_length = after_plugin.length() +
+        (pieces.length() - 1) * (value.length() - project_token_length)
+      if final_length > 8192 {
+        Err(
+          "hook command must be a nonempty string of at most 8192 characters after substitution",
+        )
+      } else {
+        Ok(pieces.join(value))
+      }
+    }
+    None if after_plugin.length() > 8192 =>
+      Err(
+        "hook command must be a nonempty string of at most 8192 characters after substitution",
+      )
+    None => Ok(after_plugin)
+  }
 }
 
 ///|
@@ -165,7 +271,11 @@ fn native_hook_codex_regex_supported(value : String) -> Bool {
 }
 
 ///|
-fn native_hook_parse_command(value : Json) -> Result[NativeHookCommand, String] {
+fn native_hook_parse_command(
+  value : Json,
+  plugin_root~ : String? = None,
+  project_dir_override~ : String? = None,
+) -> Result[NativeHookCommand, String] {
   let fields = match native_hook_object(value) {
     Some(value) => value
     None => return Err("hook command must be an object")
@@ -183,7 +293,7 @@ fn native_hook_parse_command(value : Json) -> Result[NativeHookCommand, String] 
     None | Some(Json::String("command")) => ()
     Some(_) => return Err("only command hooks are supported")
   }
-  let command = match native_hook_string(fields.get("command"), "command") {
+  let raw_command = match native_hook_string(fields.get("command"), "command") {
     Ok(Some(value)) if !value.trim().is_empty() && value.length() <= 8192 =>
       value
     _ =>
@@ -191,8 +301,12 @@ fn native_hook_parse_command(value : Json) -> Result[NativeHookCommand, String] 
         "hook command must be a nonempty string of at most 8192 characters",
       )
   }
-  if command.contains("${CLAUDE_PLUGIN_ROOT}") {
-    return Err("${CLAUDE_PLUGIN_ROOT} substitution is not supported")
+  let command = match
+    native_hook_substitute_command(
+      raw_command, plugin_root, project_dir_override,
+    ) {
+    Ok(value) => value
+    Err(error) => return Err(error)
   }
   let timeout_ms = match fields.get("timeout") {
     None => NATIVE_HOOK_DEFAULT_TIMEOUT_MS
@@ -209,6 +323,8 @@ fn native_hook_parse_groups(
   value : Json?,
   event : String,
   dialect : String,
+  plugin_root~ : String? = None,
+  project_dir_override~ : String? = None,
 ) -> Result[Array[NativeHookGroup], String] {
   let groups = match value {
     None => return Ok([])
@@ -271,7 +387,12 @@ fn native_hook_parse_groups(
       if command_count > NATIVE_HOOK_MAX_COMMANDS {
         return Err("each hook event is limited to 32 commands")
       }
-      let command = match native_hook_parse_command(raw_command) {
+      let command = match
+        native_hook_parse_command(
+          raw_command,
+          plugin_root~,
+          project_dir_override~,
+        ) {
         Ok(value) => value
         Err(error) => return Err(error)
       }
@@ -381,6 +502,8 @@ fn native_hook_parse_codex_groups(
 fn native_hook_parse_config(
   value : Json,
   dialect~ : String = "claude-code",
+  plugin_root~ : String? = None,
+  project_dir_override~ : String? = None,
 ) -> Result[
   (
     Array[NativeHookGroup],
@@ -393,6 +516,12 @@ fn native_hook_parse_config(
   ),
   String,
 ] {
+  if (plugin_root is Some(_) || project_dir_override is Some(_)) &&
+    dialect == "codex" {
+    return Err(
+      "--hooks-plugin-root and --hooks-project-dir require --hooks-dialect claude-code",
+    )
+  }
   let root = match native_hook_object(value) {
     Some(value) => value
     None => return Err("hooks config must be a JSON object")
@@ -466,12 +595,20 @@ fn native_hook_parse_config(
       hook_map.get("SessionStart"),
       "SessionStart",
       dialect,
+      plugin_root~,
+      project_dir_override~,
     ) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
   let pre_tool = match
-    native_hook_parse_groups(hook_map.get("PreToolUse"), "PreToolUse", dialect) {
+    native_hook_parse_groups(
+      hook_map.get("PreToolUse"),
+      "PreToolUse",
+      dialect,
+      plugin_root~,
+      project_dir_override~,
+    ) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -480,6 +617,8 @@ fn native_hook_parse_config(
       hook_map.get("PostToolUse"),
       "PostToolUse",
       dialect,
+      plugin_root~,
+      project_dir_override~,
     ) {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -489,12 +628,20 @@ fn native_hook_parse_config(
       hook_map.get("UserPromptSubmit"),
       "UserPromptSubmit",
       dialect,
+      plugin_root~,
+      project_dir_override~,
     ) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
   let stop = match
-    native_hook_parse_groups(hook_map.get("Stop"), "Stop", dialect) {
+    native_hook_parse_groups(
+      hook_map.get("Stop"),
+      "Stop",
+      dialect,
+      plugin_root~,
+      project_dir_override~,
+    ) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -503,6 +650,8 @@ fn native_hook_parse_config(
       hook_map.get("SubagentStart"),
       "SubagentStart",
       dialect,
+      plugin_root~,
+      project_dir_override~,
     ) {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -512,6 +661,8 @@ fn native_hook_parse_config(
       hook_map.get("SubagentStop"),
       "SubagentStop",
       dialect,
+      plugin_root~,
+      project_dir_override~,
     ) {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -576,9 +727,15 @@ async fn NativeHooks::load(
   project_dir : String,
   dialect~ : String = "claude-code",
   model~ : String = "",
+  plugin_root~ : String? = None,
+  project_dir_override~ : String? = None,
 ) -> Result[NativeHooks, String] {
-  if dialect != "claude-code" && dialect != "codex" {
-    return Err("hooks dialect must be claude-code or codex")
+  match
+    native_hook_validate_options(
+      path, dialect, model, plugin_root, project_dir_override,
+    ) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
   }
   match path {
     None =>
@@ -593,6 +750,7 @@ async fn NativeHooks::load(
         dialect,
         model,
         project_dir,
+        claude_project_dir: project_dir_override.unwrap_or(project_dir),
         handler_counter: 0,
       })
     Some(path) => {
@@ -603,7 +761,13 @@ async fn NativeHooks::load(
       let document = @json.parse(text) catch {
         _ => return Err("hooks config is not valid JSON")
       }
-      match native_hook_parse_config(document, dialect~) {
+      match
+        native_hook_parse_config(
+          document,
+          dialect~,
+          plugin_root~,
+          project_dir_override~,
+        ) {
         Ok(
           (
             session_start,
@@ -626,6 +790,7 @@ async fn NativeHooks::load(
             dialect,
             model,
             project_dir,
+            claude_project_dir: project_dir_override.unwrap_or(project_dir),
             handler_counter: 0,
           })
         Err(error) => Err(error)

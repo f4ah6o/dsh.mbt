@@ -142,7 +142,16 @@ async fn NativeRuntime::open(
   enable_subagents~ : Bool = false,
   hooks_dialect~ : String = "claude-code",
   hooks_model~ : String = "",
+  hooks_plugin_root~ : String? = None,
+  hooks_project_dir~ : String? = None,
 ) -> Result[NativeRuntime, String] {
+  match
+    native_hook_validate_options(
+      hooks_config_path, hooks_dialect, hooks_model, hooks_plugin_root, hooks_project_dir,
+    ) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
   let provider_config = match
     native_provider_config(
       demo_provider, mode_override, model_override, base_url_override, max_retries,
@@ -159,6 +168,8 @@ async fn NativeRuntime::open(
       workspace_path,
       dialect=hooks_dialect,
       model=hooks_model,
+      plugin_root=hooks_plugin_root,
+      project_dir_override=hooks_project_dir,
     ) {
     Ok(value) => value
     Err(error) => return Err(error)

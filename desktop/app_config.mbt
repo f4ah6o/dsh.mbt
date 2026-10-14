@@ -10,6 +10,10 @@ priv struct DesktopConfig {
   max_retries : Int32
   mcp_config_path : String?
   hooks_config_path : String?
+  hooks_plugin_root : String?
+  hooks_project_dir : String?
+  hooks_dialect : String
+  hooks_model : String
   lsp_config_path : String?
   enable_skills : Bool
   enable_subagents : Bool
@@ -195,8 +199,9 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
     "/tmp/dsh-desktop-frame.ppm",
   )
   let values = [
-    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--lsp-config",
-    "--skill-dir", "--mode", "--model", "--base-url", "--max-retries", "--frame-output",
+    "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--hooks-plugin-root",
+    "--hooks-project-dir", "--hooks-dialect", "--hooks-model", "--lsp-config", "--skill-dir",
+    "--mode", "--model", "--base-url", "--max-retries", "--frame-output",
   ]
   let flags = [
     "--demo", "--allow-shell", "--enable-skills", "--enable-subagents", "--smoke",
@@ -208,6 +213,9 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
     if values.contains(argument) {
       if index + 1 >= args.length() || args[index + 1].has_prefix("--") {
         return Err(argument + " requires a value")
+      }
+      if args[index + 1].contains("\u0000") {
+        return Err(argument + " cannot contain NUL")
       }
       index += 2
     } else if flags.contains(argument) {
@@ -226,6 +234,66 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
   if desktop_argument_values(args, "--hooks-config").length() > 1 {
     return Err("--hooks-config may only be specified once")
   }
+  if desktop_argument_values(args, "--hooks-plugin-root").length() > 1 {
+    return Err("--hooks-plugin-root may only be specified once")
+  }
+  if desktop_argument_values(args, "--hooks-project-dir").length() > 1 {
+    return Err("--hooks-project-dir may only be specified once")
+  }
+  if desktop_argument_values(args, "--hooks-dialect").length() > 1 {
+    return Err("--hooks-dialect may only be specified once")
+  }
+  if desktop_argument_values(args, "--hooks-model").length() > 1 {
+    return Err("--hooks-model may only be specified once")
+  }
+  let hooks_config_path = desktop_argument_value(args, "--hooks-config")
+  let hooks_plugin_root = desktop_argument_value(args, "--hooks-plugin-root")
+  let hooks_project_dir = desktop_argument_value(args, "--hooks-project-dir")
+  let hooks_dialect = desktop_argument_value(args, "--hooks-dialect").unwrap_or(
+    "claude-code",
+  )
+  let hooks_model = desktop_argument_value(args, "--hooks-model").unwrap_or("")
+  if hooks_config_path == Some("") {
+    return Err("--hooks-config requires a nonempty path")
+  }
+  for
+    (option, value) in [
+      ("--hooks-config", hooks_config_path),
+      ("--hooks-plugin-root", hooks_plugin_root),
+      ("--hooks-project-dir", hooks_project_dir),
+    ] {
+    match value {
+      Some(path) if path.length() > 4096 =>
+        return Err(option + " must be at most 4096 characters")
+      _ => ()
+    }
+  }
+  match hooks_dialect {
+    "claude-code" | "codex" => ()
+    _ => return Err("--hooks-dialect must be claude-code or codex")
+  }
+  if desktop_argument_value(args, "--hooks-dialect") == Some("") ||
+    desktop_argument_value(args, "--hooks-model") == Some("") {
+    return Err("--hooks-dialect and --hooks-model require a nonempty value")
+  }
+  if hooks_model != "" && hooks_dialect != "codex" {
+    return Err("--hooks-model requires --hooks-dialect codex")
+  }
+  if (
+      desktop_argument_value(args, "--hooks-dialect") is Some(_) ||
+      desktop_argument_value(args, "--hooks-model") is Some(_) ||
+      hooks_plugin_root is Some(_) ||
+      hooks_project_dir is Some(_)
+    ) &&
+    hooks_config_path is None {
+    return Err("hook options require --hooks-config")
+  }
+  if (hooks_plugin_root is Some(_) || hooks_project_dir is Some(_)) &&
+    hooks_dialect == "codex" {
+    return Err(
+      "--hooks-plugin-root and --hooks-project-dir require --hooks-dialect claude-code",
+    )
+  }
   if desktop_argument_values(args, "--lsp-config").length() > 1 {
     return Err("--lsp-config may only be specified once")
   }
@@ -242,7 +310,11 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
     base_url: desktop_argument_value(args, "--base-url").unwrap_or(""),
     max_retries,
     mcp_config_path: desktop_argument_value(args, "--mcp-config"),
-    hooks_config_path: desktop_argument_value(args, "--hooks-config"),
+    hooks_config_path,
+    hooks_plugin_root,
+    hooks_project_dir,
+    hooks_dialect,
+    hooks_model,
     lsp_config_path: desktop_argument_value(args, "--lsp-config"),
     enable_skills: desktop_argument_flag(args, "--enable-skills"),
     enable_subagents: desktop_argument_flag(args, "--enable-subagents"),
@@ -255,7 +327,7 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
 
 ///|
 fn desktop_usage() -> String {
-  "Usage: dsh-desktop [--workspace PATH] [--data-dir PATH] [--mcp-config PATH] [--hooks-config PATH] [--lsp-config PATH] [--enable-skills] [--enable-subagents] [--skill-dir PATH] [--mode MODE] [--model NAME] [--base-url URL] [--max-retries 0..5] [--allow-shell] [--demo]\n" +
+  "Usage: dsh-desktop [--workspace PATH] [--data-dir PATH] [--mcp-config PATH] [--hooks-config PATH] [--hooks-plugin-root PATH] [--hooks-project-dir PATH] [--hooks-dialect claude-code|codex] [--hooks-model NAME] [--lsp-config PATH] [--enable-skills] [--enable-subagents] [--skill-dir PATH] [--mode MODE] [--model NAME] [--base-url URL] [--max-retries 0..5] [--allow-shell] [--demo]\n" +
   "       dsh-desktop --smoke [--workspace PATH] [--data-dir PATH]\n" +
   "       dsh-desktop --offline-e2e --workspace PATH --data-dir PATH [--frame-output FILE]\n\n" +
   "A native macOS conversation window backed by dsh's local runtime. Send a prompt, review tool calls, and approve or deny them in the transcript. Use Command-V to paste and Up/Down or PageUp/PageDown to scroll history. Japanese input through system IME composition is not supported by the current GPUI text host; paste works."
