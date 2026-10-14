@@ -145,6 +145,11 @@ async fn native_desktop_resolve_candidates(
 
 ///|
 async fn native_desktop_launch(args : Array[String]) -> Result[Unit, String] {
+  if !native_os_is_macos() {
+    return Err(
+      "dsh desktop is supported only on macOS; use dsh web on this platform",
+    )
+  }
   if !@fs.can_execute("/usr/bin/open") {
     return Err("dsh desktop requires macOS LaunchServices (/usr/bin/open)")
   }

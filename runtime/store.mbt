@@ -472,9 +472,12 @@ fn NativeStore::acquire(
   let previous_token = json_string(object_field(previous, "token"))
   if previous_host != hostname || os_process_alive(previous_pid) {
     return Err(
-      "another host owns this data directory (pid " +
+      "data directory is locked; recorded owner: host " +
+      previous_host +
+      " (pid " +
       previous_pid.to_string() +
-      ")",
+      "). Verify and stop the owning dsh instance on that host before retrying, or use --data-dir PATH for a separate instance. " +
+      "The lock was left unchanged because its owner cannot be confirmed dead.",
     )
   }
   match root.create_exclusive_code("host.recovery", owner, permission=0o600) {

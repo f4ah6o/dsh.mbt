@@ -126,13 +126,13 @@ fn native_usage() -> String {
 }
 
 ///|
-/// `abort` writes its runtime diagnostic to stdout in native builds. ACP owns
-/// stdout as a JSON-RPC stream, so fatal startup/shutdown paths use a bounded
-/// stderr message and terminate with a nonzero status instead.
+/// Expected CLI failures belong on stderr and exit normally, without SIGABRT
+/// or a core dump. ACP callers additionally use bounded, sanitized messages
+/// because stdout is reserved for their JSON-RPC stream.
 extern "C" fn native_process_exit(status : Int32) -> Unit = "exit"
 
 ///|
-fn native_acp_fatal(message : String) -> Unit {
+fn native_cli_fatal(message : String) -> Unit {
   eprintln(message)
   native_flush_stderr()
   native_process_exit(1)
@@ -527,20 +527,27 @@ pub async fn run_cli() -> Unit {
   if native_flag(raw_args, "--internal-worker") {
     let payload = match native_worker_payload(raw_args) {
       Ok(value) => value
-      Err(error) => abort(error)
+      Err(error) => {
+        native_cli_fatal(error)
+        return
+      }
     }
     let status = native_exec_worker(payload)
-    abort(
+    native_cli_fatal(
       "native process worker could not start (OS error " +
       status.to_string() +
       ")",
     )
+    return
   }
   if raw_args.length() > 1 && raw_args[1] == "desktop" {
     let desktop_args = raw_args[2:].to_owned()
     match native_desktop_launch(desktop_args) {
       Ok(_) => ()
-      Err(error) => abort(error)
+      Err(error) => {
+        native_cli_fatal(error)
+        return
+      }
     }
     return
   }
@@ -549,9 +556,10 @@ pub async fn run_cli() -> Unit {
     Ok(_) => ()
     Err(error) =>
       if native_flag(args, "--acp") {
-        native_acp_fatal("native ACP arguments are invalid")
+        native_cli_fatal("native ACP arguments are invalid")
       } else {
-        abort(error)
+        native_cli_fatal(error)
+        return
       }
   }
   native_configure_service_signal_policy(args)
@@ -562,23 +570,35 @@ pub async fn run_cli() -> Unit {
   if native_flag(args, "--serve") {
     let (data_dir, workspace) = match native_cli_paths(args) {
       Ok(value) => value
-      Err(error) => abort(error)
+      Err(error) => {
+        native_cli_fatal(error)
+        return
+      }
     }
     let port = match native_option(args, "--port") {
       Some(value) =>
         match service_parse_int(value) {
           Some(value) if value >= 0 && value <= 65535 => value
-          _ => abort("--port must be between 0 and 65535")
+          _ => {
+            native_cli_fatal("--port must be between 0 and 65535")
+            return
+          }
         }
       None => 3080
     }
     let source_root = match @env.current_dir() {
       Some(value) => value
-      None => abort("cannot determine native service source directory")
+      None => {
+        native_cli_fatal("cannot determine native service source directory")
+        return
+      }
     }
     let max_retries = match native_cli_retry_limit(args) {
       Ok(value) => value
-      Err(error) => abort(error)
+      Err(error) => {
+        native_cli_fatal(error)
+        return
+      }
     }
     let runtime = match
       NativeRuntime::open(
@@ -603,7 +623,10 @@ pub async fn run_cli() -> Unit {
         ),
         hooks_model=native_option(args, "--hooks-model").unwrap_or(""),
       ) {
-      Err(error) => abort("native runtime could not start: " + error)
+      Err(error) => {
+        native_cli_fatal("native runtime could not start: " + error)
+        return
+      }
       Ok(runtime) => runtime
     }
     let service = match
@@ -615,24 +638,34 @@ pub async fn run_cli() -> Unit {
       ) {
       Err(error) => {
         ignore(runtime.close())
-        abort("native service could not start: " + error)
+        native_cli_fatal("native service could not start: " + error)
+        return
       }
       Ok(service) => service
     }
     match service.run() {
       Ok(_) => ()
-      Err(error) => abort("native service failed: " + error)
+      Err(error) => {
+        native_cli_fatal("native service failed: " + error)
+        return
+      }
     }
     return
   }
   if native_flag(args, "--mcp") {
     let (data_dir, workspace) = match native_cli_paths(args) {
       Ok(value) => value
-      Err(error) => abort(error)
+      Err(error) => {
+        native_cli_fatal(error)
+        return
+      }
     }
     let max_retries = match native_cli_retry_limit(args) {
       Ok(value) => value
-      Err(error) => abort(error)
+      Err(error) => {
+        native_cli_fatal(error)
+        return
+      }
     }
     let runtime = match
       NativeRuntime::open(
@@ -657,17 +690,24 @@ pub async fn run_cli() -> Unit {
         ),
         hooks_model=native_option(args, "--hooks-model").unwrap_or(""),
       ) {
-      Err(error) => abort("native runtime could not start: " + error)
+      Err(error) => {
+        native_cli_fatal("native runtime could not start: " + error)
+        return
+      }
       Ok(runtime) => runtime
     }
     match native_mcp_stdio(runtime) {
       Err(error) => {
         ignore(runtime.close())
-        abort("native MCP carrier failed: " + error)
+        native_cli_fatal("native MCP carrier failed: " + error)
+        return
       }
       Ok(_) =>
         match runtime.close() {
-          Err(error) => abort("native runtime shutdown failed: " + error)
+          Err(error) => {
+            native_cli_fatal("native runtime shutdown failed: " + error)
+            return
+          }
           Ok(_) => ()
         }
     }
@@ -677,14 +717,14 @@ pub async fn run_cli() -> Unit {
     let (data_dir, workspace) = match native_cli_paths(args) {
       Ok(value) => value
       Err(_) => {
-        native_acp_fatal("native ACP paths could not be resolved")
+        native_cli_fatal("native ACP paths could not be resolved")
         return
       }
     }
     let max_retries = match native_cli_retry_limit(args) {
       Ok(value) => value
       Err(_) => {
-        native_acp_fatal("native ACP retry configuration is invalid")
+        native_cli_fatal("native ACP retry configuration is invalid")
         return
       }
     }
@@ -712,7 +752,7 @@ pub async fn run_cli() -> Unit {
         hooks_model=native_option(args, "--hooks-model").unwrap_or(""),
       ) {
       Err(_) => {
-        native_acp_fatal("native runtime could not start")
+        native_cli_fatal("native runtime could not start")
         return
       }
       Ok(runtime) => runtime
@@ -720,11 +760,11 @@ pub async fn run_cli() -> Unit {
     match native_acp_stdio(runtime) {
       Err(_) => {
         ignore(runtime.close())
-        native_acp_fatal("native ACP carrier failed")
+        native_cli_fatal("native ACP carrier failed")
       }
       Ok(_) =>
         match runtime.close() {
-          Err(_) => native_acp_fatal("native runtime shutdown failed")
+          Err(_) => native_cli_fatal("native runtime shutdown failed")
           Ok(_) => ()
         }
     }
@@ -744,11 +784,17 @@ pub async fn run_cli() -> Unit {
   if cli_action {
     let (data_dir, workspace) = match native_cli_paths(args) {
       Ok(value) => value
-      Err(error) => abort(error)
+      Err(error) => {
+        native_cli_fatal(error)
+        return
+      }
     }
     let max_retries = match native_cli_retry_limit(args) {
       Ok(value) => value
-      Err(error) => abort(error)
+      Err(error) => {
+        native_cli_fatal(error)
+        return
+      }
     }
     let runtime = match
       NativeRuntime::open(
@@ -773,18 +819,25 @@ pub async fn run_cli() -> Unit {
         ),
         hooks_model=native_option(args, "--hooks-model").unwrap_or(""),
       ) {
-      Err(error) => abort("native runtime could not start: " + error)
+      Err(error) => {
+        native_cli_fatal("native runtime could not start: " + error)
+        return
+      }
       Ok(runtime) => runtime
     }
     let output = match native_cli_action(runtime, args) {
       Ok(value) => value
       Err(error) => {
         ignore(runtime.close())
-        abort("native CLI action failed: " + error)
+        native_cli_fatal("native CLI action failed: " + error)
+        return
       }
     }
     match runtime.close() {
-      Err(error) => abort("native runtime shutdown failed: " + error)
+      Err(error) => {
+        native_cli_fatal("native runtime shutdown failed: " + error)
+        return
+      }
       Ok(_) => {
         let rendered = native_cli_render(args, output)
         if !rendered.is_empty() {
@@ -800,21 +853,31 @@ pub async fn run_cli() -> Unit {
   }
   let (data_dir, workspace) = match native_cli_paths(args) {
     Ok(value) => value
-    Err(error) => abort(error)
+    Err(error) => {
+      native_cli_fatal(error)
+      return
+    }
   }
   let mcp_config_path = native_option(args, "--mcp-config")
   match
     NativeRuntime::open(data_dir, workspace, false, false, mcp_config_path~) {
-    Err(error) => abort("native runtime could not start: " + error)
+    Err(error) => {
+      native_cli_fatal("native runtime could not start: " + error)
+      return
+    }
     Ok(runtime) =>
       match runtime.run_demo() {
         Err(error) => {
           ignore(runtime.close())
-          abort("native runtime demo failed: " + error)
+          native_cli_fatal("native runtime demo failed: " + error)
+          return
         }
         Ok(demo_id) => {
           match runtime.close() {
-            Err(error) => abort("native runtime shutdown failed: " + error)
+            Err(error) => {
+              native_cli_fatal("native runtime shutdown failed: " + error)
+              return
+            }
             Ok(_) => ()
           }
           match
@@ -824,7 +887,10 @@ pub async fn run_cli() -> Unit {
               demo_id,
               mcp_config_path~,
             ) {
-            Err(error) => abort("native runtime reload check failed: " + error)
+            Err(error) => {
+              native_cli_fatal("native runtime reload check failed: " + error)
+              return
+            }
             Ok(_) =>
               println(
                 "native runtime demo passed: checkpoint, approval, tool, context, persisted reload",

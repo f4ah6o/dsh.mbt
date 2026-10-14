@@ -1156,6 +1156,28 @@ moon run native --target native --release -- \
 
 `--deny-call` follows the same flow but rejects the tool. Provider account lifecycle actions are also available locally with `--auth-status`, `--sign-in`, `--models`, `--select-model MODEL`, and `--sign-out`; each action requires `--data-dir` and `--workspace`. CLI `--sign-in` opens the host operating system's default browser. Sign-in from the local browser UI opens a new tab in that same browser. In both cases, the callback flow and tokens stay on the host in the protected native store.
 
+## Startup failures and platform support
+
+`dsh desktop` launches the macOS `Dsh.app` bundle and is supported only on
+macOS. On Linux, use `dsh web` for the browser UI. A Linux `/usr/bin/open`
+(such as an `xdg-open` alias) does not provide macOS LaunchServices.
+Expected CLI failures print a diagnostic to stderr and exit with status 1,
+without aborting or generating a core dump.
+
+Only one runtime may own a data directory at a time. If startup reports a
+locked directory, the hostname and PID identify the **recorded** owner, not
+proof that the current process with that PID is dsh. Verify the owning dsh
+instance on that host and shut it down normally before retrying. Do not kill
+an arbitrary PID or delete `host.lock` to bypass this check. To run an
+independent instance, use a different `--data-dir /absolute/path` (it has its
+own sessions and authentication state).
+
+A same-host lock is recovered automatically only when its PID is confirmed
+absent. Foreign-host locks, live or reused PIDs, invalid JSON, and
+locks whose owners cannot be confirmed absent remain protected. An old creation timestamp alone is not
+proof that a lock is stale. Upgrading or reinstalling dsh does not stop an
+already-running instance or remove its lock.
+
 ## Data directory compatibility
 
 On first open, the native runtime can read supported legacy dsh session snapshots and Session v4 inputs, then writes the native versioned envelope and receipt ledger. This conversion is one-way; older Node-host versions reject the native envelope. The Node host is retired in this version. Back up the data directory before opening it with the native runtime, and do not run an older writer against that directory afterward.

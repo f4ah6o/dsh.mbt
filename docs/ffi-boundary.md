@@ -26,6 +26,7 @@ dsh_kill_process_group          dsh_os_flush_stderr
 dsh_os_executable_path          dsh_os_flush_stdout
 dsh_os_hard_worker_memory_supported
 dsh_os_hostname                 dsh_os_pid
+dsh_os_is_macos
 dsh_os_process_alive            dsh_os_process_group_alive
 dsh_os_stdin_is_terminal
 dsh_os_timestamp                dsh_os_uid
@@ -35,6 +36,7 @@ dsh_service_signals_restore
 
 `host_os.c` wraps dirfd-relative file operations, no-follow opens, metadata,
 atomic writes, process spawning and termination, terminal and process facts,
+a compile-time macOS platform flag,
 stdout/stderr flushing, and the low-level SHA-256 / RS256 primitives used by
 MoonBit authentication code. Its filesystem walk rejects absolute paths and
 `.` / `..` components as a syscall-level guard; MoonBit still owns workspace
