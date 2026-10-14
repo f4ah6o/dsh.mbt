@@ -29,6 +29,7 @@ priv struct NativeService {
   runtime : NativeRuntime
   web_root : String?
   requested_port : Int32
+  auto_port : Bool
   tailnet_host : String?
   tailnet_owner : String?
   tailnet_port : Int32
@@ -113,6 +114,7 @@ async fn NativeService::new(
   source_root : String,
   requested_port : Int32,
   assets_dir~ : String? = None,
+  auto_port~ : Bool = false,
 ) -> Result[NativeService, String] {
   if requested_port < 0 || requested_port > 65535 {
     return Err("HTTP port must be between 0 and 65535")
@@ -143,6 +145,7 @@ async fn NativeService::new(
     runtime,
     web_root,
     requested_port,
+    auto_port,
     tailnet_host: tailnet_config.map(config => config.0),
     tailnet_owner: tailnet_config.map(config => config.1),
     tailnet_port: tailnet_config.map(config => config.2).unwrap_or(443),
@@ -171,7 +174,7 @@ async fn NativeService::run(self : NativeService) -> Result[Unit, String] {
   native_flush_stdout()
   let service_result = @async.handle_cancellation(async fn() {
     self.run_listener() catch {
-      _ => Err("native service HTTP listener failed unexpectedly")
+      error => Err("native service HTTP listener failed: " + error.to_string())
     }
   })
   let close_result = @async.protect_from_cancel(async fn() {
@@ -197,7 +200,16 @@ async fn NativeService::run_listener(
   let address = @socket.Addr::parse(
     "127.0.0.1:" + self.requested_port.to_string(),
   )
-  let server = native_service_listener(address)
+  let server = native_service_start_listener(address, auto_port=self.auto_port) catch {
+    error =>
+      return Err(
+        "cannot listen on 127.0.0.1:" +
+        self.requested_port.to_string() +
+        ": " +
+        error.to_string() +
+        "; choose an unused --port, or use --port 0 for an available port",
+      )
+  }
   defer server.close()
   let port = server.addr.port()
   let local_url = "http://127.0.0.1:" + port.to_string()
@@ -224,6 +236,7 @@ async fn NativeService::run_listener(
       )
   }
   native_flush_stdout()
+  let mut listener_error = None
   @async.with_task_group <| group => {
     let listener = group.spawn(no_wait=true, allow_failure=true, async fn() {
       server.run_forever(max_connections=NATIVE_HTTP_CONNECTION_LIMIT) <| ((
@@ -246,7 +259,12 @@ async fn NativeService::run_listener(
         server.close()
         finished = true
       } else {
-        let listener_state = Some(listener.try_wait()) catch { _ => None }
+        let listener_state = Some(listener.try_wait()) catch {
+          error => {
+            listener_error = Some(error.to_string())
+            None
+          }
+        }
         match listener_state {
           Some(Some(_)) => {
             server.close()
@@ -264,13 +282,43 @@ async fn NativeService::run_listener(
   if c_service_signals_requested() != 0 {
     Ok(())
   } else {
-    Err("native service HTTP listener stopped unexpectedly")
+    Err(
+      "native service HTTP listener stopped at " +
+      local_url +
+      listener_error.map(error => ": " + error).unwrap_or(" unexpectedly"),
+    )
   }
 }
 
 ///|
 async fn native_service_listener(address : @socket.Addr) -> @http.Server {
   @http.Server(address, reuse_addr=true)
+}
+
+///|
+extern "C" fn c_service_address_in_use(errno : Int32) -> Bool = "dsh_service_address_in_use"
+
+///|
+async fn native_service_start_listener(
+  address : @socket.Addr,
+  auto_port~ : Bool = false,
+) -> @http.Server {
+  native_service_listener(address) catch {
+    @os_error.OSError(errno, ..) as error => {
+      if !auto_port || !c_service_address_in_use(errno) {
+        raise error
+      }
+      // Only the implicit default may move. Never reuse another live listener,
+      // weaken loopback isolation, or silently change an explicitly chosen port.
+      eprintln(
+        "native service default port " +
+        address.port().to_string() +
+        " is already in use; selecting an available loopback port",
+      )
+      native_service_listener(@socket.Addr::parse("127.0.0.1:0"))
+    }
+    error => raise error
+  }
 }
 
 ///|

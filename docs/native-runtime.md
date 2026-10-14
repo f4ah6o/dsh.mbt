@@ -26,7 +26,7 @@ moon run native --target native --release -- \
 
 `sh scripts/build.sh` also builds the installable `cmd/dsh` executable after refreshing `runtime/bundled_web.mbt`. The generated bundle contains the compiled MoonBit browser module and service worker, the pinned styles, `index.html`, the web manifest, and the icon. Both `moon install ./cmd/dsh` and release executables serve these assets from any working directory. Pass `--assets-dir PATH` only when an explicit filesystem asset override is needed; the directory is resolved at service startup.
 
-The server binds only to `127.0.0.1`. The browser carrier uses the same durable command, receipt, snapshot, approval, and effect path as native clients.
+The server binds only to `127.0.0.1`. With no `--port`, it prefers port 3080; if another listener already owns that port, it binds an OS-assigned available loopback port and prints the actual URL. An explicit `--port N` is strict and reports the original OS error on failure; `--port 0` always requests an available port. A conflict never stops the existing listener or bypasses the data-directory lock. Other network or permission errors do not trigger a port fallback. For stable bookmarks, browser preferences/offline caches, or a Tailscale Serve target, choose an explicit unused `--port`: browser-local state is scoped to the URL origin, while session history remains in the selected data directory. The browser carrier uses the same durable command, receipt, snapshot, approval, and effect path as native clients.
 
 For a credential-free offline check, add `--demo`:
 
