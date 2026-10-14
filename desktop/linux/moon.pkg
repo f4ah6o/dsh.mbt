@@ -4,6 +4,7 @@ import {
   "f4ah6o/dsh/desktop",
   "f4ah6o/dsh/runtime",
   "f4ah6o/gpui/ubuntu" @native,
+  "f4ah6o/gpui/x11",
   "f4ah6o/gpui/platform/testing",
   "f4ah6o/gpui/diagnostics",
 }
@@ -17,7 +18,7 @@ options(
     "native": {
       "cc": "script/linux_text_cc.py",
       "cc-flags": "-O2",
-      "cc-link-flags": "-lwayland-client -lwayland-cursor -lwayland-egl -lEGL -lGLESv2 -lxkbcommon -lpthread -lm",
+      "cc-link-flags": "-lX11 -lwayland-client -lwayland-cursor -lwayland-egl -lEGL -lGLESv2 -lxkbcommon -lpthread -lm",
     },
   },
 )
