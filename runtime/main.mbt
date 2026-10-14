@@ -224,7 +224,7 @@ fn native_cli_approval_revision(session : Json) -> Json {
           ) ==
           call_id {
           return int_field(event, "seq")
-            .map(value => value)
+            .map(value => Json(value))
             .unwrap_or(Json::null())
         }
       }
@@ -513,7 +513,7 @@ async fn native_cli_action(
     } else {
       "approval"
     },
-    "source_session_id": fork_source.map(value => value).unwrap_or(Json::null()),
+    "source_session_id": fork_source.map(value => value).unwrap_or("null"),
     "session_id": active_session,
     "receipt": receipt.unwrap_or(Json::null()),
     "approval_revision": native_cli_approval_revision(session),

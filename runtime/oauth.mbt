@@ -391,7 +391,7 @@ fn NativeAuth::status(self : NativeAuth) -> Json {
   match self.credential {
     None =>
       {
-        "state": self.login_state.to_json(),
+        "state": Json(self.login_state),
         "account": Json::null(),
         "plan_usage": "disabled",
         "scopes": Json::array([]),
@@ -408,9 +408,9 @@ fn NativeAuth::status(self : NativeAuth) -> Json {
         _ => Map([])
       }
       fields["models"] = Json::array(self.visible_models())
-      fields["state"] = self.login_state
+      fields["state"] = Json(self.login_state)
       fields["selected_model"] = match self.selected_model {
-        Some(model) => model
+        Some(model) => Json(model)
         None => Json::null()
       }
       Json::object(fields)
@@ -1580,7 +1580,7 @@ fn native_parse_callback_query(path : String) -> Result[Json, String] {
     if values.contains(key) {
       return Err("AUTH_CALLBACK_INVALID: duplicate OAuth callback field")
     }
-    values[key] = value
+    values[key] = Json(value)
   }
   Ok(Json::object(values))
 }

@@ -558,7 +558,7 @@ fn native_cli_prune_input(
               " and 262144",
             )
         }
-        fields[field] = parsed
+        fields[field] = Json(parsed)
       }
     }
   }

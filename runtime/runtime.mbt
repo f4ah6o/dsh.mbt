@@ -1196,9 +1196,9 @@ fn native_safe_session(value : Json) -> Json {
     _ => ()
   }
   if approval_revision is Some(revision) {
-    result["approval_revision"] = revision
+    result["approval_revision"] = Json(revision)
   }
-  result["has_tool_results"] = has_tool_results
+  result["has_tool_results"] = Json(has_tool_results)
   result["events"] = Json::array(safe_events)
   Json::object(result)
 }
@@ -1352,7 +1352,7 @@ fn native_receipt_owner(receipt : Json) -> String {
 fn native_receipt_with_owner(receipt : Json, identity_key : String) -> Json {
   match receipt {
     Json::Object(fields) => {
-      fields["owner_identity_key"] = identity_key
+      fields["owner_identity_key"] = Json(identity_key)
       Json::object(fields)
     }
     _ => receipt
@@ -1593,7 +1593,7 @@ async fn NativeRuntime::accept_remote_command(
         "tool_approve", "session_send", "session_cancel", "session_prune_tool_results",
         "session_fork",
       ].contains(command.operation) {
-      input_fields["session_id"] = session_id
+      input_fields["session_id"] = Json(session_id)
     }
   }
   let input = Json::object(input_fields)
@@ -1791,7 +1791,7 @@ async fn NativeRuntime::accept_remote_prompt_command(
     Json::Object(fields) => {
       let copy = fields.copy()
       match command.session_id {
-        Some(session_id) => copy["session_id"] = session_id
+        Some(session_id) => copy["session_id"] = Json(session_id)
         None => ()
       }
       native_hook_prompt_input(Json::object(copy), [])
@@ -2168,8 +2168,10 @@ async fn NativeRuntime::finish_receipt(
       string_field(previous, "command_id") == Some(command_id) {
       let replacement = match previous {
         Json::Object(fields) => {
-          fields["status"] = status
-          fields["error"] = error.map(value => value).unwrap_or(Json::null())
+          fields["status"] = Json(status)
+          fields["error"] = error
+            .map(value => Json(value))
+            .unwrap_or(Json::null())
           Json::object(fields)
         }
         _ => previous

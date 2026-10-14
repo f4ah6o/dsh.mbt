@@ -1518,7 +1518,7 @@ fn approve_tool(app : BrowserApp, approved : Bool) -> Unit {
         Some(app.id),
         Json::object({
           "call_id": Json::string(call_id),
-          "approved": approved.to_json(),
+          "approved": Json(approved),
         }),
         approval_revision=revision,
       ) {

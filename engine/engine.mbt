@@ -576,7 +576,7 @@ fn Session::stream_projection(
       continue
     }
     match event.data {
-      Json::Object(data) if data.get("effect_id") == Some(effect_id) => {
+      Json::Object(data) if data.get("effect_id") == Some(Json(effect_id)) => {
         found = true
         match data.get("content") {
           Some(Json::String(text)) => content.write_string(text)

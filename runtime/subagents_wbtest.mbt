@@ -8,8 +8,8 @@ fn native_subagent_openai_text_stream_with_reason(
   content : String,
   finish_reason : String,
 ) -> String {
-  let escaped = content.stringify()
-  let reason = finish_reason.to_json().stringify()
+  let escaped = Json(content).stringify()
+  let reason = Json(finish_reason).stringify()
   "data: {\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\{escaped}},\"finish_reason\":null}]}\r\n\r\n" +
   "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\{reason}}]}\r\n\r\n" +
   "data: [DONE]\r\n\r\n"

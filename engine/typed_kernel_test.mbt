@@ -329,7 +329,7 @@ test "QuickCheck verifies repeated typed send and settlement operation sequences
       match engine.invoke("session_get", { "session_id": "quickcheck" }) {
         Ok(Object(fields)) =>
           valid &&
-          fields.get("turn_id") == Some(turns) &&
+          fields.get("turn_id") == Some(Json(turns)) &&
           fields.get("status") == Some("completed")
         _ => false
       }

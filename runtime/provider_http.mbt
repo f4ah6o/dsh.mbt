@@ -763,16 +763,17 @@ fn native_provider_failure_json(
   let safe_message = native_provider_clip(message, 512)
   let failure : Map[String, Json] = { "code": code, "message": safe_message }
   match status {
-    Some(value) if value >= 100 && value <= 599 => failure["status"] = value
+    Some(value) if value >= 100 && value <= 599 =>
+      failure["status"] = Json(value)
     _ => ()
   }
   match retry_after_ms {
-    Some(value) if value >= 0 => failure["retry_after_ms"] = value
+    Some(value) if value >= 0 => failure["retry_after_ms"] = Json(value)
     _ => ()
   }
   match request_id {
     Some(value) if native_provider_valid_request_id(value) =>
-      failure["request_id"] = value
+      failure["request_id"] = Json(value)
     _ => ()
   }
   Json::object({

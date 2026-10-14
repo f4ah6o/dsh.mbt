@@ -12,7 +12,7 @@ async test "native snapshot writes exceed the workspace file limit but stay boun
     })
     let content = "x".repeat(1200000)
     let state : NativeState = {
-      engine: content,
+      engine: Json(content),
       receipts: [],
       server_id: store.server_id,
       workspace_id: store.workspace_id,
@@ -29,11 +29,11 @@ async test "native snapshot writes exceed the workspace file limit but stay boun
       Ok(value) => value
       Err(error) => fail(error)
     }
-    assert_eq(loaded.engine, content)
+    assert_eq(loaded.engine, Json(content))
 
     let oversized : NativeState = {
       ..state,
-      engine: "y".repeat(SNAPSHOT_LIMIT),
+      engine: Json("y".repeat(SNAPSHOT_LIMIT)),
       revision: 2,
     }
     assert_true(store.save(oversized) is Err(_))
@@ -41,6 +41,6 @@ async test "native snapshot writes exceed the workspace file limit but stay boun
       Ok(value) => value
       Err(error) => fail(error)
     }
-    assert_eq(after_rejection.engine, content)
+    assert_eq(after_rejection.engine, Json(content))
   }
 }

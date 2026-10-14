@@ -16,7 +16,7 @@ let next_stream : Ref[Int32] = Ref(0)
 fn response(result : Result[Json, String]) -> String {
   let value : Json = match result {
     Ok(result) => { "ok": true, "result": result }
-    Err(error) => { "ok": false, "error": error.to_json() }
+    Err(error) => { "ok": false, "error": Json(error) }
   }
   value.stringify()
 }

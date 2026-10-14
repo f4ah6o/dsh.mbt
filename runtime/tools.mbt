@@ -871,7 +871,7 @@ async fn NativeTools::repository_metadata(self : NativeTools) -> Json {
       if safe {
         (value, false)
       } else {
-        (Json::null(), false)
+        ("null", false)
       }
     }
     _ => {
@@ -899,7 +899,7 @@ async fn NativeTools::repository_metadata(self : NativeTools) -> Json {
       if valid_commit {
         (commit, true)
       } else {
-        (Json::null(), false)
+        ("null", false)
       }
     }
   }

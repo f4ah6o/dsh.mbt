@@ -178,7 +178,7 @@ fn prepare_responses_impl(
     "stream": true,
   }
   if !system.is_empty() {
-    body["instructions"] = system
+    body["instructions"] = Json(system)
   }
   {
     "url": "https://api.openai.com/v1/responses",

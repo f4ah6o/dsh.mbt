@@ -569,7 +569,7 @@ test "Responses reconstructs empty terminal output from validated done items" {
   assert_true(decoder.has_completed_result())
   let result = responses_value(decoder.finish())
   assert_true(!decoder.has_completed_result())
-  assert_true(responses_field(result, "content") == text)
+  assert_true(responses_field(result, "content") == Json(text))
 }
 
 ///|
@@ -719,7 +719,8 @@ test "QuickCheck verifies arbitrary Unicode text over every decoded-string SSE s
           valid = false
         } else {
           match decoder.finish() {
-            Ok(Object(fields)) => valid = fields.get("content") == Some(text)
+            Ok(Object(fields)) =>
+              valid = fields.get("content") == Some(Json(text))
             _ => valid = false
           }
         }

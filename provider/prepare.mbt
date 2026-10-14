@@ -127,7 +127,7 @@ fn prepare_impl(
         }
         match message.get("is_error") {
           None => ()
-          Some(value) => result["is_error"] = boolean(value, "is_error")
+          Some(value) => result["is_error"] = Json(boolean(value, "is_error"))
         }
         append_message(messages, "user", [Json::object(result)])
       } else {
@@ -187,7 +187,7 @@ fn prepare_impl(
         wire["tool_calls"] = Json::array(openai_calls)
       }
       if role == "assistant" && !reasoning.is_empty() {
-        wire["reasoning_content"] = reasoning
+        wire["reasoning_content"] = Json(reasoning)
       }
       messages.push(Json::object(wire))
     }
@@ -206,7 +206,7 @@ fn prepare_impl(
   }
   if mode == "deepseek" {
     if !system.is_empty() {
-      body["system"] = system
+      body["system"] = Json(system)
     }
     let effort = optional_text(request, "reasoning_effort").unwrap_or("high")
     if effort != "off" && effort != "low" && effort != "high" && effort != "max" {
@@ -225,7 +225,7 @@ fn prepare_impl(
   } else {
     match optional_text(request, "reasoning_effort") {
       None => ()
-      Some(effort) => body["reasoning_effort"] = effort
+      Some(effort) => body["reasoning_effort"] = Json(effort)
     }
     if stream {
       body["stream_options"] = { "include_usage": true }

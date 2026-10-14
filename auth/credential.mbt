@@ -102,11 +102,11 @@ pub fn Credential::access_token_for_transport(self : Credential) -> String {
 pub fn Credential::public_summary(self : Credential) -> Json {
   let account : Map[String, Json] = Map([])
   match self.email {
-    Some(value) => account["email"] = value
+    Some(value) => account["email"] = Json(value)
     None => ()
   }
   match self.profile_id {
-    Some(value) => account["profile_id"] = value
+    Some(value) => account["profile_id"] = Json(value)
     None => ()
   }
   {
@@ -121,7 +121,7 @@ pub fn Credential::public_summary(self : Credential) -> Json {
     } else {
       "disabled"
     },
-    "scopes": Json::array(self.scopes.map(scope => scope)),
+    "scopes": Json::array(self.scopes.map(scope => Json(scope))),
     "models": Json::array([]),
   }
 }
@@ -149,7 +149,7 @@ pub fn Credential::storage_json(self : Credential) -> Json {
       Some(value) => value
       None => Json::null()
     },
-    "scopes": Json::array(self.scopes.map(scope => scope)),
+    "scopes": Json::array(self.scopes.map(scope => Json(scope))),
     "expires_at": self.expires_at,
   }
 }

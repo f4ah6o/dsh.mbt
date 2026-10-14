@@ -255,14 +255,14 @@ pub fn LoginAttempt::authorization_params(self : LoginAttempt) -> Json {
     "code_challenge_method": "S256",
   }
   if self.requested_client_id is None {
-    values["agent_name_hint"] = AGENT_NAME
+    values["agent_name_hint"] = Json(AGENT_NAME)
   }
   match self.id_token_hint {
-    Some(value) => values["id_token_hint"] = value
+    Some(value) => values["id_token_hint"] = Json(value)
     None => ()
   }
   match self.login_hint {
-    Some(value) => values["login_hint"] = value
+    Some(value) => values["login_hint"] = Json(value)
     None => ()
   }
   Json::object(values)

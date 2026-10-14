@@ -236,7 +236,7 @@ fn update_usage(
     let (wire, normalized) = pair
     match fields.get(wire) {
       None => ()
-      Some(value) => usage[normalized] = integer(value, wire)
+      Some(value) => usage[normalized] = Json(integer(value, wire))
     }
   }
   if mode == "openai" {
@@ -247,7 +247,9 @@ fn update_usage(
         match details.get("cached_tokens") {
           None => ()
           Some(value) =>
-            usage["cache_read_input_tokens"] = integer(value, "cached_tokens")
+            usage["cache_read_input_tokens"] = Json(
+              integer(value, "cached_tokens"),
+            )
         }
       }
     }
@@ -259,7 +261,9 @@ fn update_usage(
         match details.get("cached_tokens") {
           None => ()
           Some(value) =>
-            usage["cache_read_input_tokens"] = integer(value, "cached_tokens")
+            usage["cache_read_input_tokens"] = Json(
+              integer(value, "cached_tokens"),
+            )
         }
       }
     }
@@ -290,7 +294,7 @@ fn result_json(
     "finish_reason": reason,
   }
   if !reasoning.is_empty() {
-    result["reasoning"] = reasoning
+    result["reasoning"] = Json(reasoning)
   }
   if !usage.is_empty() {
     result["usage"] = Json::object(usage.copy())
