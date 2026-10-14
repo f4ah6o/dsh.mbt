@@ -6,6 +6,7 @@ import importlib.util
 import os
 from pathlib import Path
 import plistlib
+import re
 import shutil
 import stat
 import struct
@@ -192,6 +193,51 @@ int main(int argc, char **argv) {
         app = self.extract(source=source)
         self.assertEqual(run("/usr/bin/xattr", "-p", "com.apple.quarantine", app).stdout.strip().encode(), value)
         self.assertEqual(run("/usr/bin/xattr", "-p", "com.apple.quarantine", source).stdout.strip().encode(), value)
+
+    @unittest.skipUnless(os.environ.get("DSH_TEST_MACOS_MOON_CLI") == "1", "opt-in actual MoonBit CLI with background-only synthetic bundle")
+    def test_actual_moon_cli_launches_embedded_synthetic_app(self):
+        # Exercise the real MoonBit FFI, path decoding and LaunchServices argv,
+        # while the payload is a tiny non-Metal app that exits on its own.
+        version = re.search(r'^version = "([^"]+)"', (ROOT / "moon.mod").read_text(), re.M).group(1)
+        archive = self.case / (version + ".zip")
+        if not archive.exists():
+            self.make_payload(version)
+        cli = self.case / "synthetic-bundled-cli"
+        run("/bin/sh", ROOT / "scripts/package-macos-cli.sh", archive, cli, cwd=ROOT)
+        home = self.case / "isolated launch home"
+        home.mkdir(mode=0o700)
+        env = dict(os.environ, HOME=str(home))
+        def launch(marker, override=None):
+            args = [cli, "desktop"]
+            if override is not None:
+                args += ["--app-path", override]
+            args += ["--", "--marker", marker]
+            run(*args, cwd=self.case, env=env)
+            deadline = time.monotonic() + 10
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertTrue(marker.exists(), "the real MoonBit CLI did not launch the synthetic bundled app")
+            self.assertEqual(marker.read_text(), "synthetic LaunchServices fixture\n")
+        launch(self.case / "first marker")
+        with ThreadPoolExecutor(max_workers=3) as pool:
+            list(pool.map(lambda i: launch(self.case / ("concurrent marker " + str(i))), range(3)))
+        cache = home / "Library/Caches/org.fu2hito.dsh/bundled-desktop"
+        versions = [p for p in cache.iterdir() if not p.name.startswith(".")]
+        self.assertEqual(len(versions), 1)
+        app = versions[0] / "Dsh-macos-arm64/Dsh.app"
+        run("/usr/bin/codesign", "--verify", "--deep", "--strict", app)
+        # The explicit override must bypass the embedded cache. An identical
+        # fixture marker alone would also pass if --app-path were ignored.
+        resource = app / "Contents/Resources/test-resource.txt"
+        resource.write_text("invalid embedded cache must remain untouched\n")
+        rejected_marker = self.case / "rejected embedded marker"
+        rejected = subprocess.run([str(cli), "desktop", "--", "--marker", str(rejected_marker)], cwd=self.case, env=env, capture_output=True)
+        self.assertNotEqual(rejected.returncode, 0)
+        self.assertFalse(rejected_marker.exists())
+        override = self.extract(cache=self.case / "explicit override cache")
+        launch(self.case / "override marker", override=override)
+        self.assertEqual(resource.read_text(), "invalid embedded cache must remain untouched\n")
+        self.assertFalse(list(cache.glob(".stage-*")))
 
     @unittest.skipUnless(os.environ.get("DSH_TEST_MACOS_LAUNCH_SERVICES") == "1", "opt-in background-only synthetic LaunchServices fixture")
     def test_repeated_concurrent_launches_and_upgrade(self):
