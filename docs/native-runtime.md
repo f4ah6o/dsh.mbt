@@ -627,6 +627,28 @@ defaulting to 10 seconds (upstream allows longer waits). Each hook receives one
 JSON object on stdin, limited to 64 KiB. Stdout and stderr are captured
 independently up to 16 KiB each; overflow is treated as an unsupported result.
 
+For the Claude Code dialect, `--hooks-plugin-root DIR` replaces every
+`${CLAUDE_PLUGIN_ROOT}` occurrence in configured commands, and
+`--hooks-project-dir DIR` replaces every `${CLAUDE_PROJECT_DIR}` occurrence.
+The same optional values are available as `hooks_plugin_root~` and
+`hooks_project_dir~` on internal `NativeRuntime::open` and public
+`NativeDesktop::open`.
+Substitution happens when the config is parsed, first for plugin root and then
+for project directory. An omitted value leaves its token text unchanged; an
+explicit empty value replaces it with an empty string. The project-directory
+override also sets the hook process's `CLAUDE_PROJECT_DIR` environment value.
+Without that override, the environment value defaults to the selected
+workspace. Hooks still execute with the selected workspace as their working
+directory, regardless of the project-directory override.
+
+These options require `--hooks-config` and are rejected with the Codex
+dialect. Native option values are limited to 4,096 characters and cannot
+contain NUL. The expanded command must still fit the 8,192-character command
+limit. Substitution inserts the values as raw shell command text, without
+quoting or escaping; quote the token in the command template where shell
+syntax requires it. Hook commands and replacement values are trusted host
+code.
+
 ### Codex command hooks
 
 Pass `--hooks-dialect codex` with `--hooks-config PATH` to select the native
@@ -997,8 +1019,8 @@ context-limit overflow reject the request instead of being silently truncated;
 Stop keeps exit-2 control when its captured stderr truncates. Native session
 capacity and provider-shape checks remain stricter. Restore, Session v4 import,
 receipt replay, and retries do not rerun hooks. Arbitrary async hooks,
-prompt-hook types other than command-based UserPromptSubmit, and
-`${CLAUDE_PLUGIN_ROOT}` substitution are not implemented. A matching
+prompt-hook types other than command-based UserPromptSubmit, and events outside
+the seven listed above are not implemented. A matching
 PostToolUse hook adds a durable `effect-known` result event before running the
 hook. Native session capacity
 limits still apply to the additional context metadata and messages.

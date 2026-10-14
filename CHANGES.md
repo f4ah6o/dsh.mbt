@@ -16,6 +16,26 @@
 
 ### Migration
 
+## 0.1.22 - 2026-10-14
+
+### Added
+
+- Add `--hooks-plugin-root` and `--hooks-project-dir` to native CLI and runtime APIs for Claude Code command hooks. Parse-time replacement processes all plugin-root occurrences before project-directory occurrences; omitted tokens stay literal, and a project override also sets `CLAUDE_PROJECT_DIR` while hook commands keep the workspace as their working directory. Replacement values are inserted as raw shell text.
+
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+- Check the expanded hook command length before materializing project-directory substitutions, bounding temporary memory for oversized commands.
+
+### Migration
+
 ## 0.1.21 - 2026-10-13
 
 ### Added

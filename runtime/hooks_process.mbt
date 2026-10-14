@@ -50,6 +50,7 @@ async fn native_run_hook_command(
   hook : NativeHookCommand,
   stdin_text : String,
   dialect~ : String = "claude-code",
+  project_dir~ : String? = None,
 ) -> Result[NativeHookCapture, String] {
   let stdin_bytes = @utf8.encode(stdin_text)
   if stdin_bytes.length() > NATIVE_HOOK_STDIN_LIMIT {
@@ -61,7 +62,7 @@ async fn native_run_hook_command(
     ("LC_ALL", "C.UTF-8"),
   ])
   if dialect == "claude-code" {
-    worker_env["CLAUDE_PROJECT_DIR"] = tools.workspace
+    worker_env["CLAUDE_PROJECT_DIR"] = project_dir.unwrap_or(tools.workspace)
   }
   let mut worker_pid : Int32? = None
   let leader_reaped = Ref(false)

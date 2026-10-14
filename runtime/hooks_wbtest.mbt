@@ -310,6 +310,271 @@ test "native Claude hook config accepts Stop and rejects unsupported events and 
 }
 
 ///|
+test "Claude hook commands substitute roots in order and retain unset tokens" {
+  assert_eq(
+    native_hook_substitute_command(
+      "before ${CLAUDE_PLUGIN_ROOT} after ${CLAUDE_PLUGIN_ROOT} and ${CLAUDE_PROJECT_DIR}",
+      Some("plug/${CLAUDE_PROJECT_DIR}"),
+      Some("project"),
+    ).unwrap(),
+    "before plug/project after plug/project and project",
+  )
+  assert_eq(
+    native_hook_substitute_command(
+      "${CLAUDE_PLUGIN_ROOT}/${CLAUDE_PROJECT_DIR}",
+      None,
+      None,
+    ).unwrap(),
+    "${CLAUDE_PLUGIN_ROOT}/${CLAUDE_PROJECT_DIR}",
+  )
+  assert_eq(
+    native_hook_substitute_command(
+      "${CLAUDE_PLUGIN_ROOT}:${CLAUDE_PROJECT_DIR}",
+      Some(""),
+      Some(""),
+    ).unwrap(),
+    ":",
+  )
+  let empty_command = native_hook_parse_command(
+    Json::object({ "command": Json::string("${CLAUDE_PLUGIN_ROOT}") }),
+    plugin_root=Some(""),
+    project_dir_override=Some(""),
+  ).unwrap()
+  assert_eq(empty_command.command, "")
+
+  let parsed = native_hook_parse_config(
+    @json.parse(
+      native_hook_test_config(
+        "PreToolUse", "Read", "printf '%s' ${CLAUDE_PLUGIN_ROOT}/${CLAUDE_PROJECT_DIR} ${CLAUDE_PLUGIN_ROOT}",
+      ),
+    ),
+    plugin_root=Some("/plugin"),
+    project_dir_override=Some("/project"),
+  ).unwrap()
+  assert_eq(
+    parsed.1[0].commands[0].command,
+    "printf '%s' /plugin//project /plugin",
+  )
+  let raw = "printf '%s' ${CLAUDE_PLUGIN_ROOT}/${CLAUDE_PROJECT_DIR}"
+  let unset = native_hook_parse_config(
+    @json.parse(native_hook_test_config("PreToolUse", "Read", raw)),
+  ).unwrap()
+  assert_eq(unset.1[0].commands[0].command, raw)
+}
+
+///|
+test "Claude hook command and substitution option bounds are checked before use" {
+  let at_limit = Json::object({ "command": Json::string("x".repeat(8192)) })
+  assert_true(native_hook_parse_command(at_limit) is Ok(_))
+  let over_limit = Json::object({ "command": Json::string("x".repeat(8193)) })
+  assert_true(native_hook_parse_command(over_limit) is Err(_))
+  let expanded = Json::object({
+    "command": Json::string("x".repeat(5000) + "${CLAUDE_PLUGIN_ROOT}"),
+  })
+  assert_true(
+    native_hook_parse_command(expanded, plugin_root=Some("y".repeat(4096)))
+    is Err(_),
+  )
+  let plugin_token = "${CLAUDE_PLUGIN_ROOT}"
+  let project_token = "${CLAUDE_PROJECT_DIR}"
+  let repeated_plugins = plugin_token.repeat(8192 / plugin_token.length()) +
+    "x".repeat(8192 % plugin_token.length())
+  let nested_project_tokens = project_token.repeat(
+      4096 / project_token.length(),
+    ) +
+    "x".repeat(4096 % project_token.length())
+  let nested_expansion = Json::object({
+    "command": Json::string(repeated_plugins),
+  })
+  assert_true(
+    native_hook_parse_command(
+      nested_expansion,
+      plugin_root=Some(nested_project_tokens),
+      project_dir_override=Some("p".repeat(4096)),
+    )
+    is Err(_),
+  )
+  let shrinking_expansion = native_hook_parse_command(
+    Json::object({ "command": Json::string(plugin_token.repeat(3)) }),
+    plugin_root=Some(nested_project_tokens),
+    project_dir_override=Some(""),
+  ).unwrap()
+  assert_eq(shrinking_expansion.command, "xxx")
+  assert_true(
+    native_hook_validate_options(
+      Some("hooks.json"),
+      "claude-code",
+      "",
+      Some(""),
+      Some(""),
+    )
+    is Ok(_),
+  )
+  assert_true(
+    native_hook_validate_options(
+      Some("hooks.json"),
+      "claude-code",
+      "",
+      Some("/plugin\u0000root"),
+      None,
+    )
+    is Err(_),
+  )
+  assert_true(
+    native_hook_validate_options(
+      Some("hooks.json"),
+      "codex",
+      "",
+      None,
+      Some("/project"),
+    )
+    is Err(_),
+  )
+}
+
+///|
+async test "Claude hook config reader enforces its 64 KiB byte bound" {
+  let fixture = @fs.tmpdir(prefix="dsh-hook-config-limit")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let path = fixture + "/hooks.json"
+    @fs.write_file(path, @utf8.encode("x".repeat(65536)))
+    assert_eq(native_hook_read_config(path).unwrap().length(), 65536)
+    @fs.write_file(path, @utf8.encode("x".repeat(65537)))
+    assert_true(native_hook_read_config(path) is Err(_))
+  }
+}
+
+///|
+async test "Claude root and child hooks see substitution env without changing execution cwd" {
+  let fixture = @fs.tmpdir(prefix="dsh-hook-roots-env-cwd")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let config_path = fixture + "/hooks.json"
+    let marker = workspace + "/hook-roots.txt"
+    let command = "printf '%s|%s|%s|%s\\n' \"$CLAUDE_PROJECT_DIR\" \"$PWD\" ${CLAUDE_PLUGIN_ROOT} ${CLAUDE_PROJECT_DIR} >> " +
+      native_hook_shell_quote(marker)
+    let group_for = (event_matcher : String) => {
+      Json::object({
+        "matcher": Json::string(event_matcher),
+        "hooks": Json::array([
+          Json::object({ "command": Json::string(command) }),
+        ]),
+      })
+    }
+    let config = Json::object({
+      "SessionStart": Json::array([group_for("startup")]),
+      "SubagentStart": Json::array([group_for("general-purpose")]),
+      "SubagentStop": Json::array([group_for("general-purpose")]),
+    })
+    @fs.write_file(config_path, @utf8.encode(config.stringify()))
+    let hooks = NativeHooks::load(
+      Some(config_path),
+      workspace,
+      plugin_root=Some("/plugin-root"),
+      project_dir_override=Some("/configured-project"),
+    ).unwrap()
+    let tools = native_hook_test_tools(workspace)
+    group.add_defer(() => tools.root.close())
+    assert_true(
+      hooks.before_session_start(tools, "root-session", "startup").is_empty(),
+    )
+    assert_true(hooks.before_subagent_start(tools, "child-session").is_empty())
+    hooks.after_subagent_stop(tools, "child-session")
+    assert_eq(
+      @fs.read_file(marker).text(),
+      ("/configured-project|" +
+      workspace +
+      "|/plugin-root|/configured-project\n").repeat(3),
+    )
+    let empty_overrides = NativeHooks::load(
+      Some(config_path),
+      workspace,
+      plugin_root=Some(""),
+      project_dir_override=Some(""),
+    ).unwrap()
+    assert_true(
+      empty_overrides
+      .before_session_start(tools, "empty-session", "startup")
+      .is_empty(),
+    )
+    assert_eq(
+      @fs.read_file(marker).text(),
+      ("/configured-project|" +
+      workspace +
+      "|/plugin-root|/configured-project\n").repeat(3) +
+      "|" +
+      workspace +
+      "||\n",
+    )
+  }
+}
+
+///|
+async test "invalid Claude hook overrides fail before the runtime opens its store" {
+  let fixture = @fs.tmpdir(prefix="dsh-hook-option-before-store")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let config_path = fixture + "/hooks.json"
+    @fs.write_file(
+      config_path,
+      @utf8.encode(native_hook_test_config("PreToolUse", "Read", "true")),
+    )
+    let result = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(config_path),
+      hooks_dialect="codex",
+      hooks_plugin_root=Some("/plugin"),
+    )
+    assert_true(result is Err(_))
+    assert_false(@fs.exists(fixture + "/data"))
+  }
+}
+
+///|
+async test "invalid Claude hook config fails before store creation or command launch" {
+  let fixture = @fs.tmpdir(prefix="dsh-hook-config-before-store")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let marker = fixture + "/hook-launched"
+    let config = Json::object({
+      "PreToolUse": Json::array([
+        Json::object({
+          "matcher": Json::string("Read"),
+          "hooks": Json::array([
+            Json::object({
+              "command": Json::string("touch " + marker),
+              "timeout": Json::number(0),
+            }),
+          ]),
+        }),
+      ]),
+    })
+    let config_path = fixture + "/hooks.json"
+    @fs.write_file(config_path, @utf8.encode(config.stringify()))
+    let result = NativeRuntime::open(
+      fixture + "/data",
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(config_path),
+    )
+    assert_true(result is Err(_))
+    assert_false(@fs.exists(fixture + "/data"))
+    assert_false(@fs.exists(marker))
+  }
+}
+
+///|
 test "SessionStart payload and context codec retain the pinned context-only contract" {
   let payload = native_session_start_payload(
     "claude-code", "", "/workspace", "session-start-fixture", "resume",

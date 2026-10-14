@@ -186,6 +186,11 @@ async fn desktop_verify_persisted_reload(
       model=config.model,
       base_url=config.base_url,
       max_retries=config.max_retries,
+      hooks_config_path=config.hooks_config_path,
+      hooks_plugin_root=config.hooks_plugin_root,
+      hooks_project_dir=config.hooks_project_dir,
+      hooks_dialect=config.hooks_dialect,
+      hooks_model=config.hooks_model,
     ) {
     Ok(value) => value
     Err(error) =>

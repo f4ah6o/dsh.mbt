@@ -96,6 +96,67 @@ test "native CLI preserves subcommand arguments and bounds retry and approval op
 }
 
 ///|
+test "native hook substitution options survive run service and desktop CLI forwarding" {
+  let run_args = native_cli_normalize_args([
+    "dsh-native", "run", "Use hooks", "--hooks-config", "hooks.json", "--hooks-plugin-root",
+    "", "--hooks-project-dir", "/project",
+  ])
+  assert_eq(native_option(run_args, "--hooks-plugin-root"), Some(""))
+  assert_eq(native_option(run_args, "--hooks-project-dir"), Some("/project"))
+  assert_true(native_cli_validate_args(run_args) is Ok(_))
+
+  let web_args = native_cli_normalize_args([
+    "dsh-native", "web", "--hooks-config", "hooks.json", "--hooks-plugin-root", "/plugin",
+    "--hooks-project-dir", "/project",
+  ])
+  assert_true(native_flag(web_args, "--serve"))
+  assert_eq(native_option(web_args, "--hooks-plugin-root"), Some("/plugin"))
+  assert_true(native_cli_validate_args(web_args) is Ok(_))
+
+  let mcp_args = native_cli_normalize_args([
+    "dsh-native", "mcp", "--hooks-config", "hooks.json", "--hooks-plugin-root", "/plugin",
+    "--hooks-project-dir", "/project",
+  ])
+  assert_true(native_flag(mcp_args, "--mcp"))
+  assert_true(native_cli_validate_args(mcp_args) is Ok(_))
+
+  let acp_args = native_cli_normalize_args([
+    "dsh-native", "acp", "--hooks-config", "hooks.json", "--hooks-plugin-root", "/plugin",
+    "--hooks-project-dir", "/project",
+  ])
+  assert_true(native_flag(acp_args, "--acp"))
+  assert_true(native_cli_validate_args(acp_args) is Ok(_))
+
+  assert_true(
+    native_cli_validate_args([
+      "dsh-native", "--run", "prompt", "--hooks-config", "hooks.json", "--hooks-dialect",
+      "codex", "--hooks-project-dir", "/project",
+    ])
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args([
+      "dsh-native", "--run", "prompt", "--hooks-config", "hooks.json", "--hooks-plugin-root",
+      "/plugin", "--hooks-plugin-root", "/other",
+    ])
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args([
+      "dsh-native", "--run", "prompt", "--hooks-config", "hooks.json", "--hooks-project-dir",
+      "/project\u0000dir",
+    ])
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args([
+      "dsh-native", "--hooks-plugin-root", "/plugin", "--run", "prompt",
+    ])
+    is Err(_),
+  )
+}
+
+///|
 test "native CLI pruning budgets reject invalid bounds" {
   assert_eq(
     native_cli_prune_input(
