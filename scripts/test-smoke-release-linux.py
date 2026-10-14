@@ -22,17 +22,86 @@ class ProtocolTests(unittest.TestCase):
         info = 'xwininfo: Window id: 0x200005 "dsh"\n  Width: 1120\n  Height: 760\n  Map State: IsViewable\n'
         properties = '_NET_WM_PID(CARDINAL) = 321\nWM_PROTOCOLS(ATOM) = WM_DELETE_WINDOW\n'
         self.assertEqual(smoke.x11_window(log), record)
-        self.assertEqual(smoke.verify_x11_window(record, tree, info, properties, {321: {}}, 1120, 760), 2097157)
+        for protocols in ['WM_PROTOCOLS(ATOM) = WM_DELETE_WINDOW',
+                          'WM_PROTOCOLS(ATOM): protocols  WM_DELETE_WINDOW',
+                          'WM_PROTOCOLS(ATOM): protocols  WM_TAKE_FOCUS, WM_DELETE_WINDOW, _NET_WM_PING']:
+            candidate = '_NET_WM_PID(CARDINAL) = 321\n' + protocols + '\n'
+            with self.subTest(protocols=protocols):
+                self.assertEqual(smoke.verify_x11_window(record, tree, info, candidate, {321: {}}, 1120, 760), 2097157)
         for candidate_tree, candidate_info, candidate_properties, descendants in [
                 (tree, info, properties, {322: {}}),
                 (tree, info, properties.replace('321', '322'), {321: {}}),
                 (tree, info, properties.replace('WM_DELETE_WINDOW', 'WM_TAKE_FOCUS'), {321: {}}),
+                (tree, info, properties.replace('WM_DELETE_WINDOW', 'NOT_WM_DELETE_WINDOW'), {321: {}}),
+                (tree, info, properties.replace('WM_DELETE_WINDOW', 'WM_DELETE_WINDOW_SUFFIX'), {321: {}}),
                 (tree.replace('0x200005', '0x300005'), info, properties, {321: {}}),
                 (tree, info.replace('0x200005', '0x200006'), properties, {321: {}}),
                 (tree, info.replace('IsViewable', 'IsUnMapped'), properties, {321: {}})]:
             with self.subTest(descendants=descendants, properties=candidate_properties), self.assertRaises(RuntimeError):
                 smoke.verify_x11_window(record, candidate_tree, candidate_info,
                                         candidate_properties, descendants, 1120, 760)
+
+    def test_native_x11_protocols_accepts_xprop_builtin_and_generic_formats(self):
+        for value in ['WM_PROTOCOLS(ATOM): protocols  WM_DELETE_WINDOW',
+                      'WM_PROTOCOLS(ATOM) = WM_DELETE_WINDOW',
+                      'WM_PROTOCOLS(ATOM): protocols\tWM_DELETE_WINDOW\t',
+                      'WM_PROTOCOLS(ATOM)\t=\tWM_DELETE_WINDOW\t']:
+            with self.subTest(value=value):
+                self.assertEqual(smoke.x11_protocols(value + '\n'), {'WM_DELETE_WINDOW'})
+        self.assertEqual(smoke.x11_protocols('WM_PROTOCOLS(ATOM): protocols  WM_TAKE_FOCUS, WM_DELETE_WINDOW'),
+                         {'WM_TAKE_FOCUS', 'WM_DELETE_WINDOW'})
+        self.assertNotIn('WM_DELETE_WINDOW', smoke.x11_protocols('WM_PROTOCOLS(ATOM): protocols  NOT_WM_DELETE_WINDOW'))
+
+    def test_native_x11_protocols_rejects_missing_duplicate_or_malformed_properties(self):
+        valid = 'WM_PROTOCOLS(ATOM): protocols  WM_DELETE_WINDOW\n'
+        for value in ['', valid + valid, valid.replace('(ATOM)', '(STRING)'),
+                      valid.replace('WM_PROTOCOLS', 'OTHER_WM_PROTOCOLS'),
+                      valid.replace(': protocols ', ': '),
+                      valid.replace('WM_DELETE_WINDOW', '"WM_DELETE_WINDOW"'),
+                      valid.replace('WM_DELETE_WINDOW', 'WM_DELETE_WINDOW extra'),
+                      valid.replace('WM_DELETE_WINDOW', 'WM_DELETE_WINDOW,'),
+                      valid.replace('WM_DELETE_WINDOW', ''),
+                      'WM_PROTOCOLS:  no such atom on any window.\n']:
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                smoke.x11_protocols(value)
+
+    def test_native_x11_window_diagnostics_survive_parser_and_command_failure(self):
+        record = {'pid': 321, 'window': 2097157, 'width': 1120, 'height': 760}
+        tree = '  0x200005 "dsh": () 1120x760+0+0\n'
+        info = 'xwininfo: Window id: 0x200005 "dsh"\n  Width: 1120\n  Height: 760\n  Map State: IsViewable\n'
+        for exit_code, properties, error in [
+                (0, '_NET_WM_PID(CARDINAL) = 321\nWM_PROTOCOLS(ATOM): protocols  WM_TAKE_FOCUS\n',
+                 'does not advertise WM_DELETE_WINDOW'),
+                (1, 'partial property response\n', 'inspection failed: properties')]:
+            with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                harness = smoke.X11Harness(root / 'dsh', root, root / 'runtime')
+                harness.xvfb = mock.Mock(pid=123)
+                harness.xvfb.poll.return_value = None
+                harness.input_compositor = mock.Mock(pid=300)
+                harness.input_compositor.poll.return_value = None
+                harness.app_label = 'fixture'
+                harness.app_log = root / 'app.log'
+                harness.app_log.write_text('GPUI_X11_WINDOW ' + json.dumps(record) + '\n')
+                harness.window_record = None
+                results = [mock.Mock(stdout=tree, stderr='', returncode=0),
+                           mock.Mock(stdout=info, stderr='', returncode=0),
+                           mock.Mock(stdout=properties, stderr='property diagnostic', returncode=exit_code)]
+                with mock.patch.object(smoke, 'process_tree', return_value={321: {'starttime': '100'}}), \
+                     mock.patch.object(harness, 'command', side_effect=results) as invoke, \
+                     self.assertRaisesRegex(RuntimeError, error):
+                    harness.verify_app_window()
+                diagnostics = json.loads((root / 'fixture-window-verification.jsonl').read_text())
+                self.assertEqual(diagnostics['properties'], {
+                    'stdout': properties, 'stderr': 'property diagnostic', 'returncode': exit_code})
+                self.assertEqual(diagnostics['tree']['stdout'], tree)
+                self.assertEqual(diagnostics['info']['stdout'], info)
+                self.assertEqual(diagnostics['window'], record)
+                self.assertEqual(diagnostics['owned_pids'], [321])
+                self.assertFalse(diagnostics['verified'])
+                self.assertIn(error, diagnostics['error'])
+                self.assertIsNone(harness.window_record)
+                self.assertTrue(all(call.kwargs == {'check': False} for call in invoke.call_args_list))
 
     def test_native_x11_window_marker_rejects_ambiguous_or_invalid_ids(self):
         record = {'pid': 321, 'window': 2097157, 'width': 1120, 'height': 760}
@@ -203,11 +272,12 @@ class ProtocolTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             record = {'pid': 321, 'window': 2097157, 'width': 1120, 'height': 760}
-            harness = smoke.X11Harness.__new__(smoke.X11Harness)
+            harness = smoke.X11Harness(root / 'dsh', root, root / 'runtime')
             harness.xvfb = mock.Mock()
             harness.xvfb.poll.return_value = None
-            harness.input_compositor = mock.Mock()
+            harness.input_compositor = mock.Mock(pid=300)
             harness.input_compositor.poll.return_value = None
+            harness.app_label = 'fixture'
             harness.app_log = root / 'app.log'
             harness.app_log.write_text('GPUI_X11_WINDOW ' + json.dumps(record) + '\n')
             harness.window_record = record
@@ -217,6 +287,10 @@ class ProtocolTests(unittest.TestCase):
                  self.assertRaisesRegex(RuntimeError, 'process identity changed'):
                 harness.verify_app_window()
             invoke.assert_not_called()
+            diagnostics = json.loads((root / 'fixture-window-verification.jsonl').read_text())
+            self.assertEqual(diagnostics['window'], record)
+            self.assertIn('process identity changed', diagnostics['error'])
+            self.assertFalse(diagnostics['verified'])
 
     def test_window_selected_by_owned_log_id_despite_duplicate_titles(self):
         log = '[07:04:18.911] x11 output 1120x760, window id 2097157\n'

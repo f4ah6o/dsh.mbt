@@ -141,11 +141,26 @@ def x11_window(log):
     return record
 
 
+def x11_protocols(properties):
+    lines = [line for line in properties.splitlines() if line.startswith('WM_PROTOCOLS')]
+    require(len(lines) == 1, 'Expected exactly one X11 WM_PROTOCOLS property')
+    # xprop has a built-in display format for this ICCCM property. Its default
+    # is "WM_PROTOCOLS(ATOM): protocols  ...", whereas the generic atom-list
+    # format uses "WM_PROTOCOLS(ATOM) = ...". Compare whole comma-separated
+    # atom names, never a substring such as NOT_WM_DELETE_WINDOW.
+    match = re.fullmatch(r'WM_PROTOCOLS\(ATOM\)(?:[ \t]*=[ \t]*|:[ \t]*protocols[ \t]+)(.*)', lines[0])
+    require(match is not None, 'Invalid X11 WM_PROTOCOLS property format')
+    atoms = [atom.strip(' \t') for atom in match[1].split(',')]
+    require(all(re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', atom) for atom in atoms),
+            'Invalid X11 WM_PROTOCOLS atom list')
+    return set(atoms)
+
+
 def verify_x11_window(record, tree, info, properties, descendants, width, height):
     require(record['pid'] in descendants, 'X11 window PID is not an owned GUI descendant')
     pid = re.search(r'^_NET_WM_PID\(CARDINAL\) = (\d+)\s*$', properties, re.MULTILINE)
     require(pid is not None and int(pid[1]) == record['pid'], 'X11 window PID property mismatch')
-    require(re.search(r'^WM_PROTOCOLS\(ATOM\) = .*\bWM_DELETE_WINDOW\b', properties, re.MULTILINE),
+    require('WM_DELETE_WINDOW' in x11_protocols(properties),
             'X11 window does not advertise WM_DELETE_WINDOW')
     # Reuse the strict root-tree, identity, geometry and viewability oracle.
     synthetic_log = f'x11 output {width}x{height}, window id {record["window"]}\n'
@@ -504,29 +519,48 @@ class X11Harness(Harness):
         return process, log, root, tmp
 
     def verify_app_window(self, width=WIDTH, height=HEIGHT):
-        require(self.xvfb.poll() is None, 'Owned Xvfb exited')
-        require(self.input_compositor.poll() is None, 'Owned X11 app exited')
-        log = self.app_log.read_text(errors='replace')
-        record = x11_window(log)
-        require((record['width'], record['height']) == (WIDTH, HEIGHT),
-                'Unexpected initial native X11 window dimensions')
-        if self.window_record is not None:
-            require(record == self.window_record, 'Native X11 window identity changed')
-            require(same_process_running(record['pid'], self.window_process),
-                    'Native X11 window process identity changed')
-        descendants = process_tree(self.input_compositor.pid)
-        window = str(record['window'])
-        tree = self.command(['xwininfo', '-root', '-tree']).stdout
-        info = self.command(['xwininfo', '-id', window]).stdout
-        properties = self.command(['xprop', '-id', window, '_NET_WM_PID', 'WM_PROTOCOLS']).stdout
-        verified = verify_x11_window(record, tree, info, properties, descendants, width, height)
-        with (self.output / (self.app_label + '-window-verification.jsonl')).open('a') as stream:
-            stream.write(json.dumps({'window': record, 'tree': tree, 'info': info,
-                                     'properties': properties, 'owned_pids': list(descendants)}) + '\n')
-        self.window_record = record
-        self.window_process = descendants[record['pid']]
-        self.window = verified
-        return verified
+        diagnostics = {'monotonic': time.monotonic(), 'display': self.env.get('DISPLAY'),
+                       'app_pid': self.input_compositor.pid, 'expected_size': [width, height],
+                       'app_log': str(self.app_log), 'verified': False}
+        try:
+            require(self.xvfb.poll() is None, 'Owned Xvfb exited')
+            require(self.input_compositor.poll() is None, 'Owned X11 app exited')
+            log = self.app_log.read_text(errors='replace')
+            record = x11_window(log)
+            diagnostics['window'] = record
+            require((record['width'], record['height']) == (WIDTH, HEIGHT),
+                    'Unexpected initial native X11 window dimensions')
+            if self.window_record is not None:
+                require(record == self.window_record, 'Native X11 window identity changed')
+                require(same_process_running(record['pid'], self.window_process),
+                        'Native X11 window process identity changed')
+            descendants = process_tree(self.input_compositor.pid)
+            diagnostics['owned_pids'] = list(descendants)
+            window = str(record['window'])
+            for name, command in [
+                    ('tree', ['xwininfo', '-root', '-tree']),
+                    ('info', ['xwininfo', '-id', window]),
+                    ('properties', ['xprop', '-id', window, '_NET_WM_PID', 'WM_PROTOCOLS'])]:
+                result = self.command(command, check=False)
+                diagnostics[name] = {'stdout': result.stdout, 'stderr': result.stderr,
+                                     'returncode': result.returncode}
+                require(result.returncode == 0, 'Owned X11 window inspection failed: ' + name)
+            verified = verify_x11_window(
+                record, diagnostics['tree']['stdout'], diagnostics['info']['stdout'],
+                diagnostics['properties']['stdout'], descendants, width, height)
+            self.window_record = record
+            self.window_process = descendants[record['pid']]
+            self.window = verified
+            diagnostics['verified'] = True
+            return verified
+        except Exception as error:
+            diagnostics['error'] = str(error)
+            raise
+        finally:
+            # Retain raw xprop/xwininfo output even when the parser, ownership
+            # check or a command fails, rather than logging only successful IDs.
+            with (self.output / (self.app_label + '-window-verification.jsonl')).open('a') as stream:
+                stream.write(json.dumps(diagnostics) + '\n')
 
     def wait_frame(self, width=WIDTH, height=HEIGHT, offset=0):
         def ready():
