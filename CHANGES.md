@@ -4,9 +4,27 @@
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Deprecated
+
+### Removed
+
+### Security
+
+### Migration
+
+## 0.1.25 - 2026-10-14
+
+### Added
+
 - Bundle the complete signed macOS Dsh.app in the raw Apple Silicon CLI release, so the same `moon binstall` installation can launch `dsh desktop`. Extract and verify it in an owner-only version/content cache while retaining the separate unbundled worker helper.
 
 ### Changed
+
+- Scope version 0.1.25 native release artifacts and qualification to macOS 13+ on Apple Silicon. Linux and Windows artifacts are not delivered in this version; Linux X11 and Windows are not qualified by this release. Keep full platform validation for ordinary pull requests while selecting only macOS for this version's tag publication.
 
 ### Fixed
 
