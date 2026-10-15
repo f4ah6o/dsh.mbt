@@ -259,11 +259,35 @@ test "capability send emits work and cancellation rejects its late settlement" {
     ),
     "cancelled",
   )
-  let profile = api.invoke("profile_stats", {}).unwrap()
-  match profile {
-    String(text) => assert_true(text.contains("api.session_send"))
-    _ => fail("expected hotpath report")
+  api.close()
+}
+
+///|
+test "runtime profiling is absent from direct GUI manifest and MCP capabilities" {
+  let api = @api.HarnessApi::new().unwrap()
+  assert_eq(
+    api.invoke("profile_stats", {}),
+    Err("Unknown operation: profile_stats"),
+  )
+  assert_true(api.gui_binding("profile_stats") is None)
+  assert_true(!api.manifest().contains("profile_stats"))
+  let listed = api
+    .mcp_handle(
+      "{\"jsonrpc\":\"2.0\",\"id\":\"list\",\"method\":\"tools/list\",\"params\":{\"_meta\":{\"io.modelcontextprotocol/protocolVersion\":\"2026-07-28\",\"io.modelcontextprotocol/clientCapabilities\":{}}}}",
+    )
+    .unwrap()
+  let tools = get(get(@json.parse(listed), "result"), "tools")
+  match tools {
+    Array(tools) => {
+      assert_eq(tools.length(), 10)
+      for tool in tools {
+        assert_true(get(tool, "name") != Json::string("profile_stats"))
+      }
+    }
+    _ => fail("expected MCP tools")
   }
+  let rejected = rpc(api, "removed-profile", "profile_stats", {})
+  assert_eq(get(get(rejected, "error"), "code"), -32602)
   api.close()
 }
 

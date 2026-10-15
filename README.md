@@ -6,6 +6,8 @@
 
 ## Build and run
 
+hotpath は通常のアプリ依存ではありません。性能確認は独立した開発用 [tools/perf](tools/perf/README.md) から実行できます。以前の `profile_stats` 公開操作は削除しました。
+
 必要なのは固定版 MoonBit toolchain、Git、C compiler と submodule です。Yami-kumo は Mooncakes からインストールします。Node.js / npm はテストや開発スクリプト、Python 3 は一部のテストや macOS app packaging script に使いますが、いずれも配布後の product runtime 依存ではありません。Node.js / npm は product build にも使いません。
 
 ```sh

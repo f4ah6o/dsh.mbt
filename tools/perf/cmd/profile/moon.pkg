@@ -1,0 +1,6 @@
+import {
+  "f4ah6o/dsh_perf/trace",
+  "f4ah6o/hotpath/src" @hotpath,
+}
+
+pkgtype(kind: "executable")

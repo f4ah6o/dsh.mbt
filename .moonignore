@@ -1,0 +1,23 @@
+# Keep archive filtering aligned with .gitignore.
+_build/
+release/
+target/
+.mooncakes/
+node_modules/
+.dsh.mbt/
+coverage/
+test-results/
+.turtles/
+ios/ClientEmbedding/DshClientEmbedding.xcodeproj/
+/web/moonbit/browser.js
+/web/sw.js
+*.log
+.env
+.env.*
+!.env.example
+
+__pycache__/
+
+# Optional development performance module and its upstream source.
+/tools/perf/
+/vendor/hotpath/

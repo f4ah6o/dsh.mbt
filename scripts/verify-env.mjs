@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const projectRoot = fileURLToPath(new URL('../', import.meta.url));
-const dependencyPaths = ['vendor/gpui', 'vendor/hotpath', 'tools/turtles'];
+const dependencyPaths = ['vendor/gpui', 'tools/turtles'];
 const yamiKumoPackage = 'f4ah6o/yami_kumo';
 const yamiKumoVersion = '0.1.0';
 // This is the build/runner release distributed with .moonbit-version.
@@ -128,7 +128,7 @@ export function verifyEnvironment({ quiet = false } = {}) {
     const directory = join(projectRoot, path);
     if (!existsSync(join(directory, '.git')) || !existsSync(join(directory, 'moon.mod'))) {
       throw new Error('Dependency ' + path + ' is not initialized. Run:\n' +
-        '  git submodule update --init --recursive');
+        '  git submodule update --init --recursive vendor/gpui tools/turtles');
     }
     const head = capture('git', ['rev-parse', 'HEAD'], directory);
     if (head.status !== 0 || head.stdout.trim() !== pin[1]) {
@@ -157,7 +157,7 @@ export function verifyEnvironment({ quiet = false } = {}) {
   const turtlesVersion = moduleField(join(projectRoot, 'tools/turtles/moon.mod'), 'version');
   if (!quiet) {
     console.log('Environment: Node ' + process.versions.node + '; MoonBit ' +
-      compilerVersion + '; core and 3 dependency pins verified.');
+      compilerVersion + '; core and 2 dependency pins verified.');
   }
   return { compilerVersion, moonVersion, turtlesVersion, yamiKumoVersion, pins };
 }

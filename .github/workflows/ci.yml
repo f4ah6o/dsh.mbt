@@ -72,6 +72,8 @@ jobs:
         run: npm run build
       - name: Check formatting, own warnings and JavaScript syntax
         run: npm run check
+      - name: Verify performance tooling stays outside the product dependency and archive
+        run: python3 scripts/check-performance-boundary.py
       - name: Test portable MoonBit packages on all backends
         run: npm run test:moon
       - name: Install pinned Chromium for the native browser fixture
@@ -80,3 +82,8 @@ jobs:
         run: npm run test:web
       - name: Run strict-CSP browser smoke against the native fixture
         run: npm run test:integration
+      - name: Verify the optional independent performance module
+        run: |
+          moon -C tools/perf install
+          moon -C tools/perf test trace --target native
+          moon -C tools/perf run cmd/profile --target native --release

@@ -12,9 +12,13 @@
 
 ### Removed
 
+- Remove runtime hotpath instrumentation and the `profile_stats` capability from direct, GUI, HTTP and MCP API discovery/invocation. The normal dsh module no longer depends on hotpath; optional caller-side performance checks live in `tools/perf`.
+
 ### Security
 
 ### Migration
+
+- Clients must stop invoking `profile_stats` or expecting it in capability/MCP listings. Use the independent development harness in `tools/perf/README.md` for fixed-fixture timings; it does not provide a production telemetry endpoint. Existing core/bench engine benchmarks remain available.
 
 ## 0.1.25 - 2026-10-14
 

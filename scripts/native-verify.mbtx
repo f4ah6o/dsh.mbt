@@ -66,19 +66,6 @@ fn json_int(value : Json?) -> Int {
 }
 
 ///|
-fn normalize_diagnostic_path(path : String) -> String {
-  let builder = StringBuilder()
-  for character in path {
-    builder.write_char(if character == '\\' { '/' } else { character })
-  }
-  let mut normalized = builder.to_string()
-  while normalized.has_prefix("./") {
-    normalized = normalized[2:].to_owned()
-  }
-  normalized
-}
-
-///|
 async fn check_native_packages() -> Unit {
   let packages = [
     "engine", "provider", "auth", "protocol", "client", "plugins", "api", "ui", "native",
@@ -108,44 +95,33 @@ async fn check_native_packages() -> Unit {
     None => fail("moon check report is missing its summary")
   }
   let mut errors = json_int(json_field(summary, "moon_errors"))
-  let mut own_warnings = json_int(json_field(summary, "moon_warnings"))
-  let mut pinned_warnings = 0
+  let mut warnings = json_int(json_field(summary, "moon_warnings"))
   let diagnostics = match json_field(report, "diagnostics") {
     Some(Array(values)) => values
     _ => fail("moon check report is missing diagnostics")
   }
   for diagnostic in diagnostics {
     let level = json_text(json_field(diagnostic, "level"))
-    let path = normalize_diagnostic_path(
-      json_text(json_field(diagnostic, "path")),
-    )
+    let path = json_text(json_field(diagnostic, "path"))
     let message = json_text(json_field(diagnostic, "message"))
     if level == "error" {
       errors += 1
       println("[error] " + path + " " + message)
     } else if level == "warning" {
-      if path.has_prefix("vendor/hotpath/") || path.contains("/vendor/hotpath/") {
-        pinned_warnings += 1
-      } else {
-        own_warnings += 1
-        println("[warning] " + path + " " + message)
-      }
+      warnings += 1
+      println("[warning] " + path + " " + message)
     }
   }
-  if status != 0 || errors != 0 || own_warnings != 0 {
+  if status != 0 || errors != 0 || warnings != 0 {
     fail(
       "native MoonBit check failed: " +
       errors.to_string() +
       " errors, " +
-      own_warnings.to_string() +
-      " warnings outside pinned hotpath",
+      warnings.to_string() +
+      " warnings",
     )
   }
-  println(
-    "Native MoonBit check passed; own warnings 0, pinned hotpath warnings " +
-    pinned_warnings.to_string() +
-    ".",
-  )
+  println("Native MoonBit check passed; warnings 0.")
 }
 
 ///|

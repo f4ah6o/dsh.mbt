@@ -43,13 +43,15 @@ assembled from `ui/yami-kumo/styles.css` and `ui/dsh.css`.
 
 ## hotpath.mbt
 
-The `vendor/hotpath` submodule pins
+The optional development-only `vendor/hotpath` submodule pins
 [gpui-mbt/hotpath.mbt](https://github.com/gpui-mbt/hotpath.mbt) at
 `be4cb98a3eb61bd5ab176c9e5e6bd921b74d1dce`. Its module name is
 `f4ah6o/hotpath`. The pinned revision does not declare a license in its module
 manifest and does not contain a standalone LICENSE file. Its source remains a
 separate upstream submodule; this project's MIT declaration does not relicense
-it. License metadata clarification is tracked in
+it. It is used only by the independent `tools/perf` module, is not linked into
+the application and is excluded from the root Mooncakes source archive.
+License metadata clarification is tracked in
 [the remaining port work](issues/open/0001-upstream-parity.md).
 
 ## turtles.mbt

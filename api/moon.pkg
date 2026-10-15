@@ -5,7 +5,6 @@ import {
   "f4ah6o/gpui/capability",
   "f4ah6o/gpui/diagnostics",
   "f4ah6o/gpui/mcp",
-  "f4ah6o/hotpath/src" @hotpath,
   "moonbitlang/core/json",
 }
 
