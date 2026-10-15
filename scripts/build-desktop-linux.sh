@@ -10,7 +10,7 @@ for tool in moon python3 pkg-config wayland-scanner; do
   command -v "$tool" >/dev/null || { echo "Required Linux desktop build tool missing: $tool" >&2; exit 1; }
 done
 pkg-config --atleast-version=1.50 pangoft2
-pkg-config --exists wayland-client wayland-cursor wayland-egl egl glesv2 xkbcommon fontconfig
+pkg-config --exists x11 wayland-client wayland-cursor wayland-egl egl glesv2 xkbcommon fontconfig
 sh vendor/gpui/scripts/prepare_ubuntu.sh
 BUILD_KIND=release
 if [ "$MODE" = --debug ]; then
@@ -21,7 +21,7 @@ else
 fi
 BIN="$ROOT/_build/native/$BUILD_KIND/build/f4ah6o/dsh/desktop/linux/linux.exe"
 test -x "$BIN"
-printf 'Built native Linux Wayland desktop: %s\n' "$BIN"
+printf 'Built native Linux Wayland/X11 desktop: %s\n' "$BIN"
 case "$MODE" in
   --build|--verify) exit 0;;
   --smoke) set -- --smoke --demo "$@";;

@@ -126,16 +126,16 @@ moon binstall f4ah6o/dsh/cmd/dsh
 
 ### Linux native desktop
 
-Linux release の `dsh-linux-x86_64` / `dsh-linux-aarch64` は native desktop も同梱します。`moon binstall` で入れた同じ `dsh` から `dsh desktop` を起動できます。Wayland session と EGL/GLES、XKB、Pango/Fontconfig の system libraries が必要です。Ubuntu 24.04 では次を導入してください。
+Linux release の `dsh-linux-x86_64` / `dsh-linux-aarch64` は native desktop も同梱します。`moon binstall` で入れた同じ `dsh` から `dsh desktop` を起動できます。Wayland または X11 session と EGL/GLES、XKB、Pango/Fontconfig の system libraries が必要です。Ubuntu 24.04 では次を導入してください。
 
 ```sh
-sudo apt-get install libwayland-client0 libwayland-cursor0 libwayland-egl1 \
+sudo apt-get install libx11-6 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
   libegl1 libgles2 libegl-mesa0 libgl1-mesa-dri libxkbcommon0 \
   libpangoft2-1.0-0 libfontconfig1 fonts-noto-cjk
 dsh desktop --demo
 ```
 
-画面、入力、保存・tool approval は GPUI の native Wayland backend と共通の desktop application を使います。browser は起動しません。通常の keyboard / Compose 入力と Ctrl+A/C/V/X に対応し、IME composition は未対応です。X11-only session では Wayland session に切り替えてください。GUI の system libraries は `dsh web` / CLI だけを使う場合は不要です。
+画面、入力、保存・tool approval は GPUI の native Wayland / X11 backend と共通の desktop application を使います。browser は起動しません。通常の keyboard 入力と Ctrl+A/C/V/X に対応し、IME composition は未対応です。自動選択は Wayland の環境変数を優先し、なければ DISPLAY で X11 を選びます。DSH_DESKTOP_BACKEND=wayland または DSH_DESKTOP_BACKEND=x11 で明示的に選択できます。接続に失敗した際、別 backend への自動切り替えは行いません。GUI の system libraries は `dsh web` / CLI だけを使う場合は不要です。
 
 desktop は private temporary directory に展開して起動し、終了時に削除します。`TMPDIR` が `noexec` mount の場合は、実行可能な private temporary location を指定してください。source build と詳細な制約は [native desktop guide](docs/desktop.md) にあります。
 

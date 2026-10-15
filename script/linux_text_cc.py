@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Link the native Wayland desktop against distro text/rendering libraries."""
+"""Link the native Linux desktop against distro text/rendering libraries."""
 import os
 import shlex
 import subprocess
 import sys
 
 compiler = shlex.split(os.environ.get('CC', 'cc'))
-packages = ['wayland-client', 'wayland-cursor', 'wayland-egl', 'egl', 'glesv2',
+packages = ['x11', 'wayland-client', 'wayland-cursor', 'wayland-egl', 'egl', 'glesv2',
             'xkbcommon', 'pangoft2', 'fontconfig']
 try:
     flags = shlex.split(subprocess.check_output(

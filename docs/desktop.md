@@ -1,15 +1,17 @@
 # Native desktop
 
-## Linux Wayland
+## Linux Wayland and X11
 
-The Linux release CLI embeds a real GPUI Wayland/EGL desktop executable. `dsh desktop` extracts it and a private CLI worker into an owner-only temporary directory, launches the desktop, preserves argument boundaries and exit status, and removes the files after exit. It does not open a browser or download executable code. The embedded checksum detects corruption; release authenticity comes from the release distribution/checksum workflow.
+The Linux release CLI embeds a real GPUI Wayland/X11 EGL desktop executable. `dsh desktop` extracts it and a private CLI worker into an owner-only temporary directory, launches the desktop, preserves argument boundaries and exit status, and removes the files after exit. It does not open a browser or download executable code. The embedded checksum detects corruption; release authenticity comes from the release distribution/checksum workflow.
 
-Supported baseline: Ubuntu 24.04, x86-64 and ARM64, with a Wayland compositor and EGL/GLES drivers (Mesa software rendering is valid). Install the runtime libraries and Japanese fonts listed in README. An X11-only login is not a Wayland host. Direct XKB/Compose keyboard input, pointer, scrolling and Ctrl+A/C/V/X are supported. Wayland IME composition is not yet implemented. Clipboard requires compositor support; unsupported capabilities are reported rather than simulated.
+Supported baseline: Ubuntu 24.04, x86-64 and ARM64, with a Wayland compositor or X11 server and EGL/GLES drivers (Mesa software rendering is valid). Install the runtime libraries and Japanese fonts listed in README. The X11 backend connects directly to the X server and does not require a Wayland compositor or XWayland. Keyboard input, pointer, scrolling and Ctrl+A/C/V/X are supported. IME composition is not yet implemented. Clipboard requires session support; unsupported capabilities are reported rather than simulated. X11 currently uses scale 1.
+
+`DSH_DESKTOP_BACKEND=auto` (the default) prefers a nonempty `WAYLAND_DISPLAY` or `WAYLAND_SOCKET`, then a nonempty `DISPLAY`. Set `DSH_DESKTOP_BACKEND=wayland` or `DSH_DESKTOP_BACKEND=x11` to choose explicitly. Unknown values and missing session variables fail with an actionable error. Once selected, connection or driver errors are reported without silently trying the other backend.
 
 Build from the recursive checkout with the pinned MoonBit toolchain:
 
 ```sh
-sudo apt-get install libwayland-dev wayland-protocols libegl1-mesa-dev \
+sudo apt-get install libx11-dev libwayland-dev wayland-protocols libegl1-mesa-dev \
   libgles2-mesa-dev libxkbcommon-dev libpango1.0-dev libfontconfig1-dev
 sh scripts/build.sh
 sh scripts/build-desktop-linux.sh --build
@@ -20,16 +22,16 @@ python3 scripts/package-linux-desktop.py \
 release/dsh-linux-$(uname -m) desktop --demo
 ```
 
-`sh scripts/build-desktop.sh run --demo` also dispatches to the Linux builder. An unbundled source CLI may use `dsh desktop --app-path /absolute/path/to/linux.exe`; it carries its own private CLI helper for native tool execution. Packaging preserves a single executable for `moon binstall`. Only the GUI child links Wayland/text libraries; the CLI/web host remains usable without GUI libraries.
+`sh scripts/build-desktop.sh run --demo` also dispatches to the Linux builder. An unbundled source CLI may use `dsh desktop --app-path /absolute/path/to/linux.exe`; it carries its own private CLI helper for native tool execution. Packaging preserves a single executable for `moon binstall`. Only the GUI child links X11/Wayland/text libraries; the CLI/web host remains usable without GUI libraries.
 
-Release CI tests the actual packaged executable through a private authenticated Xvfb and nested Weston compositor, including genuine keyboard/pointer input, approval, a workspace write, persisted reload and GPU frame readback. A separate normal-shell pass covers resize and close. Tests also check termination and private-file cleanup. A build-only check does not establish GUI runtime success.
+Release CI runs the actual packaged executable twice: Wayland through a private authenticated Xvfb plus nested Weston compositor, and native X11 directly against private authenticated Xvfb. Both use genuine keyboard/pointer input, approval, a workspace write, persisted reload and GPU frame readback. X11 additionally checks external Unicode clipboard round-trips, server-driven resize and WM_DELETE_WINDOW close; Wayland keeps its normal-shell resize/close pass. Tests also check termination and private-file cleanup on x86-64 and ARM64. A build-only check does not establish GUI runtime success.
 
 ## macOS
 
 
 `Dsh.app` is a native GPUI/AppKit/Metal conversation window backed by the same
 MoonBit runtime and durable session store as `dsh`, `dsh web`, and the local
-MCP service. The app bundle is available for macOS 13 or later on Apple Silicon. Linux uses the embedded Wayland executable described above; Windows desktop packages are not provided.
+MCP service. The app bundle is available for macOS 13 or later on Apple Silicon. Linux uses the embedded Linux executable described above; Windows desktop packages are not provided.
 
 ## Install the release app
 

@@ -2,7 +2,9 @@
 """Pure harness tests; no GUI claims and no access to any desktop."""
 import importlib.util
 import json
+import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -13,6 +15,341 @@ spec.loader.exec_module(smoke)
 
 
 class ProtocolTests(unittest.TestCase):
+    def x11_fixture(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        harness = smoke.X11Harness(root / 'dsh', root, root / 'runtime')
+        harness.app_label = 'fixture'
+        return harness
+
+    def test_native_x11_window_requires_owned_pid_and_exact_window(self):
+        record = {'pid': 321, 'window': 2097157, 'width': 1120, 'height': 760}
+        log = 'GPUI_X11_WINDOW ' + json.dumps(record) + '\n'
+        tree = '  0x200005 "dsh": () 1120x760+0+0\n  0x200006 "dsh": () 1120x760+0+0\n'
+        info = 'xwininfo: Window id: 0x200005 "dsh"\n  Width: 1120\n  Height: 760\n  Map State: IsViewable\n'
+        properties = '_NET_WM_PID(CARDINAL) = 321\nWM_PROTOCOLS(ATOM) = WM_DELETE_WINDOW\n'
+        self.assertEqual(smoke.x11_window(log), record)
+        for protocols in ['WM_PROTOCOLS(ATOM) = WM_DELETE_WINDOW',
+                          'WM_PROTOCOLS(ATOM): protocols  WM_DELETE_WINDOW',
+                          'WM_PROTOCOLS(ATOM): protocols  WM_TAKE_FOCUS, WM_DELETE_WINDOW, _NET_WM_PING']:
+            candidate = '_NET_WM_PID(CARDINAL) = 321\n' + protocols + '\n'
+            with self.subTest(protocols=protocols):
+                self.assertEqual(smoke.verify_x11_window(record, tree, info, candidate, {321: {}}, 1120, 760), 2097157)
+        for candidate_tree, candidate_info, candidate_properties, descendants in [
+                (tree, info, properties, {322: {}}),
+                (tree, info, properties.replace('321', '322'), {321: {}}),
+                (tree, info, properties.replace('WM_DELETE_WINDOW', 'WM_TAKE_FOCUS'), {321: {}}),
+                (tree, info, properties.replace('WM_DELETE_WINDOW', 'NOT_WM_DELETE_WINDOW'), {321: {}}),
+                (tree, info, properties.replace('WM_DELETE_WINDOW', 'WM_DELETE_WINDOW_SUFFIX'), {321: {}}),
+                (tree.replace('0x200005', '0x300005'), info, properties, {321: {}}),
+                (tree, info.replace('0x200005', '0x200006'), properties, {321: {}}),
+                (tree, info.replace('IsViewable', 'IsUnMapped'), properties, {321: {}})]:
+            with self.subTest(descendants=descendants, properties=candidate_properties), self.assertRaises(RuntimeError):
+                smoke.verify_x11_window(record, candidate_tree, candidate_info,
+                                        candidate_properties, descendants, 1120, 760)
+
+    def test_native_x11_protocols_accepts_xprop_builtin_and_generic_formats(self):
+        for value in ['WM_PROTOCOLS(ATOM): protocols  WM_DELETE_WINDOW',
+                      'WM_PROTOCOLS(ATOM) = WM_DELETE_WINDOW',
+                      'WM_PROTOCOLS(ATOM): protocols\tWM_DELETE_WINDOW\t',
+                      'WM_PROTOCOLS(ATOM)\t=\tWM_DELETE_WINDOW\t']:
+            with self.subTest(value=value):
+                self.assertEqual(smoke.x11_protocols(value + '\n'), {'WM_DELETE_WINDOW'})
+        self.assertEqual(smoke.x11_protocols('WM_PROTOCOLS(ATOM): protocols  WM_TAKE_FOCUS, WM_DELETE_WINDOW'),
+                         {'WM_TAKE_FOCUS', 'WM_DELETE_WINDOW'})
+        self.assertNotIn('WM_DELETE_WINDOW', smoke.x11_protocols('WM_PROTOCOLS(ATOM): protocols  NOT_WM_DELETE_WINDOW'))
+
+    def test_native_x11_protocols_rejects_missing_duplicate_or_malformed_properties(self):
+        valid = 'WM_PROTOCOLS(ATOM): protocols  WM_DELETE_WINDOW\n'
+        for value in ['', valid + valid, valid.replace('(ATOM)', '(STRING)'),
+                      valid.replace('WM_PROTOCOLS', 'OTHER_WM_PROTOCOLS'),
+                      valid.replace(': protocols ', ': '),
+                      valid.replace('WM_DELETE_WINDOW', '"WM_DELETE_WINDOW"'),
+                      valid.replace('WM_DELETE_WINDOW', 'WM_DELETE_WINDOW extra'),
+                      valid.replace('WM_DELETE_WINDOW', 'WM_DELETE_WINDOW,'),
+                      valid.replace('WM_DELETE_WINDOW', ''),
+                      'WM_PROTOCOLS:  no such atom on any window.\n']:
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                smoke.x11_protocols(value)
+
+    def test_native_x11_window_diagnostics_survive_parser_and_command_failure(self):
+        record = {'pid': 321, 'window': 2097157, 'width': 1120, 'height': 760}
+        tree = '  0x200005 "dsh": () 1120x760+0+0\n'
+        info = 'xwininfo: Window id: 0x200005 "dsh"\n  Width: 1120\n  Height: 760\n  Map State: IsViewable\n'
+        for exit_code, properties, error in [
+                (0, '_NET_WM_PID(CARDINAL) = 321\nWM_PROTOCOLS(ATOM): protocols  WM_TAKE_FOCUS\n',
+                 'does not advertise WM_DELETE_WINDOW'),
+                (1, 'partial property response\n', 'inspection failed: properties')]:
+            with self.subTest(exit_code=exit_code), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                harness = smoke.X11Harness(root / 'dsh', root, root / 'runtime')
+                harness.xvfb = mock.Mock(pid=123)
+                harness.xvfb.poll.return_value = None
+                harness.input_compositor = mock.Mock(pid=300)
+                harness.input_compositor.poll.return_value = None
+                harness.app_label = 'fixture'
+                harness.app_log = root / 'app.log'
+                harness.app_log.write_text('GPUI_X11_WINDOW ' + json.dumps(record) + '\n')
+                harness.window_record = None
+                results = [mock.Mock(stdout=tree, stderr='', returncode=0),
+                           mock.Mock(stdout=info, stderr='', returncode=0),
+                           mock.Mock(stdout=properties, stderr='property diagnostic', returncode=exit_code)]
+                with mock.patch.object(smoke, 'process_tree', return_value={321: {'starttime': '100'}}), \
+                     mock.patch.object(harness, 'command', side_effect=results) as invoke, \
+                     self.assertRaisesRegex(RuntimeError, error):
+                    harness.verify_app_window()
+                diagnostics = json.loads((root / 'fixture-window-verification.jsonl').read_text())
+                self.assertEqual(diagnostics['properties'], {
+                    'stdout': properties, 'stderr': 'property diagnostic', 'returncode': exit_code})
+                self.assertEqual(diagnostics['tree']['stdout'], tree)
+                self.assertEqual(diagnostics['info']['stdout'], info)
+                self.assertEqual(diagnostics['window'], record)
+                self.assertEqual(diagnostics['owned_pids'], [321])
+                self.assertFalse(diagnostics['verified'])
+                self.assertIn(error, diagnostics['error'])
+                self.assertIsNone(harness.window_record)
+                self.assertTrue(all(call.kwargs == {'check': False} for call in invoke.call_args_list))
+
+    def test_native_x11_window_marker_rejects_ambiguous_or_invalid_ids(self):
+        record = {'pid': 321, 'window': 2097157, 'width': 1120, 'height': 760}
+        good = 'GPUI_X11_WINDOW ' + json.dumps(record) + '\n'
+        for log in ['', good + good, 'GPUI_X11_WINDOW []\n',
+                    'GPUI_X11_WINDOW ' + json.dumps(dict(record, window=True)),
+                    'GPUI_X11_WINDOW ' + json.dumps(dict(record, pid=1)),
+                    'GPUI_X11_WINDOW ' + json.dumps(dict(record, window=-1)),
+                    'GPUI_X11_WINDOW ' + json.dumps(dict(record, width='1120')),
+                    'GPUI_X11_WINDOW ' + json.dumps(dict(record, extra=1))]:
+            with self.subTest(log=log), self.assertRaises(RuntimeError):
+                smoke.x11_window(log)
+
+    def test_native_x11_frame_matches_window_and_requested_size(self):
+        frame = 'GPUI_X11_FRAME {"window":2097157,"width":1120,"height":760}\n'
+        self.assertTrue(smoke.x11_presented(frame, 2097157, 1120, 760))
+        self.assertFalse(smoke.x11_presented(frame, 2097158, 1120, 760))
+        self.assertFalse(smoke.x11_presented(frame, 2097157, 1180, 800))
+        self.assertFalse(smoke.x11_presented('GPUI_X11_FRAME {"window":2097157', 2097157, 1120, 760))
+        for value in [{'window': True, 'width': 1120, 'height': 760},
+                      {'window': 2097157, 'width': 0, 'height': 760},
+                      {'window': 2097157, 'width': 1120, 'height': '760'},
+                      {'window': 2097157}, {'window': 2097157, 'width': 1120, 'height': 760, 'extra': 1}]:
+            with self.subTest(value=value), self.assertRaises(RuntimeError):
+                smoke.x11_presented('GPUI_X11_FRAME ' + json.dumps(value), 2097157, 1120, 760)
+
+    def test_native_x11_fixture_excludes_inherited_desktop_and_credentials(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            runtime = base / 'runtime'
+            runtime.mkdir()
+            inherited = {'DISPLAY': ':0', 'XAUTHORITY': '/home/user/.Xauthority',
+                         'WAYLAND_DISPLAY': 'wayland-0', 'WAYLAND_SOCKET': '7',
+                         'DSH_DESKTOP_BACKEND': 'wayland', 'GPUI_NATIVE_E2E': '0',
+                         'OPENAI_API_KEY': 'not-real', 'DEEPSEEK_API_KEY': 'not-real'}
+            with mock.patch.dict(os.environ, inherited):
+                harness = smoke.X11Harness(base / 'packaged', base, runtime)
+            for key in ('DISPLAY', 'WAYLAND_DISPLAY', 'WAYLAND_SOCKET', 'OPENAI_API_KEY', 'DEEPSEEK_API_KEY'):
+                self.assertNotIn(key, harness.env)
+            self.assertEqual(harness.env['XAUTHORITY'], str(runtime / 'Xauthority'))
+            self.assertEqual(harness.env['DSH_DESKTOP_BACKEND'], 'x11')
+            self.assertEqual(harness.env['XDG_SESSION_TYPE'], 'x11')
+            harness.env['DISPLAY'] = ':12345'
+            with mock.patch.object(harness, 'launch', return_value=(mock.sentinel.process, base / 'app.log')) as launch:
+                harness.app('fixture', ['--offline-e2e'], {'DSH_DESKTOP_BACKEND': 'auto'})
+            environment = launch.call_args.args[2]
+            self.assertEqual(environment['DISPLAY'], ':12345')
+            self.assertEqual(environment['DSH_DESKTOP_BACKEND'], 'auto')
+            self.assertEqual(environment['DSH_DESKTOP_E2E_TEXT'], smoke.X11_EXPECTED_TEXT)
+            self.assertEqual(environment['DSH_DESKTOP_EXTERNAL_INPUT'], '1')
+            self.assertNotIn('WAYLAND_DISPLAY', environment)
+            self.assertNotIn('WAYLAND_SOCKET', environment)
+
+    def test_native_x11_clipboard_uses_external_owner_and_real_input(self):
+        harness = self.x11_fixture()
+        harness.expected_text = smoke.X11_EXPECTED_TEXT
+        harness.app_label = 'fixture'
+        harness.clipboard_round_trips = 0
+        harness.input_compositor = mock.Mock()
+        harness.input_compositor.poll.return_value = None
+        owner = mock.Mock()
+        owner.poll.return_value = None
+        reads = iter([smoke.CLIPBOARD_TEXT, smoke.X11_EXPECTED_TEXT])
+        def command(args, check=True):
+            return mock.Mock(stdout=next(reads) if args[0] == 'xclip' else '', stderr='', returncode=0)
+        with mock.patch.object(harness, 'wait_frame'), \
+             mock.patch.object(harness, 'focused', return_value='2097157'), \
+             mock.patch.object(harness, 'move_and_click') as click, \
+             mock.patch.object(harness, 'launch', return_value=(owner, None)) as launch, \
+             mock.patch.object(harness, 'command', side_effect=command) as invoke:
+            harness.input_click((1032, 725), True)
+        self.assertEqual(harness.clipboard_round_trips, 1)
+        launch.assert_called_once_with(
+            ['xclip', '-quiet', '-selection', 'clipboard', '-in', '-target', 'UTF8_STRING'],
+            'fixture-clipboard-owner', input_text=smoke.CLIPBOARD_TEXT)
+        self.assertEqual(click.call_args_list, [mock.call('2097157', 400, 650), mock.call('2097157', 1032, 725)])
+        calls = [call.args[0] for call in invoke.call_args_list]
+        self.assertIn(['xdotool', 'key', '--clearmodifiers', 'ctrl+a', 'ctrl+v'], calls)
+        self.assertIn(['xdotool', 'key', '--clearmodifiers', 'ctrl+a', 'ctrl+c'], calls)
+        self.assertIn(['xdotool', 'type', '--clearmodifiers', '--delay', '20', '--', ' via Linux keyboard'], calls)
+        self.assertFalse(any('--window' in command for command in calls))
+        observations = [json.loads(line) for line in
+                        (harness.output / 'fixture-clipboard-verification.jsonl').read_text().splitlines()]
+        self.assertEqual([entry['phase'] for entry in observations], ['owner', 'round-trip'])
+        self.assertTrue(all(entry['matched'] for entry in observations))
+
+    def test_native_x11_clipboard_mismatch_prevents_submit(self):
+        harness = self.x11_fixture()
+        harness.expected_text = smoke.X11_EXPECTED_TEXT
+        harness.app_label = 'fixture'
+        harness.clipboard_round_trips = 0
+        harness.input_compositor = mock.Mock()
+        harness.input_compositor.poll.return_value = None
+        owner = mock.Mock()
+        owner.poll.return_value = None
+        def bounded_check(predicate, timeout, label):
+            if not predicate():
+                raise RuntimeError('Timed out waiting for ' + label)
+        with mock.patch.object(harness, 'wait_frame'), \
+             mock.patch.object(harness, 'focused', return_value='2097157'), \
+             mock.patch.object(harness, 'move_and_click') as click, \
+             mock.patch.object(harness, 'launch', return_value=(owner, None)), \
+             mock.patch.object(harness, 'command', return_value=mock.Mock(stdout=smoke.CLIPBOARD_TEXT, stderr='', returncode=0)), \
+             mock.patch.object(smoke, 'wait_for', side_effect=bounded_check), \
+             self.assertRaisesRegex(RuntimeError, 'clipboard round-trip'):
+            harness.input_click((1032, 725), True)
+        click.assert_called_once_with('2097157', 400, 650)
+        self.assertEqual(harness.clipboard_round_trips, 0)
+        observations = [json.loads(line) for line in
+                        (harness.output / 'fixture-clipboard-verification.jsonl').read_text().splitlines()]
+        self.assertFalse(observations[-1]['matched'])
+        self.assertEqual(observations[-1]['actual'], smoke.CLIPBOARD_TEXT)
+        self.assertEqual(observations[-1]['expected'], smoke.X11_EXPECTED_TEXT)
+
+    def test_native_x11_clipboard_diagnostics_bound_text_without_weakening_equality(self):
+        harness = self.x11_fixture()
+        limit = smoke.CLIPBOARD_DIAGNOSTIC_CHARACTERS
+        actual = smoke.X11_EXPECTED_TEXT + 'x' * (limit * 2)
+        result = mock.Mock(stdout=actual, stderr='e' * (limit * 2), returncode=0)
+        with mock.patch.object(harness, 'command', return_value=result):
+            self.assertFalse(harness.clipboard_matches(smoke.X11_EXPECTED_TEXT, 'round-trip'))
+        entry = json.loads((harness.output / 'fixture-clipboard-verification.jsonl').read_text())
+        self.assertEqual(entry['actual'], actual[:limit])
+        self.assertEqual(entry['actual_characters'], len(actual))
+        self.assertTrue(entry['actual_truncated'])
+        self.assertEqual(len(entry['stderr']), limit)
+        self.assertTrue(entry['stderr_truncated'])
+        self.assertFalse(entry['matched'])
+
+    def test_native_x11_clipboard_nonzero_exit_and_timeout_are_recorded(self):
+        harness = self.x11_fixture()
+        result = mock.Mock(stdout=smoke.CLIPBOARD_TEXT, stderr='failed conversion', returncode=1)
+        with mock.patch.object(harness, 'command', return_value=result):
+            self.assertFalse(harness.clipboard_matches(smoke.CLIPBOARD_TEXT, 'owner'))
+        error = smoke.subprocess.TimeoutExpired('xclip', 10, output=b'partial', stderr=b'timed out')
+        with mock.patch.object(harness, 'command', side_effect=error), self.assertRaises(smoke.subprocess.TimeoutExpired):
+            harness.clipboard_matches(smoke.X11_EXPECTED_TEXT, 'round-trip')
+        entries = [json.loads(line) for line in
+                   (harness.output / 'fixture-clipboard-verification.jsonl').read_text().splitlines()]
+        self.assertEqual(entries[0]['returncode'], 1)
+        self.assertEqual(entries[0]['stderr'], 'failed conversion')
+        self.assertFalse(entries[0]['matched'])
+        self.assertIsNone(entries[1]['returncode'])
+        self.assertEqual(entries[1]['actual'], 'partial')
+        self.assertEqual(entries[1]['stderr'], 'timed out')
+        self.assertTrue(entries[1]['timed_out'])
+        self.assertFalse(entries[1]['matched'])
+
+    def test_native_x11_clipboard_diagnostics_only_accept_fixed_fixture_values(self):
+        harness = self.x11_fixture()
+        with mock.patch.object(harness, 'command') as command, self.assertRaises(RuntimeError):
+            harness.clipboard_matches('arbitrary clipboard text', 'owner')
+        command.assert_not_called()
+        self.assertFalse((harness.output / 'fixture-clipboard-verification.jsonl').exists())
+
+    def test_native_x11_close_sends_window_protocol_instead_of_destroying(self):
+        import ctypes
+        xlib = mock.Mock()
+        xlib.XOpenDisplay.return_value = 100
+        xlib.XInternAtom.side_effect = [40, 41]
+        def send(display, window, propagate, event_mask, event):
+            self.assertEqual((display, window, propagate, event_mask), (100, 2097157, 0, 0))
+            client = event._obj.client
+            self.assertEqual((client.type, client.window, client.message_type, client.format), (33, 2097157, 40, 32))
+            self.assertEqual(list(client.data.l), [41, 0, 0, 0, 0])
+            self.assertEqual(ctypes.sizeof(event._obj), 24 * ctypes.sizeof(ctypes.c_long))
+            return 1
+        xlib.XSendEvent.side_effect = send
+        with mock.patch.object(ctypes, 'CDLL', return_value=xlib), \
+             mock.patch.dict(os.environ, {'DISPLAY': ':12345'}), \
+             mock.patch.object(sys, 'argv', ['helper', '2097157']):
+            exec(compile(smoke.X11_CLOSE_HELPER, '<x11-close-helper>', 'exec'), {})
+        xlib.XOpenDisplay.assert_called_once_with(b':12345')
+        xlib.XSendEvent.assert_called_once()
+        xlib.XSync.assert_called_once_with(100, 0)
+        xlib.XCloseDisplay.assert_called_once_with(100)
+        xlib.XDestroyWindow.assert_not_called()
+
+    def test_native_x11_external_resize_requires_new_present_then_clean_close(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / 'app.log'
+            log.write_text('initial frame\n')
+            app = mock.Mock(returncode=0)
+            harness = smoke.X11Harness.__new__(smoke.X11Harness)
+            with mock.patch.object(harness, 'app', return_value=(app, log, root, root)) as launch, \
+                 mock.patch.object(harness, 'wait_frame') as frame, \
+                 mock.patch.object(harness, 'verify_app_window', return_value=2097157), \
+                 mock.patch.object(harness, 'command', return_value=mock.Mock(stdout='')) as invoke, \
+                 mock.patch.object(harness, 'clean_payload') as clean:
+                result = harness.external_lifecycle()
+            launch.assert_called_once_with('external-lifecycle', [])
+            self.assertEqual(frame.call_args_list, [mock.call(), mock.call(1180, 800, len('initial frame\n'))])
+            calls = [call.args[0] for call in invoke.call_args_list]
+            self.assertEqual(calls, [
+                ['xdotool', 'windowsize', '--sync', '2097157', '1180', '800'],
+                [sys.executable, '-c', smoke.X11_CLOSE_HELPER, '2097157'],
+                ['xwininfo', '-root', '-tree']])
+            self.assertTrue(result['window_destroyed'])
+            self.assertEqual(result['os_resize'], [1180, 800])
+            clean.assert_called_once_with(root)
+
+    def test_native_x11_external_resize_failure_never_sends_close(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / 'app.log'
+            log.write_text('initial frame\n')
+            harness = smoke.X11Harness.__new__(smoke.X11Harness)
+            with mock.patch.object(harness, 'app', return_value=(mock.Mock(), log, root, root)), \
+                 mock.patch.object(harness, 'wait_frame', side_effect=[None, RuntimeError('no resized frame')]), \
+                 mock.patch.object(harness, 'verify_app_window', return_value=2097157), \
+                 mock.patch.object(harness, 'command') as invoke, \
+                 self.assertRaisesRegex(RuntimeError, 'no resized frame'):
+                harness.external_lifecycle()
+            invoke.assert_called_once_with(['xdotool', 'windowsize', '--sync', '2097157', '1180', '800'])
+
+    def test_native_x11_reused_pid_is_rejected_before_display_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            record = {'pid': 321, 'window': 2097157, 'width': 1120, 'height': 760}
+            harness = smoke.X11Harness(root / 'dsh', root, root / 'runtime')
+            harness.xvfb = mock.Mock()
+            harness.xvfb.poll.return_value = None
+            harness.input_compositor = mock.Mock(pid=300)
+            harness.input_compositor.poll.return_value = None
+            harness.app_label = 'fixture'
+            harness.app_log = root / 'app.log'
+            harness.app_log.write_text('GPUI_X11_WINDOW ' + json.dumps(record) + '\n')
+            harness.window_record = record
+            harness.window_process = {'starttime': '100'}
+            with mock.patch.object(smoke, 'same_process_running', return_value=False), \
+                 mock.patch.object(harness, 'command') as invoke, \
+                 self.assertRaisesRegex(RuntimeError, 'process identity changed'):
+                harness.verify_app_window()
+            invoke.assert_not_called()
+            diagnostics = json.loads((root / 'fixture-window-verification.jsonl').read_text())
+            self.assertEqual(diagnostics['window'], record)
+            self.assertIn('process identity changed', diagnostics['error'])
+            self.assertFalse(diagnostics['verified'])
+
     def test_window_selected_by_owned_log_id_despite_duplicate_titles(self):
         log = '[07:04:18.911] x11 output 1120x760, window id 2097157\n'
         tree = ('     0x200005 "Weston Compositor": () 1120x760+0+0\n'
