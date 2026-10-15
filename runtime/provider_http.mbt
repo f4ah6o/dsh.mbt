@@ -307,10 +307,10 @@ async fn NativeAuth::run_responses_inner(
 }
 
 ///|
-/// Execute one explicit API-key provider request. The runtime supplies an
+/// Execute one configured provider request. The runtime supplies an
 /// effect-local key snapshot; keys are never stored in provider selection or
 /// included in errors. ChatGPT OAuth is handled only by run_responses.
-async fn native_run_api_key(
+async fn native_run_configured_provider(
   selection : NativeProviderSelection,
   request : Json,
   api_key : String,
@@ -318,7 +318,9 @@ async fn native_run_api_key(
 ) -> Result[Json, String] {
   match
     native_provider_with_deadline(NATIVE_PROVIDER_TOTAL_TIMEOUT_MS, async fn() {
-      native_run_api_key_inner(selection, request, api_key, on_delta)
+      native_run_configured_provider_inner(
+        selection, request, api_key, on_delta,
+      )
     }) {
     Some(result) => result
     None =>
@@ -331,14 +333,18 @@ async fn native_run_api_key(
 }
 
 ///|
-async fn native_run_api_key_inner(
+async fn native_run_configured_provider_inner(
   selection : NativeProviderSelection,
   request : Json,
   api_key : String,
   on_delta : async (String, String) -> Result[Unit, String],
 ) -> Result[Json, String] {
-  if selection.auth_mode() != ApiKey {
-    return Err("INVALID_SELECTION: API-key runner requires API-key auth")
+  let no_auth = selection.auth_mode() == NoAuth
+  if selection.auth_mode() == ChatGPT ||
+    (no_auth && selection.protocol() != OpenAIChatCompletions) {
+    return Err(
+      "INVALID_SELECTION: configured runner requires API-key auth or explicit unauthenticated Chat Completions",
+    )
   }
   let is_responses = selection.protocol() == OpenAIResponses
   let mode = match selection.protocol() {
@@ -346,12 +352,12 @@ async fn native_run_api_key_inner(
     OpenAIChatCompletions => "openai"
     OpenAIResponses => "openai"
   }
-  if api_key.is_empty() || api_key.length() > 8192 {
+  if !no_auth && (api_key.is_empty() || api_key.length() > 8192) {
     return Ok(
       native_provider_failure_json("AUTH", "Provider API key is missing"),
     )
   }
-  for character in api_key {
+  for character in (if no_auth { "" } else { api_key }) {
     if character == '\r' || character == '\n' {
       return Ok(
         native_provider_failure_json(
@@ -410,6 +416,8 @@ async fn native_run_api_key_inner(
       "anthropic-version": "2023-06-01",
       "x-api-key": api_key,
     }
+  } else if no_auth {
+    { "Accept": "text/event-stream", "Content-Type": "application/json" }
   } else {
     {
       "Accept": "text/event-stream",
@@ -649,6 +657,13 @@ async fn native_provider_dispatch_responses_deltas(
 fn native_provider_base_url(
   base_url : String,
 ) -> Result[(String, String), String] {
+  for character in base_url {
+    if character <= ' ' || character == '\u{7f}' {
+      return Err(
+        "INVALID_BASE_URL: provider URL contains whitespace or control characters",
+      )
+    }
+  }
   let (scheme, rest) = match base_url.split_once("://") {
     Some((scheme, rest)) => (scheme.to_owned(), rest.to_owned())
     None => return Err("INVALID_BASE_URL: provider URL must use HTTP(S)")

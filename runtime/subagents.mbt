@@ -311,7 +311,7 @@ async fn NativeRuntime::subagent_provider_binding(
     Err(error) => return Err(error)
   }
   let api_key = if self.provider_config.demo_provider ||
-    selection.auth_mode() == NativeAuthMode::ChatGPT {
+    selection.auth_mode() != NativeAuthMode::ApiKey {
     None
   } else {
     let key_name = if selection.protocol() == NativeProtocol::DeepSeekMessages {
@@ -348,7 +348,7 @@ async fn NativeRuntime::subagent_provider_request(
       Ok(())
     })
   }
-  native_run_api_key(
+  native_run_configured_provider(
     binding.selection,
     request,
     binding.api_key.unwrap_or(""),
