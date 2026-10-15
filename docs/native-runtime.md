@@ -1234,6 +1234,8 @@ Native workspace glob supports literals, `*`, `?`, and `**`; `**/` can match zer
 
 API-key mode uses `DSH_MODE=deepseek|openai|openai-responses`, `DSH_MODEL`, and optional `DSH_BASE_URL`; keys come from `DSH_API_KEY` or the provider-specific environment variable. ChatGPT sign-in is selected with `DSH_MODE=openai-responses DSH_AUTH=chatgpt`; the OAuth token stays in the host's protected store. A Tailnet page uses the Mac-owned credential and cannot start a remote OAuth flow or receive tokens.
 
+Unauthenticated Chat Completions requires explicit `DSH_AUTH=none`, `DSH_MODE=openai` (or `--mode openai`), an explicit model, and an explicit API root via `DSH_BASE_URL` or `--base-url`. It never falls back to no-auth when a key is missing or a server rejects authentication. Both parent and child requests omit Authorization, x-api-key, and cookies and ignore API-key environment variables. Responses and DeepSeek Messages reject this setting. TLS is required except for loopback fixtures. API roots ending in `/v1` or `/v1/` are joined without duplicating `/v1`; supply a root, not the full `/chat/completions` URL. Persisted explicit ChatGPT provider selection still takes precedence until the user chooses the configured provider. See [OpenCode setup and live verification limits](opencode-free-models.md).
+
 The iOS bridge and physical-device/Tailscale end-to-end checks remain separate acceptance gates.
 
 

@@ -73,7 +73,12 @@ fn native_provider_config(
   let auth_mode = match auth {
     "api-key" => NativeAuthMode::ApiKey
     "chatgpt" => NativeAuthMode::ChatGPT
-    _ => return Err("DSH_AUTH must be api-key or chatgpt")
+    "none" => NativeAuthMode::NoAuth
+    _ => return Err("DSH_AUTH must be api-key, chatgpt, or none")
+  }
+  if auth_mode == NativeAuthMode::NoAuth &&
+    protocol != NativeProtocol::OpenAIChatCompletions {
+    return Err("DSH_AUTH=none requires DSH_MODE=openai")
   }
   if auth_mode == NativeAuthMode::ChatGPT &&
     protocol != NativeProtocol::OpenAIResponses {
@@ -109,6 +114,16 @@ fn native_provider_config(
   if auth_mode == NativeAuthMode::ApiKey {
     match
       NativeProviderSelection::api_key(protocol, model, base_url, generation) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
+  } else if auth_mode == NativeAuthMode::NoAuth {
+    match
+      NativeProviderSelection::no_auth(
+        model,
+        base_url.unwrap_or(""),
+        generation,
+      ) {
       Ok(_) => ()
       Err(error) => return Err(error)
     }
@@ -2873,17 +2888,19 @@ async fn NativeRuntime::run_provider_effect(
         )
       })
     } else {
-      native_run_api_key(selection, request, api_key.unwrap(), async fn(
-        text,
-        why,
-      ) -> Result[Unit, String] {
-        self.project_provider_delta(
-          effect.id(),
-          text,
-          why,
-          selection=Some(selection),
-        )
-      })
+      native_run_configured_provider(
+        selection,
+        request,
+        api_key.unwrap_or(""),
+        async fn(text, why) -> Result[Unit, String] {
+          self.project_provider_delta(
+            effect.id(),
+            text,
+            why,
+            selection=Some(selection),
+          )
+        },
+      )
     }
     match result {
       Ok(value) => {
