@@ -122,7 +122,7 @@ Mooncakes module/package coordinate を使う場合は、上の GitHub Release c
 moon binstall f4ah6o/dsh/cmd/dsh
 ```
 
-どちらの coordinate も既定では `~/.local/bin` に install します。上の `PATH` 設定後、`dsh --help` で起動を確認できます。既存の `dsh` executable を更新または置き換えるには `moon binstall f4ah6o/dsh.mbt --force` を実行してください。Mooncakes package coordinate にも同じ `--force` を付けられます。公開 asset は Linux x86-64 / ARM64 と macOS Apple Silicon 向けです。
+どちらの coordinate も既定では `~/.local/bin` に install します。上の `PATH` 設定後、`dsh --help` で起動を確認できます。既存の `dsh` executable を更新または置き換えるには `moon binstall f4ah6o/dsh.mbt --force` を実行してください。Mooncakes package coordinate にも同じ `--force` を付けられます。配布対象 OS はバージョンごとに異なるため、対象版の Release notes を確認してください。[0.1.25](docs/releases/0.1.25.md) は macOS 13+ / Apple Silicon のみを配布し、Linux / Windows の成果物はありません。Linux X11 / Windows はこの版では未適格です。Linux x86-64 / ARM64 のバイナリは [0.1.24](https://github.com/f4ah6o/dsh.mbt/releases/tag/v0.1.24) にあります。
 
 ### Linux native desktop
 
