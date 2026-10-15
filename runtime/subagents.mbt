@@ -306,37 +306,9 @@ async fn NativeRuntime::subagent_provider_binding(
     Ok(value) => value
     Err(error) => return Err(error)
   }
-  let selection = if self.provider_config.demo_provider {
-    match
-      NativeProviderSelection::api_key(
-        NativeProtocol::OpenAIChatCompletions,
-        "offline-demo",
-        None,
-        self.provider_config.generation,
-      ) {
-      Ok(value) => value
-      Err(error) => return Err(error)
-    }
-  } else if self.provider_config.auth_mode == NativeAuthMode::ChatGPT {
-    let selected = match acp_model {
-      Some(model) => self.auth.provider_selection_for_model(model)
-      None => self.auth.provider_selection()
-    }
-    match selected {
-      Ok(value) => value
-      Err(error) => return Err(error)
-    }
-  } else {
-    match
-      NativeProviderSelection::api_key(
-        self.provider_config.protocol,
-        acp_model.unwrap_or(self.provider_config.model),
-        self.provider_config.base_url,
-        self.provider_config.generation,
-      ) {
-      Ok(value) => value
-      Err(error) => return Err(error)
-    }
+  let selection = match self.capture_provider_selection(acp_model) {
+    Ok(value) => value
+    Err(error) => return Err(error)
   }
   let api_key = if self.provider_config.demo_provider ||
     selection.auth_mode() == NativeAuthMode::ChatGPT {
@@ -364,6 +336,10 @@ async fn NativeRuntime::subagent_provider_request(
   binding : NativeSubagentProviderBinding,
   request : Json,
 ) -> Result[Json, String] {
+  match self.validate_provider_selection(binding.selection) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
   if self.provider_config.demo_provider {
     return Ok(native_demo_subagent_provider_response(request))
   }
@@ -402,10 +378,13 @@ async fn NativeRuntime::subagent_complete_provider(
     } else {
       self.subagent_provider_request(binding, effect.request())
     }
-    let value = match response {
-      Ok(value) => value
-      Err(error) => native_provider_failure(error)
-    }
+    let value = self.provider_result(
+      binding.selection,
+      match response {
+        Ok(value) => value
+        Err(error) => native_provider_failure(error)
+      },
+    )
     match native_failure_is_retryable(value) {
       Some(failure) => {
         let scheduled = match
@@ -440,7 +419,7 @@ async fn NativeRuntime::subagent_complete_provider(
   self.complete_subagent_provider_result(
     child,
     effect,
-    final_result.unwrap(),
+    self.provider_result(binding.selection, final_result.unwrap()),
     child_id,
     control~,
   )

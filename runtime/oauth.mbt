@@ -24,6 +24,7 @@ priv struct AuthEndpoints {
   token : String
   discovery : String
   models : String
+  responses : String
   test_mode : Bool
 }
 
@@ -34,6 +35,7 @@ fn AuthEndpoints::production() -> AuthEndpoints {
     token: @auth.TOKEN_ENDPOINT,
     discovery: "https://auth.openai.com/.well-known/openid-configuration",
     models: "https://api.openai.com/v1/models",
+    responses: "https://api.openai.com/v1/responses",
     test_mode: false,
   }
 }
@@ -163,6 +165,8 @@ priv struct NativeAuth {
   endpoints : AuthEndpoints
   mut credential : @auth.Credential?
   mut generation : String
+  mut provider_choice : String
+  mut route_generation : String
   mut selected_model : String?
   mut model_identity : String?
   mut models : Array[Json]
@@ -195,6 +199,8 @@ fn NativeAuth::open(store : NativeStore) -> Result[NativeAuth, String] {
     endpoints: AuthEndpoints::production(),
     credential: state.credential,
     generation: state.generation,
+    provider_choice: state.provider_choice,
+    route_generation: state.route_generation,
     selected_model: state.selected_model,
     model_identity: state.model_identity,
     models: state.models,
@@ -221,6 +227,8 @@ fn NativeAuth::open(store : NativeStore) -> Result[NativeAuth, String] {
 priv struct NativeAuthLoaded {
   credential : @auth.Credential?
   generation : String
+  provider_choice : String
+  route_generation : String
   selected_model : String?
   model_identity : String?
   models : Array[Json]
@@ -243,6 +251,8 @@ fn native_auth_load(
       return Ok({
         credential: None,
         generation: "signed-out",
+        provider_choice: "configured",
+        route_generation: "",
         selected_model: None,
         model_identity: None,
         models: [],
@@ -259,8 +269,25 @@ fn native_auth_load(
     _ => return Err("protected ChatGPT credential file is invalid")
   }
   let version = native_auth_int(fields.get("version"), 0)
-  if version != 1 {
+  if version != 1 && version != 2 {
     return Err("unsupported protected ChatGPT credential format")
+  }
+  // Legacy stores keep the explicitly configured startup route until the user
+  // chooses a model again. Credential presence alone never changes routing.
+  let provider_choice = if version == 1 {
+    "configured"
+  } else {
+    native_auth_string(fields.get("provider_choice"))
+  }
+  let route_generation = if version == 1 {
+    ""
+  } else {
+    native_auth_string(fields.get("route_generation"))
+  }
+  if !["configured", "chatgpt"].contains(provider_choice) ||
+    route_generation.length() > 128 ||
+    (provider_choice == "chatgpt" && route_generation.is_empty()) {
+    return Err("protected provider choice is invalid")
   }
   let credential = match fields.get("credential") {
     None | Some(Null) => None
@@ -304,6 +331,8 @@ fn native_auth_load(
     return Ok({
       credential,
       generation,
+      provider_choice,
+      route_generation,
       selected_model: None,
       model_identity: None,
       models: [],
@@ -314,6 +343,8 @@ fn native_auth_load(
   Ok({
     credential,
     generation,
+    provider_choice,
+    route_generation,
     selected_model,
     model_identity,
     models,
@@ -355,7 +386,9 @@ fn NativeAuth::persist_locked(self : NativeAuth) -> Result[Unit, String] {
     None => Json::null()
   }
   let content = Json::object({
-    "version": 1,
+    "version": 2,
+    "provider_choice": self.provider_choice,
+    "route_generation": self.route_generation,
     "credential": credential,
     "generation": self.generation,
     "selected_model": match self.selected_model {
@@ -381,6 +414,7 @@ fn NativeAuth::status(self : NativeAuth) -> Json {
   if self.closed {
     return {
       "state": "signed_out",
+      "provider_choice": self.provider_choice,
       "account": Json::null(),
       "plan_usage": "disabled",
       "scopes": Json::array([]),
@@ -392,6 +426,7 @@ fn NativeAuth::status(self : NativeAuth) -> Json {
     None =>
       {
         "state": Json(self.login_state),
+        "provider_choice": self.provider_choice,
         "account": Json::null(),
         "plan_usage": "disabled",
         "scopes": Json::array([]),
@@ -407,6 +442,7 @@ fn NativeAuth::status(self : NativeAuth) -> Json {
         Object(fields) => fields
         _ => Map([])
       }
+      fields["provider_choice"] = Json(self.provider_choice)
       fields["models"] = Json::array(self.visible_models())
       fields["state"] = Json(self.login_state)
       fields["selected_model"] = match self.selected_model {
@@ -555,16 +591,6 @@ async fn NativeAuth::models_with(
 }
 
 ///|
-/// Persist a model only after the selected account's fresh model list confirms
-/// it. The UI selection then changes the next provider effect's request.
-async fn NativeAuth::select_model(
-  self : NativeAuth,
-  model : String,
-) -> Result[Json, String] {
-  self.select_model_for_profile(model, None)
-}
-
-///|
 async fn NativeAuth::select_model_for_profile(
   self : NativeAuth,
   model : String,
@@ -620,21 +646,29 @@ async fn NativeAuth::select_model_for_profile(
   if self.model_identity != Some(credential.identity_for_native()) {
     return Err("AUTH_ACCOUNT_CHANGED: model catalog belongs to another account")
   }
-  if self.selected_model == Some(model) {
+  if self.selected_model == Some(model) && self.provider_choice == "chatgpt" {
     return Ok({ "ok": true, "model": model })
   }
   let old_model = self.selected_model
   let old_generation = self.generation
+  let old_choice = self.provider_choice
+  let old_route = self.route_generation
   let generation = match native_auth_random_id() {
     Ok(value) => value
     Err(error) => return Err(error)
   }
   self.selected_model = Some(model)
+  if self.provider_choice != "chatgpt" {
+    self.route_generation = generation
+  }
+  self.provider_choice = "chatgpt"
   self.generation = generation
   match self.persist_locked() {
     Err(error) => {
       self.selected_model = old_model
       self.generation = old_generation
+      self.provider_choice = old_choice
+      self.route_generation = old_route
       Err(error)
     }
     Ok(_) => Ok({ "ok": true, "model": self.selected_model.unwrap() })
@@ -1815,6 +1849,7 @@ fn native_auth_endpoint_allowed(
         endpoint.has_prefix("https://auth.openai.com/") &&
         !endpoint.contains("?")
       "models" => endpoint == "https://api.openai.com/v1/models"
+      "responses" => endpoint == "https://api.openai.com/v1/responses"
       _ => false
     }
   }

@@ -157,7 +157,7 @@ if [ "$DSH_SMOKE_MODE" = bundle-only ]; then
   exit 0
 fi
 
-mkdir -p "$SMOKE_ROOT/tmp" "$SMOKE_ROOT/data" "$SMOKE_ROOT/workspace" \
+mkdir -p "$SMOKE_ROOT/tmp" "$SMOKE_ROOT/home" "$SMOKE_ROOT/data" "$SMOKE_ROOT/workspace" \
   "$SMOKE_ROOT/unrelated-working-directory"
 python3 - "$DSH_APP" "$SMOKE_ROOT" <<'PY'
 import os
@@ -170,24 +170,42 @@ from pathlib import Path
 app_bundle, smoke_root = sys.argv[1:]
 environment = os.environ.copy()
 environment["TMPDIR"] = os.path.join(smoke_root, "tmp")
+environment["HOME"] = os.path.join(smoke_root, "home")
 environment["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
-for name in (
-    "DSH_API_KEY",
+removed_names = {name for name in environment if name.startswith("DSH_")}
+removed_names.update((
     "DEEPSEEK_API_KEY",
     "OPENAI_API_KEY",
-    "DSH_TAILNET_HOST",
-    "DSH_TAILNET_ALLOWED_USERS",
-    "DSH_TAILNET_PORT",
     "GPUI_MACOS_LIBRARY",
     "GPUI_NATIVE_E2E",
-    "DSH_NATIVE_WORKER_BIN",
     "DYLD_LIBRARY_PATH",
     "DYLD_FRAMEWORK_PATH",
     "DYLD_INSERT_LIBRARIES",
     "DYLD_FALLBACK_LIBRARY_PATH",
     "DYLD_FALLBACK_FRAMEWORK_PATH",
-):
+))
+for name in removed_names:
     environment.pop(name, None)
+# LaunchServices has its own environment, and --env NAME sets an empty value
+# rather than unsetting it. Give selectors valid fixture values; blank only
+# optional secrets and injected-library paths. Demo mode prevents inference.
+fixture_environment = {
+    "HOME": environment["HOME"],
+    "TMPDIR": environment["TMPDIR"],
+    "PATH": environment["PATH"],
+    "DSH_AUTH": "api-key",
+    "DSH_MODE": "deepseek",
+    "DSH_MODEL": "offline-demo",
+    "DSH_BASE_URL": "http://127.0.0.1:1",
+    "DSH_API_KEY": "native-smoke-fixture-key",
+    "DSH_NATIVE_WORKER_BIN": os.path.join(app_bundle, "Contents", "Helpers", "dsh"),
+}
+environment.update(fixture_environment)
+launch_environment = []
+for name, value in fixture_environment.items():
+    launch_environment.extend(("--env", name + "=" + value))
+for name in sorted(removed_names - fixture_environment.keys()):
+    launch_environment.extend(("--env", name))
 stdout_path = os.path.join(smoke_root, "app.stdout")
 stderr_path = os.path.join(smoke_root, "app.stderr")
 smoke_executables = [
@@ -242,8 +260,8 @@ try:
         [
             "/usr/bin/open",
             "-n",
-            "-F",
             "-W",
+            *launch_environment,
             "--stdout",
             stdout_path,
             "--stderr",
@@ -252,6 +270,7 @@ try:
             app_bundle,
             "--args",
             "--smoke",
+            "--demo",
             "--data-dir",
             os.path.join(smoke_root, "data"),
             "--workspace",

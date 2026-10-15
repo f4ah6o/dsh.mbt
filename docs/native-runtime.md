@@ -1235,3 +1235,6 @@ Native workspace glob supports literals, `*`, `?`, and `**`; `**/` can match zer
 API-key mode uses `DSH_MODE=deepseek|openai|openai-responses`, `DSH_MODEL`, and optional `DSH_BASE_URL`; keys come from `DSH_API_KEY` or the provider-specific environment variable. ChatGPT sign-in is selected with `DSH_MODE=openai-responses DSH_AUTH=chatgpt`; the OAuth token stays in the host's protected store. A Tailnet page uses the Mac-owned credential and cannot start a remote OAuth flow or receive tokens.
 
 The iOS bridge and physical-device/Tailscale end-to-end checks remain separate acceptance gates.
+
+
+ChatGPT のモデルを Settings または `--select-model` で選ぶと、その workspace の provider も ChatGPT に切り替わり、再起動後も保存された選択を使います。サインインだけでは起動時の API-key 設定を変更しません。サインアウト後は認証エラーになり、API key へ自動で戻りません。Settings の「起動時のプロバイダー設定を使用」で明示的に戻せます。`--demo-provider` ではモデル選択による実サービスへの切り替えを受け付けません。

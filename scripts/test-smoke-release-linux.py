@@ -15,6 +15,14 @@ spec.loader.exec_module(smoke)
 
 
 class ProtocolTests(unittest.TestCase):
+    def x11_fixture(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        harness = smoke.X11Harness(root / 'dsh', root, root / 'runtime')
+        harness.app_label = 'fixture'
+        return harness
+
     def test_native_x11_window_requires_owned_pid_and_exact_window(self):
         record = {'pid': 321, 'window': 2097157, 'width': 1120, 'height': 760}
         log = 'GPUI_X11_WINDOW ' + json.dumps(record) + '\n'
@@ -156,7 +164,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertNotIn('WAYLAND_SOCKET', environment)
 
     def test_native_x11_clipboard_uses_external_owner_and_real_input(self):
-        harness = smoke.X11Harness.__new__(smoke.X11Harness)
+        harness = self.x11_fixture()
         harness.expected_text = smoke.X11_EXPECTED_TEXT
         harness.app_label = 'fixture'
         harness.clipboard_round_trips = 0
@@ -166,7 +174,7 @@ class ProtocolTests(unittest.TestCase):
         owner.poll.return_value = None
         reads = iter([smoke.CLIPBOARD_TEXT, smoke.X11_EXPECTED_TEXT])
         def command(args, check=True):
-            return mock.Mock(stdout=next(reads) if args[0] == 'xclip' else '', returncode=0)
+            return mock.Mock(stdout=next(reads) if args[0] == 'xclip' else '', stderr='', returncode=0)
         with mock.patch.object(harness, 'wait_frame'), \
              mock.patch.object(harness, 'focused', return_value='2097157'), \
              mock.patch.object(harness, 'move_and_click') as click, \
@@ -183,9 +191,13 @@ class ProtocolTests(unittest.TestCase):
         self.assertIn(['xdotool', 'key', '--clearmodifiers', 'ctrl+a', 'ctrl+c'], calls)
         self.assertIn(['xdotool', 'type', '--clearmodifiers', '--delay', '20', '--', ' via Linux keyboard'], calls)
         self.assertFalse(any('--window' in command for command in calls))
+        observations = [json.loads(line) for line in
+                        (harness.output / 'fixture-clipboard-verification.jsonl').read_text().splitlines()]
+        self.assertEqual([entry['phase'] for entry in observations], ['owner', 'round-trip'])
+        self.assertTrue(all(entry['matched'] for entry in observations))
 
     def test_native_x11_clipboard_mismatch_prevents_submit(self):
-        harness = smoke.X11Harness.__new__(smoke.X11Harness)
+        harness = self.x11_fixture()
         harness.expected_text = smoke.X11_EXPECTED_TEXT
         harness.app_label = 'fixture'
         harness.clipboard_round_trips = 0
@@ -200,12 +212,58 @@ class ProtocolTests(unittest.TestCase):
              mock.patch.object(harness, 'focused', return_value='2097157'), \
              mock.patch.object(harness, 'move_and_click') as click, \
              mock.patch.object(harness, 'launch', return_value=(owner, None)), \
-             mock.patch.object(harness, 'command', return_value=mock.Mock(stdout=smoke.CLIPBOARD_TEXT, returncode=0)), \
+             mock.patch.object(harness, 'command', return_value=mock.Mock(stdout=smoke.CLIPBOARD_TEXT, stderr='', returncode=0)), \
              mock.patch.object(smoke, 'wait_for', side_effect=bounded_check), \
              self.assertRaisesRegex(RuntimeError, 'clipboard round-trip'):
             harness.input_click((1032, 725), True)
         click.assert_called_once_with('2097157', 400, 650)
         self.assertEqual(harness.clipboard_round_trips, 0)
+        observations = [json.loads(line) for line in
+                        (harness.output / 'fixture-clipboard-verification.jsonl').read_text().splitlines()]
+        self.assertFalse(observations[-1]['matched'])
+        self.assertEqual(observations[-1]['actual'], smoke.CLIPBOARD_TEXT)
+        self.assertEqual(observations[-1]['expected'], smoke.X11_EXPECTED_TEXT)
+
+    def test_native_x11_clipboard_diagnostics_bound_text_without_weakening_equality(self):
+        harness = self.x11_fixture()
+        limit = smoke.CLIPBOARD_DIAGNOSTIC_CHARACTERS
+        actual = smoke.X11_EXPECTED_TEXT + 'x' * (limit * 2)
+        result = mock.Mock(stdout=actual, stderr='e' * (limit * 2), returncode=0)
+        with mock.patch.object(harness, 'command', return_value=result):
+            self.assertFalse(harness.clipboard_matches(smoke.X11_EXPECTED_TEXT, 'round-trip'))
+        entry = json.loads((harness.output / 'fixture-clipboard-verification.jsonl').read_text())
+        self.assertEqual(entry['actual'], actual[:limit])
+        self.assertEqual(entry['actual_characters'], len(actual))
+        self.assertTrue(entry['actual_truncated'])
+        self.assertEqual(len(entry['stderr']), limit)
+        self.assertTrue(entry['stderr_truncated'])
+        self.assertFalse(entry['matched'])
+
+    def test_native_x11_clipboard_nonzero_exit_and_timeout_are_recorded(self):
+        harness = self.x11_fixture()
+        result = mock.Mock(stdout=smoke.CLIPBOARD_TEXT, stderr='failed conversion', returncode=1)
+        with mock.patch.object(harness, 'command', return_value=result):
+            self.assertFalse(harness.clipboard_matches(smoke.CLIPBOARD_TEXT, 'owner'))
+        error = smoke.subprocess.TimeoutExpired('xclip', 10, output=b'partial', stderr=b'timed out')
+        with mock.patch.object(harness, 'command', side_effect=error), self.assertRaises(smoke.subprocess.TimeoutExpired):
+            harness.clipboard_matches(smoke.X11_EXPECTED_TEXT, 'round-trip')
+        entries = [json.loads(line) for line in
+                   (harness.output / 'fixture-clipboard-verification.jsonl').read_text().splitlines()]
+        self.assertEqual(entries[0]['returncode'], 1)
+        self.assertEqual(entries[0]['stderr'], 'failed conversion')
+        self.assertFalse(entries[0]['matched'])
+        self.assertIsNone(entries[1]['returncode'])
+        self.assertEqual(entries[1]['actual'], 'partial')
+        self.assertEqual(entries[1]['stderr'], 'timed out')
+        self.assertTrue(entries[1]['timed_out'])
+        self.assertFalse(entries[1]['matched'])
+
+    def test_native_x11_clipboard_diagnostics_only_accept_fixed_fixture_values(self):
+        harness = self.x11_fixture()
+        with mock.patch.object(harness, 'command') as command, self.assertRaises(RuntimeError):
+            harness.clipboard_matches('arbitrary clipboard text', 'owner')
+        command.assert_not_called()
+        self.assertFalse((harness.output / 'fixture-clipboard-verification.jsonl').exists())
 
     def test_native_x11_close_sends_window_protocol_instead_of_destroying(self):
         import ctypes

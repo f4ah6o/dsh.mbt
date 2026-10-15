@@ -26,6 +26,7 @@ WIDTH, HEIGHT = 1120, 760
 EXPECTED_TEXT = 'Create and verify a durable file. via Linux keyboard'
 CLIPBOARD_TEXT = 'Create and verify a durable file. 日本語'
 X11_EXPECTED_TEXT = CLIPBOARD_TEXT + ' via Linux keyboard'
+CLIPBOARD_DIAGNOSTIC_CHARACTERS = 1024
 
 # Run in a subprocess with the harness's private DISPLAY and XAUTHORITY. Using
 # XSendEvent with WM_DELETE_WINDOW requests normal close; xdotool windowclose
@@ -583,6 +584,45 @@ class X11Harness(Harness):
                 'Native X11 app focus verification failed')
         return window
 
+    def clipboard_matches(self, expected, phase):
+        # This reader is used only after verification of our private Xvfb and
+        # app window. Log the two fixed fixture values, never a user clipboard.
+        require((phase, expected) in [('owner', CLIPBOARD_TEXT), ('round-trip', X11_EXPECTED_TEXT)],
+                'Unexpected clipboard diagnostic fixture')
+        diagnostics = {'monotonic': time.monotonic(), 'phase': phase,
+                       'window': self.window, 'expected': expected,
+                       'returncode': None, 'matched': False}
+        def capture(actual, stderr):
+            for name, value in [('actual', actual), ('stderr', stderr)]:
+                if isinstance(value, bytes):
+                    value = value.decode('utf-8', errors='replace')
+                value = value or ''
+                diagnostics[name] = value[:CLIPBOARD_DIAGNOSTIC_CHARACTERS]
+                diagnostics[name + '_characters'] = len(value)
+                diagnostics[name + '_truncated'] = len(value) > CLIPBOARD_DIAGNOSTIC_CHARACTERS
+        try:
+            result = self.command(['xclip', '-selection', 'clipboard', '-out', '-target', 'UTF8_STRING'],
+                                  check=False)
+            capture(result.stdout, result.stderr)
+            diagnostics['returncode'] = result.returncode
+            # Compare the full, unmodified output. Diagnostic truncation must
+            # never turn an overlong or otherwise incorrect value into a pass.
+            diagnostics['matched'] = result.returncode == 0 and result.stdout == expected
+            return diagnostics['matched']
+        except subprocess.TimeoutExpired as error:
+            capture(error.stdout, error.stderr)
+            diagnostics['timed_out'] = True
+            diagnostics['error'] = str(error)
+            raise
+        except Exception as error:
+            diagnostics['error'] = str(error)
+            raise
+        finally:
+            # Both callers have bounded five-second polling loops. Preserve
+            # every bounded observation, including the one before a failure.
+            with (self.output / (self.app_label + '-clipboard-verification.jsonl')).open('a') as stream:
+                stream.write(json.dumps(diagnostics) + '\n')
+
     def input_click(self, coordinates, first):
         self.wait_frame()
         window = self.focused()
@@ -593,18 +633,14 @@ class X11Harness(Harness):
                 self.app_label + '-clipboard-owner', input_text=CLIPBOARD_TEXT)
             def clipboard_owned():
                 require(clipboard.poll() is None, 'Private clipboard owner exited early')
-                result = self.command(['xclip', '-selection', 'clipboard', '-out', '-target', 'UTF8_STRING'],
-                                      check=False)
-                return result.returncode == 0 and result.stdout == CLIPBOARD_TEXT
+                return self.clipboard_matches(CLIPBOARD_TEXT, 'owner')
             wait_for(clipboard_owned, 5, 'private UTF-8 clipboard owner')
             self.command(['xdotool', 'key', '--clearmodifiers', 'ctrl+a', 'ctrl+v'])
             self.command(['xdotool', 'type', '--clearmodifiers', '--delay', '20', '--', ' via Linux keyboard'])
             self.command(['xdotool', 'key', '--clearmodifiers', 'ctrl+a', 'ctrl+c'])
             def copied():
                 require(self.input_compositor.poll() is None, 'Owned X11 app exited during clipboard test')
-                result = self.command(['xclip', '-selection', 'clipboard', '-out', '-target', 'UTF8_STRING'],
-                                      check=False)
-                return result.returncode == 0 and result.stdout == self.expected_text
+                return self.clipboard_matches(self.expected_text, 'round-trip')
             wait_for(copied, 5, 'native X11 UTF-8 clipboard round-trip')
             self.clipboard_round_trips += 1
             self.focused()

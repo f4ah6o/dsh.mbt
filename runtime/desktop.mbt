@@ -219,7 +219,7 @@ pub async fn NativeDesktop::auth_select_model(
     return Err("the selected ChatGPT profile is no longer active")
   }
   let result = match
-    self.runtime.auth.select_model_for_profile(model, Some(profile_id)) {
+    self.runtime.select_chatgpt_model(model, expected_profile=Some(profile_id)) {
     Ok(value) => value
     Err(error) => return Err(error)
   }
@@ -389,4 +389,19 @@ pub fn desktop_flush_output() -> Unit {
 /// Expected desktop startup failures must remain visible in release builds.
 pub fn desktop_fail(message : String) -> Unit {
   native_cli_fatal(message)
+}
+
+///|
+/// Explicitly restore the provider settings supplied at startup.
+pub async fn NativeDesktop::auth_use_configured_provider(
+  self : NativeDesktop,
+) -> Result[Json, String] {
+  let result = match self.runtime.auth.use_configured_provider() {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  match self.runtime.touch_projection() {
+    Ok(_) => Ok(result)
+    Err(error) => Err(error)
+  }
 }
