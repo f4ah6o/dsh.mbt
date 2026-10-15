@@ -23,25 +23,17 @@ function checkPackages(packages, target) {
   if (report.version !== 1 || !Array.isArray(report.diagnostics)) {
     throw new Error('Unsupported moon check diagnostic format.');
   }
-  // Non-source Moon warnings cannot be attributed to the pinned dependency.
-  let ownWarnings = report.summary?.moon_warnings || 0;
+  let warnings = report.summary?.moon_warnings || 0;
   let errors = report.summary?.moon_errors || 0;
-  let dependencyWarnings = 0;
   const displayed = new Set();
   for (const diagnostic of report.diagnostics) {
     const path = relative(projectRoot, resolve(projectRoot, diagnostic.path || '.'))
       .split(sep).join('/');
-    const hotpathWarning = diagnostic.level === 'warning' &&
-      path.startsWith('vendor/hotpath/');
     if (diagnostic.level === 'error') errors += 1;
-    if (diagnostic.level === 'warning') {
-      if (hotpathWarning) dependencyWarnings += 1;
-      else ownWarnings += 1;
-    }
+    if (diagnostic.level === 'warning') warnings += 1;
     const key = [diagnostic.level, path, diagnostic.loc, diagnostic.message].join('\n');
     if (!displayed.has(key)) {
-      const label = hotpathWarning ? 'pinned hotpath warning' : diagnostic.level;
-      console.error('[' + label + '] ' + path + ':' + diagnostic.loc + '\n' +
+      console.error('[' + diagnostic.level + '] ' + path + ':' + diagnostic.loc + '\n' +
         diagnostic.message);
       displayed.add(key);
     }
@@ -49,12 +41,12 @@ function checkPackages(packages, target) {
   for (const message of report.messages || []) {
     console.error(typeof message === 'string' ? message : JSON.stringify(message));
   }
-  if (result.status !== 0 || report.status !== 'success' || errors || ownWarnings) {
+  if (result.status !== 0 || report.status !== 'success' || errors || warnings) {
     throw new Error('MoonBit check failed for ' + packages.join(', ') + ' (' + target +
-      '): ' + errors + ' errors, ' + ownWarnings + ' warnings outside pinned hotpath.');
+      '): ' + errors + ' errors, ' + warnings + ' warnings.');
   }
   console.log('MoonBit check: ' + packages.join(', ') + ' (' + target +
-    ') passed; own warnings 0, pinned hotpath warnings ' + dependencyWarnings + '.');
+    ') passed; warnings 0.');
 }
 
 function javascriptFiles(directory) {

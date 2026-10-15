@@ -25,7 +25,7 @@ flowchart TD
 | `engine/` | セッション、連続したイベント、履歴 projection、turn / step、承認、effect、復元検証 |
 | `provider/` | DeepSeek Messages / OpenAI Chat Completions の request、JSON response、incremental SSE decoder |
 | `plugins/` | MoonBit startup composition、依存・所有権検証、6 種の tool schema |
-| `api/` | gpui `App` / registry / typed capability / GUI binding / MCP、hotpath 計測 |
+| `api/` | gpui `App` / registry / typed capability / GUI binding / MCP |
 | `ui/` | gpui による transcript layout、visible scene、scroll bounds |
 | `app/` | MoonBit application composition と明示的な start / stop boundary |
 | `runtime/` | Native CLI / HTTP / MCP、provider transport、workspace tools、atomic persistence、scheduler、shutdown library |
@@ -214,7 +214,6 @@ public deployment や multi-user authentication は未実装です。
 | `session_cancel` | `session_id` | 停止した session |
 | `tool_approve` | `session_id`, `call_id`, `approved` | 判定後の session |
 | `plugin_list` | `{}` | startup composition と tool 所有者 |
-| `profile_stats` | `{}` | hotpath の集計 report 文字列 |
 
 各操作の入力は additional properties を認めません。typed GUI binding にも同じ検証を適用します。
 `session_send` は実行中の session への重複投入を拒否します。
@@ -262,7 +261,10 @@ browser は upstream 由来の Canvas renderer で scene を描きます。長�
 Canvas bitmap は viewport サイズに保ちます。DOM は textarea、button、session navigation、読み上げ可能な transcript を提供します。
 
 `api/api.mbt` は gpui `App` を作成し、owned capability registry と protocol server をその寿命に結び付けます。
-`hotpath.Profiler` が capability ごとの実際の呼出しを計測します。
+通常の API は profiler を保持せず、呼出しごとの hotpath 計測を行いません。
+`profile_stats` は direct / GUI / HTTP / MCP の公開操作から削除しました。
+呼出し元はこの操作の利用と discovery 上の期待を取り除いてください。
+固定 fixture の性能確認は独立した開発用 module [tools/perf](../tools/perf/README.md) で行います。
 `plugins/` は compile 時に組み込む MoonBit tool descriptor の依存と重複を検証します。
 一覧中の session / loop / provider / UI / API は startup component の記録であり、Cordis の実行時 plugin loader ではありません。
 

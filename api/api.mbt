@@ -7,7 +7,6 @@ pub struct HarnessApi {
   priv registry : @capability.Registry
   priv protocol : @mcp.ProtocolServer
   priv operations : Map[String, @capability.TypedCapability[Json, Json]]
-  priv profiler : @hotpath.Profiler
   priv native_prompt_contexts : Ref[Array[String]]
   priv native_session_start_contexts : Ref[Array[String]]
   priv native_hook_context_source_kind : Ref[String]
@@ -202,7 +201,6 @@ fn create_api(
     None => ()
   }
   let engine = @engine.Engine::new(plugins.tools())
-  let profiler = @hotpath.Profiler::new()
   let native_prompt_contexts : Ref[Array[String]] = Ref([])
   let native_session_start_contexts : Ref[Array[String]] = Ref([])
   let native_hook_context_source_kind = Ref("hooks-claude-code")
@@ -250,10 +248,6 @@ fn create_api(
         "plugin_list", "List plugins", "Read the mounted MoonBit startup composition and tool ownership.",
         true,
       ),
-      (
-        "profile_stats", "Read profiler", "Read hotpath.mbt aggregate timings for capability invocations.",
-        true,
-      ),
     ] {
     let descriptor = checked(
       @capability.Descriptor::new(
@@ -295,67 +289,64 @@ fn create_api(
       },
       _output => Ok(()),
       input => {
-        profiler.measure("api." + name, () => {
-          match name {
-            "plugin_list" => Ok(plugins.manifest())
-            "profile_stats" => Ok(Json::string(profiler.render_text()))
-            "session_send" =>
-              match @engine.EngineCommand::from_json("session_send", input) {
-                Ok(@engine.EngineCommand::SendPrompt(session_id, prompt)) => {
-                  let command_result = if !native_session_start_contexts.val.is_empty() ||
-                    !native_prompt_contexts.val.is_empty() {
-                    engine.apply_session_send_with_hook_contexts(
-                      session_id,
-                      prompt,
-                      native_session_start_contexts.val,
-                      native_prompt_contexts.val,
-                      source_kind=native_hook_context_source_kind.val,
-                    )
+        match name {
+          "plugin_list" => Ok(plugins.manifest())
+          "session_send" =>
+            match @engine.EngineCommand::from_json("session_send", input) {
+              Ok(@engine.EngineCommand::SendPrompt(session_id, prompt)) => {
+                let command_result = if !native_session_start_contexts.val.is_empty() ||
+                  !native_prompt_contexts.val.is_empty() {
+                  engine.apply_session_send_with_hook_contexts(
+                    session_id,
+                    prompt,
+                    native_session_start_contexts.val,
+                    native_prompt_contexts.val,
+                    source_kind=native_hook_context_source_kind.val,
+                  )
+                } else {
+                  let command = @engine.EngineCommand::SendPrompt(
+                    session_id, prompt,
+                  )
+                  if preview_session_send.val {
+                    engine.preview(command)
                   } else {
-                    let command = @engine.EngineCommand::SendPrompt(
-                      session_id, prompt,
-                    )
-                    if preview_session_send.val {
-                      engine.preview(command)
-                    } else {
-                      engine.apply(command)
-                    }
+                    engine.apply(command)
                   }
-                  match command_result {
+                }
+                match command_result {
+                  Ok(value) => Ok(value)
+                  Err(error) => Err(domain_error(name, error))
+                }
+              }
+              Ok(command) =>
+                if preview_session_send.val {
+                  match engine.preview(command) {
+                    Ok(value) => Ok(value)
+                    Err(error) => Err(domain_error(name, error))
+                  }
+                } else {
+                  match engine.apply(command) {
                     Ok(value) => Ok(value)
                     Err(error) => Err(domain_error(name, error))
                   }
                 }
-                Ok(command) =>
-                  if preview_session_send.val {
-                    match engine.preview(command) {
-                      Ok(value) => Ok(value)
-                      Err(error) => Err(domain_error(name, error))
-                    }
+              Err(error) => Err(domain_error(name, error))
+            }
+          _ if preview_session_send.val =>
+            Err(domain_error(name, "preview accepts only session_send"))
+          _ =>
+            match engine.invoke(name, input) {
+              Ok(value) =>
+                Ok(
+                  if name == "session_list" {
+                    session_summaries(value)
                   } else {
-                    match engine.apply(command) {
-                      Ok(value) => Ok(value)
-                      Err(error) => Err(domain_error(name, error))
-                    }
-                  }
-                Err(error) => Err(domain_error(name, error))
-              }
-            _ if preview_session_send.val =>
-              Err(domain_error(name, "preview accepts only session_send"))
-            _ =>
-              match engine.invoke(name, input) {
-                Ok(value) =>
-                  Ok(
-                    if name == "session_list" {
-                      session_summaries(value)
-                    } else {
-                      value
-                    },
-                  )
-                Err(error) => Err(domain_error(name, error))
-              }
-          }
-        })
+                    value
+                  },
+                )
+              Err(error) => Err(domain_error(name, error))
+            }
+        }
       },
       () => {
         if registry.is_alive() {
@@ -380,7 +371,6 @@ fn create_api(
     registry,
     protocol,
     operations,
-    profiler,
     native_prompt_contexts,
     native_session_start_contexts,
     native_hook_context_source_kind,
@@ -602,9 +592,7 @@ pub fn HarnessApi::complete(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.complete", () => {
-    self.engine.complete(id, result)
-  })
+  self.engine.complete(id, result)
 }
 
 ///|
@@ -617,9 +605,7 @@ pub fn HarnessApi::complete_effect(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.complete", () => {
-    self.engine.complete_effect(id, result)
-  })
+  self.engine.complete_effect(id, result)
 }
 
 ///|
@@ -633,9 +619,7 @@ pub fn HarnessApi::complete_effect_with_stop_hook(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.complete", () => {
-    self.engine.complete_effect_with_stop_hook(id, result)
-  })
+  self.engine.complete_effect_with_stop_hook(id, result)
 }
 
 ///|
@@ -649,9 +633,7 @@ pub fn HarnessApi::complete_effect_with_post_tool_prompt_hook(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.complete", () => {
-    self.engine.complete_effect_with_post_tool_prompt_hook(id, result)
-  })
+  self.engine.complete_effect_with_post_tool_prompt_hook(id, result)
 }
 
 ///|
@@ -675,9 +657,7 @@ pub fn HarnessApi::accept_post_tool_prompt_hook(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.post_tool_prompt_hook_accept", () => {
-    self.engine.accept_post_tool_prompt_hook(checkpoint, contexts)
-  })
+  self.engine.accept_post_tool_prompt_hook(checkpoint, contexts)
 }
 
 ///|
@@ -689,9 +669,7 @@ pub fn HarnessApi::block_post_tool_prompt_hook(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.post_tool_prompt_hook_block", () => {
-    self.engine.block_post_tool_prompt_hook(checkpoint, reason)
-  })
+  self.engine.block_post_tool_prompt_hook(checkpoint, reason)
 }
 
 ///|
@@ -715,9 +693,7 @@ pub fn HarnessApi::prepare_stop_continuation(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.stop_hook_prepare", () => {
-    self.engine.prepare_stop_continuation(checkpoint, text)
-  })
+  self.engine.prepare_stop_continuation(checkpoint, text)
 }
 
 ///|
@@ -728,9 +704,7 @@ pub fn HarnessApi::finish_stop_hook(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.stop_hook_finish", () => {
-    self.engine.finish_stop_hook(checkpoint)
-  })
+  self.engine.finish_stop_hook(checkpoint)
 }
 
 ///|
@@ -742,9 +716,7 @@ pub fn HarnessApi::continue_stop_hook(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.stop_hook_continue", () => {
-    self.engine.continue_stop_hook(checkpoint, contexts)
-  })
+  self.engine.continue_stop_hook(checkpoint, contexts)
 }
 
 ///|
@@ -756,9 +728,7 @@ pub fn HarnessApi::block_stop_continuation(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.stop_hook_block", () => {
-    self.engine.block_stop_continuation(checkpoint, denial_reason)
-  })
+  self.engine.block_stop_continuation(checkpoint, denial_reason)
 }
 
 ///|
@@ -772,9 +742,7 @@ pub fn HarnessApi::record_effect_outcome(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.record_effect_outcome", () => {
-    self.engine.record_effect_outcome(id.as_string(), result)
-  })
+  self.engine.record_effect_outcome(id.as_string(), result)
 }
 
 ///|
@@ -786,9 +754,7 @@ pub fn HarnessApi::schedule_retry(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.schedule_retry", () => {
-    self.engine.schedule_retry(id, policy)
-  })
+  self.engine.schedule_retry(id, policy)
 }
 
 ///|
@@ -800,9 +766,7 @@ pub fn HarnessApi::start_retry(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.start_retry", () => {
-    self.engine.start_retry(id, retry_id)
-  })
+  self.engine.start_retry(id, retry_id)
 }
 
 ///|
@@ -816,9 +780,7 @@ pub fn HarnessApi::project_stream(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.project_stream", () => {
-    self.engine.project_stream(effect_id, content, reasoning)
-  })
+  self.engine.project_stream(effect_id, content, reasoning)
 }
 
 ///|
@@ -832,9 +794,7 @@ pub fn HarnessApi::project_effect_stream(
   if !self.registry.is_alive() {
     return Err("application is closed")
   }
-  self.profiler.measure("engine.project_stream", () => {
-    self.engine.project_effect_stream(effect_id, content, reasoning)
-  })
+  self.engine.project_effect_stream(effect_id, content, reasoning)
 }
 
 ///|
