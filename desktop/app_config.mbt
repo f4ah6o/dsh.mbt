@@ -173,11 +173,25 @@ fn desktop_argument_values(
 }
 
 ///|
+/// Default PPM location for frame evidence. Windows keeps it inside the
+/// process temp directory instead of the POSIX `/tmp` path.
+fn desktop_default_frame_output() -> String {
+  if @runtime.native_os_is_windows() {
+    match @env.get_env_var("TEMP") {
+      Some(value) if !value.is_empty() => value + "/dsh-desktop-frame.ppm"
+      _ => "dsh-desktop-frame.ppm"
+    }
+  } else {
+    "/tmp/dsh-desktop-frame.ppm"
+  }
+}
+
+///|
 fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
   if desktop_argument_flag(args, "--help") || desktop_argument_flag(args, "-h") {
     return Err("help")
   }
-  let home = @env.get_env_var("HOME").unwrap_or("")
+  let home = @runtime.native_home_dir()
   let default_workspace = if home != "" {
     home
   } else {
@@ -200,7 +214,7 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
   let offline_e2e = desktop_argument_flag(args, "--offline-e2e") ||
     desktop_argument_flag(args, "--visual-smoke")
   let frame_output = desktop_argument_value(args, "--frame-output").unwrap_or(
-    "/tmp/dsh-desktop-frame.ppm",
+    desktop_default_frame_output(),
   )
   let values = [
     "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--hooks-plugin-root",

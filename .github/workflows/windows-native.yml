@@ -37,8 +37,19 @@ jobs:
         run: moon test engine provider plugins auth protocol client app ui --target native --deny-warn
       - name: Test the Windows runtime boundary
         run: moon test runtime --target native --deny-warn --filter "windows*"
+      - name: Test the Japanese font prerequisite
+        run: moon test desktop/windows --target native --deny-warn --filter "*Japanese*"
       - name: Build the Windows CLI (release)
         run: moon build --target native --release cmd/dsh
+      - name: Build the Windows desktop (release)
+        run: moon build --target native --release desktop/windows
+      - name: Run the Windows desktop smoke gate (manual only)
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        run: |
+          python scripts/test-windows-desktop.py --no-build 2>&1 |
+            Tee-Object -FilePath windows-native-desktop.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Compile the C boundary with MSVC warnings enabled
         shell: pwsh
         run: |

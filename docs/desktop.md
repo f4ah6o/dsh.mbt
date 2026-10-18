@@ -2,11 +2,27 @@
 
 ## Windows
 
-Not provided yet. The Windows work starts with the bounded native runtime
-(M1): CLI, web, session store, approval, and the SafeRoot boundary. A Windows
-build reports an explicit unsupported error for `dsh desktop` instead of
-launching a stub. See the
-[Windows native profile](native-runtime.md#windows-x64-profile).
+Windows 11 x64 has a real GPUI Direct3D 11 desktop executable. Build it with
+the pinned toolchain and run the gate:
+
+```powershell
+moon build --target native --release desktop/windows cmd/dsh
+pwsh -NoProfile -File scripts/build-desktop-windows.ps1 -Mode E2E
+python scripts/test-windows-desktop.py
+```
+
+`--smoke` opens a visible window, presents a frame, resizes (shrinks, so a
+small RDP display cannot clamp the change away), closes and destroys it.
+`--offline-e2e` with `GPUI_NATIVE_E2E=1` sends the demo prompt, approves the
+workspace write, verifies the Japanese heading and ChatGPT settings frames
+from the owned frame, and reloads the session without replay. Frame evidence
+is written as `frame.ppm` and `frame.ppm.settings.ppm`.
+
+Japanese text uses the system DirectWrite stack; the gate fails with
+`Japanese font prerequisite not met` when the font or glyph coverage is
+missing instead of reporting a pass. IME composition is not implemented; paste
+uses the host clipboard. The `dsh desktop` launcher for Windows is not
+provided yet; run `dsh-desktop.exe` directly.
 
 ## Linux Wayland and X11
 

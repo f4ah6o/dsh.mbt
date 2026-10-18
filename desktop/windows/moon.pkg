@@ -1,0 +1,16 @@
+import {
+  "moonbitlang/async",
+  "f4ah6o/dsh/desktop",
+  "f4ah6o/gpui/windows" @native,
+  "f4ah6o/gpui/platform/testing",
+}
+
+import {
+  "f4ah6o/gpui/text",
+  "f4ah6o/gpui/platform/windows_text",
+  "f4ah6o/gpui/primitives",
+} for "wbtest"
+
+supported_targets = "+native"
+
+pkgtype(kind: "executable")

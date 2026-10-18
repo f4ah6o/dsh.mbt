@@ -119,8 +119,11 @@ async fn desktop_run(
       Err(error) => return Err(error)
       Ok(_) => ()
     }
+    // Normalize to "/" so the marker stays valid JSON on Windows: a raw
+    // backslash path would introduce an invalid escape sequence.
+    let frame_evidence = @runtime.native_path_normalize(config.frame_output)
     println(
-      "DSH_DESKTOP_DEMO {\"native_events\":true,\"tool_approval\":\"approved\",\"completed\":true,\"workspace_write\":true,\"reload\":\"passed\",\"japanese_frame\":\"passed\",\"frame\":\"\{config.frame_output}\"}",
+      "DSH_DESKTOP_DEMO {\"native_events\":true,\"tool_approval\":\"approved\",\"completed\":true,\"workspace_write\":true,\"reload\":\"passed\",\"japanese_frame\":\"passed\",\"frame\":\"\{frame_evidence}\"}",
     )
   }
   Ok(())

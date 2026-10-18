@@ -82,8 +82,9 @@ directory or lock mutation): shell / bash, `grep` (there is no hard worker
 memory limit), external MCP, LSP, command hooks, subagents, `dsh acp`,
 `dsh mcp`, `--internal-worker`, and ChatGPT SIWC. `siwc-auth.json` is never read
 or written and the auth projection stays signed out; use `--demo` or an API
-key. `dsh desktop` reports an explicit unsupported error until the desktop
-milestone lands.
+key. The GPUI desktop executable is built from `desktop/windows` (see
+[the desktop guide](desktop.md#windows)); the `dsh desktop` launcher remains
+unsupported on Windows, so run `dsh-desktop.exe` directly.
 
 The C boundary returns `ENOTSUP` for `exec_worker`, `child_exit_state`, and
 `kill_process_group` on Windows, and `os_hard_worker_memory_supported` is 0.

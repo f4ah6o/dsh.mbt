@@ -1,5 +1,23 @@
 # 検証記録
 
+## Windows x64 GPUI desktop (M2)
+
+2026-10-19, Windows 11 x64 (interactive session with a 758x662 RDP display),
+MSVC 2022 + Windows SDK `10.0.26100`, MoonBit `0.10.15+943464bfa`, gpui.mbt
+0.9.0 (`windows` and `platform/windows_text`).
+
+| gate | result |
+| --- | --- |
+| `moon test desktop/windows --target native --filter "*Japanese*"` | PASS: Yu Gothic measurement, zero unknown glyphs, DirectWrite scene admission. |
+| `moon test desktop --target native --filter "*budget*"` | PASS 4 / 4: long transcript, 5000-scalar clip to 1365 scalars, settings with 9 models drops the occluded conversation layer, pending approval. |
+| `moon build --target native --release desktop/windows cmd/dsh` | PASS. |
+| `dsh-desktop.exe --smoke` | PASS: frame presented, resize observed, close requested, window destroyed. The probe shrinks because the session display is smaller than the requested 1120x760 window; growing was clamped by the display and produced no WM_SIZE. |
+| `GPUI_NATIVE_E2E=1 dsh-desktop.exe --offline-e2e` | PASS: demo send, approval, `native-demo.txt`, durable reload, Japanese heading pixels, settings heading pixels. |
+| `python scripts/test-windows-desktop.py` | PASS: markers, PPM structure, workspace write, `sessions.json`, and no `siwc-auth.json`. |
+| `dsh desktop` launcher on Windows | NOT RUN / not implemented in M2 (M3). Run `dsh-desktop.exe` directly. |
+| macOS / Linux desktop regression | NOT RUN: the implementing host is Windows. The shared budget and pixel-probe changes are platform-neutral; hosted CI must confirm. |
+| Hosted Windows desktop E2E | NOT RUN: `windows-native.yml` builds the desktop and runs the font test, but the interactive window step is not enabled until a runner with a D3D11 desktop is validated. |
+
 ## Windows x64 native runtime (M1)
 
 2026-10-19, Windows 11 x64 (Japanese locale), MSVC 2022 + Windows SDK
