@@ -10,7 +10,7 @@ DSH_NATIVE_TARGET_DIR="_build/native/release"
 if [ "$(uname -s)" = "Darwin" ]; then
   DSH_NATIVE_TARGET_DIR="_build/native-macos-${MACOSX_DEPLOYMENT_TARGET:-13.0}/native/release"
 fi
-DSH_NATIVE=${DSH_NATIVE_BINARY:-"$DSH_ROOT/$DSH_NATIVE_TARGET_DIR/build/f4ah6o/dsh/native/native.exe"}
+DSH_NATIVE=${DSH_NATIVE_BINARY:-"$DSH_ROOT/$DSH_NATIVE_TARGET_DIR/build/native/native.exe"}
 DSH_WEB_CWD=${DSH_WEB_CWD:-"$DSH_ROOT"}
 if [ ! -x "$DSH_NATIVE" ]; then
   echo "Browser smoke requires an executable web host: missing $DSH_NATIVE" >&2

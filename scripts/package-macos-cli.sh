@@ -17,7 +17,7 @@ python3 scripts/prepare-macos-desktop-payload.py --archive "$DSH_ARCHIVE" \
 # a previously linked CLI. The app archive carries the separate base helper.
 MOON_CC="$DSH_ROOT/scripts/macos-cli-cc.py" MACOSX_DEPLOYMENT_TARGET=13.0 DSH_MACOS_DESKTOP_PAYLOAD="$DSH_PAYLOAD_ROOT/app.payload" \
   moon build cmd/dsh --target native --release --frozen --target-dir "$DSH_PAYLOAD_ROOT/build"
-DSH_CLI="$DSH_PAYLOAD_ROOT/build/native/release/build/f4ah6o/dsh/cmd/dsh/dsh.exe"
+DSH_CLI="$DSH_PAYLOAD_ROOT/build/native/release/build/cmd/dsh/dsh.exe"
 mkdir -p "$(dirname "$DSH_OUTPUT")"
 cp "$DSH_CLI" "$DSH_PAYLOAD_ROOT/dsh"
 chmod 755 "$DSH_PAYLOAD_ROOT/dsh"

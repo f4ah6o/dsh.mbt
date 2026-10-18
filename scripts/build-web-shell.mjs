@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const checkOnly = process.argv.includes('--check');
-const buildDirectory = path.join(root, '_build/js/release/build/f4ah6o/dsh/browser');
+const buildDirectory = path.join(root, '_build/js/release/build/browser');
 const browserModule = path.join(buildDirectory, 'browser.js');
 const serviceWorkerModule = path.join(buildDirectory, 'sw/sw.js');
 const yamiSource = path.join(root, '.mooncakes/f4ah6o/yami_kumo');

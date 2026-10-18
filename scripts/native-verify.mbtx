@@ -210,7 +210,7 @@ async fn main {
     worker_target_dir,
   ])
   let worker_binary = worker_target_dir +
-    "/native/release/build/f4ah6o/dsh/native/native.exe"
+    "/native/release/build/native/native.exe"
   if !@fs.exists(worker_binary) {
     fail("native worker executable was not produced at its expected build path")
   }
@@ -248,10 +248,10 @@ async fn main {
     }
   }
   copy_and_compare_asset(
-    "_build/js/release/build/f4ah6o/dsh/browser/browser.js", "web/moonbit/browser.js",
+    "_build/js/release/build/browser/browser.js", "web/moonbit/browser.js",
   )
   copy_and_compare_asset(
-    "_build/js/release/build/f4ah6o/dsh/browser/sw/sw.js", "web/sw.js",
+    "_build/js/release/build/browser/sw/sw.js", "web/sw.js",
   )
   assert_asset_matches(
     ".mooncakes/f4ah6o/yami_kumo/styles/kumo-standalone.css", "web/kumo-standalone.css",
@@ -265,12 +265,16 @@ async fn main {
   assert_asset_matches(
     ".mooncakes/f4ah6o/yami_kumo/licenses/cloudflare-kumo-LICENSE", "licenses/yami-kumo-cloudflare-kumo-LICENSE",
   )
+  assert_asset_matches(
+    ".mooncakes/f4ah6o/gpui/LICENSE", "licenses/gpui-LICENSE",
+  )
   for
     path in [
-      "_build/js/release/build/f4ah6o/dsh/browser/browser.js", "_build/js/release/build/f4ah6o/dsh/browser/sw/sw.js",
+      "_build/js/release/build/browser/browser.js", "_build/js/release/build/browser/sw/sw.js",
       "web/moonbit/browser.js", "web/sw.js", "web/kumo-standalone.css", "web/yami-kumo-components.css",
-      "web/yami-kumo-shell.css", "licenses/yami-kumo-LICENSE", "licenses/yami-kumo-cloudflare-kumo-LICENSE",
-      "web/index.html", "web/manifest.webmanifest", "web/icon.svg",
+      "web/yami-kumo-shell.css", "licenses/gpui-LICENSE", "licenses/yami-kumo-LICENSE",
+      "licenses/yami-kumo-cloudflare-kumo-LICENSE", "web/index.html",
+      "web/manifest.webmanifest", "web/icon.svg",
     ] {
     if !@fs.exists(path) {
       fail("no-Node web asset build did not produce " + path)

@@ -8,7 +8,7 @@ Supported baseline: Ubuntu 24.04, x86-64 and ARM64, with a Wayland compositor or
 
 `DSH_DESKTOP_BACKEND=auto` (the default) prefers a nonempty `WAYLAND_DISPLAY` or `WAYLAND_SOCKET`, then a nonempty `DISPLAY`. Set `DSH_DESKTOP_BACKEND=wayland` or `DSH_DESKTOP_BACKEND=x11` to choose explicitly. Unknown values and missing session variables fail with an actionable error. Once selected, connection or driver errors are reported without silently trying the other backend.
 
-Build from the recursive checkout with the pinned MoonBit toolchain:
+Build from the checkout with the pinned MoonBit toolchain and installed MoonBit dependencies:
 
 ```sh
 sudo apt-get install libx11-dev libwayland-dev wayland-protocols libegl1-mesa-dev \
@@ -63,8 +63,8 @@ values.
 
 ## Build and run from source
 
-On macOS with the pinned MoonBit toolchain, Git submodules, and Xcode command
-line tools installed, build a local bundle with:
+On macOS with the pinned MoonBit toolchain, installed MoonBit dependencies, and
+Xcode command line tools installed, build a local bundle with:
 
 ```sh
 sh scripts/build-desktop.sh --build

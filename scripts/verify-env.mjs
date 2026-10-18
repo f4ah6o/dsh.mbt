@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const projectRoot = fileURLToPath(new URL('../', import.meta.url));
-const dependencyPaths = ['vendor/gpui', 'tools/turtles'];
+const dependencyPaths = ['tools/turtles'];
 const yamiKumoPackage = 'f4ah6o/yami_kumo';
 const yamiKumoVersion = '0.1.1';
 const gpuiPackage = 'f4ah6o/gpui';
@@ -76,22 +76,40 @@ function verifyYamiKumoPackage() {
   return installedVersion;
 }
 
-function verifyGpuiDeclaration() {
+function verifyGpuiPackage() {
   const projectManifest = readFileSync(join(projectRoot, 'moon.mod'), 'utf8');
   const declared = projectManifest.match(/"f4ah6o\/gpui@([^"]+)"/)?.[1];
   if (!declared) {
     throw new Error('moon.mod must declare ' + gpuiPackage + ' with an explicit version.');
   }
-  const pinnedVersion = moduleField(
-    join(projectRoot, 'vendor/gpui', 'moon.mod'),
-    'version',
-  );
-  if (declared !== pinnedVersion) {
-    throw new Error('moon.mod declares ' + gpuiPackage + '@' + declared +
-      ' but vendor/gpui is ' + pinnedVersion +
-      '. Update the declaration to match the pinned submodule.');
+  const packageRoot = join(projectRoot, '.mooncakes', 'f4ah6o', 'gpui');
+  const packageManifest = join(packageRoot, 'moon.mod');
+  if (!existsSync(packageManifest)) {
+    throw new Error('Pinned package ' + gpuiPackage + '@' + declared +
+      ' is not installed. Run:\n  moon update && moon install');
   }
-  return pinnedVersion;
+  const installedName = moduleField(packageManifest, 'name');
+  const installedVersion = moduleField(packageManifest, 'version');
+  if (installedName !== gpuiPackage || installedVersion !== declared) {
+    throw new Error('Installed gpui.mbt package mismatch: expected ' +
+      gpuiPackage + '@' + declared + ', found ' + installedName + '@' +
+      installedVersion + '. Run:\n  moon update && moon install');
+  }
+  const requiredFiles = [
+    'LICENSE',
+    'platform/macos/native.m',
+    'platform/macos_text/core_text.c',
+    'script/macos_text_prebuild.py',
+    'scripts/prepare_ubuntu.sh',
+    'tests/x11/run_contract.sh',
+  ];
+  const missingFiles = requiredFiles.filter(path => !existsSync(join(packageRoot, path)));
+  if (missingFiles.length) {
+    throw new Error('Installed ' + gpuiPackage + '@' + declared +
+      ' is missing required native sources: ' + missingFiles.join(', ') +
+      '. Run:\n  moon update && moon install');
+  }
+  return installedVersion;
 }
 
 export function verifyEnvironment({ quiet = false } = {}) {
@@ -147,7 +165,7 @@ export function verifyEnvironment({ quiet = false } = {}) {
     const directory = join(projectRoot, path);
     if (!existsSync(join(directory, '.git')) || !existsSync(join(directory, 'moon.mod'))) {
       throw new Error('Dependency ' + path + ' is not initialized. Run:\n' +
-        '  git submodule update --init --recursive vendor/gpui tools/turtles');
+        '  git submodule update --init --recursive tools/turtles');
     }
     const head = capture('git', ['rev-parse', 'HEAD'], directory);
     if (head.status !== 0 || head.stdout.trim() !== pin[1]) {
@@ -173,11 +191,11 @@ export function verifyEnvironment({ quiet = false } = {}) {
     pins[path] = pin[1];
   }
   const yamiKumoVersion = verifyYamiKumoPackage();
-  const gpuiVersion = verifyGpuiDeclaration();
+  const gpuiVersion = verifyGpuiPackage();
   const turtlesVersion = moduleField(join(projectRoot, 'tools/turtles/moon.mod'), 'version');
   if (!quiet) {
     console.log('Environment: Node ' + process.versions.node + '; MoonBit ' +
-      compilerVersion + '; core, gpui and 2 dependency pins verified.');
+      compilerVersion + '; core, gpui, Yami-kumo and the turtles pin verified.');
   }
   return {
     compilerVersion, moonVersion, turtlesVersion, yamiKumoVersion, gpuiVersion, pins,

@@ -15,18 +15,17 @@ invoked.
 
 ## gpui.mbt
 
-The `vendor/gpui` Git submodule pins
-[gpui-mbt/gpui.mbt](https://github.com/gpui-mbt/gpui.mbt) at
-`5906394b001d465744660573b5e81dfd647402a7`. Its MoonBit module name is
-`f4ah6o/gpui`. Licensed under Apache License 2.0; see
-[`vendor/gpui/LICENSE`](vendor/gpui/LICENSE).
+The Mooncakes module `f4ah6o/gpui` version `0.9.0` is installed from
+[gpui-mbt/gpui.mbt](https://github.com/gpui-mbt/gpui.mbt). Its MoonBit module
+name is `f4ah6o/gpui`. Licensed under Apache License 2.0; the package license is
+reproduced at [`licenses/gpui-LICENSE`](licenses/gpui-LICENSE).
 
 ## Yami-kumo and Cloudflare Kumo
 
 The browser package consumes Mooncakes module `f4ah6o/yami_kumo` version
-`0.1.0`, published from
-[f4ah6o/Yami-kumo](https://github.com/f4ah6o/Yami-kumo) at merged revision
-`0f6828647864930ef1c3022604beac36dcbd0781`. Its MoonBit shell, DOM adapter,
+`0.1.1`, published from
+[f4ah6o/Yami-kumo](https://github.com/f4ah6o/Yami-kumo) at release revision
+`db0d0d06fd33c11b9313c7e749d2e097fa131f6f`. Its MoonBit shell, DOM adapter,
 and CSS are installed from `.mooncakes/f4ah6o/yami_kumo`. This project does not
 claim the package source under its own MIT license; see the copied upstream
 license at [`licenses/yami-kumo-LICENSE`](licenses/yami-kumo-LICENSE).

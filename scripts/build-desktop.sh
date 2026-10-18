@@ -48,9 +48,16 @@ APP_BUNDLE="$BUILD_ROOT/$APP_NAME.app"
 APP_EXECUTABLE="$APP_BUNDLE/Contents/MacOS/dsh-desktop"
 GPUI_DYLIB="$APP_BUNDLE/Contents/Frameworks/libgpui_macos.dylib"
 MOON_TARGET_ROOT="$ROOT_DIR/_build/desktop-macos13"
-MOON_BUILD_ROOT="$MOON_TARGET_ROOT/native/$BUILD_KIND/build/f4ah6o/dsh"
+MOON_BUILD_ROOT="$MOON_TARGET_ROOT/native/$BUILD_KIND/build"
 DESKTOP_BINARY="$MOON_BUILD_ROOT/desktop/macos/macos.exe"
 CLI_BINARY="$MOON_BUILD_ROOT/cmd/dsh/dsh.exe"
+GPUI_PACKAGE="$ROOT_DIR/.mooncakes/f4ah6o/gpui"
+if [[ ! -f "$GPUI_PACKAGE/platform/macos/native.m" ||
+      ! -f "$GPUI_PACKAGE/platform/macos_text/core_text.c" ]]; then
+  echo "Installed gpui.mbt package is missing its macOS native sources: $GPUI_PACKAGE" >&2
+  echo "Run: moon update && moon install" >&2
+  exit 1
+fi
 mkdir -p "$BUILD_ROOT"
 
 if [[ "$BUILD_KIND" == release ]]; then
@@ -76,16 +83,16 @@ trap cleanup EXIT HUP INT TERM
 
 if [[ "$TEST_BUILD" == 1 ]]; then
   xcrun clang -dynamiclib -mmacosx-version-min=13.0 -DGPUI_TESTING -fobjc-arc -Wall -Wextra -Werror \
-    "$ROOT_DIR/vendor/gpui/platform/macos/native.m" \
-    "$ROOT_DIR/vendor/gpui/platform/macos_text/core_text.c" \
+    "$GPUI_PACKAGE/platform/macos/native.m" \
+    "$GPUI_PACKAGE/platform/macos_text/core_text.c" \
     -framework AppKit -framework QuartzCore -framework Metal \
     -framework CoreText -framework CoreGraphics -framework CoreFoundation \
     -Wl,-install_name,@rpath/libgpui_macos.dylib \
     -o "$STAGING_BUNDLE/Contents/Frameworks/libgpui_macos.dylib"
 else
   xcrun clang -dynamiclib -mmacosx-version-min=13.0 -fobjc-arc -Wall -Wextra -Werror \
-    "$ROOT_DIR/vendor/gpui/platform/macos/native.m" \
-    "$ROOT_DIR/vendor/gpui/platform/macos_text/core_text.c" \
+    "$GPUI_PACKAGE/platform/macos/native.m" \
+    "$GPUI_PACKAGE/platform/macos_text/core_text.c" \
     -framework AppKit -framework QuartzCore -framework Metal \
     -framework CoreText -framework CoreGraphics -framework CoreFoundation \
     -Wl,-install_name,@rpath/libgpui_macos.dylib \

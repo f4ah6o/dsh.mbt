@@ -34,6 +34,11 @@ DSH_EXECUTABLE_NAME=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$D
 DSH_EXECUTABLE="$DSH_APP/Contents/MacOS/$DSH_EXECUTABLE_NAME"
 DSH_FRAMEWORKS="$DSH_APP/Contents/Frameworks"
 DSH_HELPER="$DSH_APP/Contents/Helpers/dsh"
+DSH_GPUI_LICENSE="$DSH_ROOT/licenses/gpui-LICENSE"
+if [ ! -f "$DSH_GPUI_LICENSE" ]; then
+  echo "Missing checked-in gpui.mbt license: $DSH_GPUI_LICENSE" >&2
+  exit 1
+fi
 if [ ! -x "$DSH_EXECUTABLE" ]; then
   echo "The app's CFBundleExecutable is missing or not executable: $DSH_EXECUTABLE" >&2
   exit 1
@@ -74,7 +79,7 @@ mkdir -p "$DSH_STAGE/licenses"
 ditto "$DSH_APP" "$DSH_STAGE/Dsh.app"
 cp "$DSH_ROOT/LICENSE" "$DSH_STAGE/LICENSE"
 cp "$DSH_ROOT/THIRD_PARTY_NOTICES.md" "$DSH_STAGE/THIRD_PARTY_NOTICES.md"
-cp "$DSH_ROOT/vendor/gpui/LICENSE" "$DSH_STAGE/licenses/gpui-LICENSE"
+cp "$DSH_GPUI_LICENSE" "$DSH_STAGE/licenses/gpui-LICENSE"
 cp "$DSH_ROOT/licenses/yami-kumo-LICENSE" \
   "$DSH_STAGE/licenses/yami-kumo-LICENSE"
 cp "$DSH_ROOT/licenses/yami-kumo-cloudflare-kumo-LICENSE" \
@@ -83,7 +88,7 @@ DSH_APP_RESOURCES="$DSH_STAGE/Dsh.app/Contents/Resources"
 mkdir -p "$DSH_APP_RESOURCES/licenses"
 cp "$DSH_ROOT/LICENSE" "$DSH_APP_RESOURCES/LICENSE"
 cp "$DSH_ROOT/THIRD_PARTY_NOTICES.md" "$DSH_APP_RESOURCES/THIRD_PARTY_NOTICES.md"
-cp "$DSH_ROOT/vendor/gpui/LICENSE" \
+cp "$DSH_GPUI_LICENSE" \
   "$DSH_APP_RESOURCES/licenses/gpui-LICENSE"
 cp "$DSH_ROOT/licenses/yami-kumo-LICENSE" \
   "$DSH_APP_RESOURCES/licenses/yami-kumo-LICENSE"

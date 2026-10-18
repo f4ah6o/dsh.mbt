@@ -11,7 +11,13 @@ for tool in moon python3 pkg-config wayland-scanner; do
 done
 pkg-config --atleast-version=1.50 pangoft2
 pkg-config --exists x11 wayland-client wayland-cursor wayland-egl egl glesv2 xkbcommon fontconfig
-sh vendor/gpui/scripts/prepare_ubuntu.sh
+GPUI_PACKAGE="$ROOT/.mooncakes/f4ah6o/gpui"
+if [ ! -f "$GPUI_PACKAGE/scripts/prepare_ubuntu.sh" ]; then
+  echo "Installed gpui.mbt package is missing its Linux protocol helper: $GPUI_PACKAGE" >&2
+  echo "Run: moon update && moon install" >&2
+  exit 1
+fi
+sh "$GPUI_PACKAGE/scripts/prepare_ubuntu.sh"
 BUILD_KIND=release
 if [ "$MODE" = --debug ]; then
   BUILD_KIND=debug
@@ -19,7 +25,7 @@ if [ "$MODE" = --debug ]; then
 else
   moon build desktop/linux --target native --release --frozen
 fi
-BIN="$ROOT/_build/native/$BUILD_KIND/build/f4ah6o/dsh/desktop/linux/linux.exe"
+BIN="$ROOT/_build/native/$BUILD_KIND/build/desktop/linux/linux.exe"
 test -x "$BIN"
 printf 'Built native Linux Wayland/X11 desktop: %s\n' "$BIN"
 case "$MODE" in
@@ -27,6 +33,6 @@ case "$MODE" in
   --smoke) set -- --smoke --demo "$@";;
 esac
 # Source builds use the companion CLI for isolated runtime tool workers.
-: "${DSH_NATIVE_WORKER_BIN:=$ROOT/_build/native/release/build/f4ah6o/dsh/cmd/dsh/dsh.exe}"
+: "${DSH_NATIVE_WORKER_BIN:=$ROOT/_build/native/release/build/cmd/dsh/dsh.exe}"
 export DSH_NATIVE_WORKER_BIN
 exec "$BIN" "$@"

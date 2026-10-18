@@ -49,8 +49,8 @@ native は `ui/` と `desktop/` が gpui の scene / platform API を使い、br
 Yami-kumo の新しい shared UI (`ui/core` など) はまだ dsh の実行経路ではありません。
 dsh は 2 つの UI 経路を 1 つの product で組み合わせる composition root ですが、共通 UI の適合試験装置ではありません。
 
-固定は `vendor/gpui` submodule と `moon.mod` の `f4ah6o/yami_kumo` version で行います。
-`scripts/verify-env.mjs` は submodule の gitlink、`moon.mod` の gpui 宣言と `vendor/gpui/moon.mod` の version、導入済み Yami-kumo の version を照合します。
+固定は Mooncakes の `f4ah6o/gpui` と `f4ah6o/yami_kumo` version で行います。
+`scripts/verify-env.mjs` は `moon.mod` の宣言、`.mooncakes` に導入済みの gpui.mbt / Yami-kumo の version と必要な配布 asset、`tools/turtles` の submodule pin を照合します。
 pin を進めるときは `verify:env`、変更した package の `moon check`、`npm run build` を同じ revision で実行します。
 
 ## 状態遷移と effect

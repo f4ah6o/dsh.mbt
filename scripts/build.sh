@@ -14,10 +14,10 @@ fi
 moon build browser --target js --release --frozen
 moon build browser/sw --target js --release --frozen
 
-DSH_NATIVE="$DSH_NATIVE_TARGET_DIR/native/release/build/f4ah6o/dsh/native/native.exe"
-DSH_CLI="$DSH_NATIVE_TARGET_DIR/native/release/build/f4ah6o/dsh/cmd/dsh/dsh.exe"
-DSH_BROWSER="_build/js/release/build/f4ah6o/dsh/browser/browser.js"
-DSH_SERVICE_WORKER="_build/js/release/build/f4ah6o/dsh/browser/sw/sw.js"
+DSH_NATIVE="$DSH_NATIVE_TARGET_DIR/native/release/build/native/native.exe"
+DSH_CLI="$DSH_NATIVE_TARGET_DIR/native/release/build/cmd/dsh/dsh.exe"
+DSH_BROWSER="_build/js/release/build/browser/browser.js"
+DSH_SERVICE_WORKER="_build/js/release/build/browser/sw/sw.js"
 YAMI_PACKAGE=".mooncakes/f4ah6o/yami_kumo"
 if [ ! -s "$DSH_BROWSER" ]; then
   echo "MoonBit did not produce $DSH_BROWSER." >&2

@@ -2,9 +2,10 @@
 
 This is a separate, optional MoonBit module. Only this module imports hotpath;
 the normal dsh module and workspace do not resolve it. Its nested workspace
-uses the checked-out dsh and gpui sources and the existing pinned
-`vendor/hotpath` submodule. Nothing here is needed to build, test or run dsh.
-The root publication archive excludes this directory and `vendor/hotpath`.
+uses the checked-out dsh module, the Mooncakes gpui.mbt package, and the
+existing pinned `vendor/hotpath` submodule. Nothing here is needed to build,
+test or run dsh. The root publication archive excludes this directory and
+`vendor/hotpath`.
 
 From the repository root, explicitly initialize the optional source and run:
 

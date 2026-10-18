@@ -6,7 +6,8 @@
 
 ### Changed
 
-- Update the native UI dependency to gpui.mbt 0.9.0 and Yami-kumo 0.1.1, align the `moon.mod` gpui declaration with the vendored submodule, and refresh the embedded browser assets. The generated asset chunks are wider so the larger bundle stays within the compiler's text-segment limit.
+- Update the native UI dependency to gpui.mbt 0.9.0 and Yami-kumo 0.1.1, both resolved from Mooncakes, verify the installed package versions, and refresh the embedded browser assets. The generated asset chunks are wider so the larger bundle stays within the compiler's text-segment limit.
+- Resolve gpui.mbt from the published `f4ah6o/gpui@0.9.0` package instead of the `vendor/gpui` submodule. Desktop builds read the installed package's native sources, and release packaging uses the checked-in `licenses/gpui-LICENSE`.
 
 ### Fixed
 

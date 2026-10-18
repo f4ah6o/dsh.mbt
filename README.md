@@ -8,11 +8,14 @@
 
 hotpath は通常のアプリ依存ではありません。性能確認は独立した開発用 [tools/perf](tools/perf/README.md) から実行できます。以前の `profile_stats` 公開操作は削除しました。
 
-必要なのは固定版 MoonBit toolchain、Git、C compiler と submodule です。Yami-kumo は Mooncakes からインストールします。Node.js / npm はテストや開発スクリプト、Python 3 は一部のテストや macOS app packaging script に使いますが、いずれも配布後の product runtime 依存ではありません。Node.js / npm は product build にも使いません。
+必要なのは固定版 MoonBit toolchain、Git、C compiler です。gpui.mbt と Yami-kumo は Mooncakes からインストールします。submodule は turtles / hotpath の開発・検証用で、通常の product build には必要ありません。Node.js / npm はテストや開発スクリプト、Python 3 は一部のテストや macOS app packaging script に使いますが、いずれも配布後の product runtime 依存ではありません。Node.js / npm は product build にも使いません。
 
 ```sh
-git clone --recurse-submodules https://github.com/f4ah6o/dsh.mbt.git
+git clone https://github.com/f4ah6o/dsh.mbt.git
 cd dsh.mbt
+
+# 開発用の turtles / hotpath も取得する場合
+# git submodule update --init --recursive
 
 # .moonbit-version と同じ compiler / core を導入
 curl -fsSL https://cli.moonbitlang.com/install/unix.sh | bash -s -- '0.10.15+943464bfa'
@@ -23,7 +26,7 @@ moon install
 sh scripts/build.sh
 ```
 
-`sh scripts/build.sh` は MoonBit browser module と service worker、Mooncakes から導入した Yami-kumo CSS を生成・配置し、すべての browser assets を `runtime/bundled_web.mbt` に埋め込んでから native runtime と `dsh` CLI を build します。Node/npm は使いません。fresh checkout の `npm run check` は compiler 生成 assets の freshness check を skip し、assets が build 済みなら embedded bundle との一致も確認します。`web/moonbit/browser.js` と `web/sw.js` は compiler 生成物で Git 管理せず、build 後も browser の runtime URL は同じです。
+`sh scripts/build.sh` は Mooncakes から導入した gpui.mbt と Yami-kumo を使い、MoonBit browser module、service worker、Yami-kumo CSS を生成・配置し、すべての browser assets を `runtime/bundled_web.mbt` に埋め込んでから native runtime と `dsh` CLI を build します。Node/npm は使いません。fresh checkout の `npm run check` は compiler 生成 assets の freshness check を skip し、assets が build 済みなら embedded bundle との一致も確認します。`web/moonbit/browser.js` と `web/sw.js` は compiler 生成物で Git 管理せず、build 後も browser の runtime URL は同じです。
 
 API key を使わない browser demo は native service を loopback で起動します。
 
@@ -94,10 +97,10 @@ export PATH="${MOON_HOME:-$HOME/.moon}/bin:$PATH"
 dsh --help
 ```
 
-再帰 submodule を含む checkout から Moon CLI の source install を実行できます。次の例では `dsh` を Moon の `bin` directory に配置します。
+checkout から Moon CLI の source install を実行できます。次の例では `dsh` を Moon の `bin` directory に配置します。
 
 ```sh
-git clone --recurse-submodules https://github.com/f4ah6o/dsh.mbt.git
+git clone https://github.com/f4ah6o/dsh.mbt.git
 cd dsh.mbt
 moon update
 mkdir -p "${MOON_HOME:-$HOME/.moon}/bin"
@@ -108,7 +111,7 @@ dsh web --demo --data-dir /absolute/path/to/dsh-demo-data \
   --workspace /absolute/path/to/project --port 3210
 ```
 
-`dsh web` は browser assets を executable から配信するため、checkout 外から起動できます。埋め込み bundle は source install と release binary の両方に含まれます。`--assets-dir /path/to/web` を明示するとその directory の assets で override できます。source install には再帰 submodule clone を使ってください。
+`dsh web` は browser assets を executable から配信するため、checkout 外から起動できます。埋め込み bundle は source install と release binary の両方に含まれます。`--assets-dir /path/to/web` を明示するとその directory の assets で override できます。
 
 PATH に導入した upstream [`moon-binstall`](https://github.com/f4ah6o/moon-binstall) 0.1.6 では、GitHub Release の checksum 検証付き binary を install できます。GitHub Release coordinate の repository 名は `f4ah6o/dsh.mbt` です。`f4ah6o/dsh` は Mooncakes module 名です。Mooncakes package coordinate で解決する場合は、package path まで含めた `f4ah6o/dsh/cmd/dsh` を指定します。
 

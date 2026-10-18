@@ -14,14 +14,11 @@ on:
       - "desktop/**"
       - "browser/**"
       - "web/**"
-      - "vendor/gpui"
-      - "vendor/gpui/**"
       - "**/*.mbt"
       - "**/*.mbtx"
       - "**/moon.pkg"
       - "**/moon.pkg.json"
       - "moon.mod"
-      - "moon.work"
       - "moon.lock"
       - ".moonbit-version"
       - "LICENSE"
@@ -90,8 +87,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sh scripts/build-desktop-linux.sh --build
-          sh vendor/gpui/tests/x11/run_contract.sh
-          DSH_LINUX_DESKTOP_CLI="$PWD/_build/native/release/build/f4ah6o/dsh/cmd/dsh/dsh.exe" python3 scripts/test-linux-desktop-payload.py
+          sh .mooncakes/f4ah6o/gpui/tests/x11/run_contract.sh
+          DSH_LINUX_DESKTOP_CLI="$PWD/_build/native/release/build/cmd/dsh/dsh.exe" python3 scripts/test-linux-desktop-payload.py
           python3 scripts/test-smoke-release-linux.py
       - name: Build and package the macOS app
         if: matrix.platform == 'darwin-aarch64'
@@ -119,7 +116,7 @@ jobs:
           mkdir -p release
           if [ "$RUNNER_OS" = Linux ]; then
             python3 scripts/package-linux-desktop.py --cli "$binaries" \
-              --desktop _build/native/release/build/f4ah6o/dsh/desktop/linux/linux.exe \
+              --desktop _build/native/release/build/desktop/linux/linux.exe \
               --output "release/dsh-${{ matrix.platform }}"
           else
             sh scripts/package-macos-cli.sh release/Dsh-macos-arm64.zip "release/dsh-${{ matrix.platform }}"

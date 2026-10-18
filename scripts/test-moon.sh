@@ -13,7 +13,7 @@ native_test_root=$(mktemp -d "${TMPDIR:-/tmp}/dsh-native-tests.XXXXXX")
 trap 'rm -rf "$native_test_root"' EXIT HUP INT TERM
 native_target="$native_test_root/worker-build"
 moon build native --target native --release --frozen --target-dir "$native_target"
-native_worker="$native_target/native/release/build/f4ah6o/dsh/native/native.exe"
+native_worker="$native_target/native/release/build/native/native.exe"
 if [ ! -x "$native_worker" ]; then
   echo "Native worker executable is missing: $native_worker" >&2
   exit 1
