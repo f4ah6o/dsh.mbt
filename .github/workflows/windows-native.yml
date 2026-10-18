@@ -1,0 +1,69 @@
+name: Windows native runtime
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-native-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  native-windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+      - uses: hustcer/setup-moonbit@1522f9aef02a8ca0187dfc00a41f5dd6b16750f7 # v1.23
+        with:
+          version: 0.10.15+943464bfa
+          core-version: 0.10.15+943464bfa
+      - name: Show toolchain
+        run: moon version --all
+      - name: Refresh the MoonBit package registry
+        run: moon update
+      - name: Resolve pinned MoonBit dependencies
+        run: moon install
+      - name: Typecheck every package
+        run: moon check --target native --deny-warn
+      - name: Test portable packages on the native backend
+        run: moon test engine provider plugins auth protocol client app ui --target native --deny-warn
+      - name: Test the Windows runtime boundary
+        run: moon test runtime --target native --deny-warn --filter "windows*"
+      - name: Build the Windows CLI (release)
+        run: moon build --target native --release cmd/dsh
+      - name: Compile the C boundary with MSVC warnings enabled
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $install = & $vswhere -latest -products * `
+            -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 `
+            -property installationPath
+          if (-not $install) {
+            throw "MSVC 2022 with the x64 C++ workload is required"
+          }
+          $object = Join-Path $env:RUNNER_TEMP "host_os_win32.obj"
+          cmd /c "`"$install\Common7\Tools\VsDevCmd.bat`" -arch=x64 -no_logo && cl /nologo /W4 /std:c11 /utf-8 /c runtime\host_os_win32.c /Fo:`"$object`""
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run the Windows native runtime smoke gate
+        shell: pwsh
+        run: |
+          python scripts/test-windows-runtime.py --exe _build/native/release/build/cmd/dsh/dsh.exe 2>&1 |
+            Tee-Object -FilePath windows-native-smoke.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-native-evidence
+          path: |
+            windows-native-smoke.log
+            _build/native/release/build/cmd/dsh/dsh.exe
+          if-no-files-found: warn

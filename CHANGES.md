@@ -4,10 +4,13 @@
 
 ### Added
 
+- Add the bounded Windows 11 x64 native runtime: `dsh run` / `dsh web`, demo and API-key providers, read / write / edit / glob, the durable session store and host lock, and approval. The C boundary (`runtime/host_os_win32.c`, `runtime/oauth_os_win32.c`) supplies drive / UNC path normalization, reparse-point rejection, owner-only ACLs, atomic writes through `ReplaceFileW` / `MoveFileExW`, BCrypt SHA-256 / RS256, and a `SetConsoleCtrlHandler` shutdown path. Windows tests and `scripts/test-windows-runtime.py` cover the profile; `windows-native.yml` runs them on `windows-latest`.
+
 ### Changed
 
 - Update the native UI dependency to gpui.mbt 0.9.0 and Yami-kumo 0.1.1, both resolved from Mooncakes, verify the installed package versions, and refresh the embedded browser assets. The generated asset chunks are wider so the larger bundle stays within the compiler's text-segment limit.
 - Resolve gpui.mbt from the published `f4ah6o/gpui@0.9.0` package instead of the `vendor/gpui` submodule. Desktop builds read the installed package's native sources, and release packaging uses the checked-in `licenses/gpui-LICENSE`.
+- Make workspace / data-directory path admission platform-aware. Windows accepts `C:\` and `\\server\share` roots, normalizes separators, and uses `USERPROFILE` for the home directory; POSIX keeps the `/` prefix rule.
 
 ### Fixed
 
@@ -19,9 +22,12 @@
 
 ### Security
 
+- Protect the Windows data directory with a current-user-only DACL and create 0600 files with an owner-only DACL. Reject reparse points, ADS colons, `..`, reserved device names, and trailing spaces or dots; re-verify the root identity and path mapping before and after an atomic commit, and remove a commit that fails the post-commit identity check. ChatGPT SIWC is disabled on Windows and `siwc-auth.json` is never read or written.
+
 ### Migration
 
 - Clients must stop invoking `profile_stats` or expecting it in capability/MCP listings. Use the independent development harness in `tools/perf/README.md` for fixed-fixture timings; it does not provide a production telemetry endpoint. Existing core/bench engine benchmarks remain available.
+- On Windows, use `--demo` or an API key. Shell / grep, external MCP, LSP, command hooks, subagents, `dsh acp`, `dsh mcp`, SIWC, and `dsh desktop` fail closed with a typed error and do not modify the data directory. Reusing a POSIX data directory on Windows is not supported; back it up before trying.
 
 ## 0.1.25 - 2026-10-14
 

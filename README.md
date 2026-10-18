@@ -148,6 +148,19 @@ desktop は private temporary directory に展開して起動し、終了時に�
 
 macOS 13+ / Apple Silicon の raw CLI release にも完全な `Dsh.app` を同梱します。`moon binstall` で入れた同じ `dsh` から `dsh desktop` を起動でき、最初の起動で署名を検証して `~/Library/Caches/org.fu2hito.dsh/bundled-desktop/` の version/hash 別専用ディレクトリへ展開します。GitHub Release の `Dsh-macos-arm64.zip` も引き続き配布します。`--app-path` は指定したアプリを優先します。インストール、source build、UI と現在の IME 制約は[native desktop guide](docs/desktop.md)を参照してください。release app は ad-hoc signed で、Developer ID signed / notarized ではありません。
 
+### Windows x64 (preview)
+
+Windows 11 x64 では MSVC 2022 + Windows SDK、Python 3.11+、pinned MoonBit toolchain で native CLI を build できます。`dsh run --demo --approve-writes`、`dsh web --demo`、read / write / edit / glob、session store / host lock、approval が動作します。data directory は current user のみの DACL で保護し、reparse point（junction / symlink）、ADS、`..`、予約名を拒否します。
+
+```powershell
+moon update
+moon install
+moon build --target native --release cmd/dsh
+python scripts/test-windows-runtime.py
+```
+
+shell / grep、external MCP、LSP、command hooks、subagents、`dsh acp`、`dsh mcp`、ChatGPT SIWC は Windows profile では明示的に未対応です（`--demo` または API key を使用）。`siwc-auth.json` は read / write しません。`dsh desktop`、IME composition、zip packaging は未提供です。制約の詳細は[Windows native profile](docs/native-runtime.md#windows-x64-profile)を参照してください。
+
 ## Browser UI and data
 
 Browser UI は MoonBit module から生成される JavaScript と service worker、Mooncakes の `f4ah6o/yami_kumo@0.1.0` から導入する styles で構成します。これらと HTML、manifest、icon を `dsh` executable に埋め込み、`dsh web` から配信します。React や Node.js host は product runtime に含みません。日本語 UI は会話検索、responsive navigation / details drawer、session details、fork、visible task list、tool output pruning を提供します。ChatGPT の sign-in、model refresh / selection、sign-out は Settings にあります。設定は browser local storage、session は native data directory に保存し、公式 API に履歴をアップロードしません。iOS UI は別の受け入れ範囲です。

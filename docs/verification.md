@@ -1,5 +1,27 @@
 # 検証記録
 
+## Windows x64 native runtime (M1)
+
+2026-10-19, Windows 11 x64 (Japanese locale), MSVC 2022 + Windows SDK
+`10.0.26100`, Python `3.12.15` (uv-managed; the Microsoft Store alias is not a
+usable interpreter), MoonBit compiler / core `0.10.15+943464bfa`, moon /
+moonrun `0.1.20261012`. The checkout is `cf68f68` plus the M1 working tree; no
+hosted Windows CI run exists for this work yet.
+
+| gate | result |
+| --- | --- |
+| `moon check --target native --deny-warn` | PASS, 0 errors / 0 own warnings. |
+| `moon test engine provider plugins auth protocol client app ui --target native --deny-warn` | PASS, 204 / 204 on the native backend. |
+| `moon test runtime --target native --deny-warn --filter "windows*"` | PASS, 6 / 6. Covers path normalization / absolute detection, SafeRoot create / read / stat / atomic write / expected-version conflict / traversal and reserved-name rejection / unlink / list, junction rejection (`mklink /J`), a demo turn with an approved write, reopen with zero effects, and fail-closed options with no data-directory mutation. |
+| `moon build --target native --release cmd/dsh` | PASS. |
+| `cl /W4 /std:c11 /utf-8 /c runtime/host_os_win32.c` | PASS, no warnings. |
+| `python scripts/test-windows-runtime.py --exe _build/native/release/build/cmd/dsh/dsh.exe` | PASS: demo turn completed with `native-demo.txt`; `prune-session` reopened the store without replaying the write; `dsh web --demo --port 0` served HTTP 200; unsupported options and subcommands exited non-zero with the Windows profile diagnostic and no data directory. `siwc-auth.json` was not created. |
+| Graceful console shutdown | NOT RUN in the headless agent (no attached console); the same run observed an abrupt exit and verified the stale `host.lock` was reclaimed by the next start. A CI console step is expected to exercise CTRL_BREAK. |
+| macOS / Linux runtime, desktop, and web regression | NOT RUN: the implementing host is Windows. `host_os.c`, `oauth_os.c`, and `signal_os.c` keep the POSIX blocks behind `__APPLE__` / `__linux__`; hosted CI must confirm. |
+| Hosted `windows-native.yml` | NOT RUN: the workflow was added with this change and has no run yet. |
+| M2 Windows GPUI desktop and Japanese font probe | NOT RUN / not implemented in M1. |
+| M3 zip packaging and release-plan update | NOT RUN / not implemented in M1. |
+
 ## UserPromptSubmit native command-hook increment (0.1.13)
 
 2026-10-10, macOS arm64, local Node.js `24.21.0`, MoonBit compiler / core

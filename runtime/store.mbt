@@ -530,20 +530,22 @@ fn NativeStore::acquire(
 
 ///|
 async fn NativeStore::open(data_dir : String) -> Result[NativeStore, String] {
-  let absolute = if data_dir.has_prefix("/") {
-    data_dir
+  let absolute = if native_path_is_absolute(data_dir) {
+    native_path_normalize(data_dir)
   } else {
     match @env.current_dir() {
-      Some(current) => current + "/" + data_dir
+      Some(current) => native_path_normalize(current + "/" + data_dir)
       None => return Err("cannot determine current directory")
     }
   }
   @fs.mkdir(absolute, permission=0o700, recursive=true, allow_exist=true) catch {
     _ => return Err("cannot create native data directory")
   }
-  let canonical = @fs.realpath(absolute) catch {
-    _ => return Err("cannot resolve native data directory")
-  }
+  let canonical = native_path_normalize(
+    @fs.realpath(absolute) catch {
+      _ => return Err("cannot resolve native data directory")
+    },
+  )
   let root = match SafeRoot::open(canonical) {
     Ok(root) => root
     Err(error) => return Err(error)

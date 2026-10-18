@@ -1,5 +1,13 @@
 # Native desktop
 
+## Windows
+
+Not provided yet. The Windows work starts with the bounded native runtime
+(M1): CLI, web, session store, approval, and the SafeRoot boundary. A Windows
+build reports an explicit unsupported error for `dsh desktop` instead of
+launching a stub. See the
+[Windows native profile](native-runtime.md#windows-x64-profile).
+
 ## Linux Wayland and X11
 
 The Linux release CLI embeds a real GPUI Wayland/X11 EGL desktop executable. `dsh desktop` extracts it and a private CLI worker into an owner-only temporary directory, launches the desktop, preserves argument boundaries and exit status, and removes the files after exit. It does not open a browser or download executable code. The embedded checksum detects corruption; release authenticity comes from the release distribution/checksum workflow.
