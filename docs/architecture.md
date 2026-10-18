@@ -32,6 +32,27 @@ flowchart TD
 | `native/`, `cmd/dsh/` | `moon run native` と `moon install ./cmd/dsh` 向けの薄い executable entrypoints |
 | `browser/`, `web/` | MoonBit browser / service-worker package、生成 JavaScript、pinned static CSS |
 
+## ecosystem 内の位置づけ
+
+dsh.mbt は gpui.mbt と Yami-kumo の下流に置く実アプリ兼統合 consumer です。
+native UI の状態・layout・入力・描画は gpui.mbt が、browser UI の安全な HTML 生成と共通 component の意味は Yami-kumo が所有します。
+dsh は session、event log、agent / tool loop、承認、provider protocol、HTTP / MCP service、CLI と native / browser の composition を所有します。
+この分担は gpui.mbt の [ecosystem charter](https://github.com/gpui-mbt/gpui.mbt/blob/main/issues/open/20261015-ecosystem-charter-and-merge-gates.md) と Yami-kumo の [four-platform roadmap](https://github.com/f4ah6o/Yami-kumo/blob/main/docs/roadmaps/20261017-four-platform-gui/ROADMAP.md) に沿います。
+
+依存は dsh → gpui.mbt、dsh → Yami-kumo の一方向です。
+dsh 固有の会話 UI、provider、session の仕様を upstream の公開 API へ持ち込みません。
+dsh で見つけた不具合は、dsh で再現した後に担当 repository の最小 fixture へ縮約し、修正後の revision を dsh の pin として取り込みます。
+dsh は ecosystem 全体の必須 PoC やリリースの単一ブロッカーではありません。
+互換性と共通 UX の判定は gpui-conformance、vlmkit、Yami-kumo の consumer / fixture が担当します。
+
+native は `ui/` と `desktop/` が gpui の scene / platform API を使い、browser は `browser/` が Yami-kumo の HTML / DOM API を使います。
+Yami-kumo の新しい shared UI (`ui/core` など) はまだ dsh の実行経路ではありません。
+dsh は 2 つの UI 経路を 1 つの product で組み合わせる composition root ですが、共通 UI の適合試験装置ではありません。
+
+固定は `vendor/gpui` submodule と `moon.mod` の `f4ah6o/yami_kumo` version で行います。
+`scripts/verify-env.mjs` は submodule の gitlink、`moon.mod` の gpui 宣言と `vendor/gpui/moon.mod` の version、導入済み Yami-kumo の version を照合します。
+pin を進めるときは `verify:env`、変更した package の `moon check`、`npm run build` を同じ revision で実行します。
+
 ## 状態遷移と effect
 
 1. `session_send` が user message と turn 開始を記録し、`llm` effect を作る。
