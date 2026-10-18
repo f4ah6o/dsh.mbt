@@ -159,7 +159,7 @@ moon build --target native --release cmd/dsh
 python scripts/test-windows-runtime.py
 ```
 
-shell / grep、external MCP、LSP、command hooks、subagents、`dsh acp`、`dsh mcp`、ChatGPT SIWC は Windows profile では明示的に未対応です（`--demo` または API key を使用）。`siwc-auth.json` は read / write しません。`dsh desktop`、IME composition、zip packaging は未提供です。制約の詳細は[Windows native profile](docs/native-runtime.md#windows-x64-profile)を参照してください。
+shell / grep、external MCP、LSP、command hooks、subagents、`dsh acp`、`dsh mcp`、ChatGPT SIWC は Windows profile では明示的に未対応です（`--demo` または API key を使用）。`siwc-auth.json` は read / write しません。`dsh-windows-x86_64.zip` には CLI と `dsh-desktop.exe` を同梱し、`dsh desktop` から sibling discovery または `--app-path` で起動できます。IME composition は未対応です。制約の詳細は[Windows native profile](docs/native-runtime.md#windows-x64-profile)を参照してください。
 
 ## Browser UI and data
 

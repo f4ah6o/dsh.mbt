@@ -83,8 +83,9 @@ memory limit), external MCP, LSP, command hooks, subagents, `dsh acp`,
 `dsh mcp`, `--internal-worker`, and ChatGPT SIWC. `siwc-auth.json` is never read
 or written and the auth projection stays signed out; use `--demo` or an API
 key. The GPUI desktop executable is built from `desktop/windows` (see
-[the desktop guide](desktop.md#windows)); the `dsh desktop` launcher remains
-unsupported on Windows, so run `dsh-desktop.exe` directly.
+[the desktop guide](desktop.md#windows)); `dsh desktop` launches a sibling
+`dsh-desktop.exe` or an explicit `--app-path`, and the `dsh-windows-x86_64.zip`
+release asset carries both executables.
 
 The C boundary returns `ENOTSUP` for `exec_worker`, `child_exit_state`, and
 `kill_process_group` on Windows, and `os_hard_worker_memory_supported` is 0.

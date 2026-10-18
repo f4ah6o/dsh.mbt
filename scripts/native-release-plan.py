@@ -11,7 +11,16 @@ PLATFORMS = {
     "linux-x86_64": "ubuntu-24.04",
     "linux-aarch64": "ubuntu-24.04-arm",
     "darwin-aarch64": "macos-15",
+    "windows-x86_64": "windows-latest",
 }
+
+# Windows ships a directory archive (CLI + desktop + notices) instead of the
+# single raw executable used by the POSIX assets.
+ASSET_NAMES = {"windows-x86_64": "dsh-windows-x86_64.zip"}
+
+
+def release_asset(platform):
+    return ASSET_NAMES.get(platform, "dsh-" + platform)
 
 
 def build_plan(root, event, ref):
@@ -42,7 +51,7 @@ def build_plan(root, event, ref):
         platforms = list(PLATFORMS)
     else:
         raise ValueError("unsupported release workflow event")
-    assets = ["dsh-" + p for p in platforms]
+    assets = [release_asset(p) for p in platforms]
     if "darwin-aarch64" in platforms:
         assets.append("Dsh-macos-arm64.zip")
     return {

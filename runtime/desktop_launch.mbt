@@ -29,10 +29,10 @@ fn native_desktop_parse_launch_args(
         return Err("--app-path requires a nonempty absolute path")
       }
       let value = args[index + 1]
-      if value.contains("\u0000") || !value.has_prefix("/") {
+      if value.contains("\u0000") || !native_path_is_absolute(value) {
         return Err("--app-path must be an absolute path")
       }
-      app_path = Some(value)
+      app_path = Some(native_path_normalize(value))
       index += 1
     } else {
       app_args.push(argument)
@@ -144,10 +144,104 @@ async fn native_desktop_resolve_candidates(
 }
 
 ///|
+/// Validate an explicit Windows desktop executable. The launcher only accepts
+/// an absolute path to an existing regular `.exe`; directories, scripts and
+/// missing files fail before any process is started.
+async fn native_windows_desktop_executable(
+  path : String,
+) -> Result[String, String] {
+  let normalized = native_path_normalize(path)
+  if !native_path_is_absolute(normalized) {
+    return Err("desktop app path must be an absolute path")
+  }
+  if !normalized.to_lower().has_suffix(".exe") {
+    return Err("desktop app path must name a .exe executable")
+  }
+  let canonical = @fs.realpath(normalized) catch {
+    _ => return Err("desktop app path does not exist: " + normalized)
+  }
+  match @fs.kind(canonical) {
+    @fs.Regular => Ok(canonical)
+    _ => Err("desktop app path is not a regular file: " + canonical)
+  }
+}
+
+///|
+/// Discover `dsh-desktop.exe` next to the running CLI. The packaged layout and
+/// a source build both place the two executables in the same directory; the
+/// source build names the desktop binary `windows.exe` after its package.
+async fn native_windows_desktop_sibling() -> Result[String, String] {
+  let executable = match native_executable_path() {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let directory = match executable.rev_find("/") {
+    Some(index) if index > 0 => executable[:index].to_owned()
+    _ => return Err("cannot locate the dsh executable directory")
+  }
+  let candidates = [directory + "/dsh-desktop.exe", directory + "/windows.exe"]
+  for candidate in candidates {
+    let canonical = @fs.realpath(candidate) catch { _ => "" }
+    if canonical != "" {
+      match @fs.kind(canonical) {
+        @fs.Regular => return Ok(canonical)
+        _ => ()
+      }
+    }
+  }
+  Err(
+    "dsh-desktop.exe was not found next to " +
+    executable +
+    "; pass --app-path C:\\path\\to\\dsh-desktop.exe",
+  )
+}
+
+///|
+async fn native_windows_desktop_launch(
+  options : NativeDesktopLaunchOptions,
+) -> Result[Unit, String] {
+  let app_path = match options.app_path {
+    Some(path) =>
+      match native_windows_desktop_executable(path) {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+    None =>
+      match native_windows_desktop_sibling() {
+        Ok(value) => value
+        Err(error) => return Err(error)
+      }
+  }
+  // Native tool effects re-enter the CLI worker; default it to this CLI so the
+  // desktop does not try to launch itself with --internal-worker.
+  if @env.get_env_var("DSH_NATIVE_WORKER_BIN") is None {
+    match native_executable_path() {
+      Ok(executable) => @env.set_env_var("DSH_NATIVE_WORKER_BIN", executable)
+      Err(_) => ()
+    }
+  }
+  let status = @process.run(app_path, options.app_args) catch {
+    _ =>
+      return Err(
+        "could not start the Windows desktop: " +
+        app_path +
+        "; check the path, architecture, and permissions",
+      )
+  }
+  if status != 0 {
+    native_process_exit(status)
+  }
+  Ok(())
+}
+
+///|
 async fn native_desktop_launch(args : Array[String]) -> Result[Unit, String] {
   let options = match native_desktop_parse_launch_args(args) {
     Ok(value) => value
     Err(error) => return Err(error)
+  }
+  if native_os_is_windows() {
+    return native_windows_desktop_launch(options)
   }
   if native_os_is_linux() {
     // The synchronous native supervisor owns forwarding and cleanup. Disable

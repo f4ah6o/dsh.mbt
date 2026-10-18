@@ -33,7 +33,14 @@ class ReleasePlanTests(unittest.TestCase):
     def test_regular_pr_still_validates_every_platform(self):
         plan = release.build_plan(self.root, "pull_request", "99/merge")
         self.assertEqual({p["platform"] for p in plan["matrix"]["include"]}, set(release.PLATFORMS))
-        self.assertEqual(len(plan["assets"]), 4)
+        self.assertEqual(len(plan["assets"]), 5)
+        self.assertIn("dsh-windows-x86_64.zip", plan["assets"])
+
+    def test_windows_tag_ships_a_zip_asset(self):
+        self.configure("0.1.25", ["windows-x86_64"])
+        plan = release.build_plan(self.root, "push", "v0.1.25")
+        self.assertEqual(plan["matrix"]["include"], [{"os": "windows-latest", "platform": "windows-x86_64"}])
+        self.assertEqual(plan["assets"], ["dsh-windows-x86_64.zip"])
 
     def test_version_and_tag_must_match(self):
         with self.assertRaises(ValueError):
@@ -43,7 +50,7 @@ class ReleasePlanTests(unittest.TestCase):
             release.build_plan(self.root, "push", "v0.1.25")
 
     def test_invalid_scope_and_missing_notes_fail_closed(self):
-        for platforms in [[], ["windows-x86_64"], ["darwin-aarch64", "darwin-aarch64"]]:
+        for platforms in [[], ["solaris-x86_64"], ["darwin-aarch64", "darwin-aarch64"]]:
             self.configure("0.1.25", platforms)
             with self.assertRaises(ValueError):
                 release.build_plan(self.root, "push", "v0.1.25")

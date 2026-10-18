@@ -21,8 +21,16 @@ is written as `frame.ppm` and `frame.ppm.settings.ppm`.
 Japanese text uses the system DirectWrite stack; the gate fails with
 `Japanese font prerequisite not met` when the font or glyph coverage is
 missing instead of reporting a pass. IME composition is not implemented; paste
-uses the host clipboard. The `dsh desktop` launcher for Windows is not
-provided yet; run `dsh-desktop.exe` directly.
+uses the host clipboard.
+
+`dsh desktop` starts the sibling `dsh-desktop.exe`, or an explicit
+`--app-path C:\path\to\dsh-desktop.exe`. The launcher validates an absolute
+regular `.exe`, sets `DSH_NATIVE_WORKER_BIN` to the CLI, and propagates the
+desktop exit status. `scripts/package-windows-desktop.ps1` stages
+`dsh.exe`, `dsh-desktop.exe`, licenses, notices and `README-windows.md` into
+`dsh-windows-x86_64.zip`; `scripts/smoke-release-windows.ps1` extracts it into
+a path with spaces and non-ASCII characters and runs the CLI demo, the loopback
+web server, the desktop E2E, and both launcher modes.
 
 ## Linux Wayland and X11
 

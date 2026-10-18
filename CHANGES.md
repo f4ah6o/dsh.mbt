@@ -6,6 +6,7 @@
 
 - Add the bounded Windows 11 x64 native runtime: `dsh run` / `dsh web`, demo and API-key providers, read / write / edit / glob, the durable session store and host lock, and approval. The C boundary (`runtime/host_os_win32.c`, `runtime/oauth_os_win32.c`) supplies drive / UNC path normalization, reparse-point rejection, owner-only ACLs, atomic writes through `ReplaceFileW` / `MoveFileExW`, BCrypt SHA-256 / RS256, and a `SetConsoleCtrlHandler` shutdown path. Windows tests and `scripts/test-windows-runtime.py` cover the profile; `windows-native.yml` runs them on `windows-latest`.
 - Add the Windows GPUI Direct3D 11 desktop (`desktop/windows`) with frame capture, synthetic click/key hooks, and a Japanese font prerequisite test. The shared desktop app now enforces a 64-run / 4096-byte / 32px scene text budget, clips runs at UTF-8 scalar boundaries, and omits the occluded conversation layer while settings are open. `--smoke` and `--offline-e2e` pass on Windows; `scripts/build-desktop-windows.ps1` and `scripts/test-windows-desktop.py` provide the gate.
+- Add Windows packaging and launch: `dsh desktop` starts a sibling `dsh-desktop.exe` (or `--app-path`) and propagates its exit status, and `scripts/package-windows-desktop.ps1` builds `dsh-windows-x86_64.zip` with the CLI, desktop, licenses, notices and a Windows README. `scripts/smoke-release-windows.ps1` extracts the zip into a space/non-ASCII path and runs the CLI demo, loopback web, desktop E2E and both launcher modes. The release plan now maps `windows-x86_64` to the zip asset.
 
 ### Changed
 

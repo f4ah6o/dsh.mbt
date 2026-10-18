@@ -43,6 +43,13 @@ jobs:
         run: moon build --target native --release cmd/dsh
       - name: Build the Windows desktop (release)
         run: moon build --target native --release desktop/windows
+      - name: Package and smoke the Windows zip
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/package-windows-desktop.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File scripts/smoke-release-windows.ps1 release/dsh-windows-x86_64.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run the Windows desktop smoke gate (manual only)
         if: github.event_name == 'workflow_dispatch'
         shell: pwsh

@@ -547,12 +547,6 @@ pub async fn run_cli() -> Unit {
     return
   }
   if raw_args.length() > 1 && raw_args[1] == "desktop" {
-    if native_os_is_windows() {
-      native_cli_fatal(
-        "dsh desktop launch is not available on the Windows native profile yet; run dsh-desktop.exe directly",
-      )
-      return
-    }
     let desktop_args = raw_args[2:].to_owned()
     match native_desktop_launch(desktop_args) {
       Ok(_) => ()
