@@ -1,7 +1,12 @@
 /*
  * Windows replacements for the POSIX OAuth helpers in oauth_os.c:
  * CSPRNG bytes, browser launch, and the Unix clock.
+ *
+ * The moon.pkg native-stub list is shared by every platform, so the whole
+ * translation unit is empty on POSIX builds.
  */
+
+#if defined(_WIN32)
 
 #define _WIN32_WINNT 0x0A00
 #define WIN32_LEAN_AND_MEAN
@@ -55,3 +60,11 @@ int64_t dsh_auth_unix_time(void) {
   if (now < 0) return -1;
   return (int64_t)now;
 }
+
+#endif /* _WIN32 */
+
+#if !defined(_WIN32)
+/* Keep the shared native-stub build non-empty on POSIX without pulling in
+ * Windows headers. */
+typedef int dsh_oauth_os_win32_translation_unit_is_empty;
+#endif

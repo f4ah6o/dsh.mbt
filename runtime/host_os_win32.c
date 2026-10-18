@@ -20,6 +20,8 @@
  * never truncated into an Int32.
  */
 
+#if defined(_WIN32)
+
 #define _WIN32_WINNT 0x0A00
 #define WIN32_LEAN_AND_MEAN
 #define _CRT_SECURE_NO_WARNINGS
@@ -656,8 +658,12 @@ static int32_t dsh_sid_hash(PSID sid) {
   return hash == 0 ? 1 : (int32_t)hash;
 }
 
-/* Build a security descriptor whose DACL grants GENERIC_ALL to the current
- * user only. Caller frees `sd` and `acl` with LocalFree. */
+/* Build a security descriptor whose owner and DACL are the current user.
+ * The owner is set explicitly because an elevated token's default owner is
+ * BUILTIN\Administrators, which would not match the uid reported by
+ * dsh_os_uid() and would make an otherwise owner-only DACL look shared.
+ * SE_DACL_PROTECTED keeps inherited parent ACEs out. Caller frees `sd` and
+ * `acl` with LocalFree. */
 static int dsh_owner_only_security(int directory, SECURITY_ATTRIBUTES *attributes,
                                    PSECURITY_DESCRIPTOR *sd, PACL *acl) {
   PSID owner = NULL;
@@ -683,7 +689,10 @@ static int dsh_owner_only_security(int directory, SECURITY_ATTRIBUTES *attribute
     return DSH_ENOMEM;
   }
   if (!InitializeSecurityDescriptor(descriptor, SECURITY_DESCRIPTOR_REVISION) ||
-      !SetSecurityDescriptorDacl(descriptor, TRUE, built, FALSE)) {
+      !SetSecurityDescriptorDacl(descriptor, TRUE, built, FALSE) ||
+      !SetSecurityDescriptorOwner(descriptor, owner, FALSE) ||
+      !SetSecurityDescriptorControl(descriptor, SE_DACL_PROTECTED,
+                                    SE_DACL_PROTECTED)) {
     LocalFree(built);
     LocalFree(descriptor);
     return DSH_EIO;
@@ -1801,3 +1810,11 @@ int dsh_crypto_verify_rs256(const uint8_t *modulus, int modulus_len,
   free(blob);
   return valid;
 }
+
+#endif /* _WIN32 */
+
+#if !defined(_WIN32)
+/* Keep the shared native-stub build non-empty on POSIX without pulling in
+ * Windows headers. */
+typedef int dsh_host_os_win32_translation_unit_is_empty;
+#endif

@@ -114,6 +114,43 @@ async test "windows SafeRoot accepts safe names and rejects traversal" {
 
 ///|
 #cfg(platform="windows")
+async test "windows SafeRoot ignores inheritable parent ACEs" {
+  let fixture = @fs.tmpdir(prefix="dsh-windows-inherit")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let root = fixture + "/workspace"
+    @fs.mkdir(root)
+    // A hosted runner's temp directory can carry inheritable ACEs (for
+    // example BUILTIN\\Users). A file created with a non-protected explicit
+    // DACL would inherit them and wrongly report 0755. The SID form avoids
+    // localized group names.
+    let status = @process.run("icacls", [
+      root.replace_all(old="/", new="\\"),
+      "/grant",
+      "*S-1-5-32-545:(OI)(CI)R",
+    ])
+    if status != 0 {
+      fail("icacls prerequisite not met: exit " + status.to_string())
+    }
+    let safe = match SafeRoot::open(root) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => safe.close())
+    match safe.create_exclusive("inherited.txt", "x") {
+      Ok(_) => ()
+      Err(error) => fail(error)
+    }
+    let version = match safe.read_text("inherited.txt") {
+      Ok(value) => value.1
+      Err(error) => fail(error)
+    }
+    assert_eq(version.permission(), 0o600)
+  }
+}
+
+///|
+#cfg(platform="windows")
 async test "windows SafeRoot rejects junction traversal" {
   let fixture = @fs.tmpdir(prefix="dsh-windows-reparse")
   @async.with_task_group() <| group => {

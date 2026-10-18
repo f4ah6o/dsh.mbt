@@ -37,6 +37,11 @@ jobs:
         run: moon test engine provider plugins auth protocol client app ui --target native --deny-warn
       - name: Test the Windows runtime boundary
         run: moon test runtime --target native --deny-warn --filter "windows*"
+      - name: Install the Japanese font capability (best effort)
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          DISM /Online /Add-Capability /CapabilityName:Language.Fonts.Jpan~~~und-JPAN~0.0.1.0
       - name: Test the Japanese font prerequisite
         run: moon test desktop/windows --target native --deny-warn --filter "*Japanese*"
       - name: Build the Windows CLI (release)

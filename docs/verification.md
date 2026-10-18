@@ -10,7 +10,7 @@ binaries built from the M3 working tree.
 | `moon build --target native --release cmd/dsh desktop/windows` | PASS. |
 | `dsh.exe desktop --app-path <windows.exe> --smoke` | PASS: explicit path, exit status propagated. |
 | `python scripts/test-native-release-plan.py` | PASS 6 / 6; the PR plan lists `windows-latest` and the `dsh-windows-x86_64.zip` asset. |
-| `pwsh scripts/package-windows-desktop.ps1` | PASS: `release/dsh-windows-x86_64.zip` 4,035,748 bytes, SHA-256 `2cdc0fca058a06b1df79f17831ffc787949cc7fe4c6f118e271956b5571b9998`. The staging check rejected no build/cache/credential artifacts. |
+| `pwsh scripts/package-windows-desktop.ps1` | PASS: `release/dsh-windows-x86_64.zip` 4,036,025 bytes, SHA-256 `2fd0740d01eb67c300c137edc05ca3e01bde700afba4dcfa3de9c3a96ca5d27c`. The staging check rejected no build/cache/credential artifacts. |
 | `pwsh scripts/smoke-release-windows.ps1 release/dsh-windows-x86_64.zip` | PASS from a path containing spaces and Japanese characters: CLI demo, loopback `dsh web` HTTP 200, `dsh desktop --app-path` offline E2E (Japanese frame + reload), and sibling-discovery `--smoke`. |
 | `dsh desktop` sibling discovery from the packaged directory | PASS (same smoke run). |
 | Hosted `publish-native.yml` Windows job | NOT RUN: added with this change; no hosted run yet. |

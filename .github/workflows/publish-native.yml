@@ -84,6 +84,12 @@ jobs:
           else
             sh scripts/build.sh
           fi
+      - name: Install the Japanese font capability (best effort)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          DISM /Online /Add-Capability /CapabilityName:Language.Fonts.Jpan~~~und-JPAN~0.0.1.0
       - name: Build the Windows CLI and desktop executables
         if: runner.os == 'Windows'
         shell: pwsh
