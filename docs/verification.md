@@ -13,8 +13,8 @@ binaries built from the M3 working tree.
 | `pwsh scripts/package-windows-desktop.ps1` | PASS: `release/dsh-windows-x86_64.zip` 4,036,025 bytes, SHA-256 `2fd0740d01eb67c300c137edc05ca3e01bde700afba4dcfa3de9c3a96ca5d27c`. The staging check rejected no build/cache/credential artifacts. |
 | `pwsh scripts/smoke-release-windows.ps1 release/dsh-windows-x86_64.zip` | PASS from a path containing spaces and Japanese characters: CLI demo, loopback `dsh web` HTTP 200, `dsh desktop --app-path` offline E2E (Japanese frame + reload), and sibling-discovery `--smoke`. |
 | `dsh desktop` sibling discovery from the packaged directory | PASS (same smoke run). |
-| Hosted `publish-native.yml` Windows job | NOT RUN: added with this change; no hosted run yet. |
-| macOS / Linux release assets | NOT RUN: unchanged by this change; the PR plan still validates all four platforms. |
+| Hosted `publish-native.yml` Windows job | PASS in [run 39170351756](https://github.com/f4ah6o/dsh.mbt/actions/runs/39170351756): build, Japanese font test, `dsh-windows-x86_64.zip` packaging and `scripts/smoke-release-windows.ps1` on `windows-latest` (23m07s). |
+| macOS / Linux release assets | PASS in the same run: `darwin-aarch64` (5m25s), `linux-x86_64` (7m25s), and `linux-aarch64` (8m16s) built and smoked; the PR plan validated all four platforms. |
 
 ## Windows x64 GPUI desktop (M2)
 
@@ -30,31 +30,36 @@ MSVC 2022 + Windows SDK `10.0.26100`, MoonBit `0.10.15+943464bfa`, gpui.mbt
 | `dsh-desktop.exe --smoke` | PASS: frame presented, resize observed, close requested, window destroyed. The probe shrinks because the session display is smaller than the requested 1120x760 window; growing was clamped by the display and produced no WM_SIZE. |
 | `GPUI_NATIVE_E2E=1 dsh-desktop.exe --offline-e2e` | PASS: demo send, approval, `native-demo.txt`, durable reload, Japanese heading pixels, settings heading pixels. |
 | `python scripts/test-windows-desktop.py` | PASS: markers, PPM structure, workspace write, `sessions.json`, and no `siwc-auth.json`. |
-| `dsh desktop` launcher on Windows | NOT RUN / not implemented in M2 (M3). Run `dsh-desktop.exe` directly. |
-| macOS / Linux desktop regression | NOT RUN: the implementing host is Windows. The shared budget and pixel-probe changes are platform-neutral; hosted CI must confirm. |
-| Hosted Windows desktop E2E | NOT RUN: `windows-native.yml` builds the desktop and runs the font test, but the interactive window step is not enabled until a runner with a D3D11 desktop is validated. |
+| `dsh desktop` launcher on Windows | PASS (M3): explicit `--app-path` and sibling discovery. |
+| macOS / Linux desktop regression | PASS in [publish run 39170351756](https://github.com/f4ah6o/dsh.mbt/actions/runs/39170351756): the Linux Wayland/X11 desktop build and smoke and the macOS app packaging passed. |
+| Hosted Windows desktop E2E | PASS in [windows-native run 39170351932](https://github.com/f4ah6o/dsh.mbt/actions/runs/39170351932): font test, package, and `smoke-release-windows.ps1`, which runs `--offline-e2e` and `--smoke` on the runner. |
 
 ## Windows x64 native runtime (M1)
 
 2026-10-19, Windows 11 x64 (Japanese locale), MSVC 2022 + Windows SDK
 `10.0.26100`, Python `3.12.15` (uv-managed; the Microsoft Store alias is not a
 usable interpreter), MoonBit compiler / core `0.10.15+943464bfa`, moon /
-moonrun `0.1.20261012`. The checkout is `cf68f68` plus the M1 working tree; no
-hosted Windows CI run exists for this work yet.
+moonrun `0.1.20261012`. The checkout is `cf68f68` plus the M1 working tree.
+The first push runs [39169784643](https://github.com/f4ah6o/dsh.mbt/actions/runs/39169784643)
+(Windows) and [39169784555](https://github.com/f4ah6o/dsh.mbt/actions/runs/39169784555)
+(portable) failed: the hosted Windows runner reported 0755 for a 0600 file
+because its elevated token defaults to `BUILTIN\Administrators` as owner, and
+POSIX builds compiled the shared Win32 stubs. Fixed in `1aecc2c`; the exact-head
+reruns below are the acceptance evidence.
 
 | gate | result |
 | --- | --- |
 | `moon check --target native --deny-warn` | PASS, 0 errors / 0 own warnings. |
 | `moon test engine provider plugins auth protocol client app ui --target native --deny-warn` | PASS, 204 / 204 on the native backend. |
-| `moon test runtime --target native --deny-warn --filter "windows*"` | PASS, 6 / 6. Covers path normalization / absolute detection, SafeRoot create / read / stat / atomic write / expected-version conflict / traversal and reserved-name rejection / unlink / list, junction rejection (`mklink /J`), a demo turn with an approved write, reopen with zero effects, and fail-closed options with no data-directory mutation. |
+| `moon test runtime --target native --deny-warn --filter "windows*"` | PASS, 7 / 7. Covers path normalization / absolute detection, SafeRoot create / read / stat / atomic write / expected-version conflict / traversal and reserved-name rejection / unlink / list, owner-only DACLs that ignore inheritable parent ACEs, junction rejection (`mklink /J`), a demo turn with an approved write, reopen with zero effects, and fail-closed options with no data-directory mutation. |
 | `moon build --target native --release cmd/dsh` | PASS. |
 | `cl /W4 /std:c11 /utf-8 /c runtime/host_os_win32.c` | PASS, no warnings. |
 | `python scripts/test-windows-runtime.py --exe _build/native/release/build/cmd/dsh/dsh.exe` | PASS: demo turn completed with `native-demo.txt`; `prune-session` reopened the store without replaying the write; `dsh web --demo --port 0` served HTTP 200; unsupported options and subcommands exited non-zero with the Windows profile diagnostic and no data directory. `siwc-auth.json` was not created. |
-| Graceful console shutdown | NOT RUN in the headless agent (no attached console); the same run observed an abrupt exit and verified the stale `host.lock` was reclaimed by the next start. A CI console step is expected to exercise CTRL_BREAK. |
-| macOS / Linux runtime, desktop, and web regression | NOT RUN: the implementing host is Windows. `host_os.c`, `oauth_os.c`, and `signal_os.c` keep the POSIX blocks behind `__APPLE__` / `__linux__`; hosted CI must confirm. |
-| Hosted `windows-native.yml` | NOT RUN: the workflow was added with this change and has no run yet. |
-| M2 Windows GPUI desktop and Japanese font probe | NOT RUN / not implemented in M1. |
-| M3 zip packaging and release-plan update | NOT RUN / not implemented in M1. |
+| Graceful console shutdown | NOT RUN on the local agent or the hosted runner (neither has an attached console). Both exercised an abrupt exit and verified the stale `host.lock` was reclaimed by the next start; CTRL_BREAK still needs a console-attached host. |
+| macOS / Linux runtime, desktop, and web regression | PASS in [run 39170351777](https://github.com/f4ah6o/dsh.mbt/actions/runs/39170351777): `portable-and-native` and `native-without-node` passed, including the Linux Wayland/X11 desktop assets in the publish workflow. |
+| Hosted `windows-native.yml` | PASS in [run 39170351932](https://github.com/f4ah6o/dsh.mbt/actions/runs/39170351932) (14m44s): typecheck, portable tests, Windows boundary and font tests, release builds, MSVC `/W4` compile, runtime smoke, and the packaged zip smoke. |
+| M2 Windows GPUI desktop and Japanese font probe | PASS; see the M2 table. |
+| M3 zip packaging and release-plan update | PASS; see the M3 table. |
 
 ## UserPromptSubmit native command-hook increment (0.1.13)
 
