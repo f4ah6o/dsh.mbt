@@ -71,7 +71,7 @@ while IFS='|' read -r DSH_URL DSH_FILE DSH_NAME; do
   {
     # shellcheck disable=SC2016 # Backticks are literal MoonBit doc-comment delimiters.
     printf '\n///|\n/// Embedded source for `%s`.\nfn native_embedded_web_%s() -> String {\n  let encoded = [\n' "$DSH_FILE" "$DSH_NAME"
-    fold -w 96 "$DSH_BASE64" | while IFS= read -r DSH_CHUNK || [ -n "$DSH_CHUNK" ]; do
+    fold -w 512 "$DSH_BASE64" | while IFS= read -r DSH_CHUNK || [ -n "$DSH_CHUNK" ]; do
       printf '    "%s",\n' "$DSH_CHUNK"
     done
     printf '  ].join("")\n  @utf8.decode_lossy(@base64.decode_lossy(encoded))\n}\n'

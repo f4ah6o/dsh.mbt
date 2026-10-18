@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
 export const projectRoot = fileURLToPath(new URL('../', import.meta.url));
 const dependencyPaths = ['vendor/gpui', 'tools/turtles'];
 const yamiKumoPackage = 'f4ah6o/yami_kumo';
-const yamiKumoVersion = '0.1.0';
+const yamiKumoVersion = '0.1.1';
+const gpuiPackage = 'f4ah6o/gpui';
 // This is the build/runner release distributed with .moonbit-version.
 const expectedBuildVersion = '0.1.20261012';
 
@@ -73,6 +74,24 @@ function verifyYamiKumoPackage() {
       missingFiles.join(', ') + '. Run:\n  moon update && moon install');
   }
   return installedVersion;
+}
+
+function verifyGpuiDeclaration() {
+  const projectManifest = readFileSync(join(projectRoot, 'moon.mod'), 'utf8');
+  const declared = projectManifest.match(/"f4ah6o\/gpui@([^"]+)"/)?.[1];
+  if (!declared) {
+    throw new Error('moon.mod must declare ' + gpuiPackage + ' with an explicit version.');
+  }
+  const pinnedVersion = moduleField(
+    join(projectRoot, 'vendor/gpui', 'moon.mod'),
+    'version',
+  );
+  if (declared !== pinnedVersion) {
+    throw new Error('moon.mod declares ' + gpuiPackage + '@' + declared +
+      ' but vendor/gpui is ' + pinnedVersion +
+      '. Update the declaration to match the pinned submodule.');
+  }
+  return pinnedVersion;
 }
 
 export function verifyEnvironment({ quiet = false } = {}) {
@@ -154,12 +173,15 @@ export function verifyEnvironment({ quiet = false } = {}) {
     pins[path] = pin[1];
   }
   const yamiKumoVersion = verifyYamiKumoPackage();
+  const gpuiVersion = verifyGpuiDeclaration();
   const turtlesVersion = moduleField(join(projectRoot, 'tools/turtles/moon.mod'), 'version');
   if (!quiet) {
     console.log('Environment: Node ' + process.versions.node + '; MoonBit ' +
-      compilerVersion + '; core and 2 dependency pins verified.');
+      compilerVersion + '; core, gpui and 2 dependency pins verified.');
   }
-  return { compilerVersion, moonVersion, turtlesVersion, yamiKumoVersion, pins };
+  return {
+    compilerVersion, moonVersion, turtlesVersion, yamiKumoVersion, gpuiVersion, pins,
+  };
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

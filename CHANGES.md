@@ -6,6 +6,8 @@
 
 ### Changed
 
+- Update the native UI dependency to gpui.mbt 0.9.0 and Yami-kumo 0.1.1, align the `moon.mod` gpui declaration with the vendored submodule, and refresh the embedded browser assets. The generated asset chunks are wider so the larger bundle stays within the compiler's text-segment limit.
+
 ### Fixed
 
 ### Deprecated

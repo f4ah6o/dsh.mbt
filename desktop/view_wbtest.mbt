@@ -34,7 +34,7 @@ test "native scene preserves the host viewport and bounds oversized text runs" {
         assert_true(bounds.size().width() <= 2048.0)
       @scene.TextRunItem(bounds~, ..) =>
         assert_true(bounds.size().width() <= 2048.0)
-      @scene.QuadItem(..) => ()
+      _ => ()
     }
   }
 }
