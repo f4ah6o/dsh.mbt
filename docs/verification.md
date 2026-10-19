@@ -1,5 +1,26 @@
 # 検証記録
 
+## Windows IME composition (2026-10-20)
+
+macOS 26.5.2 arm64, MoonBit `0.1.20261012`, gpui.mbt 0.10.1 installed from
+Mooncakes. The Windows desktop was cross-built and the shared desktop tests
+were run locally; the D3D11 window and Microsoft IME run on hosted Windows or
+the remote Windows desktop.
+
+| gate | result |
+| --- | --- |
+| `moon build --target native --release desktop/windows cmd/dsh` against `f4ah6o/gpui@0.10.1` | PASS on macOS cross-build. |
+| `moon test desktop --target native --deny-warn` | PASS 22 / 22, including the shared composition state machine. |
+| `sh scripts/build.sh` | PASS: embedded browser assets refreshed for gpui 0.10.1. |
+| Windows packaged smoke (`scripts/smoke-release-windows.ps1`) | Runs `dsh desktop --app-path ... --offline-e2e` with `GPUI_NATIVE_E2E=1`, which posts Update / Commit / Cancel through the Windows host and requires `"ime_composition":true`. Hosted `windows-native.yml` covers this path; a local macOS run cannot execute D3D11. |
+| real Microsoft IME / candidate window / 100%–200% DPI | **NOT RUN**. The synthetic payload is not physical IME acceptance. |
+
+The dsh Windows entrypoint now advertises `supports_text_composition` and wires
+`set_text_composition`, `set_text_composition_caret`, `finish_text_composition`,
+and `post_test_composition` to gpui's bounded IMM32 transport. Focus loss,
+Settings, New, session switch, approval, response cancel, and Command shortcuts
+use the shared `desktop_finish_composition` path.
+
 ## macOS IME composition (2026-10-19)
 
 macOS 26.5.2 arm64, MoonBit `0.1.20261012`, gpui.mbt 0.10.0 installed from

@@ -20,13 +20,20 @@ async fn main {
       asynchronous_frames: true,
       text_input_events: true,
       control_shortcuts: true,
-      supports_text_composition: false,
-      set_text_composition: @desktop.desktop_unsupported_text_composition,
-      set_text_composition_caret: @desktop.desktop_unsupported_text_composition_caret,
-      finish_text_composition: @desktop.desktop_unsupported_finish_text_composition,
-      post_test_composition: @desktop.desktop_unsupported_post_test_composition,
-      // Windows text sessions are owned by the shared desktop app; the GPUI
-      // host derives keyboard focus from its own window messages.
+      supports_text_composition: true,
+      set_text_composition: fn(window, enabled) {
+        host.set_text_composition(window, enabled)
+      },
+      set_text_composition_caret: fn(window, caret) {
+        host.set_text_composition_caret(window, caret)
+      },
+      finish_text_composition: fn(window, commit) {
+        host.finish_text_composition(window, commit)
+      },
+      post_test_composition: fn(window, event) {
+        host.post_test_composition(window, event)
+      },
+      // The GPUI host derives keyboard focus from its own window messages.
       focus_changed: fn(_window, _focused) { Ok(()) },
       initialize_window: fn(_window) { Ok(()) },
       read_clipboard: fn() { host.read_clipboard() },
