@@ -31,7 +31,12 @@ async fn desktop_handle_event(
     }
     @platform.Composition(event) => desktop_handle_composition(state, event)
     @platform.Input(@primitives.TextInput(text~)) =>
-      if !state.settings_open && state.composition is None {
+      if desktop_accept_direct_text(
+          state.focused,
+          state.settings_open,
+          state.composition_enabled && state.host.composition_owns_text_input,
+          state.composition is Some(_),
+        ) {
         desktop_insert_text(state, text)
       }
     @platform.Input(@primitives.KeyPressed(key~, modifiers~, repeat=_)) =>

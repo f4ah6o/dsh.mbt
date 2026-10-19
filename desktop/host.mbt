@@ -5,6 +5,8 @@ pub(all) struct Host {
   asynchronous_frames : Bool
   text_input_events : Bool
   control_shortcuts : Bool
+  // Only hosts routing all text through Composition suppress direct TextInput.
+  composition_owns_text_input : Bool
   supports_text_composition : Bool
   set_text_composition : (@platform.WindowId, Bool) -> Result[
     Unit,

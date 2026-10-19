@@ -25,18 +25,45 @@ async fn main {
           "; check the compositor and session environment (DSH_DESKTOP_BACKEND=x11 selects X11 explicitly)",
         )
     }
+    // Keep physical keyboard text and compositor composition mutually exclusive.
+    let composition_enabled = Ref(false)
+    let window_focused = Ref(false)
     Ok({
       backend: host,
       asynchronous_frames: true,
       text_input_events: true,
       control_shortcuts: true,
-      supports_text_composition: false,
-      set_text_composition: @desktop.desktop_unsupported_text_composition,
-      set_text_composition_caret: @desktop.desktop_unsupported_text_composition_caret,
-      finish_text_composition: @desktop.desktop_unsupported_finish_text_composition,
-      post_test_composition: @desktop.desktop_unsupported_post_test_composition,
+      composition_owns_text_input: true,
+      supports_text_composition: true,
+      set_text_composition: fn(window, enabled) {
+        match host.set_text_composition(window, enabled) {
+          Err(error) => Err(error)
+          Ok(_) => {
+            composition_enabled.val = enabled
+            if enabled {
+              // The native composition transaction already disarms direct text.
+              Ok(())
+            } else {
+              host.set_direct_keyboard_text(window, window_focused.val)
+            }
+          }
+        }
+      },
+      set_text_composition_caret: fn(window, caret) {
+        host.set_text_composition_caret(window, caret)
+      },
+      finish_text_composition: fn(window, commit) {
+        host.finish_text_composition(window, commit)
+      },
+      post_test_composition: fn(window, event) {
+        host.post_test_composition(window, event)
+      },
       focus_changed: fn(window, focused) {
-        host.set_direct_keyboard_text(window, focused)
+        window_focused.val = focused
+        host.set_direct_keyboard_text(
+          window,
+          focused && !composition_enabled.val,
+        )
       },
       initialize_window: fn(_window) { Ok(()) },
       read_clipboard: fn() { host.read_clipboard() },
@@ -83,6 +110,7 @@ fn start_x11() -> Result[@desktop.Host, String] {
     asynchronous_frames: true,
     text_input_events: true,
     control_shortcuts: true,
+    composition_owns_text_input: false,
     supports_text_composition: false,
     set_text_composition: @desktop.desktop_unsupported_text_composition,
     set_text_composition_caret: @desktop.desktop_unsupported_text_composition_caret,

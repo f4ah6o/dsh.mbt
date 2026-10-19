@@ -1,5 +1,19 @@
 # Changes
 
+## Unreleased
+
+### Added
+
+- Connect opt-in (`DSH_DESKTOP_IME=1`) Wayland desktop composition through the published gpui.mbt 0.10.1 text-input-v1 transport. Keep direct keyboard text mutually exclusive with compositor commits and fence native queued transactions on app cancellation before preedit delivery.
+
+### Migration
+
+- Uses the existing gpui 0.10.1 dependency; no package version or Windows wiring change is needed. TextInput suppression is adapter-specific so ordinary Windows typing remains available outside active preedit. See `docs/wayland-ime-composition.md`.
+
+### Limitations
+
+- Wayland text-input-v1 only. X11/XIM is unchanged. Application-requested finish commits cached preedit rather than selecting an IME candidate. Physical IBus/Mozc and candidate popup qualification remain NOT RUN.
+
 ## 0.1.28 - 2026-10-20
 
 ### Added
