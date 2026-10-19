@@ -19,7 +19,7 @@
 ### Fixed
 
 - Prevent composition commit/cancel from double-inserting text or forwarding a second Enter/Escape into the application.
-- Cancel a pending preedit instead of leaving stale marked text when the composer loses focus, Settings opens, or a session changes.
+- Cancel a pending preedit instead of leaving stale marked text when the composer loses focus, Settings opens, a session changes, New or approval is clicked, or a response is cancelled. These local transitions now finish the native composition as well, so AppKit marked text cannot outlive the desktop state.
 
 ### Deprecated
 

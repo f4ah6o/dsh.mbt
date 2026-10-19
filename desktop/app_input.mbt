@@ -64,7 +64,7 @@ async fn desktop_handle_click(
     return
   }
   if desktop_button_rect("new", width, height).contains(position) {
-    desktop_cancel_composition(state)
+    desktop_finish_composition(state, false)
     desktop_create_session(state)
     return
   }
@@ -76,12 +76,12 @@ async fn desktop_handle_click(
   }
   if is_awaiting_approval {
     if desktop_button_rect("allow", width, height).contains(position) {
-      desktop_cancel_composition(state)
+      desktop_finish_composition(state, false)
       desktop_approve(state, true)
       return
     }
     if desktop_button_rect("deny", width, height).contains(position) {
-      desktop_cancel_composition(state)
+      desktop_finish_composition(state, false)
       desktop_approve(state, false)
       return
     }
@@ -91,7 +91,7 @@ async fn desktop_handle_click(
       return
     }
     if desktop_button_rect("cancel", width, height).contains(position) {
-      desktop_cancel_composition(state)
+      desktop_finish_composition(state, false)
       desktop_cancel(state)
       return
     }
@@ -110,7 +110,7 @@ async fn desktop_handle_click(
     let session_index = first_session + row_index
     if session_index < state.sessions.length() &&
       desktop_session_row_rect(row_index).contains(position) {
-      desktop_cancel_composition(state)
+      desktop_finish_composition(state, false)
       state.selected_id = desktop_json_string(
         state.sessions[session_index],
         "id",

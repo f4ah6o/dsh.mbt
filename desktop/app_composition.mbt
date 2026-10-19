@@ -248,7 +248,7 @@ fn desktop_update_composition(
   }
   if desktop_text_char_count(text) > 1024 {
     state.error_message = "入力中の文字列が長すぎるため、変換を中止しました"
-    desktop_cancel_composition(state)
+    desktop_finish_composition(state, false)
     return
   }
   if state.composition is None {
@@ -324,7 +324,13 @@ fn desktop_finish_composition(state : DesktopState, commit : Bool) -> Unit {
     return
   }
   match (state.host.finish_text_composition)(state.window, commit) {
-    Ok(_) => ()
+    Ok(_) =>
+      // Cancelling is terminal even if the host publishes no event (for
+      // example when AppKit already dropped its marked text). Keep a commit
+      // pending until its text arrives.
+      if !commit {
+        desktop_cancel_composition(state)
+      }
     Err(error) => {
       state.error_message = desktop_error_text(error)
       desktop_cancel_composition(state)
