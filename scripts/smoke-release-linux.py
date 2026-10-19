@@ -27,6 +27,22 @@ EXPECTED_TEXT = 'Create and verify a durable file. via Linux keyboard'
 CLIPBOARD_TEXT = 'Create and verify a durable file. 日本語'
 X11_EXPECTED_TEXT = CLIPBOARD_TEXT + ' via Linux keyboard'
 CLIPBOARD_DIAGNOSTIC_CHARACTERS = 1024
+# desktop-shell initializes Weston's text-input-v1 support; kiosk-shell does not.
+# Disable chrome/animations so the app-sized output remains the input viewport.
+WESTON_CONFIG = """[shell]
+animation=none
+close-animation=none
+startup-animation=none
+focus-animation=none
+panel-position=none
+locking=false
+"""
+
+
+def require_text_input_manager(text):
+    require(re.search(r'wl_registry(?:@|#)\d+\.global\(\d+, "zwp_text_input_manager_v1", [1-9]\d*\)', text),
+            'Owned Weston did not advertise text-input-v1; inspect the app protocol log')
+
 
 # Run in a subprocess with the harness's private DISPLAY and XAUTHORITY. Using
 # XSendEvent with WM_DELETE_WINDOW requests normal close; xdotool windowclose
@@ -306,21 +322,23 @@ class Harness:
         self.xvfb = xvfb
         return {'private_display': self.env['DISPLAY'], 'inherited_display_excluded': inherited}
 
-    def compositor(self, shell, label, width=WIDTH, height=HEIGHT):
+    def compositor(self, shell, label, width=WIDTH, height=HEIGHT, input_enabled=False):
         socket = label
+        config = self.output / (label + '-weston.ini')
+        config.write_text(WESTON_CONFIG)
         help_text = self.command(['weston', '--help'], check=False)
         # Legacy X11 Weston defaults to GL (its --use-gl flag is headless-only).
         renderer = ['--renderer=gl'] if '--renderer' in help_text.stdout + help_text.stderr else []
         weston, _ = self.launch(['weston', '--backend=x11-backend.so', *renderer,
                                 '--shell=' + shell + '-shell.so', '--socket=' + socket,
                                 f'--width={width}', f'--height={height}', '--idle-time=0',
-                                '--no-config', '--log=' + str(self.output / (label + '-weston.log'))], label)
+                                '--config=' + str(config), '--log=' + str(self.output / (label + '-weston.log'))], label)
         def ready():
             require(weston.poll() is None, 'Owned Weston exited; inspect compositor logs')
             return (self.runtime / socket).exists()
         wait_for(ready, 15, 'owned Weston socket')
         self.env['WAYLAND_DISPLAY'] = socket
-        if shell == 'kiosk':
+        if input_enabled:
             def discover():
                 require(weston.poll() is None, 'Owned Weston exited during window discovery')
                 log = (self.output / (label + '-weston.log')).read_text(errors='replace')
@@ -700,16 +718,20 @@ def main():
             harness = harness_class(binary, output, Path(runtime))
             try:
                 result.update(harness.start_display())
-                kiosk = harness.compositor('kiosk', 'kiosk') if args.backend == 'wayland' else None
+                input_compositor = (harness.compositor('desktop', 'composition', input_enabled=True)
+                                    if args.backend == 'wayland' else None)
                 # Auto must prefer Wayland when both endpoints exist, and use
                 # native X11 when only DISPLAY exists. Later cases are explicit.
                 choice = {'DSH_DESKTOP_BACKEND': 'auto'}
                 app, log, root, tmp = harness.app('demo', ['--offline-e2e'], choice)
                 text, clicks = harness.run_until_exit(app, log, input_enabled=True)
+                if args.backend == 'wayland':
+                    require_text_input_manager(text)
                 require(clicks == 2, f'Expected two native clicks, saw {clicks}')
                 result['demo'] = marker(text, 'DSH_DESKTOP_DEMO', {
                     'native_events': True, 'tool_approval': 'approved', 'completed': True,
-                    'workspace_write': True, 'reload': 'passed', 'japanese_frame': 'passed'})
+                    'workspace_write': True, 'reload': 'passed', 'japanese_frame': 'passed',
+                    'ime_composition': args.backend == 'wayland'})
                 require((root / 'workspace/native-demo.txt').read_text() == 'durable native tool result',
                         'Durable workspace write mismatch')
                 result['frames'] = {name: ppm_info(root / name) for name in [
@@ -733,9 +755,9 @@ def main():
                         'Cancelled worker performed a late workspace write')
                 shutdown['payload_cleanup'] = True
                 result['active_worker_term'] = shutdown
-                if kiosk is not None:
-                    harness.stop(kiosk)
-                    # A normal shell permits the resize that kiosk fullscreen ignores.
+                if input_compositor is not None:
+                    harness.stop(input_compositor)
+                    # Give lifecycle resize requests room beyond the initial app size.
                     harness.compositor('desktop', 'lifecycle', width=1280, height=900)
                 # Explicit X11 must ignore even an unusable Wayland endpoint.
                 choice = {'WAYLAND_DISPLAY': 'not-a-real-wayland-socket'} if args.backend == 'x11' else None

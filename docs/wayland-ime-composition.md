@@ -46,6 +46,15 @@ exact draft contents and that finishing does not itself send a message. Native
 unit coverage rejects direct insertion while opt-in owns input and restores the
 direct path when opt-in is disabled.
 
+The packaged Linux harness uses an owned Weston desktop-shell with panels and
+animations disabled. It requires the app's protocol trace to show the compositor
+advertising `zwp_text_input_manager_v1` and the demo receipt to report
+`ime_composition: true`; unsupported capability is a failure, never a skip.
+The first PR #74 CI attempt used kiosk-shell, which did not advertise that global
+on either Linux runner and timed out before composition could start. Those
+failure artifacts are retained on the original run. The desktop-shell profile
+must pass hosted CI before this integration is merged.
+
 Synthetic headless transport evidence is not physical IME qualification. Real
 IBus/Mozc candidate popup placement, conversion and candidate selection remain
 NOT RUN until tested on the bounded Weston 14 desktop-shell + stock IBus 1.5.32
