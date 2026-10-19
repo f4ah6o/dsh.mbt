@@ -24,12 +24,24 @@ priv struct DesktopConfig {
 }
 
 ///|
+priv struct DesktopComposition {
+  start : Int32
+  replaced : Int32
+  preedit : String
+  cursor_utf16 : Int32
+  send_after_commit : Bool
+}
+
+///|
 priv struct DesktopState {
   runtime : @runtime.NativeDesktop
   host : Host
   window : @platform.WindowId
   group : @async.TaskGroup[Result[Unit, String]]
   config : DesktopConfig
+  mut composition : DesktopComposition?
+  mut composition_enabled : Bool
+  mut composition_seen : Bool
   mut snapshot : Json
   mut sessions : Array[Json]
   mut selected_id : String
@@ -97,6 +109,9 @@ fn desktop_state(
     window,
     group,
     config,
+    composition: None,
+    composition_enabled: false,
+    composition_seen: false,
     snapshot: Json::empty_object(),
     sessions: [],
     selected_id: "",

@@ -26,10 +26,12 @@ async fn desktop_handle_event(
         Ok(_) => ()
         Err(error) => state.error_message = desktop_error_text(error)
       }
+      desktop_set_focused(state, focused)
       state.dirty = true
     }
+    @platform.Composition(event) => desktop_handle_composition(state, event)
     @platform.Input(@primitives.TextInput(text~)) =>
-      if !state.settings_open {
+      if !state.settings_open && state.composition is None {
         desktop_insert_text(state, text)
       }
     @platform.Input(@primitives.KeyPressed(key~, modifiers~, repeat=_)) =>
@@ -123,16 +125,16 @@ async fn desktop_pump(
       }
       Err(error) => return Err(desktop_error_text(error))
     }
-    let draft = desktop_draft_with_caret(state.draft, state.cursor)
+    let composition_preedit = match state.composition {
+      Some(composition) => composition.preedit
+      None => ""
+    }
+    if composition_preedit != "" {
+      desktop_sync_composition_caret(state)
+    }
     let frame = desktop_scene(
       state.snapshot,
-      if state.draft.is_empty() {
-        ""
-      } else if state.focused {
-        draft
-      } else {
-        desktop_draft_string(state.draft)
-      },
+      desktop_composition_text(state),
       state.sessions,
       state.selected_id,
       state.status_message,
@@ -147,6 +149,7 @@ async fn desktop_pump(
       auth_error=state.auth_error,
       settings_scroll=state.settings_scroll,
       settings_focus=state.settings_focus,
+      composition_preedit~,
     )
     match state.host.backend.present(state.window, frame) {
       Ok(_) => {

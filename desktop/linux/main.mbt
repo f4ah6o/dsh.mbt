@@ -30,6 +30,11 @@ async fn main {
       asynchronous_frames: true,
       text_input_events: true,
       control_shortcuts: true,
+      supports_text_composition: false,
+      set_text_composition: @desktop.desktop_unsupported_text_composition,
+      set_text_composition_caret: @desktop.desktop_unsupported_text_composition_caret,
+      finish_text_composition: @desktop.desktop_unsupported_finish_text_composition,
+      post_test_composition: @desktop.desktop_unsupported_post_test_composition,
       focus_changed: fn(window, focused) {
         host.set_direct_keyboard_text(window, focused)
       },
@@ -78,6 +83,11 @@ fn start_x11() -> Result[@desktop.Host, String] {
     asynchronous_frames: true,
     text_input_events: true,
     control_shortcuts: true,
+    supports_text_composition: false,
+    set_text_composition: @desktop.desktop_unsupported_text_composition,
+    set_text_composition_caret: @desktop.desktop_unsupported_text_composition_caret,
+    finish_text_composition: @desktop.desktop_unsupported_finish_text_composition,
+    post_test_composition: @desktop.desktop_unsupported_post_test_composition,
     focus_changed: fn(window, focused) {
       host.set_direct_keyboard_text(window, focused)
     },

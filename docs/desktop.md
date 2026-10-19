@@ -118,7 +118,7 @@ Enter or choose **送信 Enter** to send. Shift-Enter inserts a newline. Command
 pastes text from the clipboard. While a response is running, use **キャンセル**
 to cancel it. Review each requested tool in the transcript and choose Allow or
 Deny before it runs. Use Up/Down or PageUp/PageDown to scroll transcript
-history; mouse-wheel forwarding is not available in the current GPUI host. The
+history; mouse-wheel events are forwarded when the GPUI host provides them. The
 app checkpoints conversations in the same data directory used by other native
 dsh surfaces; close other dsh processes that use that directory before
 starting the desktop app.
@@ -136,11 +136,23 @@ explicit locations. Provider configuration uses the same `DSH_MODE`,
 a network-free demo that exercises approval and a workspace write, start with
 `dsh desktop --demo --workspace /absolute/path/to/scratch`.
 
-The current GPUI macOS text host does not implement IME composition; paste
-supports Japanese prompt entry. A few unsupported glyphs may render as a
-fallback square, but prompt contents remain intact. The app's Japanese session
-list, transcript, composer, and approval flow were exercised on macOS with the
-offline demo; live provider calls and other macOS versions are separate checks.
+The macOS composer uses the system input method when `DSH_DESKTOP_IME=1` is
+set. It is opt-in until real Kotoeri acceptance is recorded. Preedit is shown
+inline with a caret underline, Enter commits without sending, Escape
+cancels without clearing the draft, and clicking Send commits first. The
+candidate window follows the composer caret. Composition is disabled again on
+focus loss, Settings, New, session switches, approvals, and Command shortcuts;
+a pending preedit is cancelled rather than sent. Linux and Windows desktop
+remain paste-only in this release. A few unsupported glyphs may render as a
+fallback square, but prompt contents remain intact.
+
+Synthetic composition E2E passes on macOS. Real Japanese Kotoeri acceptance is
+**NOT RUN**: the opt-in harness can select Kotoeri on the window input context,
+but it cannot make its process the active application in the headless test
+environment. Do not treat the synthetic run as physical IME acceptance. The
+app's Japanese session list, transcript, composer, and approval flow were
+exercised on macOS with the offline demo; live provider calls and other macOS
+versions are separate checks.
 
 For the hosted release build, the macOS CI job validates the app archive,
 signature, bundled dependencies, license notices, and declared deployment

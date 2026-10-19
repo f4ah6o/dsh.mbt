@@ -20,6 +20,11 @@ async fn main {
       asynchronous_frames: true,
       text_input_events: true,
       control_shortcuts: true,
+      supports_text_composition: false,
+      set_text_composition: @desktop.desktop_unsupported_text_composition,
+      set_text_composition_caret: @desktop.desktop_unsupported_text_composition_caret,
+      finish_text_composition: @desktop.desktop_unsupported_finish_text_composition,
+      post_test_composition: @desktop.desktop_unsupported_post_test_composition,
       // Windows text sessions are owned by the shared desktop app; the GPUI
       // host derives keyboard focus from its own window messages.
       focus_changed: fn(_window, _focused) { Ok(()) },

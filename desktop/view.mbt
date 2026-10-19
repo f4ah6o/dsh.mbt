@@ -675,7 +675,9 @@ fn desktop_scene(
   auth_error~ : String = "",
   settings_scroll~ : Int32 = 0,
   settings_focus~ : Int32 = 0,
+  composition_preedit~ : String = "",
 ) -> @scene.SceneSnapshot {
+  ignore(focused)
   let viewport = desktop_rect(0.0, 0.0, width, height)
   let items : Array[@scene.SceneItem] = []
   desktop_add_quad(items, 1, viewport, desktop_color(255, 255, 255), None)
@@ -851,25 +853,11 @@ fn desktop_scene(
     None,
   )
   let composer_width = composer.right() - composer.left() - 28.0
-  let visible_draft = desktop_renderable_text(draft, 4000)
-  let lines = @ui.wrap_text(
-    visible_draft,
-    if composer_width < 20.0 {
-      1
-    } else {
-      (composer_width / 12.0).to_int()
-    },
+  let (lines, caret_line, caret_column) = desktop_composer_layout(
+    draft, composer_width,
   )
-  let mut caret_line = 0
-  if focused {
-    for index, line in lines {
-      if line.contains("|") {
-        caret_line = index
-        break
-      }
-    }
-  }
   let first_line = if caret_line > 2 { caret_line - 2 } else { 0 }
+  let preedit_columns = desktop_preedit_columns(composition_preedit)
   let mut line_y = composer.top() + 10.0
   let mut shown = 0
   for index, line in lines {
@@ -885,6 +873,31 @@ fn desktop_scene(
         desktop_color(31, 41, 55),
         None,
       )
+      if composition_preedit != "" && index == caret_line && caret_column > 0 {
+        let start_column = if caret_column > preedit_columns {
+          caret_column - preedit_columns
+        } else {
+          0
+        }
+        let underline_left = composer.left() +
+          14.0 +
+          start_column.to_double() * 12.0
+        let underline_right = composer.left() +
+          14.0 +
+          caret_column.to_double() * 12.0
+        desktop_add_quad(
+          items,
+          920000 + index.to_uint64(),
+          desktop_rect(
+            underline_left,
+            line_y + 16.0,
+            underline_right - underline_left,
+            2.0,
+          ),
+          desktop_color(37, 99, 235),
+          None,
+        )
+      }
       line_y += 18.0
       shown += 1
     }
