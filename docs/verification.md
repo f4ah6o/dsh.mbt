@@ -17,6 +17,7 @@ the registry package was published; the final build and E2E below use
 | `dsh-desktop --smoke` (direct test-hook executable) | PASS: frame, resize, close request, destroy. |
 | `GPUI_NATIVE_E2E=1 dsh-desktop --offline-e2e` (direct test-hook executable; the synthetic path enables IME through `GPUI_NATIVE_E2E=1`, while normal use requires `DSH_DESKTOP_IME=1`) | PASS with `"ime_composition":true`: preedit, commit to the draft, cancel without mutation, candidate caret rectangle, approved workspace write, completed transcript, Settings frame, and durable reload. |
 | `sh scripts/build-desktop.sh --offline-e2e` via LaunchServices | BLOCKED by the local `open -W` environment: the same `--smoke` path also hung and the forwarded app arguments were incomplete. The direct executable path above is the recorded evidence. |
+| `moon publish` (`f4ah6o/dsh@0.1.27`) | PASS: package check passed, including the macOS host callbacks and the local-cancel fix. The earlier 0.1.26 package was superseded before its native release because this fix landed after that publish. |
 | real Kotoeri in the dsh app | NOT RUN. The synthetic path and gpui callback tests pass; physical Japanese IME remains an external gate. |
 
 ## Windows x64 packaging and launcher (M3)
