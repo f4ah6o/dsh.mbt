@@ -49,15 +49,16 @@ fn desktop_frame_has_japanese_heading(
 ) -> Result[Bool, String] {
   // The shared desktop layout uses absolute DIP coordinates (not a uniform
   // scale of 1120x760), so probe the design rectangle and clamp it to the
-  // actual frame. A smaller window still renders the same header at x=264.
-  let right = frame.width().min(474)
-  let bottom = frame.height().min(52)
+  // logical frame. A smaller window still renders the same header at x=264.
+  let right = (frame.width().to_double() / frame.scale()).to_int().min(474)
+  let bottom = (frame.height().to_double() / frame.scale()).to_int().min(52)
   let mut pixels = 0
   let mut y = 18
   while y < bottom {
     let mut x = 254
     while x < right {
-      let (red, green, blue, _) = match frame.pixel_rgba8(x, y) {
+      let (red, green, blue, _) = match
+        frame.pixel_rgba8_logical(x.to_double(), y.to_double()) {
         Ok(value) => value
         Err(error) => return Err(desktop_error_text(error))
       }
@@ -75,14 +76,15 @@ fn desktop_frame_has_japanese_heading(
 fn desktop_frame_has_transcript(
   frame : @testing.FrameCapture,
 ) -> Result[Bool, String] {
-  let right = frame.width().min(1100)
-  let bottom = frame.height().min(510)
+  let right = (frame.width().to_double() / frame.scale()).to_int().min(1100)
+  let bottom = (frame.height().to_double() / frame.scale()).to_int().min(510)
   let mut pixels = 0
   let mut y = 96
   while y < bottom {
     let mut x = 260
     while x < right {
-      let (red, green, blue, _) = match frame.pixel_rgba8(x, y) {
+      let (red, green, blue, _) = match
+        frame.pixel_rgba8_logical(x.to_double(), y.to_double()) {
         Ok(value) => value
         Err(error) => return Err(desktop_error_text(error))
       }
@@ -101,15 +103,16 @@ fn desktop_frame_has_settings(
   frame : @testing.FrameCapture,
 ) -> Result[Bool, String] {
   // "ChatGPT" is drawn at x=480, y=92 in the shared absolute layout. Clamp to
-  // the frame instead of assuming a proportional 1120x760 scale.
-  let right = frame.width().min(680)
-  let bottom = frame.height().min(126)
+  // the logical frame instead of assuming a proportional 1120x760 scale.
+  let right = (frame.width().to_double() / frame.scale()).to_int().min(680)
+  let bottom = (frame.height().to_double() / frame.scale()).to_int().min(126)
   let mut pixels = 0
   let mut y = 90
   while y < bottom {
     let mut x = 480
     while x < right {
-      let (red, green, blue, _) = match frame.pixel_rgba8(x, y) {
+      let (red, green, blue, _) = match
+        frame.pixel_rgba8_logical(x.to_double(), y.to_double()) {
         Ok(value) => value
         Err(error) => return Err(desktop_error_text(error))
       }
