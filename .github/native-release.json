@@ -1,4 +1,4 @@
 {
-  "version": "0.1.25",
-  "platforms": ["darwin-aarch64"]
+  "version": "0.1.26",
+  "platforms": ["linux-x86_64", "linux-aarch64", "darwin-aarch64", "windows-x86_64"]
 }
