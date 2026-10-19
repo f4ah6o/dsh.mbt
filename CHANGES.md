@@ -4,7 +4,7 @@
 
 ### Added
 
-- Add opt-in (`DSH_DESKTOP_IME=1`) Windows IME composition to the native desktop composer through gpui.mbt 0.10.1's bounded IMM32 transport. Preedit is rendered inline with a caret underline, commit / cancel use the shared desktop state, the candidate window follows the composer caret, Enter commits without sending, Escape cancels, and clicking Send commits before sending. The synthetic desktop E2E posts the same composition events and records `"ime_composition":true`. Real Microsoft IME / candidate-window / high-DPI acceptance remains NOT RUN.
+- Add opt-in (`DSH_DESKTOP_IME=1`) Windows IME composition to the native desktop composer through gpui.mbt 0.10.1's bounded IMM32 transport. Preedit is rendered inline with a caret underline, commit / cancel use the shared desktop state, the candidate window follows the composer caret, Enter commits without sending, Escape cancels, and clicking Send commits before sending. The hosted Windows packaged smoke posts the same composition events and records `"ime_composition":true`. Real Microsoft IME / candidate-window / high-DPI acceptance remains NOT RUN.
 
 ### Changed
 

@@ -12,7 +12,7 @@ the remote Windows desktop.
 | `moon build --target native --release desktop/windows cmd/dsh` against `f4ah6o/gpui@0.10.1` | PASS on macOS cross-build. |
 | `moon test desktop --target native --deny-warn` | PASS 22 / 22, including the shared composition state machine. |
 | `sh scripts/build.sh` | PASS: embedded browser assets refreshed for gpui 0.10.1. |
-| Windows packaged smoke (`scripts/smoke-release-windows.ps1`) | Runs `dsh desktop --app-path ... --offline-e2e` with `GPUI_NATIVE_E2E=1`, which posts Update / Commit / Cancel through the Windows host and requires `"ime_composition":true`. Hosted `windows-native.yml` covers this path; a local macOS run cannot execute D3D11. |
+| Windows packaged smoke (`scripts/smoke-release-windows.ps1`) | PASS on hosted [`windows-native` run 39330135935](https://github.com/f4ah6o/dsh.mbt/actions/runs/39330135935): `dsh desktop --app-path ... --offline-e2e` posted Update / Commit / Cancel through the Windows host and printed `"ime_composition":true` alongside native events, approval, workspace write, Japanese frame, and reload. |
 | real Microsoft IME / candidate window / 100%–200% DPI | **NOT RUN**. The synthetic payload is not physical IME acceptance. |
 
 The dsh Windows entrypoint now advertises `supports_text_composition` and wires
