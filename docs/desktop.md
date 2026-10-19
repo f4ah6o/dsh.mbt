@@ -20,8 +20,14 @@ is written as `frame.ppm` and `frame.ppm.settings.ppm`.
 
 Japanese text uses the system DirectWrite stack; the gate fails with
 `Japanese font prerequisite not met` when the font or glyph coverage is
-missing instead of reporting a pass. IME composition is not implemented; paste
-uses the host clipboard.
+missing instead of reporting a pass. The Windows composer accepts opt-in
+system IME composition through `DSH_DESKTOP_IME=1` and gpui.mbt's bounded IMM32
+transport; preedit is shown inline, commit / cancel and the candidate caret use
+the shared desktop composition state, and `WM_CHAR` / `WM_IME_CHAR` duplicates
+are suppressed until the commit ends. Without the flag, paste uses the host
+clipboard. Synthetic Windows composition E2E passes; real Microsoft IME,
+candidate-window placement, and high-DPI acceptance are **NOT RUN**. See the
+[Windows native profile](native-runtime.md#windows-x64-profile) for the runtime boundary.
 
 `dsh desktop` starts the sibling `dsh-desktop.exe`, or an explicit
 `--app-path C:\path\to\dsh-desktop.exe`. The launcher validates an absolute
