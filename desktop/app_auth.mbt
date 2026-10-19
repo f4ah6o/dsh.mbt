@@ -294,7 +294,7 @@ async fn desktop_auth_activate_focus(state : DesktopState) -> Unit {
   let connected = desktop_auth_connected(auth)
   if state.settings_focus == 0 {
     state.settings_open = false
-    state.focused = true
+    desktop_set_focused(state, true)
     state.dirty = true
   } else if state.settings_focus == 1 {
     state.dirty = true
@@ -323,7 +323,7 @@ async fn desktop_auth_handle_settings_key(
   match key {
     @primitives.Escape => {
       state.settings_open = false
-      state.focused = true
+      desktop_set_focused(state, true)
       state.dirty = true
     }
     @primitives.Tab => {
@@ -383,7 +383,7 @@ async fn desktop_auth_handle_settings_click(
       position,
     ) {
     state.settings_open = false
-    state.focused = true
+    desktop_set_focused(state, true)
     state.dirty = true
     return
   }

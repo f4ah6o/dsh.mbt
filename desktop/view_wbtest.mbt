@@ -40,6 +40,37 @@ test "native scene preserves the host viewport and bounds oversized text runs" {
 }
 
 ///|
+test "composition preedit renders inline with a caret underline" {
+  let scene = desktop_scene(
+    Json::empty_object(),
+    "日本語|",
+    [],
+    "",
+    "",
+    "",
+    1120.0,
+    760.0,
+    1.0,
+    true,
+    0.0,
+    composition_preedit="日本語",
+  )
+  let mut has_text = false
+  let mut has_underline = false
+  for item in scene.items() {
+    match item {
+      @scene.TextItem(text~, ..) if text.contains("日本語|") =>
+        has_text = true
+      @scene.QuadItem(id~, color~, ..) if id == 920000UL =>
+        has_underline = color.blue() == 235 && color.red() == 37
+      _ => ()
+    }
+  }
+  assert_true(has_text)
+  assert_true(has_underline)
+}
+
+///|
 test "native desktop transcript renders the session todo list" {
   let session : Json = {
     "todos": [

@@ -56,14 +56,15 @@ async fn desktop_handle_click(
     return
   }
   if desktop_button_rect("settings-open", width, height).contains(position) {
+    desktop_set_focused(state, false)
     state.settings_open = true
     state.settings_focus = 1
     state.settings_scroll = 0
-    state.focused = false
     state.dirty = true
     return
   }
   if desktop_button_rect("new", width, height).contains(position) {
+    desktop_finish_composition(state, false)
     desktop_create_session(state)
     return
   }
@@ -75,10 +76,12 @@ async fn desktop_handle_click(
   }
   if is_awaiting_approval {
     if desktop_button_rect("allow", width, height).contains(position) {
+      desktop_finish_composition(state, false)
       desktop_approve(state, true)
       return
     }
     if desktop_button_rect("deny", width, height).contains(position) {
+      desktop_finish_composition(state, false)
       desktop_approve(state, false)
       return
     }
@@ -88,12 +91,13 @@ async fn desktop_handle_click(
       return
     }
     if desktop_button_rect("cancel", width, height).contains(position) {
+      desktop_finish_composition(state, false)
       desktop_cancel(state)
       return
     }
   }
   if desktop_button_rect("composer", width, height).contains(position) {
-    state.focused = true
+    desktop_set_focused(state, true)
     state.dirty = true
     return
   }
@@ -106,6 +110,7 @@ async fn desktop_handle_click(
     let session_index = first_session + row_index
     if session_index < state.sessions.length() &&
       desktop_session_row_rect(row_index).contains(position) {
+      desktop_finish_composition(state, false)
       state.selected_id = desktop_json_string(
         state.sessions[session_index],
         "id",
@@ -116,6 +121,7 @@ async fn desktop_handle_click(
       return
     }
   }
+  desktop_set_focused(state, false)
 }
 
 ///|
@@ -128,7 +134,19 @@ async fn desktop_handle_key(
     desktop_auth_handle_settings_key(state, key, modifiers)
     return
   }
-  state.focused = true
+  if state.composition is Some(_) {
+    if desktop_shortcut_modifier(modifiers, state.host.control_shortcuts) {
+      desktop_finish_composition(state, false)
+    } else {
+      match key {
+        @primitives.Enter => desktop_finish_composition(state, true)
+        @primitives.Escape => desktop_finish_composition(state, false)
+        _ => ()
+      }
+      return
+    }
+  }
+  desktop_set_focused(state, true)
   match desktop_key_input_text(key, modifiers, state.host.text_input_events) {
     Some(text) => {
       desktop_insert_text(state, text)

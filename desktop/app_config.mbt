@@ -24,12 +24,24 @@ priv struct DesktopConfig {
 }
 
 ///|
+priv struct DesktopComposition {
+  start : Int32
+  replaced : Int32
+  preedit : String
+  cursor_utf16 : Int32
+  send_after_commit : Bool
+}
+
+///|
 priv struct DesktopState {
   runtime : @runtime.NativeDesktop
   host : Host
   window : @platform.WindowId
   group : @async.TaskGroup[Result[Unit, String]]
   config : DesktopConfig
+  mut composition : DesktopComposition?
+  mut composition_enabled : Bool
+  mut composition_seen : Bool
   mut snapshot : Json
   mut sessions : Array[Json]
   mut selected_id : String
@@ -97,6 +109,9 @@ fn desktop_state(
     window,
     group,
     config,
+    composition: None,
+    composition_enabled: false,
+    composition_seen: false,
     snapshot: Json::empty_object(),
     sessions: [],
     selected_id: "",
@@ -348,7 +363,7 @@ fn desktop_usage() -> String {
   "Usage: dsh-desktop [--workspace PATH] [--data-dir PATH] [--mcp-config PATH] [--hooks-config PATH] [--hooks-plugin-root PATH] [--hooks-project-dir PATH] [--hooks-dialect claude-code|codex] [--hooks-model NAME] [--lsp-config PATH] [--enable-skills] [--enable-subagents] [--skill-dir PATH] [--mode MODE] [--model NAME] [--base-url URL] [--max-retries 0..5] [--allow-shell] [--demo]\n" +
   "       dsh-desktop --smoke [--workspace PATH] [--data-dir PATH]\n" +
   "       dsh-desktop --offline-e2e --workspace PATH --data-dir PATH [--frame-output FILE]\n\n" +
-  "A native macOS conversation window backed by dsh's local runtime. Send a prompt, review tool calls, and approve or deny them in the transcript. Use Command-V to paste and Up/Down or PageUp/PageDown to scroll history. Japanese input through system IME composition is not supported by the current GPUI text host; paste works."
+  "A native macOS conversation window backed by dsh's local runtime. Send a prompt, review tool calls, and approve or deny them in the transcript. Use Command-V to paste and Up/Down or PageUp/PageDown to scroll history. Japanese input through system IME composition is available on macOS with DSH_DESKTOP_IME=1; paste works without it."
 }
 
 ///|

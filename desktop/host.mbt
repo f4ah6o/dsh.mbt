@@ -5,6 +5,23 @@ pub(all) struct Host {
   asynchronous_frames : Bool
   text_input_events : Bool
   control_shortcuts : Bool
+  supports_text_composition : Bool
+  set_text_composition : (@platform.WindowId, Bool) -> Result[
+    Unit,
+    @diagnostics.FrameworkError,
+  ]
+  set_text_composition_caret : (@platform.WindowId, @primitives.Rect) -> Result[
+    Unit,
+    @diagnostics.FrameworkError,
+  ]
+  finish_text_composition : (@platform.WindowId, Bool) -> Result[
+    Unit,
+    @diagnostics.FrameworkError,
+  ]
+  post_test_composition : (@platform.WindowId, @primitives.CompositionEvent) -> Result[
+    Unit,
+    @diagnostics.FrameworkError,
+  ]
   focus_changed : (@platform.WindowId, Bool) -> Result[
     Unit,
     @diagnostics.FrameworkError,
@@ -23,4 +40,65 @@ pub(all) struct Host {
     Unit,
     @diagnostics.FrameworkError,
   ]
+}
+
+///|
+/// Fail-closed fallback for hosts without a native composition client.
+pub fn desktop_unsupported_text_composition(
+  _window : @platform.WindowId,
+  _enabled : Bool,
+) -> Result[Unit, @diagnostics.FrameworkError] {
+  Err(
+    @diagnostics.FrameworkError::new(
+      @diagnostics.UnsupportedCapability,
+      "set_text_composition",
+      subsystem="dsh-desktop",
+      backend="text",
+    ),
+  )
+}
+
+///|
+pub fn desktop_unsupported_text_composition_caret(
+  _window : @platform.WindowId,
+  _caret : @primitives.Rect,
+) -> Result[Unit, @diagnostics.FrameworkError] {
+  Err(
+    @diagnostics.FrameworkError::new(
+      @diagnostics.UnsupportedCapability,
+      "set_text_composition_caret",
+      subsystem="dsh-desktop",
+      backend="text",
+    ),
+  )
+}
+
+///|
+pub fn desktop_unsupported_finish_text_composition(
+  _window : @platform.WindowId,
+  _commit : Bool,
+) -> Result[Unit, @diagnostics.FrameworkError] {
+  Err(
+    @diagnostics.FrameworkError::new(
+      @diagnostics.UnsupportedCapability,
+      "finish_text_composition",
+      subsystem="dsh-desktop",
+      backend="text",
+    ),
+  )
+}
+
+///|
+pub fn desktop_unsupported_post_test_composition(
+  _window : @platform.WindowId,
+  _event : @primitives.CompositionEvent,
+) -> Result[Unit, @diagnostics.FrameworkError] {
+  Err(
+    @diagnostics.FrameworkError::new(
+      @diagnostics.UnsupportedCapability,
+      "post_test_composition",
+      subsystem="dsh-desktop",
+      backend="text",
+    ),
+  )
 }

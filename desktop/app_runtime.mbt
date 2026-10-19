@@ -119,6 +119,27 @@ async fn desktop_create_session(state : DesktopState) -> Unit {
 
 ///|
 async fn desktop_send(state : DesktopState) -> Unit {
+  match state.composition {
+    Some(composition) => {
+      state.composition = Some({
+        start: composition.start,
+        replaced: composition.replaced,
+        preedit: composition.preedit,
+        cursor_utf16: composition.cursor_utf16,
+        send_after_commit: true,
+      })
+      match (state.host.finish_text_composition)(state.window, true) {
+        Ok(_) => ()
+        Err(error) => {
+          state.error_message = desktop_error_text(error)
+          state.composition = None
+        }
+      }
+      state.dirty = true
+      return
+    }
+    None => ()
+  }
   let prompt = desktop_draft_string(state.draft).trim()
   if prompt.is_empty() || state.selected_id == "" {
     return

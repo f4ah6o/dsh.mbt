@@ -36,6 +36,7 @@ async fn desktop_run(
   }
   let mut window : @platform.WindowId? = None
   let mut offline_session : String? = None
+  let mut offline_composition = false
   let result = @async.with_task_group() <| group => {
     let created = match
       host.backend.create_window("dsh — Native Assistant", 1120.0, 760.0) {
@@ -55,10 +56,12 @@ async fn desktop_run(
     window = Some(created)
     let state = desktop_state(runtime, host, created, group, config)
     desktop_refresh(state)
+    desktop_sync_composition_enabled(state)
     let app_result = if config.offline_e2e {
       match desktop_run_offline_e2e(state) {
         Ok(session_id) => {
           offline_session = Some(session_id)
+          offline_composition = state.composition_seen
           Ok(())
         }
         Err(error) => {
@@ -123,7 +126,7 @@ async fn desktop_run(
     // backslash path would introduce an invalid escape sequence.
     let frame_evidence = @runtime.native_path_normalize(config.frame_output)
     println(
-      "DSH_DESKTOP_DEMO {\"native_events\":true,\"tool_approval\":\"approved\",\"completed\":true,\"workspace_write\":true,\"reload\":\"passed\",\"japanese_frame\":\"passed\",\"frame\":\"\{frame_evidence}\"}",
+      "DSH_DESKTOP_DEMO {\"native_events\":true,\"tool_approval\":\"approved\",\"completed\":true,\"workspace_write\":true,\"reload\":\"passed\",\"japanese_frame\":\"passed\",\"ime_composition\":\{offline_composition},\"frame\":\"\{frame_evidence}\"}",
     )
   }
   Ok(())

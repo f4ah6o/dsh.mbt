@@ -235,6 +235,110 @@ async fn desktop_verify_persisted_reload(
 }
 
 ///|
+async fn desktop_wait_composition(
+  state : DesktopState,
+  active : Bool,
+  timeout_ms : Int32,
+) -> Result[Unit, String] {
+  let deadline = @async.now() + timeout_ms.to_int64()
+  while @async.now() < deadline {
+    match desktop_pump(state, false) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
+    if state.done {
+      return Err("native window closed while awaiting text composition")
+    }
+    if (state.composition is Some(_)) == active {
+      return Ok(())
+    }
+  }
+  Err(
+    if active {
+      "timed out waiting for text composition to start"
+    } else {
+      "timed out waiting for text composition to finish"
+    },
+  )
+}
+
+///|
+async fn desktop_run_offline_composition(
+  state : DesktopState,
+) -> Result[Unit, String] {
+  if !state.host.supports_text_composition {
+    return Ok(())
+  }
+  desktop_set_focused(state, true)
+  match
+    (state.host.post_test_composition)(
+      state.window,
+      @primitives.Update(text="にほんご", cursor_utf16=4),
+    ) {
+    Ok(_) => ()
+    Err(error) => return Err(desktop_error_text(error))
+  }
+  match desktop_wait_composition(state, true, 10000) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  if desktop_composer_caret_rect(state) is None {
+    return Err("composition did not produce a candidate caret rectangle")
+  }
+  state.dirty = true
+  match desktop_flush_frame(state) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  match
+    (state.host.post_test_composition)(
+      state.window,
+      @primitives.Commit(text="日本語"),
+    ) {
+    Ok(_) => ()
+    Err(error) => return Err(desktop_error_text(error))
+  }
+  match desktop_wait_composition(state, false, 10000) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  if desktop_draft_string(state.draft) != "日本語" {
+    return Err("committed IME text did not reach the draft")
+  }
+  state.draft = []
+  state.cursor = 0
+  state.dirty = true
+  match
+    (state.host.post_test_composition)(
+      state.window,
+      @primitives.Update(text="にほんご", cursor_utf16=4),
+    ) {
+    Ok(_) => ()
+    Err(error) => return Err(desktop_error_text(error))
+  }
+  match desktop_wait_composition(state, true, 10000) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  match (state.host.post_test_composition)(state.window, @primitives.Cancel) {
+    Ok(_) => ()
+    Err(error) => return Err(desktop_error_text(error))
+  }
+  match desktop_wait_composition(state, false, 10000) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  if !state.draft.is_empty() {
+    return Err("cancelled IME preedit mutated the draft")
+  }
+  state.composition_seen = true
+  state.draft = []
+  state.cursor = 0
+  state.dirty = true
+  Ok(())
+}
+
+///|
 async fn desktop_run_offline_e2e(
   state : DesktopState,
 ) -> Result[String, String] {
@@ -250,6 +354,10 @@ async fn desktop_run_offline_e2e(
     )
   }
   let session_id = state.selected_id
+  match desktop_run_offline_composition(state) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
   state.draft = []
   for character in "Create and verify a durable file." {
     state.draft.push(character)
@@ -341,7 +449,7 @@ async fn desktop_run_offline_e2e(
   }
   state.settings_open = true
   state.settings_focus = 1
-  state.focused = false
+  desktop_set_focused(state, false)
   state.dirty = true
   match desktop_flush_frame(state) {
     Ok(_) => ()

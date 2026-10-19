@@ -23,6 +23,23 @@ The optional live sequence is in [native runtime guide](native-runtime.md#option
 | M6 Node-independent build/test | Current local no-Node verification passes with Node/npm absent: native format/check/build, 291/291 tests, CLI help, browser/service-worker asset checks, and checkpoint/approval/tool/context/reload demo. The standalone `.mbtx` wrapper resolves its separate imports; its internal repository checks/builds remain frozen. [Earlier Actions run](https://github.com/f4ah6o/dsh.mbt/actions/runs/37589966829) tested the initial M6 implementation at `8dc1ea7744ae7902938afe4b3071fabff0340b51`, before the Node-host retirement. |
 | M7 iOS native | Formal gpui iOS host is not implemented. The current iOS work is a SwiftUI + generated MoonC shared-client embedding spike; its Simulator build/install/launch was reported successful. Physical-device lifecycle, memory, callback, accessibility, and tailnet tests remain unrun. |
 
+## 2026-10-19 macOS IME composition increment
+
+The macOS desktop composer can opt in (`DSH_DESKTOP_IME=1`) to gpui.mbt 0.10.0's bounded
+`NSTextInputClient` transport. The shared desktop state owns the preedit range,
+commit replacement, cancel, candidate caret, and commit-then-send behavior;
+the platform entrypoint only supplies host callbacks. Windows / Linux / X11
+remain paste-only.
+
+Synthetic native composition passes in both gpui and dsh, including a printable
+key through `interpretKeyEvents`, Enter commit without a duplicate application
+key, Escape cancel without a duplicate Escape, and the desktop offline E2E
+marker `"ime_composition":true`. Real Japanese Kotoeri is **NOT RUN**: the
+headless harness can select the input source on the window context but cannot
+make its process the active application. The synthetic pass is not physical IME
+acceptance. Details and commands are in [verification](verification.md) and
+[issue 0005](../issues/polished/0005-macos-ime-composition.md).
+
 ## 2026-10-10 native session TODO increment
 
 The built-in `todo_write` provider tool replaces a bounded per-session checklist

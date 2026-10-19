@@ -127,7 +127,7 @@ Mooncakes module/package coordinate を使う場合は、上の GitHub Release c
 moon binstall f4ah6o/dsh/cmd/dsh
 ```
 
-どちらの coordinate も既定では `~/.local/bin` に install します。上の `PATH` 設定後、`dsh --help` で起動を確認できます。既存の `dsh` executable を更新または置き換えるには `moon binstall f4ah6o/dsh.mbt --force` を実行してください。Mooncakes package coordinate にも同じ `--force` を付けられます。配布対象 OS はバージョンごとに異なるため、対象版の Release notes を確認してください。[0.1.25](docs/releases/0.1.25.md) は macOS 13+ / Apple Silicon のみを配布し、Linux / Windows の成果物はありません。Linux X11 / Windows はこの版では未適格です。Linux x86-64 / ARM64 のバイナリは [0.1.24](https://github.com/f4ah6o/dsh.mbt/releases/tag/v0.1.24) にあります。
+どちらの coordinate も既定では `~/.local/bin` に install します。上の `PATH` 設定後、`dsh --help` で起動を確認できます。既存の `dsh` executable を更新または置き換えるには `moon binstall f4ah6o/dsh.mbt --force` を実行してください。Mooncakes package coordinate にも同じ `--force` を付けられます。配布対象 OS はバージョンごとに異なるため、対象版の Release notes を確認してください。[0.1.27](docs/releases/0.1.27.md) は Linux x86-64 / ARM64、macOS 13+ / Apple Silicon、Windows 11 x64 を配布します。macOS desktop は bounded IME composition に対応しますが、実機 Kotoeri の受入は NOT RUN です。旧版の配布範囲は各 Release notes を参照してください。
 
 ### Linux native desktop
 
@@ -140,13 +140,13 @@ sudo apt-get install libx11-6 libwayland-client0 libwayland-cursor0 libwayland-e
 dsh desktop --demo
 ```
 
-画面、入力、保存・tool approval は GPUI の native Wayland / X11 backend と共通の desktop application を使います。browser は起動しません。通常の keyboard 入力と Ctrl+A/C/V/X に対応し、IME composition は未対応です。自動選択は Wayland の環境変数を優先し、なければ DISPLAY で X11 を選びます。DSH_DESKTOP_BACKEND=wayland または DSH_DESKTOP_BACKEND=x11 で明示的に選択できます。接続に失敗した際、別 backend への自動切り替えは行いません。GUI の system libraries は `dsh web` / CLI だけを使う場合は不要です。
+画面、入力、保存・tool approval は GPUI の native Wayland / X11 backend と共通の desktop application を使います。browser は起動しません。通常の keyboard 入力と Ctrl+A/C/V/X に対応し、IME composition は未対応です（macOS desktop だけが bounded な composition に対応します）。自動選択は Wayland の環境変数を優先し、なければ DISPLAY で X11 を選びます。DSH_DESKTOP_BACKEND=wayland または DSH_DESKTOP_BACKEND=x11 で明示的に選択できます。接続に失敗した際、別 backend への自動切り替えは行いません。GUI の system libraries は `dsh web` / CLI だけを使う場合は不要です。
 
 desktop は private temporary directory に展開して起動し、終了時に削除します。`TMPDIR` が `noexec` mount の場合は、実行可能な private temporary location を指定してください。source build と詳細な制約は [native desktop guide](docs/desktop.md) にあります。
 
 ### macOS native app
 
-macOS 13+ / Apple Silicon の raw CLI release にも完全な `Dsh.app` を同梱します。`moon binstall` で入れた同じ `dsh` から `dsh desktop` を起動でき、最初の起動で署名を検証して `~/Library/Caches/org.fu2hito.dsh/bundled-desktop/` の version/hash 別専用ディレクトリへ展開します。GitHub Release の `Dsh-macos-arm64.zip` も引き続き配布します。`--app-path` は指定したアプリを優先します。インストール、source build、UI と現在の IME 制約は[native desktop guide](docs/desktop.md)を参照してください。release app は ad-hoc signed で、Developer ID signed / notarized ではありません。
+macOS 13+ / Apple Silicon の raw CLI release にも完全な `Dsh.app` を同梱します。`moon binstall` で入れた同じ `dsh` から `dsh desktop` を起動でき、最初の起動で署名を検証して `~/Library/Caches/org.fu2hito.dsh/bundled-desktop/` の version/hash 別専用ディレクトリへ展開します。GitHub Release の `Dsh-macos-arm64.zip` も引き続き配布します。`--app-path` は指定したアプリを優先します。macOS desktop の composer は `DSH_DESKTOP_IME=1` で bounded な IME composition（preedit / commit / cancel、candidate caret、Enter / Escape の解決）を opt-in できます。実機 Kotoeri の受入は未実行で、既定は paste のままです。インストール、source build、UI と残る IME 制約は[native desktop guide](docs/desktop.md)を参照してください。release app は ad-hoc signed で、Developer ID signed / notarized ではありません。
 
 ### Windows x64 (preview)
 
@@ -159,7 +159,7 @@ moon build --target native --release cmd/dsh
 python scripts/test-windows-runtime.py
 ```
 
-shell / grep、external MCP、LSP、command hooks、subagents、`dsh acp`、`dsh mcp`、ChatGPT SIWC は Windows profile では明示的に未対応です（`--demo` または API key を使用）。`siwc-auth.json` は read / write しません。`dsh-windows-x86_64.zip` には CLI と `dsh-desktop.exe` を同梱し、`dsh desktop` から sibling discovery または `--app-path` で起動できます。IME composition は未対応です。制約の詳細は[Windows native profile](docs/native-runtime.md#windows-x64-profile)を参照してください。
+shell / grep、external MCP、LSP、command hooks、subagents、`dsh acp`、`dsh mcp`、ChatGPT SIWC は Windows profile では明示的に未対応です（`--demo` または API key を使用）。`siwc-auth.json` は read / write しません。`dsh-windows-x86_64.zip` には CLI と `dsh-desktop.exe` を同梱し、`dsh desktop` から sibling discovery または `--app-path` で起動できます。IME composition は未対応です（macOS desktop の bounded composition は Windows には適用されません）。制約の詳細は[Windows native profile](docs/native-runtime.md#windows-x64-profile)を参照してください。
 
 ## Browser UI and data
 

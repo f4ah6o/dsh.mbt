@@ -1,5 +1,25 @@
 # 検証記録
 
+## macOS IME composition (2026-10-19)
+
+macOS 26.5.2 arm64, MoonBit `0.1.20261012`, gpui.mbt 0.10.0 installed from
+Mooncakes, Xcode command-line tools. A local source workspace was used before
+the registry package was published; the final build and E2E below use
+`moon update && moon install` and the `f4ah6o/gpui@0.10.0` registry pin.
+
+| gate | result |
+| --- | --- |
+| gpui `moon check --target all --deny-warn` | PASS: 182 tasks. |
+| gpui `moon test platform/macos platform --target native --deny-warn` | PASS 15 / 15, including composition decoding bounds. |
+| gpui native E2E (`tests/native/macos_e2e.m`) | PASS: synthetic start/update/commit/cancel, printable key through `interpretKeyEvents`, Enter commit without a duplicate application key, Escape cancel without a duplicate Escape; marker includes `"text_composition":true`. |
+| gpui real Kotoeri opt-in (`GPUI_MACOS_REAL_IME=1`) | NOT RUN: the harness selected `com.apple.inputmethod.Kotoeri.RomajiTyping.Japanese` on the window input context, but the process was not the active application (`NSApp.isActive=0`), so no composition events were produced. Do not claim Japanese IME acceptance. |
+| `moon test desktop --target native --deny-warn` | PASS 22 / 22, including composition view, commit replacement, caret columns, and overflow rejection. |
+| `dsh-desktop --smoke` (direct test-hook executable) | PASS: frame, resize, close request, destroy. |
+| `GPUI_NATIVE_E2E=1 dsh-desktop --offline-e2e` (direct test-hook executable; the synthetic path enables IME through `GPUI_NATIVE_E2E=1`, while normal use requires `DSH_DESKTOP_IME=1`) | PASS with `"ime_composition":true`: preedit, commit to the draft, cancel without mutation, candidate caret rectangle, approved workspace write, completed transcript, Settings frame, and durable reload. |
+| `sh scripts/build-desktop.sh --offline-e2e` via LaunchServices | BLOCKED by the local `open -W` environment: the same `--smoke` path also hung and the forwarded app arguments were incomplete. The direct executable path above is the recorded evidence. |
+| `moon publish` (`f4ah6o/dsh@0.1.27`) | PASS: package check passed, including the macOS host callbacks and the local-cancel fix. The earlier 0.1.26 package was superseded before its native release because this fix landed after that publish. |
+| real Kotoeri in the dsh app | NOT RUN. The synthetic path and gpui callback tests pass; physical Japanese IME remains an external gate. |
+
 ## Windows x64 packaging and launcher (M3)
 
 2026-10-19, Windows 11 x64, MSVC 2022, MoonBit `0.10.15+943464bfa`. Release

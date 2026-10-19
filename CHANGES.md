@@ -1,20 +1,25 @@
 # Changes
 
-## Unreleased
+## 0.1.27 - 2026-10-19
 
 ### Added
 
+- Add opt-in (`DSH_DESKTOP_IME=1`) macOS IME composition to the native desktop composer through gpui.mbt 0.10.0's bounded `NSTextInputClient` transport. Preedit is shown inline with a caret underline, commit replaces the captured selection, cancel discards it, the candidate window follows the composer caret, Enter commits without sending, Escape cancels, and clicking Send commits before sending. The synthetic native E2E covers start/update/commit/cancel and the full desktop path records `"ime_composition":true`. Real Kotoeri qualification remains NOT RUN.
 - Add the bounded Windows 11 x64 native runtime: `dsh run` / `dsh web`, demo and API-key providers, read / write / edit / glob, the durable session store and host lock, and approval. The C boundary (`runtime/host_os_win32.c`, `runtime/oauth_os_win32.c`) supplies drive / UNC path normalization, reparse-point rejection, owner-only ACLs, atomic writes through `ReplaceFileW` / `MoveFileExW`, BCrypt SHA-256 / RS256, and a `SetConsoleCtrlHandler` shutdown path. Windows tests and `scripts/test-windows-runtime.py` cover the profile; `windows-native.yml` runs them on `windows-latest`.
 - Add the Windows GPUI Direct3D 11 desktop (`desktop/windows`) with frame capture, synthetic click/key hooks, and a Japanese font prerequisite test. The shared desktop app now enforces a 64-run / 4096-byte / 32px scene text budget, clips runs at UTF-8 scalar boundaries, and omits the occluded conversation layer while settings are open. `--smoke` and `--offline-e2e` pass on Windows; `scripts/build-desktop-windows.ps1` and `scripts/test-windows-desktop.py` provide the gate.
 - Add Windows packaging and launch: `dsh desktop` starts a sibling `dsh-desktop.exe` (or `--app-path`) and propagates its exit status, and `scripts/package-windows-desktop.ps1` builds `dsh-windows-x86_64.zip` with the CLI, desktop, licenses, notices and a Windows README. `scripts/smoke-release-windows.ps1` extracts the zip into a space/non-ASCII path and runs the CLI demo, loopback web, desktop E2E and both launcher modes. The release plan now maps `windows-x86_64` to the zip asset.
 
 ### Changed
 
-- Update the native UI dependency to gpui.mbt 0.9.0 and Yami-kumo 0.1.1, both resolved from Mooncakes, verify the installed package versions, and refresh the embedded browser assets. The generated asset chunks are wider so the larger bundle stays within the compiler's text-segment limit.
-- Resolve gpui.mbt from the published `f4ah6o/gpui@0.9.0` package instead of the `vendor/gpui` submodule. Desktop builds read the installed package's native sources, and release packaging uses the checked-in `licenses/gpui-LICENSE`.
+- Update the native UI dependency to gpui.mbt 0.10.0 and Yami-kumo 0.1.1, both resolved from Mooncakes, verify the installed package versions, and refresh the embedded browser assets. The generated asset chunks are wider so the larger bundle stays within the compiler's text-segment limit.
+- Resolve gpui.mbt from the published `f4ah6o/gpui@0.10.0` package instead of the `vendor/gpui` submodule. Desktop builds read the installed package's native sources, and release packaging uses the checked-in `licenses/gpui-LICENSE`.
+- macOS desktop enables the composition client only while the composer is focused and `DSH_DESKTOP_IME=1` is set (the synthetic E2E also enables it through `GPUI_NATIVE_E2E=1`). Focus loss, Settings, New, session switches, approvals and command shortcuts cancel the pending preedit; text input events are ignored while a composition is active.
 - Make workspace / data-directory path admission platform-aware. Windows accepts `C:\` and `\\server\share` roots, normalizes separators, and uses `USERPROFILE` for the home directory; POSIX keeps the `/` prefix rule.
 
 ### Fixed
+
+- Prevent composition commit/cancel from double-inserting text or forwarding a second Enter/Escape into the application.
+- Cancel a pending preedit instead of leaving stale marked text when the composer loses focus, Settings opens, a session changes, New or approval is clicked, or a response is cancelled. These local transitions now finish the native composition as well, so AppKit marked text cannot outlive the desktop state.
 
 ### Deprecated
 
@@ -28,6 +33,7 @@
 
 ### Migration
 
+- macOS desktop now installs gpui.mbt 0.10.0 and supports opt-in IME composition for the composer. Linux and Windows desktop keep the paste-only input path; this release does not add IME there. Session / store schemas are unchanged.
 - Clients must stop invoking `profile_stats` or expecting it in capability/MCP listings. Use the independent development harness in `tools/perf/README.md` for fixed-fixture timings; it does not provide a production telemetry endpoint. Existing core/bench engine benchmarks remain available.
 - On Windows, use `--demo` or an API key. Shell / grep, external MCP, LSP, command hooks, subagents, `dsh acp`, `dsh mcp`, SIWC, and `dsh desktop` fail closed with a typed error and do not modify the data directory. Reusing a POSIX data directory on Windows is not supported; back it up before trying.
 

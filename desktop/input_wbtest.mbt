@@ -89,3 +89,93 @@ test "Wayland committed text does not double insert physical keys" {
   assert_false(desktop_shortcut_modifier(ctrl, false))
   assert_eq(desktop_key_input_text(key, ctrl, false), None)
 }
+
+///|
+fn desktop_test_chars(text : String) -> Array[Char] {
+  let characters : Array[Char] = []
+  for character in text {
+    characters.push(character)
+  }
+  characters
+}
+
+///|
+fn desktop_test_composition(
+  start : Int32,
+  replaced : Int32,
+  preedit : String,
+) -> DesktopComposition {
+  {
+    start,
+    replaced,
+    preedit,
+    cursor_utf16: preedit.length(),
+    send_after_commit: false,
+  }
+}
+
+///|
+test "composition view overlays preedit at the caret without mutating draft" {
+  let draft = desktop_test_chars("abc")
+  let composition = desktop_test_composition(1, 0, "にほん")
+  assert_eq(
+    desktop_composition_view_text(draft, 1, true, Some(composition)),
+    "aにほん|bc",
+  )
+  assert_eq(desktop_draft_string(draft), "abc")
+  assert_eq(desktop_composition_view_text(draft, 1, true, None), "a|bc")
+  assert_eq(desktop_composition_view_text(draft, 1, false, None), "abc")
+  let all = desktop_test_composition(0, 3, "日本")
+  assert_eq(desktop_composition_view_text(draft, 3, true, Some(all)), "日本|")
+}
+
+///|
+test "composition commit replaces the captured span and advances the caret" {
+  let draft = desktop_test_chars("abc")
+  let insert = match
+    desktop_composition_commit_draft(
+      draft,
+      desktop_test_composition(1, 0, "にほん"),
+      "日本",
+    ) {
+    Some(value) => value
+    None => fail("valid composition commit was rejected")
+  }
+  assert_eq(desktop_draft_string(insert.0), "a日本bc")
+  assert_eq(insert.1, 3)
+  let replace = match
+    desktop_composition_commit_draft(
+      draft,
+      desktop_test_composition(1, 2, "ほん"),
+      "日本語😀",
+    ) {
+    Some(value) => value
+    None => fail("valid replacing commit was rejected")
+  }
+  assert_eq(desktop_draft_string(replace.0), "a日本語😀")
+  assert_eq(replace.1, 5)
+  let overflow = "a".repeat(16001)
+  assert_true(
+    desktop_composition_commit_draft(
+      draft,
+      desktop_test_composition(0, 3, ""),
+      overflow,
+    )
+    is None,
+  )
+}
+
+///|
+test "composition caret and underline columns follow the wrapped composer" {
+  assert_eq(desktop_line_caret_column("aにほん|bc"), 4)
+  assert_eq(desktop_line_caret_column("abc"), 3)
+  assert_eq(desktop_preedit_columns("にほん"), 3)
+  assert_eq(desktop_preedit_columns("に\nほん"), 2)
+  let (lines, caret_line, caret_column) = desktop_composer_layout(
+    "aにほん|bc", 240.0,
+  )
+  assert_eq(lines.length(), 1)
+  assert_eq(lines[0], "aにほん|bc")
+  assert_eq(caret_line, 0)
+  assert_eq(caret_column, 4)
+}
