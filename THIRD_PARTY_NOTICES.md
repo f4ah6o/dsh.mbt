@@ -15,7 +15,7 @@ invoked.
 
 ## gpui.mbt
 
-The Mooncakes module `f4ah6o/gpui` version `0.10.0` is installed from
+The Mooncakes module `f4ah6o/gpui` version `0.10.1` is installed from
 [gpui-mbt/gpui.mbt](https://github.com/gpui-mbt/gpui.mbt). Its MoonBit module
 name is `f4ah6o/gpui`. Licensed under Apache License 2.0; the package license is
 reproduced at [`licenses/gpui-LICENSE`](licenses/gpui-LICENSE).

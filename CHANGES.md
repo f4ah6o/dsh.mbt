@@ -1,5 +1,31 @@
 # Changes
 
+## 0.1.28 - 2026-10-20
+
+### Added
+
+- Add opt-in (`DSH_DESKTOP_IME=1`) Windows IME composition to the native desktop composer through gpui.mbt 0.10.1's bounded IMM32 transport. Preedit is rendered inline with a caret underline, commit / cancel use the shared desktop state, the candidate window follows the composer caret, Enter commits without sending, Escape cancels, and clicking Send commits before sending. The synthetic desktop E2E posts the same composition events and records `"ime_composition":true`. Real Microsoft IME / candidate-window / high-DPI acceptance remains NOT RUN.
+
+### Changed
+
+- Update the native UI dependency to gpui.mbt 0.10.1 and resolve it from Mooncakes. Windows desktop now advertises `supports_text_composition` and wires the host callbacks; Linux / X11 desktop keeps the typed unsupported fallback.
+- Refresh the embedded browser assets for the gpui 0.10.1 dependency.
+
+### Fixed
+
+- Windows composition cancels the pending preedit on focus loss, Settings, New, session switch, approval, response cancel, and Command shortcuts through the shared `finish_text_composition` path, so the native IMM32 marked text cannot outlive the desktop state.
+- Prevent double text insertion from `WM_CHAR` / `WM_IME_CHAR` after a commit and duplicate Enter / Escape delivery while a composition is active.
+
+### Migration
+
+- Windows desktop now supports opt-in IME composition for the composer. Linux / X11 desktop remains paste-only at the dsh layer. Session / store schemas are unchanged.
+- The package requires `f4ah6o/gpui@0.10.1`. The macOS / Windows composition transports are opt-in; synthetic evidence does not establish physical IME acceptance.
+
+### Limitations
+
+- Physical Microsoft IME, candidate-window placement, and 100% / 150% / 200% DPI acceptance are NOT RUN. The Windows evidence is the synthetic desktop E2E only.
+- Wayland composition exists in gpui.mbt 0.10.1, but dsh's Linux desktop still uses its typed unsupported fallback and remains paste-only.
+
 ## 0.1.27 - 2026-10-19
 
 ### Added
