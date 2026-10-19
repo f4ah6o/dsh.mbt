@@ -30,7 +30,25 @@ pub async fn NativeDesktop::open(
   hooks_project_dir~ : String? = None,
 ) -> Result[NativeDesktop, String] {
   // A packaged Dsh.app carries the CLI as a private helper because native
-  // tool effects re-enter the executable with --internal-worker.
+  // tool effects re-enter the executable with --internal-worker. On Windows
+  // the launcher sets DSH_NATIVE_WORKER_BIN; a directly started desktop falls
+  // back to a sibling dsh.exe so it never re-enters itself.
+  if native_os_is_windows() && @env.get_env_var("DSH_NATIVE_WORKER_BIN") is None {
+    match native_executable_path() {
+      Ok(executable) =>
+        match executable.rev_find("/") {
+          Some(index) if index > 0 => {
+            let candidate = executable[:index].to_owned() + "/dsh.exe"
+            let helper = @fs.realpath(candidate) catch { _ => "" }
+            if helper != "" {
+              @env.set_env_var("DSH_NATIVE_WORKER_BIN", helper)
+            }
+          }
+          _ => ()
+        }
+      Err(_) => ()
+    }
+  }
   if @env.get_env_var("DSH_NATIVE_WORKER_BIN") is None {
     match native_executable_path() {
       Ok(executable) => {

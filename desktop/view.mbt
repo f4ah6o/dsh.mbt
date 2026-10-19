@@ -170,6 +170,73 @@ fn desktop_add_quad(
 }
 
 ///|
+/// Clip a text run to the Windows renderer's 4096-byte limit at a UTF-8
+/// scalar boundary. The bound is shared by every platform because an
+/// over-budget run is rejected rather than clipped by the host.
+fn desktop_clip_utf8_bytes(text : String, max_bytes : Int32) -> String {
+  let bytes = @utf8.encode(text)
+  if bytes.length() <= max_bytes {
+    return text
+  }
+  let mut end = max_bytes
+  while end > 0 && (bytes[end].to_int() & 0xC0) == 0x80 {
+    end -= 1
+  }
+  let truncated : Array[Byte] = []
+  for index = 0; index < end; index = index + 1 {
+    truncated.push(bytes[index])
+  }
+  @utf8.decode(Bytes::from_array(truncated[:])) catch {
+    _ => ""
+  }
+}
+
+///|
+fn desktop_scene_text_count(items : Array[@scene.SceneItem]) -> Int32 {
+  let mut count = 0
+  for item in items {
+    match item {
+      @scene.TextItem(..) | @scene.TextRunItem(..) => count += 1
+      _ => ()
+    }
+  }
+  count
+}
+
+///|
+fn desktop_scene_is_conversation(item : @scene.SceneItem) -> Bool {
+  let id = item.id()
+  (id >= 60UL && id < 500UL) || (id >= 10000UL && id < 300000UL)
+}
+
+///|
+/// Keep a frame inside the Windows text budget (64 runs). Oldest transcript
+/// text items are dropped first; the sidebar, header and settings overlay are
+/// retained so the user can still act on the visible layer.
+fn desktop_budget_scene_text(
+  items : Array[@scene.SceneItem],
+) -> Array[@scene.SceneItem] {
+  let mut text_count = desktop_scene_text_count(items)
+  if text_count <= 64 {
+    return items
+  }
+  let result : Array[@scene.SceneItem] = []
+  for item in items {
+    if text_count > 64 && desktop_scene_is_conversation(item) {
+      match item {
+        @scene.TextItem(..) | @scene.TextRunItem(..) => {
+          text_count -= 1
+          continue
+        }
+        _ => ()
+      }
+    }
+    result.push(item)
+  }
+  result
+}
+
+///|
 fn desktop_add_text(
   items : Array[@scene.SceneItem],
   id : UInt64,
@@ -201,7 +268,7 @@ fn desktop_add_text(
     @scene.SceneItem::text(
       id,
       bounds,
-      desktop_renderable_single_line(text, 3000),
+      desktop_renderable_single_line(desktop_clip_utf8_bytes(text, 4096), 3000),
       font_size,
       color,
       @scene.AffineTransform::identity(),
@@ -745,6 +812,7 @@ fn desktop_scene(
     "cancelled" => "キャンセル済み"
     _ => "待機中"
   }
+  let conversation_start = items.length()
   desktop_add_text(
     items,
     60,
@@ -902,11 +970,26 @@ fn desktop_scene(
         )
       }
   }
+  let settings_start = items.length()
   if settings_open {
     desktop_add_settings(
       items, snapshot, width, height, auth_busy, auth_error, settings_scroll, settings_focus,
     )
   }
+  // The settings overlay occludes the conversation. Do not submit the hidden
+  // layer: it would only consume the host's bounded text-run budget.
+  let visible = if settings_open {
+    let kept : Array[@scene.SceneItem] = []
+    for index = 0; index < items.length(); index = index + 1 {
+      if index < conversation_start || index >= settings_start {
+        kept.push(items[index])
+      }
+    }
+    kept
+  } else {
+    items
+  }
+  let budgeted = desktop_budget_scene_text(visible)
   match
     @scene.SceneSnapshot::new(
       viewport,
@@ -917,7 +1000,7 @@ fn desktop_scene(
           desktop_rect(244.0, 82.0, width - 264.0, height - 250.0),
         ]),
       ],
-      items,
+      budgeted,
     ) {
     Ok(value) => value
     Err(_) =>
@@ -1202,6 +1285,8 @@ fn desktop_add_settings(
       desktop_settings_button_rect("auth-sign-in", width, height),
       if auth_busy {
         "サインイン中..."
+      } else if @runtime.native_os_is_windows() {
+        "ChatGPT サインイン非対応"
       } else {
         "ChatGPT にサインイン"
       },
@@ -1273,7 +1358,11 @@ fn desktop_add_settings(
       402.0,
       content_width - 24.0,
       12.0,
-      "サインインすると利用可能なモデルが表示されます。",
+      if @runtime.native_os_is_windows() {
+        "Windows では ChatGPT サインインを利用できません。API key を使用してください。"
+      } else {
+        "サインインすると利用可能なモデルが表示されます。"
+      },
       desktop_color(107, 114, 128),
       None,
     )

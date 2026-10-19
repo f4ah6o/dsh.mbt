@@ -153,7 +153,23 @@ async fn desktop_auth_finish_action(state : DesktopState) -> Unit {
 }
 
 ///|
+/// The bounded Windows profile has no protected credential store. Surface the
+/// limitation where the user clicked instead of starting a flow that the
+/// runtime will reject.
+fn desktop_auth_reject_windows(state : DesktopState) -> Bool {
+  if !@runtime.native_os_is_windows() {
+    return false
+  }
+  state.auth_error = "Windows profile では ChatGPT のサインイン / モデル選択は利用できません。API key または --demo を使用してください。"
+  state.dirty = true
+  true
+}
+
+///|
 async fn desktop_auth_start_sign_in(state : DesktopState) -> Unit {
+  if desktop_auth_reject_windows(state) {
+    return
+  }
   if state.auth_busy {
     return
   }
@@ -193,6 +209,9 @@ async fn desktop_auth_start_sign_in(state : DesktopState) -> Unit {
 
 ///|
 fn desktop_auth_start_refresh_models(state : DesktopState) -> Unit {
+  if desktop_auth_reject_windows(state) {
+    return
+  }
   if state.auth_busy {
     return
   }
@@ -216,6 +235,9 @@ fn desktop_auth_start_refresh_models(state : DesktopState) -> Unit {
 
 ///|
 fn desktop_auth_start_sign_out(state : DesktopState) -> Unit {
+  if desktop_auth_reject_windows(state) {
+    return
+  }
   if state.auth_busy {
     return
   }
@@ -242,6 +264,9 @@ fn desktop_auth_start_select_model(
   state : DesktopState,
   model : String,
 ) -> Unit {
+  if desktop_auth_reject_windows(state) {
+    return
+  }
   if state.auth_busy || model.is_empty() {
     return
   }

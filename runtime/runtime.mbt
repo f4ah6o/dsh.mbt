@@ -145,6 +145,28 @@ async fn NativeRuntime::open(
   hooks_plugin_root~ : String? = None,
   hooks_project_dir~ : String? = None,
 ) -> Result[NativeRuntime, String] {
+  // The bounded Windows profile rejects host capabilities that need POSIX
+  // process control or external servers before touching the data directory.
+  if native_os_is_windows() {
+    let unsupported = if allow_shell {
+      Some("shell commands")
+    } else if mcp_config_path is Some(_) {
+      Some("external MCP servers")
+    } else if lsp_config_path is Some(_) {
+      Some("external language servers")
+    } else if hooks_config_path is Some(_) {
+      Some("command hooks")
+    } else if enable_subagents {
+      Some("subagents")
+    } else {
+      None
+    }
+    match unsupported {
+      Some(surface) =>
+        return Err(surface + " are not supported on the Windows native profile")
+      None => ()
+    }
+  }
   match
     native_hook_validate_options(
       hooks_config_path, hooks_dialect, hooks_model, hooks_plugin_root, hooks_project_dir,
@@ -159,9 +181,11 @@ async fn NativeRuntime::open(
     Ok(value) => value
     Err(error) => return Err(error)
   }
-  let workspace_path = @fs.realpath(workspace) catch {
-    _ => return Err("cannot resolve workspace directory")
-  }
+  let workspace_path = native_path_normalize(
+    @fs.realpath(workspace) catch {
+      _ => return Err("cannot resolve workspace directory")
+    },
+  )
   let hooks = match
     NativeHooks::load(
       hooks_config_path,
@@ -196,12 +220,14 @@ async fn NativeRuntime::open(
         }
       }
   }
-  let worker_launcher = @fs.realpath(worker_path) catch {
-    _ => {
-      workspace_root.close()
-      return Err("cannot resolve native worker executable")
-    }
-  }
+  let worker_launcher = native_path_normalize(
+    @fs.realpath(worker_path) catch {
+      _ => {
+        workspace_root.close()
+        return Err("cannot resolve native worker executable")
+      }
+    },
+  )
   let store = match NativeStore::open(data_dir) {
     Ok(store) => store
     Err(error) => {

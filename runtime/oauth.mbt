@@ -175,6 +175,10 @@ priv struct NativeAuth {
   mut pending_browser_sign_in_generation : String?
   mut pending_checkpoint : Bool
   mut closed : Bool
+  /// The Windows profile keeps credentials in memory only: siwc-auth.json is
+  /// never read or written and every ChatGPT account operation is typed
+  /// unsupported. API-key and demo routes do not use this state.
+  windows_profile : Bool
 }
 
 ///|
@@ -184,11 +188,26 @@ fn NativeAuth::open(store : NativeStore) -> Result[NativeAuth, String] {
     Err(error) => return Err(error)
   }
   let host_id = store.host_id()
-  let state = match native_auth_load(root, host_id) {
-    Ok(state) => state
-    Err(error) => {
-      root.close()
-      return Err(error)
+  let windows_profile = native_os_is_windows()
+  let state = if windows_profile {
+    {
+      credential: None,
+      generation: "signed-out",
+      provider_choice: "configured",
+      route_generation: "",
+      selected_model: None,
+      model_identity: None,
+      models: [],
+      login_state: "signed_out",
+      was_missing: false,
+    }
+  } else {
+    match native_auth_load(root, host_id) {
+      Ok(state) => state
+      Err(error) => {
+        root.close()
+        return Err(error)
+      }
     }
   }
   let auth = {
@@ -209,6 +228,7 @@ fn NativeAuth::open(store : NativeStore) -> Result[NativeAuth, String] {
     pending_browser_sign_in_generation: None,
     pending_checkpoint: false,
     closed: false,
+    windows_profile,
   }
   if state.was_missing {
     match auth.persist_locked() {
@@ -380,7 +400,27 @@ fn native_auth_optional_string(value : Json?) -> String? {
 }
 
 ///|
+fn NativeAuth::reject_windows_siwc(
+  self : NativeAuth,
+  surface : String,
+) -> Result[Unit, String] {
+  if self.windows_profile {
+    Err(
+      "SIWC_UNSUPPORTED: " +
+      surface +
+      " is not available on the Windows native profile; use an API key or the demo provider",
+    )
+  } else {
+    Ok(())
+  }
+}
+
+///|
 fn NativeAuth::persist_locked(self : NativeAuth) -> Result[Unit, String] {
+  if self.windows_profile {
+    // No protected credential store exists on Windows: nothing to persist.
+    return Ok(())
+  }
   let credential = match self.credential {
     Some(value) => value.storage_json()
     None => Json::null()
@@ -461,6 +501,10 @@ fn NativeAuth::begin_sign_in(self : NativeAuth) -> Result[Json, String] {
   if self.closed {
     return Err("AUTH_CLOSED: authentication manager is closed")
   }
+  match self.reject_windows_siwc("ChatGPT sign-in") {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
   if self.login_state == "signing_in" {
     return Ok({ "started": false })
   }
@@ -522,6 +566,10 @@ async fn NativeAuth::models_with(
   self : NativeAuth,
   fetch : async (AuthEndpoints, String) -> Result[Array[Json], String],
 ) -> Result[Json, String] {
+  match self.reject_windows_siwc("ChatGPT model catalog") {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
   let selection = match self.credential_snapshot() {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -598,6 +646,10 @@ async fn NativeAuth::select_model_for_profile(
 ) -> Result[Json, String] {
   if model.is_empty() || model.length() > 256 {
     return Err("INVALID_MODEL: model slug is empty or too long")
+  }
+  match self.reject_windows_siwc("ChatGPT model selection") {
+    Err(error) => return Err(error)
+    Ok(_) => ()
   }
   match expected_profile {
     Some(profile_id) if !native_desktop_auth_profile_matches(
@@ -802,6 +854,10 @@ async fn NativeAuth::refresh_locked_with(
   ],
   persist : () -> Result[Unit, String],
 ) -> Result[@auth.Credential, String] {
+  match self.reject_windows_siwc("ChatGPT credential refresh") {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
   let fields = match credential.refresh_request() {
     Ok(value) =>
       match value {
@@ -903,6 +959,10 @@ fn NativeAuth::credential_snapshot(
 
 ///|
 async fn NativeAuth::sign_in(self : NativeAuth) -> Result[Json, String] {
+  match self.reject_windows_siwc("ChatGPT sign-in") {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
   self.login_gate.acquire()
   defer self.login_gate.release()
   if self.closed {
@@ -1317,6 +1377,10 @@ async fn NativeAuth::sign_out_for_profile(
   defer self.gate.release()
   if self.closed {
     return Err("AUTH_CLOSED: authentication manager is closed")
+  }
+  match self.reject_windows_siwc("ChatGPT sign-out") {
+    Err(error) => return Err(error)
+    Ok(_) => ()
   }
   match expected_profile {
     Some(profile_id) if !native_desktop_auth_profile_matches(

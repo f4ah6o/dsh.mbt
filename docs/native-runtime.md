@@ -47,6 +47,53 @@ moon run native --target native --release -- \
   --workspace /absolute/path/to/project
 ```
 
+## Windows x64 profile
+
+The Windows x64 profile is a bounded native host, not a port of every macOS /
+Linux capability. Build it with MSVC 2022 plus the Windows SDK, Python 3.11+
+(the gpui prebuild script needs a real interpreter, not the Store alias), and
+the pinned MoonBit toolchain:
+
+```powershell
+moon update
+moon install
+moon build --target native --release cmd/dsh
+python scripts/test-windows-runtime.py
+```
+
+Supported: `dsh run` / `dsh web` / `dsh --help`, the demo and API-key
+providers, read / write / edit / glob, the durable session store and host lock,
+and approval. Paths are normalized to `/`; drive roots and UNC shares are
+accepted, while `..`, ADS colons, reserved DOS device names, trailing spaces or
+dots, and control characters are rejected. Every component is opened with
+`FILE_FLAG_OPEN_REPARSE_POINT` and a junction or symlink is rejected rather than
+traversed.
+
+Data-directory protection uses a current-user-only DACL (`0700`), 0600 file
+creates, and an owner-SID-derived uid. Atomic writes commit through
+`ReplaceFileW` / `MoveFileExW` after re-checking the root and path mapping, and
+remove a commit that fails the post-commit identity check. The guarantee is
+path-based: a same-user process that swaps a directory between the final check
+and the rename can still win that race. Windows is a bounded host, not an OS
+sandbox.
+
+Unsupported on the Windows profile (typed error, non-zero exit, and no data
+directory or lock mutation): shell / bash, `grep` (there is no hard worker
+memory limit), external MCP, LSP, command hooks, subagents, `dsh acp`,
+`dsh mcp`, `--internal-worker`, and ChatGPT SIWC. `siwc-auth.json` is never read
+or written and the auth projection stays signed out; use `--demo` or an API
+key. The GPUI desktop executable is built from `desktop/windows` (see
+[the desktop guide](desktop.md#windows)); `dsh desktop` launches a sibling
+`dsh-desktop.exe` or an explicit `--app-path`, and the `dsh-windows-x86_64.zip`
+release asset carries both executables.
+
+The C boundary returns `ENOTSUP` for `exec_worker`, `child_exit_state`, and
+`kill_process_group` on Windows, and `os_hard_worker_memory_supported` is 0.
+The CLI rejects the corresponding options before opening the store, so a failed
+capability check cannot modify the data directory. Verification commands and
+the exact PASS / NOT RUN split are recorded in
+[verification](verification.md#windows-x64-native-runtime-m1).
+
 ## Workspace skills
 
 Filesystem skills are opt-in. Pass `--enable-skills` to `run`, `web`, `mcp`, or

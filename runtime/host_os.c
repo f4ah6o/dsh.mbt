@@ -2,22 +2,22 @@
 #define _GNU_SOURCE 1
 
 #include <errno.h>
-#include <fcntl.h>
-#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/resource.h>
-#include <sys/types.h>
 #include <time.h>
-#include <unistd.h>
 
 #if defined(__APPLE__) || defined(__linux__)
 #include <dirent.h>
+#include <fcntl.h>
+#include <limits.h>
 #include <signal.h>
+#include <sys/resource.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 #include <sys/wait.h>
+#include <unistd.h>
 #include <dlfcn.h>
 #ifdef __APPLE__
 #include <mach-o/dyld.h>
@@ -37,6 +37,14 @@ int dsh_os_is_macos(void) {
 
 int dsh_os_is_linux(void) {
 #ifdef __linux__
+  return 1;
+#else
+  return 0;
+#endif
+}
+
+int dsh_os_is_windows(void) {
+#ifdef _WIN32
   return 1;
 #else
   return 0;
@@ -951,7 +959,7 @@ int dsh_exec_worker(const uint8_t *payload, int length) {
   return saved;
 }
 
-#else
+#elif !defined(_WIN32)
 int dsh_fs_open_root(const char *path) { (void)path; return -ENOTSUP; }
 int dsh_fs_root_matches(int root_fd, const char *path) { (void)root_fd; (void)path; return -ENOTSUP; }
 int dsh_fs_mapping_matches(int root_fd, const char *root_path, const char *relative_path, int is_directory) { (void)root_fd; (void)root_path; (void)relative_path; (void)is_directory; return -ENOTSUP; }
@@ -1098,7 +1106,7 @@ int dsh_crypto_verify_rs256(const uint8_t *modulus, int modulus_len,
   pkey_free(pkey);
   return valid;
 }
-#else
+#elif !defined(_WIN32)
 int dsh_crypto_sha256(const uint8_t *data, int length, uint8_t *output) { (void)data; (void)length; (void)output; return 0; }
 int dsh_crypto_verify_rs256(const uint8_t *modulus, int modulus_len, const uint8_t *exponent, int exponent_len, const uint8_t *message, int message_len, const uint8_t *signature, int signature_len) { (void)modulus; (void)modulus_len; (void)exponent; (void)exponent_len; (void)message; (void)message_len; (void)signature; (void)signature_len; return 0; }
 #endif

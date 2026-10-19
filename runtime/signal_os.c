@@ -2,10 +2,61 @@
 #define _GNU_SOURCE 1
 
 #include <errno.h>
-#include <signal.h>
 #include <string.h>
 
-#if defined(__APPLE__) || defined(__linux__)
+#if defined(_WIN32)
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
+/* Console control events replace POSIX signals. CTRL_C / CTRL_BREAK map to
+ * SIGINT (2); close / logoff / shutdown map to SIGTERM (15). The handler only
+ * records the request; the service loop performs the bounded shutdown. */
+static volatile LONG dsh_shutdown_requested = 0;
+static volatile LONG dsh_signal_handlers_installed = 0;
+
+static BOOL WINAPI dsh_console_control_handler(DWORD control) {
+  switch (control) {
+    case CTRL_C_EVENT:
+    case CTRL_BREAK_EVENT:
+      InterlockedCompareExchange(&dsh_shutdown_requested, 2, 0);
+      return TRUE;
+    case CTRL_CLOSE_EVENT:
+    case CTRL_LOGOFF_EVENT:
+    case CTRL_SHUTDOWN_EVENT:
+      InterlockedCompareExchange(&dsh_shutdown_requested, 15, 0);
+      return TRUE;
+    default:
+      return FALSE;
+  }
+}
+
+int dsh_service_signals_install(void) {
+  if (InterlockedCompareExchange(&dsh_signal_handlers_installed, 1, 0) != 0) {
+    return -EBUSY;
+  }
+  InterlockedExchange(&dsh_shutdown_requested, 0);
+  if (!SetConsoleCtrlHandler(dsh_console_control_handler, TRUE)) {
+    InterlockedExchange(&dsh_signal_handlers_installed, 0);
+    return -EIO;
+  }
+  return 0;
+}
+
+int dsh_service_signals_requested(void) {
+  return (int)InterlockedCompareExchange(&dsh_shutdown_requested, 0, 0);
+}
+
+int dsh_service_signals_restore(void) {
+  if (InterlockedCompareExchange(&dsh_signal_handlers_installed, 0, 1) != 1) {
+    return 0;
+  }
+  InterlockedExchange(&dsh_shutdown_requested, 0);
+  if (!SetConsoleCtrlHandler(dsh_console_control_handler, FALSE)) return -EIO;
+  return 0;
+}
+#elif defined(__APPLE__) || defined(__linux__)
+#include <signal.h>
+
 static volatile sig_atomic_t dsh_shutdown_requested = 0;
 static struct sigaction dsh_previous_sigint;
 static struct sigaction dsh_previous_sigterm;

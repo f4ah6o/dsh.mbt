@@ -525,6 +525,12 @@ async fn native_cli_action(
 pub async fn run_cli() -> Unit {
   let raw_args = @env.args()
   if native_flag(raw_args, "--internal-worker") {
+    if native_os_is_windows() {
+      native_cli_fatal(
+        "native process workers are not supported on the Windows native profile",
+      )
+      return
+    }
     let payload = match native_worker_payload(raw_args) {
       Ok(value) => value
       Err(error) => {
@@ -566,6 +572,25 @@ pub async fn run_cli() -> Unit {
   if native_flag(args, "--help") || native_flag(args, "-h") {
     println(native_usage())
     return
+  }
+  if native_os_is_windows() {
+    let unsupported = if native_flag(args, "--acp") {
+      Some("dsh acp")
+    } else if native_flag(args, "--mcp") {
+      Some("dsh mcp")
+    } else {
+      None
+    }
+    match unsupported {
+      Some(surface) => {
+        // Fail closed before the runtime opens the data directory or lock.
+        native_cli_fatal(
+          surface + " is not supported on the Windows native profile",
+        )
+        return
+      }
+      None => ()
+    }
   }
   if native_flag(args, "--serve") {
     let (data_dir, workspace) = match native_cli_paths(args) {

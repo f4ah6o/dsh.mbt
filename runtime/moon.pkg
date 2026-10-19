@@ -26,7 +26,9 @@ supported_targets = "+native"
 options(
   "native-stub": [
     "host_os.c",
+    "host_os_win32.c",
     "oauth_os.c",
+    "oauth_os_win32.c",
     "signal_os.c",
     "linux_desktop_payload.c",
     "macos_desktop_payload.c",

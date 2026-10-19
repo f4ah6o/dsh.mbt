@@ -2,18 +2,17 @@
 #define _GNU_SOURCE 1
 
 #include <errno.h>
-#include <fcntl.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/wait.h>
 #include <time.h>
-#include <unistd.h>
 
 #if defined(__APPLE__) || defined(__linux__)
+#include <fcntl.h>
 #include <signal.h>
-#endif
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 static int dsh_auth_read_random(uint8_t *out, int length) {
   if (!out || length < 0 || length > 4096) return EINVAL;
@@ -60,7 +59,6 @@ int dsh_auth_open_url(const char *url) {
       (strncmp(url, "https://", 8) != 0 && strncmp(url, "http://", 7) != 0)) {
     return EINVAL;
   }
-#if defined(__APPLE__) || defined(__linux__)
   int fds[2];
   int status = dsh_auth_pipe_cloexec(fds);
   if (status != 0) return status;
@@ -106,10 +104,6 @@ int dsh_auth_open_url(const char *url) {
   close(fds[0]);
   if (count < 0) return errno;
   return count == 0 ? 0 : child_error;
-#else
-  (void)url;
-  return ENOTSUP;
-#endif
 }
 
 int64_t dsh_auth_unix_time(void) {
@@ -117,3 +111,21 @@ int64_t dsh_auth_unix_time(void) {
   if (now < 0) return -1;
   return (int64_t)now;
 }
+#elif !defined(_WIN32)
+int dsh_auth_random(uint8_t *out, int length) {
+  (void)out;
+  (void)length;
+  return ENOTSUP;
+}
+
+int dsh_auth_open_url(const char *url) {
+  (void)url;
+  return ENOTSUP;
+}
+
+int64_t dsh_auth_unix_time(void) {
+  time_t now = time(NULL);
+  if (now < 0) return -1;
+  return (int64_t)now;
+}
+#endif

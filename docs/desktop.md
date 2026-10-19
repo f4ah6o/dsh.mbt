@@ -1,5 +1,37 @@
 # Native desktop
 
+## Windows
+
+Windows 11 x64 has a real GPUI Direct3D 11 desktop executable. Build it with
+the pinned toolchain and run the gate:
+
+```powershell
+moon build --target native --release desktop/windows cmd/dsh
+pwsh -NoProfile -File scripts/build-desktop-windows.ps1 -Mode E2E
+python scripts/test-windows-desktop.py
+```
+
+`--smoke` opens a visible window, presents a frame, resizes (shrinks, so a
+small RDP display cannot clamp the change away), closes and destroys it.
+`--offline-e2e` with `GPUI_NATIVE_E2E=1` sends the demo prompt, approves the
+workspace write, verifies the Japanese heading and ChatGPT settings frames
+from the owned frame, and reloads the session without replay. Frame evidence
+is written as `frame.ppm` and `frame.ppm.settings.ppm`.
+
+Japanese text uses the system DirectWrite stack; the gate fails with
+`Japanese font prerequisite not met` when the font or glyph coverage is
+missing instead of reporting a pass. IME composition is not implemented; paste
+uses the host clipboard.
+
+`dsh desktop` starts the sibling `dsh-desktop.exe`, or an explicit
+`--app-path C:\path\to\dsh-desktop.exe`. The launcher validates an absolute
+regular `.exe`, sets `DSH_NATIVE_WORKER_BIN` to the CLI, and propagates the
+desktop exit status. `scripts/package-windows-desktop.ps1` stages
+`dsh.exe`, `dsh-desktop.exe`, licenses, notices and `README-windows.md` into
+`dsh-windows-x86_64.zip`; `scripts/smoke-release-windows.ps1` extracts it into
+a path with spaces and non-ASCII characters and runs the CLI demo, the loopback
+web server, the desktop E2E, and both launcher modes.
+
 ## Linux Wayland and X11
 
 The Linux release CLI embeds a real GPUI Wayland/X11 EGL desktop executable. `dsh desktop` extracts it and a private CLI worker into an owner-only temporary directory, launches the desktop, preserves argument boundaries and exit status, and removes the files after exit. It does not open a browser or download executable code. The embedded checksum detects corruption; release authenticity comes from the release distribution/checksum workflow.

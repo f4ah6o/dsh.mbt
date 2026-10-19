@@ -233,14 +233,15 @@ pub struct SafeRoot {
 
 ///|
 pub fn SafeRoot::open(path : String) -> Result[SafeRoot, String] {
-  if !path.has_prefix("/") {
+  let normalized = native_path_normalize(path)
+  if !native_path_is_absolute(normalized) {
     return Err("workspace root must be an absolute path")
   }
-  let fd = c_open_root(c_path(path))
+  let fd = c_open_root(c_path(normalized))
   if fd < 0 {
     Err(os_error("open workspace root", -fd))
   } else {
-    Ok({ fd, path, closed: false, })
+    Ok({ fd, path: normalized, closed: false, })
   }
 }
 
@@ -397,10 +398,11 @@ fn native_executable_path() -> Result[String, String] {
   let value = @utf8.decode(bytes_from_fixedarray(buffer, length)) catch {
     _ => return Err("native executable path is not valid UTF-8")
   }
-  if !value.has_prefix("/") {
+  let normalized = native_path_normalize(value)
+  if !native_path_is_absolute(normalized) {
     return Err("native executable path is not absolute")
   }
-  Ok(value)
+  Ok(normalized)
 }
 
 ///|
@@ -906,4 +908,94 @@ extern "C" fn c_is_linux() -> Int32 = "dsh_os_is_linux"
 ///|
 fn native_os_is_linux() -> Bool {
   c_is_linux() == 1
+}
+
+///|
+extern "C" fn c_is_windows() -> Int32 = "dsh_os_is_windows"
+
+///|
+/// True when the process runs on the Windows x64 profile. The native stub is
+/// compiled per platform, so this is constant for a given executable.
+pub fn native_os_is_windows() -> Bool {
+  c_is_windows() == 1
+}
+
+///|
+fn native_drive_letter(unit : UInt16) -> Bool {
+  let value = unit.to_int()
+  (value >= 65 && value <= 90) || (value >= 97 && value <= 122)
+}
+
+///|
+/// Normalize a native path for the runtime. Windows accepts both separators,
+/// so every separator becomes "/" and an extended-length prefix is removed:
+/// `\\?\C:\x` becomes `C:/x`, `\\?\UNC\s\share` becomes `//s/share`.
+/// Other platforms keep their path unchanged.
+pub fn native_path_normalize(path : String) -> String {
+  if !native_os_is_windows() {
+    return path
+  }
+  let mut value = path
+  if value.has_prefix("\\\\?\\UNC\\") {
+    value = "\\\\" + value.after("\\\\?\\UNC\\").unwrap().to_owned()
+  } else if value.has_prefix("\\\\?\\") {
+    value = value.after("\\\\?\\").unwrap().to_owned()
+  } else if value.has_prefix("\\\\.\\") {
+    return value
+  }
+  value.replace_all(old="\\", new="/")
+}
+
+///|
+/// Platform-aware absolute-path test. Windows accepts a drive root
+/// (`C:\` or `C:/`), a UNC share (`\\server\share`), and extended-length
+/// prefixes. POSIX keeps the original "/" prefix rule.
+pub fn native_path_is_absolute(path : String) -> Bool {
+  if !native_os_is_windows() {
+    return path.has_prefix("/")
+  }
+  let value = native_path_normalize(path)
+  let units = value.code_units()
+  let length = units.length()
+  if length >= 3 &&
+    native_drive_letter(units[0]) &&
+    units[1].to_int() == 58 &&
+    units[2].to_int() == 47 {
+    return true
+  }
+  if length < 5 || units[0].to_int() != 47 || units[1].to_int() != 47 {
+    return false
+  }
+  let mut index = 2
+  let server_start = index
+  while index < length && units[index].to_int() != 47 {
+    index += 1
+  }
+  if index == server_start || index >= length {
+    return false
+  }
+  index += 1
+  let share_start = index
+  while index < length && units[index].to_int() != 47 {
+    index += 1
+  }
+  index > share_start
+}
+
+///|
+/// Current user's home directory. Windows prefers USERPROFILE and falls back
+/// to HOMEDRIVE + HOMEPATH; POSIX uses HOME.
+pub fn native_home_dir() -> String {
+  if native_os_is_windows() {
+    match @env.get_env_var("USERPROFILE") {
+      Some(value) if !value.is_empty() => return value
+      _ => ()
+    }
+    let drive = @env.get_env_var("HOMEDRIVE").unwrap_or("")
+    let home = @env.get_env_var("HOMEPATH").unwrap_or("")
+    if !drive.is_empty() && !home.is_empty() {
+      return drive + home
+    }
+  }
+  @env.get_env_var("HOME").unwrap_or("")
 }

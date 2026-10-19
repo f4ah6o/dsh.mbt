@@ -47,13 +47,16 @@ fn desktop_has_completed_answer(session : Json) -> Bool {
 fn desktop_frame_has_japanese_heading(
   frame : @testing.FrameCapture,
 ) -> Result[Bool, String] {
-  let scale_x = frame.width().to_double() / 1120.0
-  let scale_y = frame.height().to_double() / 760.0
+  // The shared desktop layout uses absolute DIP coordinates (not a uniform
+  // scale of 1120x760), so probe the design rectangle and clamp it to the
+  // actual frame. A smaller window still renders the same header at x=264.
+  let right = frame.width().min(474)
+  let bottom = frame.height().min(52)
   let mut pixels = 0
-  let mut y = (18.0 * scale_y).to_int()
-  while y < (52.0 * scale_y).to_int() && y < frame.height() {
-    let mut x = (254.0 * scale_x).to_int()
-    while x < (474.0 * scale_x).to_int() && x < frame.width() {
+  let mut y = 18
+  while y < bottom {
+    let mut x = 254
+    while x < right {
       let (red, green, blue, _) = match frame.pixel_rgba8(x, y) {
         Ok(value) => value
         Err(error) => return Err(desktop_error_text(error))
@@ -72,13 +75,13 @@ fn desktop_frame_has_japanese_heading(
 fn desktop_frame_has_transcript(
   frame : @testing.FrameCapture,
 ) -> Result[Bool, String] {
-  let scale_x = frame.width().to_double() / 1120.0
-  let scale_y = frame.height().to_double() / 760.0
+  let right = frame.width().min(1100)
+  let bottom = frame.height().min(510)
   let mut pixels = 0
-  let mut y = (96.0 * scale_y).to_int()
-  while y < (510.0 * scale_y).to_int() && y < frame.height() {
-    let mut x = (260.0 * scale_x).to_int()
-    while x < (1100.0 * scale_x).to_int() && x < frame.width() {
+  let mut y = 96
+  while y < bottom {
+    let mut x = 260
+    while x < right {
       let (red, green, blue, _) = match frame.pixel_rgba8(x, y) {
         Ok(value) => value
         Err(error) => return Err(desktop_error_text(error))
@@ -97,13 +100,15 @@ fn desktop_frame_has_transcript(
 fn desktop_frame_has_settings(
   frame : @testing.FrameCapture,
 ) -> Result[Bool, String] {
-  let scale_x = frame.width().to_double() / 1120.0
-  let scale_y = frame.height().to_double() / 760.0
+  // "ChatGPT" is drawn at x=480, y=92 in the shared absolute layout. Clamp to
+  // the frame instead of assuming a proportional 1120x760 scale.
+  let right = frame.width().min(680)
+  let bottom = frame.height().min(126)
   let mut pixels = 0
-  let mut y = (90.0 * scale_y).to_int()
-  while y < (126.0 * scale_y).to_int() && y < frame.height() {
-    let mut x = (480.0 * scale_x).to_int()
-    while x < (680.0 * scale_x).to_int() && x < frame.width() {
+  let mut y = 90
+  while y < bottom {
+    let mut x = 480
+    while x < right {
       let (red, green, blue, _) = match frame.pixel_rgba8(x, y) {
         Ok(value) => value
         Err(error) => return Err(desktop_error_text(error))
@@ -136,8 +141,8 @@ async fn desktop_run_smoke(state : DesktopState) -> Result[Unit, String] {
   match
     state.host.backend.set_size(
       state.window,
-      previous_width + 60.0,
-      previous_height + 40.0,
+      previous_width - 60.0,
+      previous_height - 40.0,
     ) {
     Ok(_) => ()
     Err(error) => return Err(desktop_error_text(error))

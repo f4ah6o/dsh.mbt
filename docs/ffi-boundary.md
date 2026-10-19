@@ -7,9 +7,12 @@ approval decisions, command scheduling, persistence formats, or UI state.
 
 ## Native C boundary
 
-The native executable links five C files: `runtime/host_os.c`,
-`runtime/oauth_os.c`, `runtime/signal_os.c`, `runtime/linux_desktop_payload.c`, and `runtime/macos_desktop_payload.c`. The reviewed C surface is limited
-to these `extern "C"` symbols:
+The native executable links seven C files: `runtime/host_os.c`,
+`runtime/host_os_win32.c`, `runtime/oauth_os.c`, `runtime/oauth_os_win32.c`,
+`runtime/signal_os.c`, `runtime/linux_desktop_payload.c`, and
+`runtime/macos_desktop_payload.c`. Each platform compiles only its own variant;
+POSIX code is guarded by `__APPLE__` / `__linux__` and Windows code by `_WIN32`.
+The reviewed C surface is limited to these `extern "C"` symbols:
 
 ```text
 dsh_auth_open_url              dsh_auth_random
@@ -27,6 +30,7 @@ dsh_os_executable_path          dsh_os_flush_stdout
 dsh_os_hard_worker_memory_supported
 dsh_os_hostname                 dsh_os_pid
 dsh_os_is_macos                 dsh_os_is_linux
+dsh_os_is_windows
 dsh_linux_desktop_launch         dsh_macos_desktop_bundle
 dsh_os_child_exit_state
 dsh_os_process_alive            dsh_os_process_group_alive
@@ -60,6 +64,24 @@ SIGTERM handlers and reports the requested signal; MoonBit owns shutdown and
 task-drain behavior. It also compares an OS error code with the platform's
 address-in-use constant; MoonBit decides whether an implicit default port may
 fall back, performs the loopback bind, and reports the selected endpoint.
+
+`host_os_win32.c` implements the same SafeRoot contract on Windows x64 without
+`openat`: every component is opened with `FILE_FLAG_OPEN_REPARSE_POINT` and must
+not carry `FILE_ATTRIBUTE_REPARSE_POINT`, the configured root handle is
+re-verified against its pathname before each operation, and a commit compares
+the anchored and fresh walks by volume serial plus file index before and after
+the rename. Handles live in a fixed process-global table so a 64-bit HANDLE is
+never truncated into an Int32. Atomic writes use a same-directory `CREATE_NEW`
+temporary, `ReplaceFileW` / `MoveFileExW(MOVEFILE_WRITE_THROUGH)`, an identity
+check after the commit, and cleanup on failure. `set_root_mode(0700)` and 0600
+file creates install an owner-only DACL; stat maps the owner SID to a stable
+`uid` and reports 0600 / 0700 only when the DACL grants no other trustee.
+`oauth_os_win32.c` supplies BCrypt CSPRNG bytes, `ShellExecuteW` for validated
+http(s) URLs, and the Unix clock. `signal_os.c` installs a
+`SetConsoleCtrlHandler` that maps CTRL_C / CTRL_BREAK to SIGINT (2) and
+CTRL_CLOSE / logoff / shutdown to SIGTERM (15); the service loop still owns the
+bounded shutdown. SHA-256 and RS256 verification use BCrypt so the API contract
+does not change when SIWC is disabled on Windows.
 
 `linux_desktop_payload.c` supplies a synchronous Linux process-supervision primitive.
 It opens `/proc/self/exe` once, validates a bounded versioned trailer, copies the

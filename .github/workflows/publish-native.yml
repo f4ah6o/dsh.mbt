@@ -77,12 +77,27 @@ jobs:
           moon update
           moon install
       - name: Build the embedded web UI and dsh CLI executable
+        if: runner.os != 'Windows'
         run: |
           if [ "$RUNNER_OS" = macOS ]; then
             MACOSX_DEPLOYMENT_TARGET=13.0 sh scripts/build.sh
           else
             sh scripts/build.sh
           fi
+      - name: Install the Japanese font capability (best effort)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          DISM /Online /Add-Capability /CapabilityName:Language.Fonts.Jpan~~~und-JPAN~0.0.1.0
+      - name: Build the Windows CLI and desktop executables
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          moon build --target native --release cmd/dsh desktop/windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          moon test desktop/windows --target native --deny-warn --filter "*Japanese*"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Build the native Linux Wayland/X11 desktop and test its payload launcher
         if: runner.os == 'Linux'
         run: |
@@ -99,6 +114,7 @@ jobs:
         if: matrix.platform == 'darwin-aarch64'
         run: sh scripts/smoke-release-macos.sh --bundle-only release/Dsh-macos-arm64.zip
       - name: Package raw release asset
+        if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
@@ -124,7 +140,16 @@ jobs:
           fi
           chmod 755 "release/dsh-${{ matrix.platform }}"
           test -s "release/dsh-${{ matrix.platform }}"
+      - name: Package and smoke the Windows zip
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/package-windows-desktop.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pwsh -NoProfile -File scripts/smoke-release-windows.ps1 release/dsh-windows-x86_64.zip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Smoke test the packaged CLI and embedded browser assets
+        if: runner.os != 'Windows'
         run: sh scripts/smoke-release-cli.sh "release/dsh-${{ matrix.platform }}"
       - name: Validate packaged native Wayland and X11 GUIs with OS input and GPU frames
         if: runner.os == 'Linux'
