@@ -7,8 +7,9 @@ integration; it does not add XIM, text-input-v2/v3, or a full editor.
 
 ## Dependency and validation
 
-This integration uses the published `f4ah6o/gpui@0.10.1` dependency already
-selected by dsh 0.1.28. No workspace override or vendored core is needed.
+This integration uses the published `f4ah6o/gpui@0.10.2` dependency, including
+the native cancel/rearm fix that preserves raw typing during the leave fence.
+The dsh package remains 0.1.28. No workspace override or vendored core is needed.
 
 ```sh
 moon update
@@ -52,8 +53,11 @@ advertising `zwp_text_input_manager_v1` and the demo receipt to report
 `ime_composition: true`; unsupported capability is a failure, never a skip.
 The first PR #74 CI attempt used kiosk-shell, which did not advertise that global
 on either Linux runner and timed out before composition could start. Those
-failure artifacts are retained on the original run. The desktop-shell profile
-must pass hosted CI before this integration is merged.
+failure artifacts are retained on the original run. The desktop-shell profile passed ARM64 acceptance and x86-64 composition/input
+smoke, but the x86-64 active-worker case exposed lost initial `Cr` keystrokes
+during the native cancellation fence. gpui 0.10.2 fixes that production ingress
+path; the unchanged exact-text oracle must pass hosted CI with this released
+dependency before this integration is merged.
 
 Synthetic headless transport evidence is not physical IME qualification. Real
 IBus/Mozc candidate popup placement, conversion and candidate selection remain
