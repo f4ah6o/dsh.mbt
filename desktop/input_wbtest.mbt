@@ -179,3 +179,51 @@ test "composition caret and underline columns follow the wrapped composer" {
   assert_eq(caret_line, 0)
   assert_eq(caret_column, 4)
 }
+
+///|
+test "direct keyboard text is exclusive with compositor-owned commits" {
+  assert_true(desktop_accept_direct_text(true, false, false, false))
+  assert_false(desktop_accept_direct_text(false, false, false, false))
+  assert_false(desktop_accept_direct_text(true, true, false, false))
+  // Reject both preedit-time keys and the duplicate queued after Commit clears it.
+  assert_false(desktop_accept_direct_text(true, false, true, true))
+  assert_false(desktop_accept_direct_text(true, false, true, false))
+  assert_false(desktop_accept_direct_text(true, false, false, true))
+  // Leaving opt-in mode restores ordinary keyboard insertion.
+  assert_true(desktop_accept_direct_text(true, false, false, false))
+}
+
+///|
+test "cancel fences native transactions queued behind a session switch" {
+  // Pointer/New is dequeued before native Start/Update/Commit: the app has no
+  // visible preedit yet, but must still invoke native finish(false).
+  assert_true(desktop_should_finish_composition(true, false, false))
+  assert_true(desktop_should_finish_composition(true, true, false))
+  assert_true(desktop_should_finish_composition(true, true, true))
+  assert_false(desktop_should_finish_composition(true, false, true))
+  assert_false(desktop_should_finish_composition(false, false, false))
+}
+
+///|
+test "Windows ordinary TextInput remains admitted outside active preedit" {
+  // Windows emits ordinary WM_CHAR as TextInput even with IME opt-in enabled.
+  // Its adapter declares composition_owns_text_input=false; Wayland declares true.
+  let enabled = true
+  let windows_owns_text_input = false
+  assert_true(
+    desktop_accept_direct_text(
+      true,
+      false,
+      enabled && windows_owns_text_input,
+      false,
+    ),
+  )
+  assert_false(
+    desktop_accept_direct_text(
+      true,
+      false,
+      enabled && windows_owns_text_input,
+      true,
+    ),
+  )
+}

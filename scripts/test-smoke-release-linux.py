@@ -15,6 +15,35 @@ spec.loader.exec_module(smoke)
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_text_input_manager_requires_advertised_protocol(self):
+        for separator in ['@', '#']:
+            smoke.require_text_input_manager(
+                f'[1.0] wl_registry{separator}2.global(7, "zwp_text_input_manager_v1", 1)')
+        for text in ['', 'zwp_text_input_manager_v1',
+                     'wl_registry@2.global(7, "zwp_text_input_manager_v3", 1)',
+                     'wl_registry@2.global(7, "zwp_text_input_manager_v1", 0)',
+                     'wl_registry@2.bind(7, "zwp_text_input_manager_v1", 1)']:
+            with self.subTest(text=text), self.assertRaises(RuntimeError):
+                smoke.require_text_input_manager(text)
+
+    def test_owned_compositor_uses_desktop_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = smoke.Harness(root / 'dsh', root, root)
+            process = mock.Mock()
+            process.poll.return_value = None
+            harness.command = mock.Mock(return_value=mock.Mock(stdout='', stderr=''))
+            harness.launch = mock.Mock(return_value=(process, root / 'log'))
+            (root / 'fixture').touch()
+            harness.compositor('desktop', 'fixture')
+            args = harness.launch.call_args.args[0]
+            self.assertIn('--shell=desktop-shell.so', args)
+            self.assertIn('--config=' + str(root / 'fixture-weston.ini'), args)
+            self.assertNotIn('--no-config', args)
+            self.assertEqual((root / 'fixture-weston.ini').read_text(), smoke.WESTON_CONFIG)
+            self.assertIn('panel-position=none', smoke.WESTON_CONFIG)
+
+
     def x11_fixture(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)

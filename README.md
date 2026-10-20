@@ -140,7 +140,7 @@ sudo apt-get install libx11-6 libwayland-client0 libwayland-cursor0 libwayland-e
 dsh desktop --demo
 ```
 
-画面、入力、保存・tool approval は GPUI の native Wayland / X11 backend と共通の desktop application を使います。browser は起動しません。通常の keyboard 入力と Ctrl+A/C/V/X に対応し、IME composition は未対応です（macOS / Windows desktop の bounded composition はこの Linux backend には適用されません）。自動選択は Wayland の環境変数を優先し、なければ DISPLAY で X11 を選びます。DSH_DESKTOP_BACKEND=wayland または DSH_DESKTOP_BACKEND=x11 で明示的に選択できます。接続に失敗した際、別 backend への自動切り替えは行いません。GUI の system libraries は `dsh web` / CLI だけを使う場合は不要です。
+画面、入力、保存・tool approval は GPUI の native Wayland / X11 backend と共通の desktop application を使います。browser は起動しません。通常の keyboard 入力と Ctrl+A/C/V/X に対応し、Wayland は `DSH_DESKTOP_IME=1` の opt-in で bounded text-input-v1 composition に接続します。X11/XIM は未対応で、実機 IBus/Mozc・candidate popup の受入は NOT RUN です。自動選択は Wayland の環境変数を優先し、なければ DISPLAY で X11 を選びます。DSH_DESKTOP_BACKEND=wayland または DSH_DESKTOP_BACKEND=x11 で明示的に選択できます。接続に失敗した際、別 backend への自動切り替えは行いません。GUI の system libraries は `dsh web` / CLI だけを使う場合は不要です。
 
 desktop は private temporary directory に展開して起動し、終了時に削除します。`TMPDIR` が `noexec` mount の場合は、実行可能な private temporary location を指定してください。source build と詳細な制約は [native desktop guide](docs/desktop.md) にあります。
 

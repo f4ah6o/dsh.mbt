@@ -20,6 +20,7 @@ async fn main {
       asynchronous_frames: true,
       text_input_events: true,
       control_shortcuts: true,
+      composition_owns_text_input: false,
       supports_text_composition: true,
       set_text_composition: fn(window, enabled) {
         host.set_text_composition(window, enabled)

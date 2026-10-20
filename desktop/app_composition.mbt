@@ -320,7 +320,11 @@ async fn desktop_commit_composition(
 
 ///|
 fn desktop_finish_composition(state : DesktopState, commit : Bool) -> Unit {
-  if state.composition is None {
+  if !desktop_should_finish_composition(
+      state.composition_enabled,
+      state.composition is Some(_),
+      commit,
+    ) {
     return
   }
   match (state.host.finish_text_composition)(state.window, commit) {
@@ -356,4 +360,27 @@ async fn desktop_handle_composition(
     @primitives.Commit(text~) => desktop_commit_composition(state, text)
     @primitives.Cancel => desktop_cancel_composition(state)
   }
+}
+
+///|
+// A compositor-owned commit must never also arrive through direct keyboard text.
+// Paste is a separate explicit clipboard action and does not use this gate.
+fn desktop_accept_direct_text(
+  focused : Bool,
+  settings_open : Bool,
+  composition_enabled : Bool,
+  preedit_active : Bool,
+) -> Bool {
+  focused && !settings_open && !composition_enabled && !preedit_active
+}
+
+///|
+fn desktop_should_finish_composition(
+  enabled : Bool,
+  visible_preedit : Bool,
+  commit : Bool,
+) -> Bool {
+  // New/session-switch may precede queued native Start/Update/Commit delivery.
+  // Cancel the native owner even before the app has observed its preedit.
+  visible_preedit || (enabled && !commit)
 }

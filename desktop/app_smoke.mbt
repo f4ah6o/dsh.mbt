@@ -263,6 +263,34 @@ async fn desktop_wait_composition(
 }
 
 ///|
+async fn desktop_post_initial_composition(
+  state : DesktopState,
+) -> Result[Unit, String] {
+  // Wayland may arm opt-in before wl_keyboard.enter creates the native session.
+  // Pump actual focus events; never fabricate a seat or keyboard focus.
+  let deadline = @async.now() + 10000L
+  while @async.now() < deadline {
+    match
+      (state.host.post_test_composition)(
+        state.window,
+        @primitives.Update(text="にほんご", cursor_utf16=4),
+      ) {
+      Ok(_) => return Ok(())
+      Err(error) =>
+        match error.code() {
+          @diagnostics.UnsupportedCapability => ()
+          _ => return Err(desktop_error_text(error))
+        }
+    }
+    match desktop_pump(state, false) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
+  }
+  Err("timed out waiting for native composition focus/capability")
+}
+
+///|
 async fn desktop_run_offline_composition(
   state : DesktopState,
 ) -> Result[Unit, String] {
@@ -270,13 +298,9 @@ async fn desktop_run_offline_composition(
     return Ok(())
   }
   desktop_set_focused(state, true)
-  match
-    (state.host.post_test_composition)(
-      state.window,
-      @primitives.Update(text="にほんご", cursor_utf16=4),
-    ) {
+  match desktop_post_initial_composition(state) {
     Ok(_) => ()
-    Err(error) => return Err(desktop_error_text(error))
+    Err(error) => return Err(error)
   }
   match desktop_wait_composition(state, true, 10000) {
     Ok(_) => ()
@@ -331,7 +355,40 @@ async fn desktop_run_offline_composition(
   if !state.draft.is_empty() {
     return Err("cancelled IME preedit mutated the draft")
   }
+  // Exercise the app-requested terminal path as well as injected IME commits.
+  // finish preserves opt-in: a second transaction must work without a focus toggle.
+  for commit in [true, false] {
+    match
+      (state.host.post_test_composition)(
+        state.window,
+        @primitives.Update(text="未確定😀", cursor_utf16=5),
+      ) {
+      Ok(_) => ()
+      Err(error) => return Err(desktop_error_text(error))
+    }
+    match desktop_wait_composition(state, true, 10000) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
+    desktop_finish_composition(state, commit)
+    match desktop_wait_composition(state, false, 10000) {
+      Ok(_) => ()
+      Err(error) => return Err(error)
+    }
+    let expected = if commit { "未確定😀" } else { "" }
+    if desktop_draft_string(state.draft) != expected || state.send_seen {
+      return Err(
+        "finish composition did not commit/cancel exactly once without sending",
+      )
+    }
+    state.draft = []
+    state.cursor = 0
+  }
   state.composition_seen = true
+  println(
+    "DSH_DESKTOP_COMPOSITION {\"synthetic\":true,\"commit_cancel\":true,\"finish_rearm\":true}",
+  )
+  @runtime.desktop_flush_output()
   state.draft = []
   state.cursor = 0
   state.dirty = true
