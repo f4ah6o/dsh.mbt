@@ -56,8 +56,25 @@ on either Linux runner and timed out before composition could start. Those
 failure artifacts are retained on the original run. The desktop-shell profile passed ARM64 acceptance and x86-64 composition/input
 smoke, but the x86-64 active-worker case exposed lost initial `Cr` keystrokes
 during the native cancellation fence. gpui 0.10.2 fixes that production ingress
-path; the unchanged exact-text oracle must pass hosted CI with this released
-dependency before this integration is merged.
+path. These are historical failures, retained in
+[the kiosk-shell run](https://github.com/f4ah6o/dsh.mbt/actions/runs/39333896007)
+and [the cancel/rearm run](https://github.com/f4ah6o/dsh.mbt/actions/runs/39335731870).
+
+On 2026-10-20, [PR #74](https://github.com/f4ah6o/dsh.mbt/pull/74) merged as
+`a56c1bbe6e940673c8997e44ccf7836a28eae377` after final head
+`7201a050a63f14129b12ebefde7697db7342ad67` passed all three hosted workflows:
+[native assets](https://github.com/f4ah6o/dsh.mbt/actions/runs/39369670556),
+[runtime/browser](https://github.com/f4ah6o/dsh.mbt/actions/runs/39369670751),
+and [Windows runtime](https://github.com/f4ah6o/dsh.mbt/actions/runs/39369670578).
+The native-assets run passed Linux x86-64 and ARM64 Wayland synthetic
+composition/finish-rearm and X11 baseline acceptance (composition remains false
+on X11). Both architectures passed the unchanged exact-text active-worker
+oracle with the full `Create and verify a durable file. via Linux keyboard`
+prompt, including the repaired initial `Cr`. The actual Wayland registry traces
+advertised text-input-v1; these results use published gpui 0.10.2, not a local
+override. Post-merge [runtime/browser](https://github.com/f4ah6o/dsh.mbt/actions/runs/39371351921)
+and [Windows runtime](https://github.com/f4ah6o/dsh.mbt/actions/runs/39371351814)
+also passed; these runs are separate from packaged Linux acceptance.
 
 Synthetic headless transport evidence is not physical IME qualification. Real
 IBus/Mozc candidate popup placement, conversion and candidate selection remain
