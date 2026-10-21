@@ -59,6 +59,15 @@ moon run native --target native --release -- \
 
 `DSH_API_KEY`、`DSH_MODE`、`DSH_MODEL`、`DSH_BASE_URL` も使えます。`--base-url` の `/v1` は重複させず結合します。OpenAI Responses は Platform API key と ChatGPT SIWC をサポートします。SIWC の credential は owner-only native store に保存します。実アカウント smoke は任意で、通常の検証では実行しません。詳細は[native runtime guide](docs/native-runtime.md)を参照してください。
 
+認証不要のOpenAI Chat Completions接続は、明示的な `DSH_AUTH=none` とAPI root・モデルの指定で有効になります。この設定では環境変数のAPIキーを読み込まず、認証ヘッダーも送りません。
+
+```bash
+DSH_AUTH=none dsh web --mode openai --model deepseek-v4.1-flash-free \
+  --base-url https://opencode.ai/inference/openai/v1
+```
+
+**OpenCode実API検証（2026-10-15）:** 公式文書では無料チャットモデルを認証なしで呼び出せますが、今回の外部クライアントからの接続はHTTP 403 `FreeTierError`（OpenCode内のみ利用可能）でした。無料モデルでの会話成功は未確認です。[モデル一覧・設定・検証範囲](docs/opencode-free-models.md)を参照してください。
+
 ## CLI
 
 native executable は `run`、`import-session`、`prune-session`、`fork-session`、`web`、`mcp`、`acp` subcommand を提供します。MoonBit から直接起動する例です。

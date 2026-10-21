@@ -66,6 +66,7 @@ pub(all) enum NativeProtocol {
 pub(all) enum NativeAuthMode {
   ApiKey
   ChatGPT
+  NoAuth
 } derive(Eq)
 
 ///|
@@ -141,6 +142,29 @@ pub fn NativeProviderSelection::api_key(
         auth_mode: ApiKey,
         base_url: url,
       })
+    Err(error) => Err(error)
+  }
+}
+
+///|
+pub fn NativeProviderSelection::no_auth(
+  model : String,
+  base_url : String,
+  generation : String,
+) -> Result[NativeProviderSelection, String] {
+  if base_url.is_empty() {
+    return Err(
+      "INVALID_BASE_URL: unauthenticated providers require an explicit API root",
+    )
+  }
+  match
+    NativeProviderSelection::api_key(
+      OpenAIChatCompletions,
+      model,
+      Some(base_url),
+      generation,
+    ) {
+    Ok(selection) => Ok({ ..selection, auth_mode: NoAuth, })
     Err(error) => Err(error)
   }
 }

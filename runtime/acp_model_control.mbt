@@ -103,6 +103,7 @@ fn NativeRuntime::acp_route_id(self : NativeRuntime) -> Result[String, String] {
   let auth = match self.effective_provider_config().auth_mode {
     NativeAuthMode::ApiKey => "api-key"
     NativeAuthMode::ChatGPT => "chatgpt"
+    NativeAuthMode::NoAuth => "none"
   }
   let base_url = if self.effective_provider_config().auth_mode ==
     NativeAuthMode::ChatGPT {

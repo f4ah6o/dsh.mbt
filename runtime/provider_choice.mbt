@@ -82,6 +82,12 @@ fn NativeRuntime::capture_provider_selection(
       Some(value) => self.auth.provider_selection_for_model(value)
       None => self.auth.provider_selection()
     }
+  } else if config.auth_mode == NoAuth {
+    NativeProviderSelection::no_auth(
+      model.unwrap_or(config.model),
+      config.base_url.unwrap_or(""),
+      config.generation + ":" + self.auth.route_generation,
+    )
   } else {
     NativeProviderSelection::api_key(
       config.protocol,
