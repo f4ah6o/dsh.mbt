@@ -291,6 +291,34 @@ int dsh_fs_stat_root(int fd, int64_t *out) {
   return 0;
 }
 
+int dsh_fs_stat_directory_at(int root_fd, const char *path, int64_t *out) {
+  int fd = dsh_open_directory_beneath(root_fd, path);
+  if (fd < 0) return errno;
+  struct stat st;
+  int status = fstat(fd, &st) == 0 ? 0 : errno;
+  close(fd);
+  if (status != 0) return status;
+  if (!S_ISDIR(st.st_mode)) return ENOTDIR;
+  dsh_copy_stat(&st, out);
+  return 0;
+}
+
+/* Return 0 for missing, 1 for directory, 2 for regular file, and 3 for any
+ * other entry. The final component is inspected without following symlinks. */
+int dsh_fs_entry_kind_at(int root_fd, const char *path) {
+  char name[NAME_MAX + 1];
+  int parent = dsh_open_parent(root_fd, path, name, sizeof(name));
+  if (parent < 0) return -errno;
+  struct stat st;
+  int status = fstatat(parent, name, &st, AT_SYMLINK_NOFOLLOW);
+  int saved = errno;
+  close(parent);
+  if (status != 0) return saved == ENOENT ? 0 : -saved;
+  if (S_ISDIR(st.st_mode)) return 1;
+  if (S_ISREG(st.st_mode)) return 2;
+  return 3;
+}
+
 int dsh_fs_read_fd(int fd, uint8_t *buffer, int capacity) {
   if (capacity < 0) return -EINVAL;
   size_t offset = 0;
@@ -1140,6 +1168,8 @@ int dsh_fs_set_root_mode(int fd, int mode) { (void)fd; (void)mode; return ENOTSU
 int dsh_fs_open_file(int root_fd, const char *path) { (void)root_fd; (void)path; return -ENOTSUP; }
 int dsh_fs_stat_fd(int fd, int64_t *out) { (void)fd; (void)out; return ENOTSUP; }
 int dsh_fs_stat_root(int fd, int64_t *out) { (void)fd; (void)out; return ENOTSUP; }
+int dsh_fs_stat_directory_at(int root_fd, const char *path, int64_t *out) { (void)root_fd; (void)path; (void)out; return ENOTSUP; }
+int dsh_fs_entry_kind_at(int root_fd, const char *path) { (void)root_fd; (void)path; return -ENOTSUP; }
 int dsh_fs_read_fd(int fd, uint8_t *buffer, int capacity) { (void)fd; (void)buffer; (void)capacity; return -ENOTSUP; }
 int dsh_fs_atomic_write(int root_fd, const char *root_path, const char *path, const uint8_t *data, int length, int mode, int create_parents, int has_expected, int force_mode, const int64_t *expected) { (void)root_fd; (void)root_path; (void)path; (void)data; (void)length; (void)mode; (void)create_parents; (void)has_expected; (void)force_mode; (void)expected; return ENOTSUP; }
 int dsh_fs_atomic_create_no_replace(int root_fd, const char *root_path, const char *path, const uint8_t *data, int length, int max_bytes, int mode, int *published) { (void)root_fd; (void)root_path; (void)path; (void)data; (void)length; (void)max_bytes; (void)mode; if (published) *published = 0; return ENOTSUP; }

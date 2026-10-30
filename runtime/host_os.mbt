@@ -98,6 +98,18 @@ extern "C" fn c_stat_fd(fd : Int32, out : FixedArray[Int64]) -> Int32 = "dsh_fs_
 extern "C" fn c_stat_root(fd : Int32, out : FixedArray[Int64]) -> Int32 = "dsh_fs_stat_root"
 
 ///|
+#borrow(path, out)
+extern "C" fn c_stat_directory_at(
+  root : Int32,
+  path : Bytes,
+  out : FixedArray[Int64],
+) -> Int32 = "dsh_fs_stat_directory_at"
+
+///|
+#borrow(path)
+extern "C" fn c_entry_kind_at(root : Int32, path : Bytes) -> Int32 = "dsh_fs_entry_kind_at"
+
+///|
 #borrow(buffer)
 extern "C" fn c_read_fd(
   fd : Int32,
@@ -285,6 +297,84 @@ pub fn SafeRoot::identity(self : SafeRoot) -> Result[(Int64, Int64), String] {
     Err(os_error("stat workspace root", status))
   } else {
     Ok((fields[0], fields[1]))
+  }
+}
+
+///|
+/// Read metadata for the directory held by this root without changing its
+/// permissions. Callers that require an owner-only root must check this value
+/// instead of calling `restrict_owner_only` on an inspection path.
+pub fn SafeRoot::directory_version(
+  self : SafeRoot,
+) -> Result[FileVersion, String] {
+  match self.ensure_open() {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  let fields : FixedArray[Int64] = FixedArray::make(10, 0)
+  let status = c_stat_root(self.fd, fields)
+  if status != 0 {
+    Err(os_error("stat workspace root", status))
+  } else {
+    Ok({ fields, })
+  }
+}
+
+///|
+/// Read metadata for a directory below this root, walking each component
+/// without following symlinks and verifying the path mapping around the read.
+pub fn SafeRoot::directory_version_at(
+  self : SafeRoot,
+  relative_path : String,
+) -> Result[FileVersion, String] {
+  match self.ensure_open() {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  match self.verify_mapping(relative_path, true) {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  let fields : FixedArray[Int64] = FixedArray::make(10, 0)
+  let status = c_stat_directory_at(self.fd, c_path(relative_path), fields)
+  if status != 0 {
+    return Err(os_error("stat workspace directory", status))
+  }
+  match self.verify_mapping(relative_path, true) {
+    Err(error) => Err(error)
+    Ok(_) => Ok({ fields, })
+  }
+}
+
+///|
+/// Inspect a single entry below this root without following its final
+/// symlink. Returns `None` when the entry is absent, otherwise `directory`,
+/// `file`, or `other` for a non-regular entry.
+pub fn SafeRoot::entry_kind(
+  self : SafeRoot,
+  relative_path : String,
+) -> Result[String?, String] {
+  match self.ensure_open() {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  match self.verify_mapping(relative_path, false) {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  let kind = c_entry_kind_at(self.fd, c_path(relative_path))
+  if kind < 0 {
+    return Err(os_error("inspect workspace entry", -kind))
+  }
+  match self.verify_mapping(relative_path, false) {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  match kind {
+    0 => Ok(None)
+    1 => Ok(Some("directory"))
+    2 => Ok(Some("file"))
+    _ => Ok(Some("other"))
   }
 }
 

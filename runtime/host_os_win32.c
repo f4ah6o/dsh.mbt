@@ -990,6 +990,79 @@ int dsh_fs_stat_root(int fd, int64_t *out) {
   return dsh_stat_handle(handle, 1, out);
 }
 
+int dsh_fs_stat_directory_at(int root_fd, const char *path, int64_t *out) {
+  wchar_t *relative = NULL;
+  int status = dsh_utf8_to_wide(path, &relative);
+  if (status != 0) return status;
+  for (wchar_t *cursor = relative; *cursor; ++cursor) {
+    if (dsh_is_separator(*cursor)) *cursor = L'\\';
+  }
+  status = dsh_validate_relative(relative);
+  if (status != 0) {
+    free(relative);
+    return status;
+  }
+  wchar_t root[DSH_MAX_WIDE_PATH];
+  status = dsh_table_root_path(root_fd, root, DSH_MAX_WIDE_PATH);
+  if (status != 0) {
+    free(relative);
+    return status;
+  }
+  HANDLE directory = INVALID_HANDLE_VALUE;
+  status = dsh_open_checked(root, relative, 1, &directory);
+  free(relative);
+  if (status != 0) return status;
+  status = dsh_stat_handle(directory, 1, out);
+  CloseHandle(directory);
+  return status;
+}
+
+/* Return 0 for missing, 1 for directory, 2 for regular file, and 3 for any
+ * other entry. OPEN_REPARSE_POINT keeps the final symlink/junction inert. */
+int dsh_fs_entry_kind_at(int root_fd, const char *path) {
+  wchar_t *relative = NULL;
+  int status = dsh_utf8_to_wide(path, &relative);
+  if (status != 0) return -status;
+  for (wchar_t *cursor = relative; *cursor; ++cursor) {
+    if (dsh_is_separator(*cursor)) *cursor = L'\\';
+  }
+  status = dsh_validate_relative(relative);
+  if (status != 0) {
+    free(relative);
+    return -status;
+  }
+  wchar_t root[DSH_MAX_WIDE_PATH];
+  status = dsh_table_root_path(root_fd, root, DSH_MAX_WIDE_PATH);
+  if (status != 0) {
+    free(relative);
+    return -status;
+  }
+  wchar_t *target = dsh_join(root, relative);
+  free(relative);
+  if (!target) return -DSH_ENOMEM;
+  wchar_t *api = dsh_api_path(target);
+  free(target);
+  if (!api) return -DSH_ENOMEM;
+  HANDLE handle = CreateFileW(
+      api, FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL,
+      OPEN_EXISTING,
+      FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+  DWORD error = GetLastError();
+  free(api);
+  if (handle == INVALID_HANDLE_VALUE) {
+    if (error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND) return 0;
+    return -dsh_map_win_error(error);
+  }
+  FILE_ATTRIBUTE_TAG_INFO info;
+  status = dsh_handle_not_reparse(handle, &info);
+  int kind = status != 0
+                 ? 3
+                 : (info.FileAttributes & FILE_ATTRIBUTE_DIRECTORY) ? 1 : 2;
+  CloseHandle(handle);
+  return kind;
+}
+
 int dsh_fs_read_fd(int fd, uint8_t *buffer, int capacity) {
   if (capacity < 0 || !buffer) return -DSH_EINVAL;
   if (capacity == 0) return 0;

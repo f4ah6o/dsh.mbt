@@ -89,6 +89,11 @@ child session 自体は永続化・再開されず、result settlement 前に割
 SafeRoot / protected-store checks と configured command hooks を使います。hook は利用者が明示した trusted host code なので、read-only
 child catalog も OS sandbox にはなりません。
 
+別 opt-in の `--persist-subagent-audits` は settled child の完全な snapshot を owner-only ファイルに保存します。ローカル CLI の
+`subagent-audits list/show` は exact parent session を相関フィルターとして inert な記録を読むだけで、provider / tool / hook を
+開始せず、store や親 session も更新しません。保存済み parent / workspace ID は記録内の相関値であり、現在の所有権や実行権限を
+証明しません。表示された orphan を parent result として採用する経路もありません。
+
 SSE decoder は分割された text / reasoning / tool arguments を逐次解析します。完全に検証された text / reasoning frame
 だけが stream event になり、tool arguments や reasoning signature は projection しません。native runtime は有限の 16 Mi-unit
 queue に Unicode scalar 境界を守った segment として追加し、onDelta callback 自身は state mutation や checkpoint を

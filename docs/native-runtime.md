@@ -234,15 +234,23 @@ through anchored metadata reads without loading their contents. Quota
 exhaustion and all save uncertainty interrupt the parent turn before another
 parent hook or provider step can run.
 
-Audit files are inert local data. There is no runtime list, read, delete,
-resume, replay, or parent-result adoption command. Background and continuable
-children remain unsupported. A successful audit publication followed by
-cancellation or a failed parent checkpoint can leave an orphan; the runtime
-keeps it and never adopts or deletes it automatically. There is no retention
-management or automatic temp cleanup; abandoned files remain charged against
-quota until the owner removes them offline. Audit records include child prompts
-and tool results, so treat the protected data directory as sensitive. The
-default behavior creates no audit directory or record.
+Audit files are inert local data. Use `dsh subagent-audits list --session PARENT_SESSION_ID` to list bounded metadata for one parent session, or `dsh subagent-audits show CHILD_ID --session PARENT_SESSION_ID` to print one full validated envelope. Add `--data-dir PATH` when using a nondefault store. Show
+prints the child prompt, hook context, and tool results to local stdout, so use
+it only when that disclosure is intended.
+
+Inspection reads an existing owner-only data directory and 0700 audit
+subdirectory plus 0600 files through bounded anchored reads. It rejects
+symlinked or reparse-point audit paths without following them. It runs before native runtime startup and does not
+create the audit directory, acquire the host lock, checkpoint a session, start
+a provider, execute tools, or run hooks. The parent session and stored workspace
+ID are correlation filters from local data; they do not prove current session
+ownership or authorize work. A successful audit publication followed by
+cancellation or a failed parent checkpoint can leave an orphan. Listing or
+showing it never adopts it. There is no delete, retention management, automatic
+temp cleanup, resume, replay, or parent-result adoption command; abandoned
+files remain charged against quota until the owner removes them offline.
+Background and continuable children remain unsupported. The default behavior
+creates no audit directory or record.
 
 ## External MCP stdio tools
 

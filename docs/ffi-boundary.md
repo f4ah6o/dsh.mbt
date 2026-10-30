@@ -19,13 +19,14 @@ dsh_auth_open_url              dsh_auth_random
 dsh_auth_unix_time             dsh_crypto_sha256
 dsh_crypto_verify_rs256        dsh_exec_worker
 dsh_fs_atomic_create_no_replace dsh_fs_atomic_write
-dsh_fs_close
+dsh_fs_close                    dsh_fs_entry_kind_at
 dsh_fs_create_exclusive        dsh_fs_list_dir
 dsh_fs_mapping_matches         dsh_fs_open_file
 dsh_fs_open_root               dsh_fs_read_fd
 dsh_fs_root_matches            dsh_fs_set_root_mode
-dsh_fs_stat_fd                  dsh_fs_stat_root
-dsh_fs_unlink                   dsh_kill_process
+dsh_fs_stat_directory_at        dsh_fs_stat_fd
+dsh_fs_stat_root                dsh_fs_unlink
+dsh_kill_process
 dsh_kill_process_group          dsh_os_flush_stderr
 dsh_os_executable_path          dsh_os_flush_stdout
 dsh_os_hard_worker_memory_supported
@@ -49,6 +50,12 @@ stdout/stderr flushing, and the low-level SHA-256 / RS256 primitives used by
 MoonBit authentication code. Its filesystem walk rejects absolute paths and
 `.` / `..` components as a syscall-level guard; MoonBit still owns workspace
 admission, path normalization, bounds, tool policy, and error semantics.
+`SafeRoot::entry_kind` reads one relative entry without following its final
+symlink, while `SafeRoot::directory_version_at` walks a nested directory
+without following any component and returns owner, permission, and identity
+metadata without changing it. The local child-audit inspector uses these
+read-only calls to require an owner-only audit directory and reject a symlink
+or other non-directory path before listing records.
 The process trampoline pins and verifies the workspace before changing
 directory, applies resource limits, then closes every inherited descriptor
 above stdin/stdout/stderr before executing the requested program. This also

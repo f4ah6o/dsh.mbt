@@ -17,6 +17,72 @@ test "native CLI preserves subcommand arguments and bounds retry and approval op
     "dsh-native", "--demo", "--workspace", "/workspace", "--acp",
   ])
   assert_true(native_cli_validate_args(acp_args) is Ok(_))
+  let audit_list_args = native_cli_normalize_args([
+    "dsh-native", "subagent-audits", "list", "--session", "session-12345678901234567890123456789012",
+    "--data-dir", "/tmp/dsh-data", "--json",
+  ])
+  assert_eq(audit_list_args, [
+    "dsh-native", "--session", "session-12345678901234567890123456789012", "--data-dir",
+    "/tmp/dsh-data", "--json", "--subagent-audits", "list",
+  ])
+  assert_eq(native_cli_positionals(audit_list_args), ["list"])
+  assert_true(native_cli_validate_args(audit_list_args) is Ok(_))
+  let audit_show_args = native_cli_normalize_args([
+    "dsh-native", "--workspace", "/tmp/project", "subagent-audits", "show", "subagent-123e4567-e89b-42d3-a456-426614174000",
+    "--session", "session-12345678901234567890123456789012",
+  ])
+  assert_eq(native_cli_positionals(audit_show_args), [
+    "show", "subagent-123e4567-e89b-42d3-a456-426614174000",
+  ])
+  assert_true(native_cli_validate_args(audit_show_args) is Ok(_))
+  assert_true(
+    native_cli_validate_args([
+      "dsh-native", "--subagent-audits", "--session", "session-12345678901234567890123456789012",
+      "show", "../invalid",
+    ])
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args(
+      native_cli_normalize_args(["dsh-native", "subagent-audits", "list"]),
+    )
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args(
+      native_cli_normalize_args([
+        "dsh-native", "subagent-audits", "list", "--session", "first-session", "--session",
+        "second-session",
+      ]),
+    )
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args(
+      native_cli_normalize_args([
+        "dsh-native", "subagent-audits", "list", "--session", "parent-session", "--hooks-config",
+        "hooks.json",
+      ]),
+    )
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args(
+      native_cli_normalize_args([
+        "dsh-native", "subagent-audits", "list", "--session", "parent-session", "--run",
+        "perform work",
+      ]),
+    )
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args(
+      native_cli_normalize_args([
+        "dsh-native", "subagent-audits", "list", "--session", "parent-session", "--serve",
+      ]),
+    )
+    is Err(_),
+  )
   assert_true(
     native_cli_validate_args([
       "dsh-native", "--run", "Inspect files", "--persist-subagent-audits",
