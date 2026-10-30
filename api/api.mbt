@@ -584,6 +584,35 @@ pub fn HarnessApi::take_typed_effects(
 }
 
 ///|
+/// Check whether this API still owns the exact pending tool effect. This is a
+/// read-only in-process query; it is not exposed as a capability or wire API.
+pub fn HarnessApi::owns_pending_tool_effect(
+  self : HarnessApi,
+  effect_id : @engine.EffectId,
+  session_id : @engine.SessionId,
+  call_id : @engine.ToolCallId,
+) -> Bool {
+  self.registry.is_alive() &&
+  self.engine.owns_pending_tool_effect(effect_id, session_id, call_id)
+}
+
+///|
+/// Close only the exact pending tool effect when a fatal foreground child
+/// outcome cannot be durably published. This is an internal typed boundary;
+/// it is not registered as a host capability or wire operation.
+pub fn HarnessApi::interrupt_owned_tool_effect(
+  self : HarnessApi,
+  effect_id : @engine.EffectId,
+  session_id : @engine.SessionId,
+  call_id : @engine.ToolCallId,
+) -> Result[Bool, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.interrupt_owned_tool_effect(effect_id, session_id, call_id)
+}
+
+///|
 pub fn HarnessApi::complete(
   self : HarnessApi,
   id : String,

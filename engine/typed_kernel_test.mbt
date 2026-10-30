@@ -18,6 +18,18 @@ fn typed_test_json(result : Result[Json, String]) -> Json {
 }
 
 ///|
+fn typed_test_string_field(value : Json, key : String) -> String? {
+  match value {
+    Object(items) =>
+      match items.get(key) {
+        Some(Json::String(text)) => Some(text)
+        _ => None
+      }
+    _ => None
+  }
+}
+
+///|
 fn typed_test_stop_response(text : String) -> Json {
   Json::object(
     Map::from_array([
@@ -125,6 +137,393 @@ test "typed commands drive the engine and typed effects/events match compatibili
       _ => false
     },
   )
+}
+
+///|
+test "pending tool ownership follows the effect registry through drain, settlement, and cancellation" {
+  let read_tool : Json = {
+    "name": "read",
+    "description": "Read text",
+    "input_schema": {
+      "type": "object",
+      "required": ["file_path"],
+      "properties": { "file_path": { "type": "string" } },
+      "additionalProperties": false,
+    },
+    "effect": "read",
+  }
+  let engine = @engine.Engine::new([read_tool])
+  let session_id = @engine.SessionId::new("ownership-settle").unwrap()
+  let call_id = @engine.ToolCallId::new("read-call").unwrap()
+  ignore(
+    typed_test_json(
+      engine.apply(
+        typed_test_command("session_create", { "id": session_id.as_string() }),
+      ),
+    ),
+  )
+  ignore(
+    typed_test_json(
+      engine.apply(
+        typed_test_command("session_send", {
+          "session_id": session_id.as_string(),
+          "prompt": "Read a file",
+        }),
+      ),
+    ),
+  )
+  let provider_effect = engine.take_typed_effects()[0]
+  assert_false(
+    engine.owns_pending_tool_effect(provider_effect.id(), session_id, call_id),
+  )
+  ignore(
+    typed_test_json(
+      engine.complete_effect(provider_effect.id(), {
+        "ok": true,
+        "content": "",
+        "tool_calls": [
+          {
+            "id": call_id.as_string(),
+            "name": "read",
+            "arguments": "{\"file_path\":\"notes.txt\"}",
+          },
+        ],
+        "finish_reason": "tool_calls",
+      }),
+    ),
+  )
+  let tool_effect = engine.take_typed_effects()[0]
+  assert_true(tool_effect.kind() == @engine.EffectType::Tool)
+  assert_true(
+    engine.owns_pending_tool_effect(tool_effect.id(), session_id, call_id),
+  )
+  assert_false(
+    engine.owns_pending_tool_effect(
+      tool_effect.id(),
+      @engine.SessionId::new("other-session").unwrap(),
+      call_id,
+    ),
+  )
+  assert_false(
+    engine.owns_pending_tool_effect(
+      tool_effect.id(),
+      session_id,
+      @engine.ToolCallId::new("other-call").unwrap(),
+    ),
+  )
+  assert_false(
+    engine.owns_pending_tool_effect(
+      @engine.EffectId::new("effect-999").unwrap(),
+      session_id,
+      call_id,
+    ),
+  )
+  assert_true(engine.take_typed_effects().is_empty())
+  let before_ownership_check = engine.snapshot()
+  assert_true(
+    engine.owns_pending_tool_effect(tool_effect.id(), session_id, call_id),
+  )
+  assert_eq(engine.snapshot(), before_ownership_check)
+  ignore(
+    typed_test_json(
+      engine.record_effect_outcome(tool_effect.id().as_string(), {
+        "ok": true,
+        "content": "notes.txt contents",
+      }),
+    ),
+  )
+  let after_known_outcome = engine.snapshot()
+  assert_true(
+    engine.owns_pending_tool_effect(tool_effect.id(), session_id, call_id),
+  )
+  assert_eq(engine.snapshot(), after_known_outcome)
+  ignore(
+    typed_test_json(
+      engine.complete_effect(tool_effect.id(), {
+        "ok": true,
+        "content": "notes.txt contents",
+      }),
+    ),
+  )
+  assert_false(
+    engine.owns_pending_tool_effect(tool_effect.id(), session_id, call_id),
+  )
+  ignore(
+    typed_test_json(
+      engine.complete_effect(engine.take_typed_effects()[0].id(), {
+        "ok": true,
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "cancel-call",
+            "name": "read",
+            "arguments": "{\"file_path\":\"notes.txt\"}",
+          },
+        ],
+        "finish_reason": "tool_calls",
+      }),
+    ),
+  )
+  let cancelled_tool = engine.take_typed_effects()[0]
+  let cancelled_call_id = @engine.ToolCallId::new("cancel-call").unwrap()
+  assert_true(
+    engine.owns_pending_tool_effect(
+      cancelled_tool.id(),
+      session_id,
+      cancelled_call_id,
+    ),
+  )
+  ignore(
+    typed_test_json(
+      engine.apply(
+        typed_test_command("session_cancel", {
+          "session_id": session_id.as_string(),
+        }),
+      ),
+    ),
+  )
+  assert_false(
+    engine.owns_pending_tool_effect(
+      cancelled_tool.id(),
+      session_id,
+      cancelled_call_id,
+    ),
+  )
+}
+
+///|
+fn typed_test_read_descriptor() -> Json {
+  {
+    "name": "read",
+    "description": "Read text",
+    "input_schema": {
+      "type": "object",
+      "required": ["file_path"],
+      "properties": { "file_path": { "type": "string" } },
+      "additionalProperties": false,
+    },
+    "effect": "read",
+  }
+}
+
+///|
+fn typed_test_pending_read(
+  session_text : String,
+  call_text : String,
+) -> (@engine.Engine, @engine.EngineEffect, @engine.EngineEffect) {
+  let engine = @engine.Engine::new([typed_test_read_descriptor()])
+  ignore(
+    typed_test_json(
+      engine.apply(
+        typed_test_command("session_create", {
+          "id": session_text,
+          "title": "Interruption fixture",
+        }),
+      ),
+    ),
+  )
+  ignore(
+    typed_test_json(
+      engine.apply(
+        typed_test_command("session_send", {
+          "session_id": session_text,
+          "prompt": "Read a file",
+        }),
+      ),
+    ),
+  )
+  let provider = engine.take_typed_effects()[0]
+  ignore(
+    typed_test_json(
+      engine.complete_effect(provider.id(), {
+        "ok": true,
+        "content": "",
+        "tool_calls": [
+          {
+            "id": call_text,
+            "name": "read",
+            "arguments": "{\"file_path\":\"notes.txt\"}",
+          },
+        ],
+        "finish_reason": "tool_calls",
+      }),
+    ),
+  )
+  let tool = engine.take_typed_effects()[0]
+  (engine, provider, tool)
+}
+
+///|
+test "owned tool interruption is exact, terminal, durable, and never requeues effects" {
+  let (engine, provider, tool) = typed_test_pending_read(
+    "interrupt-owned", "interrupt-call",
+  )
+  let session_id = @engine.SessionId::new("interrupt-owned").unwrap()
+  let call_id = @engine.ToolCallId::new("interrupt-call").unwrap()
+  let before = engine.snapshot()
+  assert_eq(
+    engine.interrupt_owned_tool_effect(provider.id(), session_id, call_id),
+    Ok(false),
+  )
+  assert_eq(
+    engine.interrupt_owned_tool_effect(
+      tool.id(),
+      @engine.SessionId::new("another-session").unwrap(),
+      call_id,
+    ),
+    Ok(false),
+  )
+  assert_eq(
+    engine.interrupt_owned_tool_effect(
+      tool.id(),
+      session_id,
+      @engine.ToolCallId::new("another-call").unwrap(),
+    ),
+    Ok(false),
+  )
+  assert_eq(engine.snapshot(), before)
+
+  assert_eq(
+    engine.interrupt_owned_tool_effect(tool.id(), session_id, call_id),
+    Ok(true),
+  )
+  let failed = typed_test_json(
+    engine.invoke("session_get", { "session_id": session_id.as_string() }),
+  )
+  assert_eq(typed_test_string_field(failed, "status"), Some("failed"))
+  let events = engine.event_log(session_id).unwrap()
+  assert_eq(
+    events
+    .filter(event => event.kind() == @engine.EngineEventKind::SessionInterrupted)
+    .length(),
+    1,
+  )
+  assert_eq(
+    events
+    .filter(event => event.kind() == @engine.EngineEventKind::TurnEnded)
+    .length(),
+    1,
+  )
+  let interrupted_completion = events.filter(event => {
+    event.kind() == @engine.EngineEventKind::ToolCompleted &&
+    typed_test_string_field(event.data(), "source") == Some("interrupted") &&
+    typed_test_string_field(event.data(), "effect_id") ==
+    Some(tool.id().as_string())
+  })
+  assert_eq(interrupted_completion.length(), 1)
+  assert_true(engine.take_typed_effects().is_empty())
+  assert_false(engine.owns_pending_tool_effect(tool.id(), session_id, call_id))
+  let interrupted_snapshot = engine.snapshot()
+  ignore(
+    typed_test_json(
+      engine.invoke("session_cancel", { "session_id": session_id.as_string() }),
+    ),
+  )
+  assert_eq(engine.snapshot(), interrupted_snapshot)
+  assert_eq(
+    engine.interrupt_owned_tool_effect(tool.id(), session_id, call_id),
+    Ok(false),
+  )
+  assert_eq(
+    Json::array(
+      engine.event_log(session_id).unwrap().map(@engine.EngineEvent::json),
+    ),
+    Json::array(events.map(@engine.EngineEvent::json)),
+  )
+
+  let restored = @engine.Engine::new([typed_test_read_descriptor()])
+  assert_eq(restored.restore(engine.snapshot()), Ok(()))
+  assert_true(restored.take_typed_effects().is_empty())
+  let restored_session = typed_test_json(
+    restored.invoke("session_get", { "session_id": session_id.as_string() }),
+  )
+  assert_eq(typed_test_string_field(restored_session, "status"), Some("failed"))
+  assert_eq(
+    Json::array(
+      restored.event_log(session_id).unwrap().map(@engine.EngineEvent::json),
+    ),
+    Json::array(events.map(@engine.EngineEvent::json)),
+  )
+}
+
+///|
+test "owned tool interruption preserves cancellation and already-known outcomes" {
+  let (cancelled_engine, _, cancelled_tool) = typed_test_pending_read(
+    "interrupt-cancel-first", "cancel-first-call",
+  )
+  let cancelled_session = @engine.SessionId::new("interrupt-cancel-first").unwrap()
+  let cancelled_call = @engine.ToolCallId::new("cancel-first-call").unwrap()
+  ignore(
+    typed_test_json(
+      cancelled_engine.invoke("session_cancel", {
+        "session_id": cancelled_session.as_string(),
+      }),
+    ),
+  )
+  let cancelled = cancelled_engine.snapshot()
+  assert_eq(
+    cancelled_engine.interrupt_owned_tool_effect(
+      cancelled_tool.id(),
+      cancelled_session,
+      cancelled_call,
+    ),
+    Ok(false),
+  )
+  assert_eq(cancelled_engine.snapshot(), cancelled)
+  assert_eq(
+    cancelled_engine
+    .event_log(cancelled_session)
+    .unwrap()
+    .filter(event => event.kind() == @engine.EngineEventKind::SessionInterrupted)
+    .length(),
+    0,
+  )
+
+  let (known_engine, _, known_tool) = typed_test_pending_read(
+    "interrupt-known-outcome", "known-outcome-call",
+  )
+  let known_session = @engine.SessionId::new("interrupt-known-outcome").unwrap()
+  let known_call = @engine.ToolCallId::new("known-outcome-call").unwrap()
+  ignore(
+    typed_test_json(
+      known_engine.record_effect_outcome(known_tool.id().as_string(), {
+        "ok": true,
+        "content": "actual tool result",
+      }),
+    ),
+  )
+  let known = known_engine.snapshot()
+  assert_eq(
+    known_engine.interrupt_owned_tool_effect(
+      known_tool.id(),
+      known_session,
+      known_call,
+    ),
+    Ok(false),
+  )
+  assert_eq(known_engine.snapshot(), known)
+  ignore(
+    typed_test_json(
+      known_engine.complete_effect(known_tool.id(), {
+        "ok": true,
+        "content": "actual tool result",
+      }),
+    ),
+  )
+  let next_effects = known_engine.take_typed_effects()
+  assert_eq(next_effects.length(), 1)
+  assert_true(next_effects[0].kind() == @engine.EffectType::Provider)
+  let completed = known_engine.snapshot()
+  assert_eq(
+    known_engine.interrupt_owned_tool_effect(
+      known_tool.id(),
+      known_session,
+      known_call,
+    ),
+    Ok(false),
+  )
+  assert_eq(known_engine.snapshot(), completed)
+  assert_true(known_engine.take_typed_effects().is_empty())
 }
 
 ///|
