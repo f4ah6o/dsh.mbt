@@ -23,6 +23,7 @@ async fn desktop_run(
       enable_skills=config.enable_skills,
       skill_dirs=config.skill_dirs,
       enable_subagents=config.enable_subagents,
+      persist_subagent_audits=config.persist_subagent_audits,
     ) {
     Ok(value) => value
     Err(error) => return Err("dsh runtime could not start: " + error)

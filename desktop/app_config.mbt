@@ -17,6 +17,7 @@ priv struct DesktopConfig {
   lsp_config_path : String?
   enable_skills : Bool
   enable_subagents : Bool
+  persist_subagent_audits : Bool
   skill_dirs : Array[String]
   smoke : Bool
   offline_e2e : Bool
@@ -237,8 +238,8 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
     "--mode", "--model", "--base-url", "--max-retries", "--frame-output",
   ]
   let flags = [
-    "--demo", "--allow-shell", "--enable-skills", "--enable-subagents", "--smoke",
-    "--offline-e2e", "--visual-smoke",
+    "--demo", "--allow-shell", "--enable-skills", "--enable-subagents", "--persist-subagent-audits",
+    "--smoke", "--offline-e2e", "--visual-smoke",
   ]
   let mut index = 0
   while index < args.length() {
@@ -260,6 +261,10 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
   if desktop_argument_values(args, "--skill-dir").length() > 0 &&
     !desktop_argument_flag(args, "--enable-skills") {
     return Err("--skill-dir requires --enable-skills")
+  }
+  if desktop_argument_flag(args, "--persist-subagent-audits") &&
+    !desktop_argument_flag(args, "--enable-subagents") {
+    return Err("--persist-subagent-audits requires --enable-subagents")
   }
   if desktop_argument_values(args, "--skill-dir").length() > 8 {
     return Err("--skill-dir may be specified at most 8 times")
@@ -351,6 +356,9 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
     lsp_config_path: desktop_argument_value(args, "--lsp-config"),
     enable_skills: desktop_argument_flag(args, "--enable-skills"),
     enable_subagents: desktop_argument_flag(args, "--enable-subagents"),
+    persist_subagent_audits: desktop_argument_flag(
+      args, "--persist-subagent-audits",
+    ),
     skill_dirs: desktop_argument_values(args, "--skill-dir"),
     smoke: desktop_argument_flag(args, "--smoke"),
     offline_e2e,
@@ -360,7 +368,7 @@ fn desktop_parse_config(args : Array[String]) -> Result[DesktopConfig, String] {
 
 ///|
 fn desktop_usage() -> String {
-  "Usage: dsh-desktop [--workspace PATH] [--data-dir PATH] [--mcp-config PATH] [--hooks-config PATH] [--hooks-plugin-root PATH] [--hooks-project-dir PATH] [--hooks-dialect claude-code|codex] [--hooks-model NAME] [--lsp-config PATH] [--enable-skills] [--enable-subagents] [--skill-dir PATH] [--mode MODE] [--model NAME] [--base-url URL] [--max-retries 0..5] [--allow-shell] [--demo]\n" +
+  "Usage: dsh-desktop [--workspace PATH] [--data-dir PATH] [--mcp-config PATH] [--hooks-config PATH] [--hooks-plugin-root PATH] [--hooks-project-dir PATH] [--hooks-dialect claude-code|codex] [--hooks-model NAME] [--lsp-config PATH] [--enable-skills] [--enable-subagents] [--persist-subagent-audits] [--skill-dir PATH] [--mode MODE] [--model NAME] [--base-url URL] [--max-retries 0..5] [--allow-shell] [--demo]\n" +
   "       dsh-desktop --smoke [--workspace PATH] [--data-dir PATH]\n" +
   "       dsh-desktop --offline-e2e --workspace PATH --data-dir PATH [--frame-output FILE]\n\n" +
   "A native macOS conversation window backed by dsh's local runtime. Send a prompt, review tool calls, and approve or deny them in the transcript. Use Command-V to paste and Up/Down or PageUp/PageDown to scroll history. Japanese input through system IME composition is opt-in on macOS, Windows and Wayland with DSH_DESKTOP_IME=1 (physical IME qualification is separate); paste works without it."

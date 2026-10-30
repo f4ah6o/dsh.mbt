@@ -8,7 +8,8 @@ const portablePackages = [
   'verification/retry_math',
 ];
 const ownPackages = [
-  ...portablePackages, 'app', 'native', 'runtime', 'cmd/dsh', 'browser', 'browser/sw', 'desktop', 'desktop/linux', 'desktop/macos',
+  ...portablePackages, 'app', 'native', 'runtime', 'cmd/dsh', 'browser', 'browser/sw',
+  'desktop', 'desktop/linux', 'desktop/macos', 'verification/native_fs',
 ];
 
 function checkPackages(packages, target) {
@@ -117,7 +118,8 @@ function checkFfiInventory() {
   const auditedSymbols = [
     'dsh_auth_open_url', 'dsh_auth_random', 'dsh_auth_unix_time',
     'dsh_crypto_sha256', 'dsh_crypto_verify_rs256', 'dsh_exec_worker',
-    'dsh_fs_atomic_write', 'dsh_fs_close', 'dsh_fs_create_exclusive',
+    'dsh_fs_atomic_create_no_replace', 'dsh_fs_atomic_write',
+    'dsh_fs_close', 'dsh_fs_create_exclusive',
     'dsh_fs_list_dir', 'dsh_fs_mapping_matches', 'dsh_fs_open_file',
     'dsh_fs_open_root', 'dsh_fs_read_fd', 'dsh_fs_root_matches',
     'dsh_fs_set_root_mode', 'dsh_fs_stat_fd', 'dsh_fs_stat_root', 'dsh_fs_unlink',
@@ -171,7 +173,10 @@ try {
   run('moon', ['fmt', '--check', ...ownPackages]);
   checkPackages(portablePackages, 'all');
   checkPackages(['app'], 'js');
-  checkPackages(['native', 'runtime', 'cmd/dsh', 'desktop', 'desktop/linux', 'desktop/macos'], 'native');
+  checkPackages([
+    'native', 'runtime', 'cmd/dsh', 'desktop', 'desktop/linux', 'desktop/macos',
+    'verification/native_fs',
+  ], 'native');
   checkPackages(['browser', 'browser/sw'], 'js');
   checkPureMoonBitInventory();
   if (existsSync(join(projectRoot, 'web/moonbit/browser.js')) &&

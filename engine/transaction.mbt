@@ -537,6 +537,63 @@ pub fn Engine::complete_effect(
 }
 
 ///|
+/// Fail a live turn because an owned foreground child outcome cannot be
+/// durably published. The exact pending tool identity is rechecked on a
+/// candidate state; a lost, settled, or known-outcome effect is left alone.
+/// This operation only records the interruption. It never dispatches effects
+/// or runs hooks. Native hosts must call it under the same gate that serializes
+/// cancellation and durable checkpointing.
+pub fn Engine::interrupt_owned_tool_effect(
+  self : Engine,
+  effect_id : EffectId,
+  session_id : SessionId,
+  call_id : ToolCallId,
+) -> Result[Bool, String] {
+  let candidate = self.copy_state()
+  if !candidate.owns_pending_tool_effect(effect_id, session_id, call_id) {
+    return Ok(false)
+  }
+  let effect_id_text = effect_id.as_string()
+  let session_id_text = session_id.as_string()
+  let call_id_text = call_id.as_string()
+  let session = match candidate.sessions.get(session_id_text) {
+    Some(value) => value
+    None => return Ok(false)
+  }
+  let call = match session.call_by_id(call_id_text) {
+    Some(value) => value
+    None => return Ok(false)
+  }
+  // Ownership alone also remains true after record_effect_outcome. That
+  // durable known result belongs to the host and must never be overwritten by
+  // a publication failure.
+  if !session.open_step ||
+    call.stage != Dispatched ||
+    call.effect_id != Some(effect_id_text) {
+    return Ok(false)
+  }
+  session.append(
+    "session/interrupted",
+    object([
+      ("reason", Json::string("Fatal child outcome; effects were not replayed")),
+    ]),
+  )
+  candidate.terminate(
+    session,
+    Failed,
+    "interrupted",
+    "Interrupted before durable completion; effect outcome is unknown",
+  )
+  if !candidate.within_capacity() ||
+    session_capacity_length(session.json()) > SESSION_CAPACITY ||
+    session.events.length() > 32768 {
+    return Err(CAPACITY_ERROR)
+  }
+  self.adopt(candidate)
+  Ok(true)
+}
+
+///|
 /// Record a bounded provider retry before the host waits. The engine owns the
 /// retry budget and only accepts transient, unprojected failures.
 pub fn Engine::schedule_retry(

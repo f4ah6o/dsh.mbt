@@ -261,8 +261,8 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
   ]
   let boolean_options = [
     "--serve", "--mcp", "--acp", "--demo", "--enable-skills", "--enable-subagents",
-    "--allow-shell", "--approve-writes", "--json", "--help", "-h", "--auth-status",
-    "--sign-in", "--sign-out", "--models",
+    "--persist-subagent-audits", "--allow-shell", "--approve-writes", "--json", "--help",
+    "-h", "--auth-status", "--sign-in", "--sign-out", "--models",
   ]
   let positionals : Array[String] = []
   let mut after_separator = false
@@ -391,6 +391,10 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
   if native_cli_options(args, "--skill-dir").length() > 0 &&
     !native_flag(args, "--enable-skills") {
     return Err("--skill-dir requires --enable-skills")
+  }
+  if native_flag(args, "--persist-subagent-audits") &&
+    !native_flag(args, "--enable-subagents") {
+    return Err("--persist-subagent-audits requires --enable-subagents")
   }
   if prune is Some(_) {
     match native_cli_prune_input(args, prune.unwrap()) {

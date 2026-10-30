@@ -1,6 +1,6 @@
 ///|
-/// The bounded, inert v1 child-audit envelope. This codec is not wired to the
-/// runtime or store; callers must not treat a decoded record as resumable work.
+/// The bounded, inert v1 child-audit envelope. Runtime publication stores only
+/// settled snapshots; a decoded record is never resumable work.
 const NATIVE_SUBAGENT_AUDIT_SCHEMA : String = "dsh-subagent-audit-v1"
 
 ///|

@@ -20,6 +20,11 @@ if [ ! -x "$native_worker" ]; then
 fi
 node scripts/test-acp-stdio.mjs "$native_worker"
 DSH_NATIVE_WORKER_BIN="$native_worker" moon test runtime --target native --frozen --target-dir "$native_test_root/tests"
+# Run separately: the atomic-create fixture consumes a process-global staging
+# serial range and must not share a process with other native filesystem tests.
+moon test verification/native_fs --target native --frozen --no-parallelize \
+  --filter "SafeRoot atomically creates complete immutable files without replacement" \
+  --target-dir "$native_test_root/native-fs-tests"
 
 sh scripts/build.sh
 sh scripts/test-install.sh

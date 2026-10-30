@@ -14,6 +14,7 @@ priv struct NativeRuntime {
   lsp : NativeLspPool
   scheduler : NativeScheduler
   subagent_semaphore : @async.Semaphore
+  persist_subagent_audits : Bool
   session_start_semaphore : @async.Semaphore
   gate : @async.Mutex
   mut state : NativeState
@@ -140,11 +141,15 @@ async fn NativeRuntime::open(
   hooks_config_path~ : String? = None,
   lsp_config_path~ : String? = None,
   enable_subagents~ : Bool = false,
+  persist_subagent_audits~ : Bool = false,
   hooks_dialect~ : String = "claude-code",
   hooks_model~ : String = "",
   hooks_plugin_root~ : String? = None,
   hooks_project_dir~ : String? = None,
 ) -> Result[NativeRuntime, String] {
+  if persist_subagent_audits && !enable_subagents {
+    return Err("--persist-subagent-audits requires --enable-subagents")
+  }
   // The bounded Windows profile rejects host capabilities that need POSIX
   // process control or external servers before touching the data directory.
   if native_os_is_windows() {
@@ -468,6 +473,7 @@ async fn NativeRuntime::open(
     lsp,
     gate: @async.Mutex::Mutex(),
     subagent_semaphore: @async.Semaphore::Semaphore(1, initial_value=1),
+    persist_subagent_audits,
     session_start_semaphore: @async.Semaphore::Semaphore(1, initial_value=1),
     state: {
       engine: api.snapshot(),
@@ -2992,6 +2998,7 @@ async fn NativeRuntime::run_effects(
   effects : Array[@engine.EngineEffect],
   command_id : String,
   accepted_revision : Int32,
+  audit_fault~ : NativeSubagentAuditAtomicFault? = None,
 ) -> Result[Unit, String] {
   if effects.is_empty() {
     return Ok(())
@@ -3007,7 +3014,7 @@ async fn NativeRuntime::run_effects(
     Ok(value) => value
     Err(error) => return Err(error)
   }
-  self.run_effects_in_control(effects, control)
+  self.run_effects_in_control(effects, control, audit_fault~)
 }
 
 ///|
@@ -3015,6 +3022,7 @@ async fn NativeRuntime::run_effects_in_control(
   self : NativeRuntime,
   effects : Array[@engine.EngineEffect],
   control : NativeJobControl,
+  audit_fault~ : NativeSubagentAuditAtomicFault? = None,
 ) -> Result[Unit, String] {
   for effect in effects {
     if effect.session_id().as_string() != control.session_id {
@@ -3036,7 +3044,11 @@ async fn NativeRuntime::run_effects_in_control(
               ) {
                 match effect.kind() {
                   @engine.EffectType::Tool =>
-                    self.run_tool_effect(effect, control=Some(control))
+                    self.run_tool_effect(
+                      effect,
+                      control=Some(control),
+                      audit_fault~,
+                    )
                   @engine.EffectType::Provider =>
                     self.run_provider_effect(effect, control=Some(control))
                 }
@@ -3067,11 +3079,13 @@ async fn NativeRuntime::run_command_job(
   accepted_revision : Int32,
   effects : Array[@engine.EngineEffect],
   control~ : NativeJobControl? = None,
+  audit_fault~ : NativeSubagentAuditAtomicFault? = None,
 ) -> Unit {
   let outcome = @async.handle_cancellation(async fn() {
     match control {
-      Some(value) => self.run_effects_in_control(effects, value)
-      None => self.run_effects(effects, command_id, accepted_revision)
+      Some(value) => self.run_effects_in_control(effects, value, audit_fault~)
+      None =>
+        self.run_effects(effects, command_id, accepted_revision, audit_fault~)
     }
   })
   @async.protect_from_cancel(async fn() {
@@ -3763,6 +3777,7 @@ async fn NativeRuntime::run_tool_effect(
   effect : @engine.EngineEffect,
   control~ : NativeJobControl? = None,
   subagent_timeout_ms~ : Int32 = NATIVE_SUBAGENT_MAX_RUN_MS,
+  audit_fault~ : NativeSubagentAuditAtomicFault? = None,
 ) -> Result[(Json, Array[@engine.EngineEffect]), String] {
   if effect.kind() != @engine.EffectType::Tool {
     return Err("effect is not a tool")
@@ -3802,11 +3817,53 @@ async fn NativeRuntime::run_tool_effect(
       )
     Ok({ action: NativeHookAction::Continue, .. }) => ()
   }
-  let tool_result = if self.external_mcp.has_tool(name) {
-    self.external_mcp.execute(effect.request())
-  } else if name == "subagent" {
-    self.run_subagent_tool(effect, control~, run_timeout_ms=subagent_timeout_ms)
-  } else if name == "lsp" && self.lsp.descriptor is Some(_) {
+  if self.external_mcp.has_tool(name) {
+    return self.finish_tool_effect(
+      effect,
+      session_id,
+      self.external_mcp.execute(effect.request()),
+      control~,
+    )
+  }
+  if name == "subagent" {
+    let outcome = self.run_subagent_tool(
+      effect,
+      parent_turn_id=turn_id,
+      control~,
+      run_timeout_ms=subagent_timeout_ms,
+      audit_fault~,
+    )
+    match outcome {
+      NativeSubagentToolOutcome::Result(tool_result) =>
+        return self.finish_tool_effect(
+          effect,
+          session_id,
+          tool_result,
+          control~,
+        )
+      NativeSubagentToolOutcome::Abandoned(error) => return Err(error)
+      NativeSubagentToolOutcome::Fatal(error) =>
+        match
+          self.interrupt_for_subagent_audit_failure(
+            effect,
+            turn_id,
+            string_field(effect.request(), "call_id").unwrap_or(""),
+            control,
+          ) {
+          Ok(true) =>
+            return Err("fatal child audit outcome interrupted the parent turn")
+          Ok(false) =>
+            return Err(
+              "fatal child audit outcome could not interrupt a settled parent turn",
+            )
+          Err(interrupt_error) =>
+            return Err(
+              "fatal child audit outcome: " + error + "; " + interrupt_error,
+            )
+        }
+    }
+  }
+  let tool_result = if name == "lsp" && self.lsp.descriptor is Some(_) {
     self.lsp.execute(self.tools, effect.request())
   } else if name == "skill" && self.skills.enabled {
     self.skills.execute(self.tools.root, effect.request())

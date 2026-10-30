@@ -14,6 +14,8 @@ Engine::complete(effect_id : String, result : Json) -> Result[Json, String]
 Engine::project_stream(effect_id : String, content : String, reasoning : String) -> Result[Json, String]
 Engine::snapshot() -> Json
 Engine::restore(snapshot : Json) -> Result[Unit, String]
+Engine::owns_pending_tool_effect(effect_id : EffectId, session_id : SessionId, call_id : ToolCallId) -> Bool
+Engine::interrupt_owned_tool_effect(effect_id : EffectId, session_id : SessionId, call_id : ToolCallId) -> Result[Bool, String]
 ```
 
 | Operation | Input |
@@ -64,6 +66,21 @@ An effect is `{id, kind: "llm" | "tool", session_id, request}`. A model request
 contains `{system, messages, tools}`. A tool request contains
 `{name, arguments, call_id}`. Model and tool results use the shared completion
 contract documented by the application host.
+
+`owns_pending_tool_effect` checks the live effect registry for an exact tool,
+session, and call match. Draining effects for host dispatch leaves the effect
+pending; settlement or cancellation removes ownership. This typed query is
+available only to in-process hosts and is not a session or wire operation. It
+is a point-in-time predicate, not a reservation; native callers must check it
+under their runtime gate immediately before the action that relies on ownership.
+
+`interrupt_owned_tool_effect` is also in-process only. It accepts only the
+exact still-dispatched call in an open step; known outcomes, cancelled or
+settled effects are left untouched. Success records one failed
+`session/interrupted` closure and retires pending effects without replay or
+hook dispatch. Native callers must invoke it under the same gate that serializes
+cancellation and checkpointing; the Engine itself does not provide that host
+gate.
 
 Consecutive calls with static `effect: "read"` classification execute in a
 rolling pool of at most four effects. The host checkpoints the whole admitted

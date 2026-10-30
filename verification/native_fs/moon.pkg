@@ -1,0 +1,7 @@
+import {
+  "f4ah6o/dsh/runtime",
+  "moonbitlang/async",
+  "moonbitlang/async/fs",
+} for "wbtest"
+
+supported_targets = "+native"

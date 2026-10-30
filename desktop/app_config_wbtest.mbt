@@ -8,6 +8,11 @@ test "desktop options preserve Claude Code substitution overrides" {
   assert_eq(config.hooks_plugin_root, Some(""))
   assert_eq(config.hooks_project_dir, Some("/configured-project"))
   assert_eq(config.hooks_dialect, "claude-code")
+  assert_true(desktop_parse_config(["--persist-subagent-audits"]) is Err(_))
+  assert_true(
+    desktop_parse_config(["--persist-subagent-audits", "--enable-subagents"])
+    is Ok(_),
+  )
 
   assert_true(
     desktop_parse_config([

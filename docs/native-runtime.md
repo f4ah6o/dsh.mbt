@@ -222,23 +222,27 @@ continuable children, child session listing / resume, independent child
 provider selection, configurable tool filters / personas / output schemas,
 or full upstream provider and lifecycle parity.
 
-The runtime package now has a pure bounded codec for the proposed
-`dsh-subagent-audit-v1` envelope. It accepts only one fully validated terminal
-child snapshot and syntax-valid parent session/turn/effect/call and workspace
-fields; validation uses a throwaway pure Engine and confirms that no effects
-remain. It does not check those parent or workspace fields against live state.
-The codec does not write or expose audit files, add a read surface, or enable
-restore-to-run / resume. Child snapshots contain prompts and tool results, so a
-future store must keep them owner-only and apply strict byte and count quotas.
-Publication must recheck the exact pending parent tool effect and cancellation
-under the native runtime gate, then use no-replace atomic publication. PRs
-[#80](https://github.com/f4ah6o/dsh.mbt/pull/80) and
-[#81](https://github.com/f4ah6o/dsh.mbt/pull/81) provide those prerequisites;
-quota, orphan handling, and unknown publication outcomes remain separate work.
-An ambiguous save must interrupt the parent turn rather than return a normal
-tool error that could lead the model to request the child again. An archive
-published before a later parent cancellation remains an inert orphan and is
-never adopted automatically.
+Add `--persist-subagent-audits` alongside `--enable-subagents` to publish the
+complete terminal Engine snapshot as `subagent-audits/<child_id>.json` under
+the protected native data directory. The files and directory use owner-only
+permissions. The strict `dsh-subagent-audit-v1` codec validates each snapshot
+before publication. Each record is at most 4 MiB; the flat directory allows
+up to 32 regular files and 128 MiB of logical file bytes. Before publication,
+the runtime reserves two entries and twice the record size to include an
+abandoned atomic-create temp file. It counts temp files and unknown filenames
+through anchored metadata reads without loading their contents. Quota
+exhaustion and all save uncertainty interrupt the parent turn before another
+parent hook or provider step can run.
+
+Audit files are inert local data. There is no runtime list, read, delete,
+resume, replay, or parent-result adoption command. Background and continuable
+children remain unsupported. A successful audit publication followed by
+cancellation or a failed parent checkpoint can leave an orphan; the runtime
+keeps it and never adopts or deletes it automatically. There is no retention
+management or automatic temp cleanup; abandoned files remain charged against
+quota until the owner removes them offline. Audit records include child prompts
+and tool results, so treat the protected data directory as sensitive. The
+default behavior creates no audit directory or record.
 
 ## External MCP stdio tools
 
