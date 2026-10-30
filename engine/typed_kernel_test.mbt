@@ -128,6 +128,158 @@ test "typed commands drive the engine and typed effects/events match compatibili
 }
 
 ///|
+test "pending tool ownership follows the effect registry through drain, settlement, and cancellation" {
+  let read_tool : Json = {
+    "name": "read",
+    "description": "Read text",
+    "input_schema": {
+      "type": "object",
+      "required": ["file_path"],
+      "properties": { "file_path": { "type": "string" } },
+      "additionalProperties": false,
+    },
+    "effect": "read",
+  }
+  let engine = @engine.Engine::new([read_tool])
+  let session_id = @engine.SessionId::new("ownership-settle").unwrap()
+  let call_id = @engine.ToolCallId::new("read-call").unwrap()
+  ignore(
+    typed_test_json(
+      engine.apply(
+        typed_test_command("session_create", { "id": session_id.as_string() }),
+      ),
+    ),
+  )
+  ignore(
+    typed_test_json(
+      engine.apply(
+        typed_test_command("session_send", {
+          "session_id": session_id.as_string(),
+          "prompt": "Read a file",
+        }),
+      ),
+    ),
+  )
+  let provider_effect = engine.take_typed_effects()[0]
+  assert_false(
+    engine.owns_pending_tool_effect(provider_effect.id(), session_id, call_id),
+  )
+  ignore(
+    typed_test_json(
+      engine.complete_effect(provider_effect.id(), {
+        "ok": true,
+        "content": "",
+        "tool_calls": [
+          {
+            "id": call_id.as_string(),
+            "name": "read",
+            "arguments": "{\"file_path\":\"notes.txt\"}",
+          },
+        ],
+        "finish_reason": "tool_calls",
+      }),
+    ),
+  )
+  let tool_effect = engine.take_typed_effects()[0]
+  assert_true(tool_effect.kind() == @engine.EffectType::Tool)
+  assert_true(
+    engine.owns_pending_tool_effect(tool_effect.id(), session_id, call_id),
+  )
+  assert_false(
+    engine.owns_pending_tool_effect(
+      tool_effect.id(),
+      @engine.SessionId::new("other-session").unwrap(),
+      call_id,
+    ),
+  )
+  assert_false(
+    engine.owns_pending_tool_effect(
+      tool_effect.id(),
+      session_id,
+      @engine.ToolCallId::new("other-call").unwrap(),
+    ),
+  )
+  assert_false(
+    engine.owns_pending_tool_effect(
+      @engine.EffectId::new("effect-999").unwrap(),
+      session_id,
+      call_id,
+    ),
+  )
+  assert_true(engine.take_typed_effects().is_empty())
+  let before_ownership_check = engine.snapshot()
+  assert_true(
+    engine.owns_pending_tool_effect(tool_effect.id(), session_id, call_id),
+  )
+  assert_eq(engine.snapshot(), before_ownership_check)
+  ignore(
+    typed_test_json(
+      engine.record_effect_outcome(tool_effect.id().as_string(), {
+        "ok": true,
+        "content": "notes.txt contents",
+      }),
+    ),
+  )
+  let after_known_outcome = engine.snapshot()
+  assert_true(
+    engine.owns_pending_tool_effect(tool_effect.id(), session_id, call_id),
+  )
+  assert_eq(engine.snapshot(), after_known_outcome)
+  ignore(
+    typed_test_json(
+      engine.complete_effect(tool_effect.id(), {
+        "ok": true,
+        "content": "notes.txt contents",
+      }),
+    ),
+  )
+  assert_false(
+    engine.owns_pending_tool_effect(tool_effect.id(), session_id, call_id),
+  )
+  ignore(
+    typed_test_json(
+      engine.complete_effect(engine.take_typed_effects()[0].id(), {
+        "ok": true,
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "cancel-call",
+            "name": "read",
+            "arguments": "{\"file_path\":\"notes.txt\"}",
+          },
+        ],
+        "finish_reason": "tool_calls",
+      }),
+    ),
+  )
+  let cancelled_tool = engine.take_typed_effects()[0]
+  let cancelled_call_id = @engine.ToolCallId::new("cancel-call").unwrap()
+  assert_true(
+    engine.owns_pending_tool_effect(
+      cancelled_tool.id(),
+      session_id,
+      cancelled_call_id,
+    ),
+  )
+  ignore(
+    typed_test_json(
+      engine.apply(
+        typed_test_command("session_cancel", {
+          "session_id": session_id.as_string(),
+        }),
+      ),
+    ),
+  )
+  assert_false(
+    engine.owns_pending_tool_effect(
+      cancelled_tool.id(),
+      session_id,
+      cancelled_call_id,
+    ),
+  )
+}
+
+///|
 test "typed command boundary rejects invalid identifiers without mutation" {
   let engine = @engine.Engine::new([])
   assert_true(

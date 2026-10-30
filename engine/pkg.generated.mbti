@@ -42,6 +42,7 @@ pub fn Engine::finish_stop_hook(Self, NativeStopHookCheckpoint) -> Result[Json, 
 pub fn Engine::inject_hook_contexts(Self, String, Array[String], source_kind? : String) -> Result[Bool, String]
 pub fn Engine::invoke(Self, String, Json) -> Result[Json, String]
 pub fn Engine::new(Array[Json]) -> Self
+pub fn Engine::owns_pending_tool_effect(Self, EffectId, SessionId, ToolCallId) -> Bool
 pub fn Engine::pending_post_tool_prompt_hook(Self, SessionId) -> NativePostToolPromptHookCheckpoint?
 pub fn Engine::pending_stop_hook(Self, SessionId) -> NativeStopHookCheckpoint?
 pub fn Engine::pending_subagent_prompt_hook(Self, String) -> NativeSubagentPromptHookCheckpoint?

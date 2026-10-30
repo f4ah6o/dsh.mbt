@@ -34,6 +34,7 @@ pub fn HarnessApi::mcp_handle(Self, String) -> String?
 pub fn HarnessApi::mcp_handle_with_hook_contexts(Self, String, Array[String], Array[String], source_kind? : String) -> String?
 pub fn HarnessApi::mcp_handle_with_prompt_contexts(Self, String, Array[String]) -> String?
 pub fn HarnessApi::new(external_mcp_tools? : Array[Json], skill_tool? : Json?, lsp_tool? : Json?, subagent_tool? : Json?) -> Result[Self, String]
+pub fn HarnessApi::owns_pending_tool_effect(Self, @engine.EffectId, @engine.SessionId, @engine.ToolCallId) -> Bool
 pub fn HarnessApi::pending_post_tool_prompt_hook(Self, @engine.SessionId) -> @engine.NativePostToolPromptHookCheckpoint?
 pub fn HarnessApi::pending_stop_hook(Self, @engine.SessionId) -> @engine.NativeStopHookCheckpoint?
 pub fn HarnessApi::prepare_stop_continuation(Self, @engine.NativeStopHookCheckpoint, String) -> Result[Json, String]
