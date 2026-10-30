@@ -87,6 +87,7 @@ fn Session::copy_state(self : Session) -> Session {
     retry_max_delay_ms: self.retry_max_delay_ms,
     pending_retry_id: self.pending_retry_id,
     sticky_max_tokens: self.sticky_max_tokens,
+    provider_request_byte_ceiling: self.provider_request_byte_ceiling,
     stop_hook_pending: self.stop_hook_pending,
     stop_hook_event_seq: self.stop_hook_event_seq,
     stop_continuation_text: self.stop_continuation_text,
@@ -400,6 +401,7 @@ pub fn Engine::apply_session_send_with_hook_contexts(
   additional_contexts : Array[String],
   source_kind~ : String = "hooks-claude-code",
   auto_prune_tool_results~ : Bool = false,
+  max_provider_request_utf8_bytes~ : Int32? = None,
 ) -> Result[Json, String] {
   if !["hooks-claude-code", "hooks-codex"].contains(source_kind) {
     return Err("Unknown native hook context source")
@@ -407,6 +409,14 @@ pub fn Engine::apply_session_send_with_hook_contexts(
   match EngineCommand::SendPrompt(session_id, prompt).validate() {
     Err(error) => return Err(error)
     Ok(_) => ()
+  }
+  match max_provider_request_utf8_bytes {
+    Some(value) if value < 1 ||
+      value > PROVIDER_CONTEXT_MEASUREMENT_MAX_UTF8_BYTES =>
+      return Err(
+        "max_provider_request_utf8_bytes must be between 1 and 16777216",
+      )
+    _ => ()
   }
   let all_contexts = initial_contexts.copy()
   for context in additional_contexts {
@@ -423,6 +433,7 @@ pub fn Engine::apply_session_send_with_hook_contexts(
     additional_contexts,
     source_kind,
     auto_prune_tool_results~,
+    max_provider_request_utf8_bytes~,
   ) catch {
     Invalid(error) => return Err(error)
   }

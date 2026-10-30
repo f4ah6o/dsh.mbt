@@ -218,6 +218,7 @@ pub fn Engine::finish_stop_hook(
         "turn/end",
         object([("reason", Json::string("completed"))]),
       )
+      session.provider_request_byte_ceiling = None
       session.clear_stop_hook_state()
     }
     Ok(session.json())

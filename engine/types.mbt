@@ -177,6 +177,8 @@ priv struct Session {
   mut pending_retry_id : String?
   /// Sticky max-token ending retained across same-turn Stop-hook continuations.
   mut sticky_max_tokens : Bool
+  /// Optional per-turn UTF-8 request ceiling recovered from its turn/start event.
+  mut provider_request_byte_ceiling : Int32?
   /// A completed provider step is paused while the native Stop hook runs.
   mut stop_hook_pending : Bool
   mut stop_hook_event_seq : Int32?
@@ -311,6 +313,7 @@ fn fresh_session(
     retry_max_delay_ms: None,
     pending_retry_id: None,
     sticky_max_tokens: false,
+    provider_request_byte_ceiling: None,
     stop_hook_pending: false,
     stop_hook_event_seq: None,
     stop_continuation_text: None,

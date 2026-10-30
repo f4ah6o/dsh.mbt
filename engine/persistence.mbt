@@ -588,10 +588,13 @@ fn apply_restore_event_batch(
       kind != "session/interrupted" {
       raise Invalid("Stop settlement is not followed by its input boundary")
     }
+    let provider_request_limit_end = kind == "turn/end" &&
+      fields(data).get("reason") == Some(Json::string("provider_request_limit"))
     if late_subagent_context_admission &&
       kind != "user/message" &&
       kind != "hook/subagent-post-tool-prompt-admitted" &&
-      kind != "step/start" {
+      kind != "step/start" &&
+      !provider_request_limit_end {
       raise Invalid("Late SubagentStart admission is not followed by a step")
     }
     if expected_subagent_context is Some(_) && kind != "user/message" {
@@ -658,6 +661,25 @@ fn apply_restore_event_batch(
       session.turn_id = turn_id
       session.step = 0
       session.status = Running
+      let turn_start_fields = fields(data)
+      for key, _ in turn_start_fields {
+        if key != "max_provider_request_utf8_bytes" {
+          raise Invalid("Invalid turn/start field")
+        }
+      }
+      session.provider_request_byte_ceiling = match
+        turn_start_fields.get("max_provider_request_utf8_bytes") {
+        None => None
+        Some(value) =>
+          Some(
+            int_value(
+              value,
+              "max_provider_request_utf8_bytes",
+              1,
+              PROVIDER_CONTEXT_MEASUREMENT_MAX_UTF8_BYTES,
+            ),
+          )
+      }
       session.todos = None
       session.clear_stop_hook_state()
       session.clear_post_tool_prompt_hook()
@@ -2295,12 +2317,19 @@ fn apply_restore_event_batch(
             raise Invalid("Turn ended with unsettled work")
           }
           let reason = required_string(data, "reason", max=64)
+          if reason == "provider_request_limit" &&
+            session.provider_request_byte_ceiling is None {
+            raise Invalid(
+              "Provider request limit ending has no turn byte ceiling",
+            )
+          }
           if stop_settled_pending_boundary &&
             reason != "blocked" &&
             reason != "cancelled" &&
             reason != "max_steps" &&
             reason != "effect_limit" &&
             reason != "session_capacity" &&
+            reason != "provider_request_limit" &&
             reason != "interrupted" {
             raise Invalid("Stop settlement ended without settling its input")
           }
@@ -2312,6 +2341,7 @@ fn apply_restore_event_batch(
             } else if has_staged_continuation {
               reason == "cancelled" ||
               reason == "session_capacity" ||
+              reason == "provider_request_limit" ||
               reason == "max_steps" ||
               reason == "effect_limit" ||
               reason == "interrupted"
@@ -2319,11 +2349,13 @@ fn apply_restore_event_batch(
               reason == "max_tokens" ||
               reason == "cancelled" ||
               reason == "session_capacity" ||
+              reason == "provider_request_limit" ||
               reason == "interrupted"
             } else {
               reason == "completed" ||
               reason == "cancelled" ||
               reason == "session_capacity" ||
+              reason == "provider_request_limit" ||
               reason == "interrupted"
             }
             if !allowed_stop_end {
@@ -2352,11 +2384,16 @@ fn apply_restore_event_batch(
             | "max_tokens"
             | "effect_limit"
             | "session_capacity"
+            | "provider_request_limit"
             | "interrupted"
             | "blocked" => Failed
             _ => raise Invalid("Unknown turn ending")
           }
           session.clear_stop_hook_state()
+          session.provider_request_byte_ceiling = None
+          late_subagent_context_admission = false
+          late_subagent_context_count = 0
+          late_subagent_context_length = 0
           stop_settled_pending_boundary = false
           stop_continuation_reason_seen = false
           stop_continuation_rejected = false

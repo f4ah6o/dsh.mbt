@@ -107,6 +107,15 @@ pub(all) enum EngineCommand {
   /// Start a prompt after applying the existing default tool-result pruning
   /// policy inside the same engine transaction.
   SendPromptWithAutoPruning(SessionId, String, Array[String])
+  /// Apply a user-selected UTF-8 byte ceiling to every provider request in the
+  /// turn. The boolean opts into the existing pre-send pruning policy.
+  SendPromptWithRequestByteCeiling(
+    SessionId,
+    String,
+    Array[String],
+    Bool,
+    Int32
+  )
   CancelSession(SessionId)
   PruneToolResults(SessionId, ToolResultPruneConfig)
   ApproveTool(SessionId, ToolCallId, Bool)
@@ -196,12 +205,30 @@ pub fn EngineCommand::from_json(
           Some(Json::True) => true
           Some(_) => raise Invalid("auto_prune_tool_results must be a boolean")
         }
-        if auto_prune_tool_results {
-          SendPromptWithAutoPruning(session_id, prompt, additional_contexts)
-        } else if additional_contexts.is_empty() {
-          SendPrompt(session_id, prompt)
-        } else {
-          SendPromptWithContexts(session_id, prompt, additional_contexts)
+        let max_request_utf8_bytes = match
+          fields(input).get("max_provider_request_utf8_bytes") {
+          None => None
+          Some(value) =>
+            Some(
+              int_value(
+                value,
+                "max_provider_request_utf8_bytes",
+                1,
+                PROVIDER_CONTEXT_MEASUREMENT_MAX_UTF8_BYTES,
+              ),
+            )
+        }
+        match max_request_utf8_bytes {
+          Some(maximum) =>
+            SendPromptWithRequestByteCeiling(
+              session_id, prompt, additional_contexts, auto_prune_tool_results, maximum,
+            )
+          None if auto_prune_tool_results =>
+            SendPromptWithAutoPruning(session_id, prompt, additional_contexts)
+          None if additional_contexts.is_empty() =>
+            SendPrompt(session_id, prompt)
+          None =>
+            SendPromptWithContexts(session_id, prompt, additional_contexts)
         }
       }
       "session_cancel" => CancelSession(decode_session_id(input))
@@ -238,6 +265,24 @@ pub fn EngineCommand::session_send_details(
       Some((session_id, prompt, contexts, false))
     SendPromptWithAutoPruning(session_id, prompt, contexts) =>
       Some((session_id, prompt, contexts, true))
+    SendPromptWithRequestByteCeiling(
+      session_id,
+      prompt,
+      contexts,
+      auto_prune_tool_results,
+      _
+    ) => Some((session_id, prompt, contexts, auto_prune_tool_results))
+    _ => None
+  }
+}
+
+///|
+/// Return the opt-in byte ceiling carried by a session-send command.
+pub fn EngineCommand::session_send_request_byte_ceiling(
+  self : EngineCommand,
+) -> Int32? {
+  match self {
+    SendPromptWithRequestByteCeiling(_, _, _, _, maximum) => Some(maximum)
     _ => None
   }
 }
@@ -304,10 +349,19 @@ fn EngineCommand::validate(self : EngineCommand) -> Result[Unit, String] {
       Err("prompt must not be empty")
     SendPromptWithAutoPruning(_, prompt, _) if prompt.length() > 16384 =>
       Err("prompt exceeds the length limit")
+    SendPromptWithRequestByteCeiling(_, prompt, _, _, _) if prompt.is_empty() =>
+      Err("prompt must not be empty")
+    SendPromptWithRequestByteCeiling(_, prompt, _, _, _) if prompt.length() >
+      16384 => Err("prompt exceeds the length limit")
     SendPromptWithContexts(_, _, additional_contexts) if additional_contexts.length() >
       32 => Err("additional_contexts must contain at most 32 items")
     SendPromptWithAutoPruning(_, _, additional_contexts) if additional_contexts.length() >
       32 => Err("additional_contexts must contain at most 32 items")
+    SendPromptWithRequestByteCeiling(_, _, additional_contexts, _, _) if additional_contexts.length() >
+      32 => Err("additional_contexts must contain at most 32 items")
+    SendPromptWithRequestByteCeiling(_, _, _, _, maximum) if maximum < 1 ||
+      maximum > PROVIDER_CONTEXT_MEASUREMENT_MAX_UTF8_BYTES =>
+      Err("max_provider_request_utf8_bytes must be between 1 and 16777216")
     SendPromptWithContexts(_, _, additional_contexts) => {
       let mut total_length = 0
       for context in additional_contexts {
@@ -323,6 +377,20 @@ fn EngineCommand::validate(self : EngineCommand) -> Result[Unit, String] {
       }
     }
     SendPromptWithAutoPruning(_, _, additional_contexts) => {
+      let mut total_length = 0
+      for context in additional_contexts {
+        if context.is_empty() || context.length() > 4096 {
+          return Err("additional_contexts contains an invalid item")
+        }
+        total_length += context.length()
+      }
+      if total_length > 16384 {
+        Err("additional_contexts exceeds the aggregate length limit")
+      } else {
+        Ok(())
+      }
+    }
+    SendPromptWithRequestByteCeiling(_, _, additional_contexts, _, _) => {
       let mut total_length = 0
       for context in additional_contexts {
         if context.is_empty() || context.length() > 4096 {
