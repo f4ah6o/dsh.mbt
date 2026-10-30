@@ -2,7 +2,7 @@
 // temporary native demo host URL and the cached Chromium executable.
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { mkdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -23,13 +23,14 @@ const pages = [];
 let browser;
 let settingsScreenshotSaved = false;
 
-function observePage(page) {
+function observePage(page, shouldIgnoreConsoleError = () => false) {
   pages.push(page);
   page.on("pageerror", (error) => failures.push(error.message));
   page.on("console", (message) => {
     if (message.type() === "error") {
       const text = message.text();
-      if (!/Failed to load resource: net::ERR_(FAILED|INTERNET_DISCONNECTED)$/.test(text)) {
+      if (!/Failed to load resource: net::ERR_(FAILED|INTERNET_DISCONNECTED)$/.test(text) &&
+          !shouldIgnoreConsoleError(text)) {
         failures.push(text);
       }
     }
@@ -403,8 +404,9 @@ async function testNativeDemo(browserInstance) {
   await page.locator("#prune-results").waitFor({ state: "visible" });
   await page.locator("#prune-results").click();
   await page.waitForFunction(
-    () => document.getElementById("action-message")?.textContent?.includes("短縮が必要な大きさのツール結果はありません") ||
-      document.getElementById("action-message")?.textContent?.includes("件のツール結果を今後のモデル要求向けに短縮"),
+    () => document.getElementById("action-message")?.textContent?.includes("新たに短縮が必要な結果はありません") ||
+      document.getElementById("action-message")?.textContent?.includes("件を短縮し、") ||
+      document.getElementById("action-message")?.textContent?.includes("件の原文を保管しました"),
     null,
     { timeout: 20_000 },
   );
@@ -658,6 +660,114 @@ async function testNativeDemo(browserInstance) {
   assert.deepEqual(violations, [], `no CSP violations occur: ${JSON.stringify(violations)}`);
 }
 
+async function testNativeArchivedHistory(browserInstance) {
+  const archiveURL = process.env.DSH_BROWSER_ARCHIVE_URL;
+  const fixtureRoot = process.env.DSH_BROWSER_ARCHIVE_FIXTURE_ROOT;
+  assert.ok(archiveURL, "the archive browser fixture URL is present");
+  assert.ok(fixtureRoot, "the archive browser fixture data directory is present");
+  const nativeState = JSON.parse(await readFile(
+    path.join(fixtureRoot, "data", "sessions.json"),
+    "utf8",
+  ));
+  const references = nativeState.engine.archives
+    .filter((reference) => reference.session_id === "archive-runtime-growth-session")
+    .sort((left, right) => left.result_seq - right.result_seq);
+  assert.ok(references.length >= 2, "the native fixture contains multiple archived Reads");
+  const locators = new Map(nativeState.archive_objects.map((locator) => [
+    locator.object_id,
+    locator.file_name,
+  ]));
+
+  const context = await browserInstance.newContext({
+    locale: "ja-JP",
+    viewport: { width: 1280, height: 820 },
+    deviceScaleFactor: 1,
+  });
+  contexts.push(context);
+  const page = await context.newPage();
+  let expectedArchive404 = false;
+  observePage(page, (text) => expectedArchive404 && /404/.test(text));
+  const response = await page.goto(archiveURL, { waitUntil: "domcontentloaded" });
+  assert.equal(response.status(), 200, "the archive host serves the compiled shell");
+  await page.locator("#transcript-canvas").waitFor({ state: "attached" });
+  await waitForConnectedWorkspace(page);
+  await page.locator(
+    '.session-option[data-session-id="archive-runtime-growth-session"]',
+  ).click();
+  await page.locator("#text-view").click();
+  await page.locator(".archive-history").waitFor({ state: "visible" });
+  assert.equal(
+    await page.locator(".archive-original-button").count(),
+    references.length,
+  );
+
+  const expected = "1: " + "R".repeat(60_000);
+  const firstSequence = references[0].result_seq;
+  const firstRead = page.waitForResponse((candidate) =>
+    new URL(candidate.url()).pathname.startsWith("/api/v1/archive/"),
+  );
+  await page.locator(
+    `.archive-original-button[data-result-seq="${firstSequence}"]`,
+  ).click();
+  const firstResponse = await firstRead;
+  assert.equal(firstResponse.status(), 200, "the original endpoint serves the verified object");
+  const originalPayload = await firstResponse.json();
+  assert.equal(originalPayload.result_sequence, references[0].result_seq);
+  assert.equal(originalPayload.object_id, references[0].object_id);
+  assert.equal(originalPayload.content, expected);
+  const renderedOriginals = async () => page.locator("#text-transcript pre").allTextContents();
+  await page.waitForFunction(
+    (value) => [...document.querySelectorAll("#text-transcript pre")]
+      .some((node) => node.textContent === value),
+    expected,
+    { timeout: 10_000 },
+  );
+  assert.equal(
+    (await renderedOriginals()).filter((text) => text === expected).length,
+    1,
+    "the accessible transcript renders the exact original content",
+  );
+
+  const secondReference = references[1];
+  const secondName = locators.get(secondReference.object_id);
+  assert.ok(secondName, "the second reference has a native storage locator");
+  const objectPath = path.join(
+    fixtureRoot,
+    "data",
+    "tool-result-archives",
+    secondName,
+  );
+  const originalObject = await readFile(objectPath, "utf8");
+  const marker = "R".repeat(32);
+  const markerOffset = originalObject.indexOf(marker);
+  assert.ok(markerOffset >= 0, "the immutable source object contains the expected text");
+  await writeFile(
+    objectPath,
+    originalObject.slice(0, markerOffset) + "S" + originalObject.slice(markerOffset + 1),
+  );
+  const corruptRead = page.waitForResponse((candidate) =>
+    new URL(candidate.url()).pathname.startsWith("/api/v1/archive/"),
+  );
+  expectedArchive404 = true;
+  await page.locator(
+    `.archive-original-button[data-result-seq="${secondReference.result_seq}"]`,
+  ).click();
+  const corruptResponse = await corruptRead;
+  assert.equal(corruptResponse.status(), 404, "tampering is rejected by the native original endpoint");
+  await page.waitForFunction(
+    () => Boolean(document.getElementById("run-error")?.textContent),
+    null,
+    { timeout: 10_000 },
+  );
+  expectedArchive404 = false;
+  assert.equal(
+    (await renderedOriginals()).filter((text) => text === expected).length,
+    1,
+    "the corrupt source is never rendered into the transcript",
+  );
+  await writeFile(objectPath, originalObject);
+}
+
 async function testCompiledAuthModelFlow(browserInstance) {
   const context = await browserInstance.newContext({
     locale: "ja-JP",
@@ -839,6 +949,14 @@ async function testCompiledAuthModelFlow(browserInstance) {
     null,
     { timeout: 20_000 },
   );
+  await page.waitForFunction(
+    () => {
+      const picker = document.getElementById("model-picker");
+      return picker instanceof HTMLSelectElement && !picker.disabled;
+    },
+    null,
+    { timeout: 20_000 },
+  );
   assert.equal(modelRefreshes, 2, "failed discovery waits for an explicit retry");
   assert.match(await page.locator("#auth-status").textContent(), /ChatGPT/);
   assert.equal(await page.locator("#auth-sign-in").isHidden(), true);
@@ -1008,7 +1126,14 @@ async function testStaleAuthCatalogCannotOverwriteNewAccount(browserInstance) {
   );
   assert.ok(authModelRequests >= 2, "profile B starts its own model catalog request while A is pending");
   releaseProfileA();
-  await page.waitForTimeout(300);
+  await page.waitForFunction(
+    () => {
+      const picker = document.getElementById("model-picker");
+      return picker instanceof HTMLSelectElement && !picker.disabled;
+    },
+    null,
+    { timeout: 20_000 },
+  );
   assert.equal(await page.locator("#model-picker option[value='chatgpt:model-b']").count(), 1);
   assert.equal(await page.locator("#model-picker").isDisabled(), false);
   assert.equal(await page.locator("#auth-models-retry").isHidden(), true);
@@ -1022,11 +1147,12 @@ try {
     args: ["--no-sandbox"],
   });
   await testNativeDemo(browser);
+  await testNativeArchivedHistory(browser);
   await testCorruptSnapshotRecovery(browser);
   await testCompiledAuthModelFlow(browser);
   await testStaleAuthCatalogCannotOverwriteNewAccount(browser);
   assert.deepEqual(failures, [], `the browser reports no runtime or console errors: ${JSON.stringify(failures)}`);
-  process.stdout.write("Native-host Chromium smoke passed: CSP, MoonBit UI/transport, Canvas, command receipts, fork/prune/import, offline shell, accessibility, auth races, and compiled service-worker cache.\n");
+  process.stdout.write("Native-host Chromium smoke passed: CSP, MoonBit UI/transport, Canvas, command receipts, fork/prune/import, archived original retrieval and tamper rejection, offline shell, accessibility, auth races, and compiled service-worker cache.\n");
 } catch (error) {
   await mkdir(screenshotDirectory, { recursive: true });
   await Promise.all(

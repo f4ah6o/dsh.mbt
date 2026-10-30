@@ -697,8 +697,9 @@ int dsh_fs_unlink(int root_fd, const char *path) {
   return status;
 }
 
-int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
-                    int capacity) {
+static int dsh_fs_list_dir_impl(int root_fd, const char *path,
+                                uint8_t *buffer, int capacity,
+                                int include_special) {
   if (capacity < 0) return -EINVAL;
   int fd = dsh_open_directory_beneath(root_fd, path);
   if (fd < 0) return -errno;
@@ -740,7 +741,7 @@ int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
       return -saved;
     }
     char kind = S_ISDIR(st.st_mode) ? 'D' : S_ISREG(st.st_mode) ? 'F' : 'X';
-    if (kind == 'X') continue;
+    if (kind == 'X' && !include_special) continue;
     size_t name_len = strlen(entry->d_name);
     if (used + name_len + 2 > (size_t)capacity) {
       closedir(dir);
@@ -753,6 +754,16 @@ int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
   }
   closedir(dir);
   return (int)used;
+}
+
+int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
+                    int capacity) {
+  return dsh_fs_list_dir_impl(root_fd, path, buffer, capacity, 0);
+}
+
+int dsh_fs_list_dir_strict(int root_fd, const char *path, uint8_t *buffer,
+                           int capacity) {
+  return dsh_fs_list_dir_impl(root_fd, path, buffer, capacity, 1);
 }
 
 int dsh_fs_sync_directory(const char *path) {
@@ -1144,6 +1155,7 @@ int dsh_fs_read_fd(int fd, uint8_t *buffer, int capacity) { (void)fd; (void)buff
 int dsh_fs_atomic_write(int root_fd, const char *root_path, const char *path, const uint8_t *data, int length, int mode, int create_parents, int has_expected, int force_mode, const int64_t *expected) { (void)root_fd; (void)root_path; (void)path; (void)data; (void)length; (void)mode; (void)create_parents; (void)has_expected; (void)force_mode; (void)expected; return ENOTSUP; }
 int dsh_fs_atomic_create_no_replace(int root_fd, const char *root_path, const char *path, const uint8_t *data, int length, int max_bytes, int mode, int *published) { (void)root_fd; (void)root_path; (void)path; (void)data; (void)length; (void)max_bytes; (void)mode; if (published) *published = 0; return ENOTSUP; }
 int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer, int capacity) { (void)root_fd; (void)path; (void)buffer; (void)capacity; return -ENOTSUP; }
+int dsh_fs_list_dir_strict(int root_fd, const char *path, uint8_t *buffer, int capacity) { (void)root_fd; (void)path; (void)buffer; (void)capacity; return -ENOTSUP; }
 int dsh_fs_sync_directory(const char *path) { (void)path; return ENOTSUP; }
 int dsh_os_uid(void) { return -1; }
 int dsh_os_pid(void) { return -1; }

@@ -1716,8 +1716,9 @@ static int dsh_append_list_entry(uint8_t *buffer, int capacity, size_t *used,
   return 0;
 }
 
-int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
-                    int capacity) {
+static int dsh_fs_list_dir_impl(int root_fd, const char *path,
+                                uint8_t *buffer, int capacity,
+                                int include_special) {
   if (capacity < 0 || !buffer) return -DSH_EINVAL;
   wchar_t *relative = NULL;
   int status = dsh_utf8_to_wide(path ? path : ".", &relative);
@@ -1784,13 +1785,17 @@ int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
         wcscmp(data.cFileName, L"..") == 0) {
       continue;
     }
-    if (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
     char kind = 0;
-    if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+    if (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+      kind = 'X';
+    } else if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
       kind = 'D';
     } else if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DEVICE)) {
       kind = 'F';
     } else {
+      kind = 'X';
+    }
+    if (kind == 'X' && !include_special) {
       continue;
     }
     int append =
@@ -1808,6 +1813,16 @@ int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
   }
   FindClose(find);
   return result == 0 ? (int)used : result;
+}
+
+int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
+                    int capacity) {
+  return dsh_fs_list_dir_impl(root_fd, path, buffer, capacity, 0);
+}
+
+int dsh_fs_list_dir_strict(int root_fd, const char *path, uint8_t *buffer,
+                           int capacity) {
+  return dsh_fs_list_dir_impl(root_fd, path, buffer, capacity, 1);
 }
 
 int dsh_fs_sync_directory(const char *path) {

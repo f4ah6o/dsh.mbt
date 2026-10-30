@@ -140,6 +140,15 @@ fn Engine::copy_state(self : Engine) -> Engine {
 }
 
 ///|
+/// Return an exact isolated copy of the engine, including pending effects,
+/// queued work, retry state, and hook checkpoints. Unlike snapshot/restore,
+/// this preserves in-flight work so a detached candidate can safely stage a
+/// read-only native operation without interrupting unrelated sessions.
+pub fn Engine::detached_copy(self : Engine) -> Engine {
+  self.copy_state()
+}
+
+///|
 fn Engine::adopt(self : Engine, candidate : Engine) -> Unit {
   self.sessions.clear()
   for id, session in candidate.sessions {

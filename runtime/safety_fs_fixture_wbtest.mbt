@@ -17,6 +17,7 @@ async test "native SafeRoot rejects symlinks, protects files, and detects confli
     }
     group.add_defer(() => root.close())
     assert_true(root.read_text("linked-file.txt") is Err(_))
+    assert_true(root.list_directory_strict(".") is Err(_))
     assert_true(root.write_atomic("linked-file.txt", "overwrite") is Err(_))
     assert_true(
       root.write_atomic(
@@ -122,6 +123,7 @@ async test "SafeRoot atomically creates complete immutable files without replace
     }
     assert_eq(stored, complete)
     assert_eq(version.permission(), 0o600)
+    assert_true(root.file_version("archive.bin").unwrap().same(version))
 
     match root.create_atomic_no_replace("archive.bin", "replacement", 64) {
       Err(AtomicCreateNoReplaceError::Exists) => ()

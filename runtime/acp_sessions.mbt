@@ -271,6 +271,11 @@ async fn NativeRuntime::read_acp_session(
     Ok(value) => value
     Err(error) => return Err(error)
   }
+  if native_session_has_archive_markers(session) {
+    return Err(
+      "This history contains archived tool results; ACP cannot expose the pruned projection as original content",
+    )
+  }
   let mut record : NativeAcpStoredSession? = None
   for candidate in self.state.acp_sessions {
     if candidate.session_id == session_id {

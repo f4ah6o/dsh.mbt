@@ -21,6 +21,7 @@ dsh_crypto_verify_rs256        dsh_exec_worker
 dsh_fs_atomic_create_no_replace dsh_fs_atomic_write
 dsh_fs_close
 dsh_fs_create_exclusive        dsh_fs_list_dir
+dsh_fs_list_dir_strict
 dsh_fs_mapping_matches         dsh_fs_open_file
 dsh_fs_open_root               dsh_fs_read_fd
 dsh_fs_root_matches            dsh_fs_set_root_mode
@@ -49,6 +50,8 @@ stdout/stderr flushing, and the low-level SHA-256 / RS256 primitives used by
 MoonBit authentication code. Its filesystem walk rejects absolute paths and
 `.` / `..` components as a syscall-level guard; MoonBit still owns workspace
 admission, path normalization, bounds, tool policy, and error semantics.
+The strict directory enumerator reports symbolic links and special entries so
+quota inventories can reject them rather than silently omit their size.
 The process trampoline pins and verifies the workspace before changing
 directory, applies resource limits, then closes every inherited descriptor
 above stdin/stdout/stderr before executing the requested program. This also

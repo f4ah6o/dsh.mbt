@@ -4,11 +4,11 @@ Status: open
 Model: unknown
 Created: 2026-10-30
 Updated: 2026-10-30
-Branch: feat/20261030-archived-read-result
+Branch: feat/20261030-archive-runtime
 
 ## 概要
 
-settled session の直接 pruning 済み通常 Read 原文を durable object へ外置きし、同一 session の inline 容量を回復する。
+settled session の直接 pruning 済み通常 Read 原文を durable object へ外置きし、同一 session の inline 容量を回復する。local integration worktree に bounded native object store、v2 manifest/receipt CAS、explicit original-history endpoint、Browser archive controls を実装した。これは未マージの実装状態であり、main の実装済みとは扱わない。
 
 ## 背景
 
@@ -32,15 +32,17 @@ preflight を mutation gate 内で再導出し、bounded immutable object を kn
 
 ## 受け入れ条件
 
-- [ ] 個々の native Read は 65536 bytes 以下で、累積原文が旧 262144 UTF-16 上限を越えても同一 session が reopen 後に次の turn を完了する。
-- [ ] Unicode の元結果・call/effect/approval・projection は復元され、provider には検証済み縮約を送る。
-- [ ] object の欠損・破損・不一致、quota、cancel、各保存境界の failure/unknown で状態と外部作用回数が整合し no-replay を守る。
-- [ ] v1 を維持し v2 を旧 reader が拒否、非対応 fork/import を変更前に拒否する。
+- [x] 6 回の actual NativeTools Read (各 60,003 bytes) を同一 session へ追加し、毎回 close/reopen と次 turn を確認。累積 360,018 bytes は旧 262144-unit 上限を超える。
+- [x] typed engine/archive tests と native object reopen test で Unicode 原文 bytes、call/effect/result correlation、projection hash を照合。provider は replay-verified projection を使う。
+- [x] object corruption/mismatch、storage / envelope quota、post-publication unknown object, manifest CAS conflict, post-write unknown acknowledgement, duplicate replay を regression test 化。Checked-in Chromium smoke は原文取得・exact render・tamper rejection を通す。
+- [ ] Dedicated cancellation-interleaving fault fixture と cross-filesystem power-loss durability は未検証。
+- [x] v1 default と v1 marker rejection を保持し、archive は fork/import/active/approval-waiting session に fail closed。旧 MCP/ACP history carriers は projection を原文扱いせず拒否する。
 
 ## テスト計画
 
-- 複数 Read と provider fixture で実行・保存・reopen・次 turn、原文 API、state/effect を照合。
-- object 前後、manifest 前後、CAS、quota、重複 command、process interruption、破損の故障注入。
+- Native regression: 6 actual Read results, per-turn durable reopen, exact original-history API, legacy carrier refusal, remote receipt replay, and a subsequent CLI turn.
+- `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium PATH=/workspace/.moon/bin:$PATH MOON_HOME=/workspace/.moon sh scripts/test-browser-smoke.sh`: PASS, including the archived-original fixture, exact 60,003-byte rendering, tampered-object 404/no-render, and the ordinary browser acceptance flow.
+- Failure fixtures cover object OutcomeUnknown both without and after file creation, final manifest CAS conflict, post-write unknown acknowledgement, 32 MiB envelope admission, quota, corruption, and duplicate command. Cancellation interleaving and physical power-loss injection remain open.
 - portable/native matrix、Node 不在 verifier、独立レビューと該当 CI。
 
 ## リスク
@@ -57,4 +59,4 @@ v2 reader と history UI の対応前に旧表示を使うと原文が黙って�
 
 ## 注記
 
-作業ブランチは未マージの #79/#81/#82 をローカルで結合した積み上げ。これらの CI・統合条件が確定するまで依存を明記し、main 実装済みと数えない。実装の安全性が成立しなければ曖昧な部分を拒否し、未完了として残す。
+作業ブランチは未マージの #79/#81/#82/#83/#84 と engine v2 #85 をローカルで結合した積み上げ。実 Chromium smoke はローカル test fixture で通過したが、CI・他 PR への統合と全 platform の filesystem crash durability は未検証。依存の merge 前に main 実装済みと数えない。

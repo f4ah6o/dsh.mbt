@@ -209,6 +209,10 @@ async fn native_cli_command(
 
 ///|
 fn native_cli_approval_revision(session : Json) -> Json {
+  match object_field(session, "approval_revision") {
+    Some(Json::Number(value, ..)) if value >= 0.0 => return Json::number(value)
+    _ => ()
+  }
   let pending = match object_field(session, "pending_approval") {
     Some(value) => value
     None => return Json::null()
@@ -431,9 +435,8 @@ async fn native_cli_action(
         _ => ()
       }
   }
-  let mut session = match
-    runtime.invoke("session_get", { "session_id": active_session }) {
-    Ok((value, _)) => value
+  let mut session = match runtime.cli_session_projection(active_session) {
+    Ok(value) => value
     Err(error) => return Err(error)
   }
   while prompt is Some(_) &&
@@ -499,9 +502,8 @@ async fn native_cli_action(
       Err(error) => return Err(error)
     }
     receipt = Some(decision)
-    session = match
-      runtime.invoke("session_get", { "session_id": active_session }) {
-      Ok((value, _)) => value
+    session = match runtime.cli_session_projection(active_session) {
+      Ok(value) => value
       Err(error) => return Err(error)
     }
   }

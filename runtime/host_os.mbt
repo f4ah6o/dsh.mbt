@@ -157,6 +157,15 @@ extern "C" fn c_list_dir(
 ) -> Int32 = "dsh_fs_list_dir"
 
 ///|
+#borrow(path, buffer)
+extern "C" fn c_list_dir_strict(
+  root : Int32,
+  path : Bytes,
+  buffer : FixedArray[Byte],
+  capacity : Int32,
+) -> Int32 = "dsh_fs_list_dir_strict"
+
+///|
 #borrow(data, output)
 extern "C" fn c_sha256(
   data : Bytes,
@@ -632,6 +641,29 @@ fn SafeRoot::stat(_self : SafeRoot, fd : Int32) -> Result[FileVersion, String] {
 }
 
 ///|
+/// Read metadata for a bounded inventory without allocating file contents.
+/// The opened entry must be a regular file and the rooted mapping must remain
+/// stable for the check.
+pub fn SafeRoot::file_version(
+  self : SafeRoot,
+  relative_path : String,
+) -> Result[FileVersion, String] {
+  let fd = match self.open_regular(relative_path) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  defer ignore(c_close(fd))
+  let version = match self.stat(fd) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  match self.verify_mapping(relative_path, false) {
+    Err(error) => Err(error)
+    Ok(_) => Ok(version)
+  }
+}
+
+///|
 pub fn SafeRoot::read_bytes(
   self : SafeRoot,
   relative_path : String,
@@ -827,6 +859,69 @@ pub fn SafeRoot::list_directory(
       _ => return Err("workspace contains a non-UTF-8 filename")
     }
     let kind = if kind_byte == b'D' { "directory" } else { "file" }
+    entries.push((name, kind))
+    offset += 2
+  }
+  Ok(entries)
+}
+
+///|
+/// List every directory entry, including links and special files. Unlike the
+/// workspace-facing listing, this inventory rejects unsupported entry kinds
+/// instead of silently hiding them; quota accounting must see every name.
+pub fn SafeRoot::list_directory_strict(
+  self : SafeRoot,
+  relative_path : String,
+) -> Result[Array[(String, String)], String] {
+  match self.ensure_open() {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  match self.verify_mapping(relative_path, true) {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  let buffer : FixedArray[Byte] = FixedArray::make(1048576, b'\x00')
+  let count = c_list_dir_strict(
+    self.fd,
+    c_path(relative_path),
+    buffer,
+    buffer.length(),
+  )
+  if count < 0 {
+    return Err(os_error("strict workspace directory listing", -count))
+  }
+  match self.verify_mapping(relative_path, true) {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  let entries : Array[(String, String)] = []
+  let mut offset = 0
+  while offset < count {
+    let start = offset
+    while offset < count && buffer[offset] != b'\x00' {
+      offset += 1
+    }
+    if offset >= count || offset + 1 >= count {
+      return Err("native directory listing returned a malformed entry")
+    }
+    let length = offset - start
+    let kind_byte = buffer[offset + 1]
+    let name_array : FixedArray[Byte] = FixedArray::makei(length, index => {
+      buffer[start + index]
+    })
+    let name = @utf8.decode(
+      bytes_from_fixedarray(name_array, name_array.length()),
+    ) catch {
+      _ => return Err("workspace contains a non-UTF-8 filename")
+    }
+    let kind = if kind_byte == b'D' {
+      "directory"
+    } else if kind_byte == b'F' {
+      "file"
+    } else {
+      return Err("directory inventory contains a link or special file")
+    }
     entries.push((name, kind))
     offset += 2
   }

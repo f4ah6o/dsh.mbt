@@ -1,4 +1,21 @@
-# 検証記録
+# Verification record
+
+## Native archived Read history (local integration worktree, 2026-10-30)
+
+| gate | result |
+| --- | --- |
+| moon check runtime browser --target native --deny-warn | PASS. |
+| Focused archive/store/runtime native test set | PASS 20 / 20. Covers six actual 60,003-byte native Read results (360,018 aggregate), object publish + reopen each turn, exact original endpoint, no-effect restore, safe web/CLI projection, legacy MCP/ACP rejection, remote duplicate receipt, and a subsequent CLI turn. |
+| Archive fault fixtures | PASS: object OutcomeUnknown before and after file creation; matching Exists refused; pre-publication 32 MiB envelope refusal leaves no object; final manifest CAS conflict leaves a charged orphan and uncertain receipt on reopen; injected post-write unknown acknowledgement reopens the completed receipt without replay. |
+| Receipt owner-scoping regression | PASS: runtime owner replacement tests and selected UserPromptSubmit completion / rejection / cancellation tests preserve a different owner's same-ID receipt. |
+| Browser JS tests | PASS 19 / 19, including archive original response sequence/object identity validation and fractional sequence rejection. |
+| `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium PATH=/workspace/.moon/bin:$PATH MOON_HOME=/workspace/.moon sh scripts/test-browser-smoke.sh` | PASS. The checked-in smoke creates a native six-Read fixture, starts a fresh compiled host over the reopened store, verifies an authenticated original GET and exact 60,003-byte render, then tampers with the second object and verifies HTTP 404 plus no corrupt transcript render. The ordinary demo, CSP, command, offline, accessibility and auth-race cases also pass. |
+| Power-loss durability on physical filesystems / all OS profiles | NOT RUN. These tests use the local isolated Linux test filesystem and do not model sudden power loss or qualify every platform's directory-sync behavior. |
+
+The native storage slice is in an unmerged local integration worktree that
+combines the prerequisite branches. Treat it as review evidence, not as a
+released or merged compatibility guarantee.
+
 
 ## Windows IME composition (2026-10-20)
 

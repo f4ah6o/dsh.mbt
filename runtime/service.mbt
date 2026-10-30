@@ -498,6 +498,35 @@ async fn NativeService::handle_get(
     }
     return
   }
+  if path.has_prefix("/api/v1/archive/") {
+    let suffix = path[16:].to_owned()
+    let separator = match suffix.find("/") {
+      Some(value) => value
+      None => {
+        self.respond_json(connection, 400, { "error": "invalid archive route" })
+        return
+      }
+    }
+    let session_id = service_decode_component(suffix[:separator].to_owned())
+    let sequence_text = suffix[separator + 1:].to_owned()
+    let result_sequence = service_parse_int(sequence_text)
+    if session_id.is_empty() ||
+      session_id.contains("/") ||
+      result_sequence is None {
+      self.respond_json(connection, 400, { "error": "invalid archive route" })
+      return
+    }
+    match
+      self.runtime.archive_original(
+        session_id,
+        result_sequence.unwrap(),
+        identity_key,
+      ) {
+      Ok(value) => self.respond_json(connection, 200, value)
+      Err(error) => self.respond_json(connection, 404, { "error": error })
+    }
+    return
+  }
   if path.has_prefix("/api/v1/sessions/") {
     let session_id = service_decode_component(path[17:].to_owned())
     if session_id.is_empty() || session_id.contains("/") {

@@ -8,6 +8,7 @@ priv struct BrowserApp {
   mut mutation : Bool
   mut frame : Int32?
   mut transcript_key : String
+  archive_originals : Map[String, String]
   mut status_key : String
   mut action_error : String
   mut action_message : String
@@ -49,6 +50,7 @@ fn BrowserApp::new() -> BrowserApp {
     mutation: false,
     frame: None,
     transcript_key: "",
+    archive_originals: Map([]),
     status_key: "",
     action_error: "",
     action_message: "",
@@ -172,6 +174,9 @@ fn sync_from_client(app : BrowserApp, restore_draft~ : Bool = false) -> Unit {
   }
   let scope = string_member(client_state, "scope_key")
   if restore_draft || previous_scope != scope {
+    if previous_scope != scope {
+      app.archive_originals.clear()
+    }
     app.draft_scope = scope
     dom_set_value("prompt", string_member(client_state, "draft"))
     resize_composer()
@@ -631,16 +636,52 @@ fn sync_text_view(app : BrowserApp) -> Unit {
 }
 
 ///|
+fn archive_original_cache_key(
+  app : BrowserApp,
+  session_id : String,
+  result_sequence : String,
+  object_id : String,
+) -> String {
+  Json::array([
+    Json::string(string_member(app.client.state(), "scope_key")),
+    Json::string(session_id),
+    Json::string(result_sequence),
+    Json::string(object_id),
+  ]).stringify()
+}
+
+///|
 fn render_accessible_transcript(app : BrowserApp) -> Unit {
   let messages = display_messages(app.snapshot)
+  let archive_messages = array_member(app.snapshot, "messages").filter(message => {
+    field(message, "archive_ref") is Some(_)
+  })
+  let archive_key_rows : Array[Json] = []
+  for message in archive_messages {
+    let reference = field(message, "archive_ref").unwrap_or(Json::null())
+    let sequence = match field(reference, "result_seq") {
+      Some(Json::Number(number, ..)) => number.trunc().to_int().to_string()
+      _ => ""
+    }
+    let object_id = string_member(reference, "object_id")
+    let cache_key = archive_original_cache_key(app, app.id, sequence, object_id)
+    archive_key_rows.push({
+      "reference": reference,
+      "original": app.archive_originals
+      .get(cache_key)
+      .map(Json::string)
+      .unwrap_or(Json::null()),
+    })
+  }
   let key = Json::array(
-    messages.map(message => {
-      Json::object({
-        "label": Json::string(message.label),
-        "text": Json::string(message.text),
-      })
-    }),
-  ).stringify()
+      messages.map(message => {
+        Json::object({
+          "label": Json::string(message.label),
+          "text": Json::string(message.text),
+        })
+      }),
+    ).stringify() +
+    Json::array(archive_key_rows).stringify()
   if app.transcript_key == key {
     return
   }
@@ -663,6 +704,60 @@ fn render_accessible_transcript(app : BrowserApp) -> Unit {
           html_element("pre", [], [html_text(message.text)]),
         ]),
       )
+    }
+    if !archive_messages.is_empty() {
+      children.push(
+        html_element("section", [html_class("archive-history")], [
+          html_element("h2", [], [
+            html_text("保管したツール出力の原文"),
+          ]),
+          html_element("p", [], [
+            html_text(
+              "モデルには短縮表示を使っています。必要な場合は、検証済みの原文を保管先から読み込めます。",
+            ),
+          ]),
+        ]),
+      )
+      for message in archive_messages {
+        let reference = field(message, "archive_ref").unwrap_or(Json::null())
+        let sequence = match field(reference, "result_seq") {
+          Some(Json::Number(number, ..)) => number.trunc().to_int().to_string()
+          _ => ""
+        }
+        let call_id = string_member(reference, "call_id")
+        let object_id = string_member(reference, "object_id")
+        let cache_key = archive_original_cache_key(
+          app,
+          app.id,
+          sequence,
+          object_id,
+        )
+        match app.archive_originals.get(cache_key) {
+          Some(original) => {
+            children.push(
+              html_element("h3", [], [
+                html_text("ツール呼び出し " + call_id + " · 原文"),
+              ]),
+            )
+            children.push(html_element("pre", [], [html_text(original)]))
+          }
+          None =>
+            children.push(
+              html_button(
+                "archive-original-" + sequence,
+                "show-archive-original",
+                "元の出力を表示 · " + call_id,
+                "archive-original-button",
+                @yami_kumo.ButtonVariant::Secondary,
+                extra_attrs=[
+                  html_attribute("data-session-id", app.id),
+                  html_attribute("data-result-seq", sequence),
+                  html_attribute("data-object-id", object_id),
+                ],
+              ),
+            )
+        }
+      }
     }
   }
   let html = match @yami_kumo.render_html(@yami_kumo.fragment(children)) {
@@ -1623,16 +1718,49 @@ fn click_action(app : BrowserApp, event : BrowserValue) -> Unit {
           let result = field(receipt, "result").unwrap_or(Json::null())
           let result = field(result, "result").unwrap_or(result)
           let pruned = array_member(result, "pruned")
-          app.action_message = if pruned.length() > 0 {
-            "\{pruned.length()} 件のツール結果を今後のモデル要求向けに短縮しました。元の出力はイベント履歴に残っています。"
-          } else {
-            "短縮が必要な大きさのツール結果はありません。"
-          }
           sync_from_client(app)
+          let archived_count = array_member(app.snapshot, "messages")
+            .filter(message => field(message, "archive_ref") is Some(_))
+            .length()
+          app.action_message = if archived_count > 0 {
+            "\{pruned.length()} 件を短縮し、\{archived_count} 件の原文を保管しました。テキスト表示で各ツール結果の「元の出力を表示」を選べます。"
+          } else if pruned.length() > 0 {
+            "\{pruned.length()} 件を今後のモデル要求向けに短縮しました。原文はセッション履歴に残っています。"
+          } else {
+            "新たに短縮が必要な結果はありません。"
+          }
           Ok(())
         },
         fence_selection=true,
       )
+    "show-archive-original" => {
+      let session_id = dom_event_attribute(event, "data-session-id")
+      let result_sequence = dom_event_attribute(event, "data-result-seq")
+      let object_id = dom_event_attribute(event, "data-object-id")
+      if session_id == "" ||
+        result_sequence == "" ||
+        object_id == "" ||
+        app.id != session_id {
+        return
+      }
+      mutate(
+        app,
+        async fn() {
+          match
+            app.client.archive_original(session_id, result_sequence, object_id) {
+            Err(error) => Err(error)
+            Ok(content) => {
+              let cache_key = archive_original_cache_key(
+                app, session_id, result_sequence, object_id,
+              )
+              app.archive_originals[cache_key] = content
+              Ok(())
+            }
+          }
+        },
+        fence_selection=true,
+      )
+    }
     "cancel" =>
       mutate(app, async fn() {
         match

@@ -8,6 +8,15 @@ const NATIVE_ENVELOPE_SCHEMA : String = "dsh.native-host-v1"
 const SNAPSHOT_LIMIT : Int32 = 33554432
 
 ///|
+const NATIVE_ARCHIVE_DIRECTORY : String = "tool-result-archives"
+
+///|
+const NATIVE_ARCHIVE_STORAGE_QUOTA : Int64 = 67108864L
+
+///|
+const NATIVE_ARCHIVE_INVENTORY_ENTRY_LIMIT : Int32 = 2048
+
+///|
 /// ACP owns only the sessions it creates. This adjunct registry records the
 /// canonical startup workspace and last ACP prompt time without changing the
 /// native engine event schema.
@@ -20,8 +29,19 @@ priv struct NativeAcpStoredSession {
 }
 
 ///|
+/// Storage locator kept beside the compact engine manifest in the native
+/// envelope. Names are random per publication; object IDs remain content
+/// digests and are never treated as filesystem paths.
+priv struct NativeArchiveLocator {
+  object_id : String
+  file_name : String
+}
+
+///|
 priv struct NativeState {
   engine : Json
+  archive_objects : Array[NativeArchiveLocator]
+  archive_sources : Array[@engine.ToolResultArchiveSource]
   mut receipts : Array[Json]
   mut acp_sessions : Array[NativeAcpStoredSession]
   server_id : String
@@ -37,6 +57,7 @@ priv struct NativeState {
 ///|
 priv struct NativeStore {
   root : SafeRoot
+  archive_root : SafeRoot
   path : String
   token : String
   server_id : String
@@ -44,6 +65,182 @@ priv struct NativeStore {
   host_id : String
   mut version : FileVersion?
   mut closed : Bool
+}
+
+///|
+fn native_archive_bytes_equal(left : Bytes, right : Bytes) -> Bool {
+  if left.length() != right.length() {
+    return false
+  }
+  for index = 0; index < left.length(); index = index + 1 {
+    if left[index] != right[index] {
+      return false
+    }
+  }
+  true
+}
+
+///|
+fn native_archive_reservation_allowed(
+  stored_bytes : Int64,
+  entry_count : Int32,
+  object_bytes : Int32,
+) -> Bool {
+  stored_bytes >= 0L &&
+  entry_count >= 0 &&
+  object_bytes > 0 &&
+  object_bytes <= 1048576 &&
+  stored_bytes + object_bytes.to_int64() * 2L <= NATIVE_ARCHIVE_STORAGE_QUOTA &&
+  entry_count + 2 <= NATIVE_ARCHIVE_INVENTORY_ENTRY_LIMIT
+}
+
+///|
+/// Inventory every name before reading object contents. Strict listing rejects
+/// symlinks and special files; directories are rejected by the archive layout.
+fn NativeStore::archive_inventory(
+  self : NativeStore,
+) -> Result[(Int64, Int32), String] {
+  let entries = match self.archive_root.list_directory_strict(".") {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  if entries.length() > NATIVE_ARCHIVE_INVENTORY_ENTRY_LIMIT {
+    return Err("archive storage inventory exceeds its entry limit")
+  }
+  let mut total_bytes = 0L
+  for (name, kind) in entries {
+    if kind != "file" {
+      return Err("archive storage contains an unsupported directory entry")
+    }
+    let version = match self.archive_root.file_version(name) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    if version.owner_uid() != os_uid() || version.permission() != 0o600 {
+      return Err("archive object or temporary file has unsafe permissions")
+    }
+    total_bytes += version.size()
+    if total_bytes > NATIVE_ARCHIVE_STORAGE_QUOTA {
+      return Err("archive storage exceeds its protected 64 MiB quota")
+    }
+  }
+  Ok((total_bytes, entries.length()))
+}
+
+///|
+/// Reserve the worst-case temporary plus final directory entries for a whole
+/// candidate batch before publishing its first object. Per-object publication
+/// repeats its inventory check to fail closed if the directory changes.
+fn NativeStore::check_archive_batch_reservation(
+  self : NativeStore,
+  objects : Array[NativeToolResultArchiveObject],
+) -> Result[Unit, String] {
+  let (stored_bytes, entry_count) = match self.archive_inventory() {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let mut reserved_bytes = 0L
+  let mut reserved_entries = 0
+  for object in objects {
+    let object_bytes = @utf8.encode(object.encoded_object()).length()
+    if object_bytes <= 0 || object_bytes > 1048576 {
+      return Err("archive object exceeds its encoded 1 MiB bound")
+    }
+    reserved_bytes += object_bytes.to_int64() * 2L
+    reserved_entries += 2
+    if stored_bytes + reserved_bytes > NATIVE_ARCHIVE_STORAGE_QUOTA ||
+      entry_count + reserved_entries > NATIVE_ARCHIVE_INVENTORY_ENTRY_LIMIT {
+      return Err("archive batch exceeds the protected storage quota")
+    }
+  }
+  Ok(())
+}
+
+///|
+/// Publish one verified immutable object under a fresh random storage name.
+/// Only a successful no-replace call is KnownSuccess. Name collisions and
+/// ambiguous publication outcomes are errors and are never adopted.
+fn NativeStore::publish_archive_object_with(
+  self : NativeStore,
+  object : NativeToolResultArchiveObject,
+  file_name : String,
+  create : (SafeRoot, String, String, Int32) -> Result[
+    Unit,
+    AtomicCreateNoReplaceError,
+  ],
+) -> Result[NativeArchiveLocator, String] {
+  let reference = object.reference()
+  let raw = object.encoded_object()
+  let verified = match NativeToolResultArchiveObject::verify(raw, reference) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  if verified.original_content() != object.original_content() ||
+    verified.pruned_content() != object.pruned_content() {
+    return Err("archive object changed before immutable publication")
+  }
+  let raw_bytes = @utf8.encode(raw)
+  if raw_bytes.length() <= 0 || raw_bytes.length() > 1048576 {
+    return Err("archive object exceeds its encoded 1 MiB bound")
+  }
+  let (stored_bytes, entry_count) = match self.archive_inventory() {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  // Reserve the temporary and final names even on filesystems where atomic
+  // publication briefly exposes both directory entries.
+  if !native_archive_reservation_allowed(
+      stored_bytes,
+      entry_count,
+      raw_bytes.length(),
+    ) {
+    return Err("archive object exceeds the protected storage quota")
+  }
+  if !native_archive_locator_name_valid(file_name) {
+    return Err("archive storage filename is invalid")
+  }
+  match create(self.archive_root, file_name, raw, 1048576) {
+    Err(AtomicCreateNoReplaceError::Exists) =>
+      return Err("archive object storage name collided; refusing to adopt it")
+    Err(AtomicCreateNoReplaceError::OutcomeUnknown(error)) =>
+      return Err("archive object publication outcome is unknown: " + error)
+    Err(AtomicCreateNoReplaceError::Failed(error)) =>
+      return Err("archive object publication failed: " + error)
+    Ok(_) => ()
+  }
+  let (published_bytes, version) = match
+    self.archive_root.read_bytes(file_name, max_bytes=1048576) {
+    Ok(value) => value
+    Err(error) =>
+      return Err("published archive object cannot be verified: " + error)
+  }
+  if !native_archive_bytes_equal(published_bytes, raw_bytes) ||
+    version.owner_uid() != os_uid() ||
+    version.permission() != 0o600 {
+    return Err("published archive object differs from its verified bytes")
+  }
+  let (final_bytes, _) = match self.archive_inventory() {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  if final_bytes > NATIVE_ARCHIVE_STORAGE_QUOTA {
+    return Err("archive publication exceeded the protected storage quota")
+  }
+  Ok({ object_id: reference.object_id(), file_name, })
+}
+
+///|
+fn NativeStore::publish_archive_object(
+  self : NativeStore,
+  object : NativeToolResultArchiveObject,
+  file_name : String,
+) -> Result[NativeArchiveLocator, String] {
+  self.publish_archive_object_with(object, file_name, (
+    root,
+    name,
+    raw,
+    max_bytes,
+  ) => root.create_atomic_no_replace(name, raw, max_bytes, permission=0o600))
 }
 
 ///|
@@ -250,6 +447,192 @@ fn native_acp_stored_sessions_json(
       Json::object(fields)
     }),
   )
+}
+
+///|
+fn native_archive_locators_json(locators : Array[NativeArchiveLocator]) -> Json {
+  Json::array(
+    locators.map(locator => {
+      Json::object({
+        "object_id": Json::string(locator.object_id),
+        "file_name": Json::string(locator.file_name),
+      })
+    }),
+  )
+}
+
+///|
+fn native_archive_snapshot_refs(
+  engine_snapshot : Json,
+) -> Result[Array[@engine.ToolResultArchiveRef], String] {
+  let raw_refs = match object_field(engine_snapshot, "archives") {
+    None => return Ok([])
+    Some(Json::Array(values)) if values.length() <= 256 => values
+    _ => return Err("engine archive manifest has an invalid shape")
+  }
+  let refs : Array[@engine.ToolResultArchiveRef] = []
+  let seen : Map[String, Bool] = Map([])
+  for raw in raw_refs {
+    let reference = match @engine.ToolResultArchiveRef::from_json(raw) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    let object_id = reference.object_id()
+    if seen.get(object_id) is Some(_) {
+      return Err("engine archive manifest contains a duplicate object id")
+    }
+    seen.set(object_id, true)
+    refs.push(reference)
+  }
+  Ok(refs)
+}
+
+///|
+fn native_archive_locator_name_valid(value : String) -> Bool {
+  if value.length() != 53 || !value.has_suffix(".json") {
+    return false
+  }
+  let stem = value[:48].to_owned()
+  for character in stem {
+    if !(character >= '0' && character <= '9') &&
+      !(character >= 'a' && character <= 'f') {
+      return false
+    }
+  }
+  true
+}
+
+///|
+fn native_archive_hex_digest_valid(value : String) -> Bool {
+  if value.length() != 64 {
+    return false
+  }
+  for character in value {
+    if !(character >= '0' && character <= '9') &&
+      !(character >= 'a' && character <= 'f') {
+      return false
+    }
+  }
+  true
+}
+
+///|
+fn native_archive_locator_array(
+  value : Json?,
+) -> Result[Array[NativeArchiveLocator], String] {
+  let entries = match value {
+    Some(Json::Array(values)) if values.length() <= 256 => values
+    _ => return Err("native snapshot has an invalid archive object map")
+  }
+  let result : Array[NativeArchiveLocator] = []
+  let ids : Map[String, Bool] = Map([])
+  let names : Map[String, Bool] = Map([])
+  for entry in entries {
+    match entry {
+      Json::Object(fields) if fields.length() == 2 => ()
+      _ => return Err("native snapshot has an invalid archive locator")
+    }
+    let object_id = match string_field(entry, "object_id") {
+      Some(value) if native_archive_hex_digest_valid(value) => value
+      _ => return Err("native snapshot has an invalid archive object id")
+    }
+    let file_name = match string_field(entry, "file_name") {
+      Some(value) if native_archive_locator_name_valid(value) => value
+      _ => return Err("native snapshot has an invalid archive object filename")
+    }
+    if ids.get(object_id) is Some(_) || names.get(file_name) is Some(_) {
+      return Err("native snapshot has a duplicate archive locator")
+    }
+    ids.set(object_id, true)
+    names.set(file_name, true)
+    result.push({ object_id, file_name, })
+  }
+  Ok(result)
+}
+
+///|
+fn native_archive_validate_coverage(
+  engine_snapshot : Json,
+  locators : Array[NativeArchiveLocator],
+  sources : Array[@engine.ToolResultArchiveSource],
+) -> Result[Unit, String] {
+  let refs = match native_archive_snapshot_refs(engine_snapshot) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  match native_archive_manifest_within_limits(refs) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  if refs.length() != locators.length() || refs.length() != sources.length() {
+    return Err("archive manifest, storage map, and verified sources differ")
+  }
+  let reference_ids : Map[String, Json] = Map([])
+  for reference in refs {
+    reference_ids.set(reference.object_id(), reference.json())
+  }
+  let locator_ids : Map[String, Bool] = Map([])
+  for locator in locators {
+    if reference_ids.get(locator.object_id) is None ||
+      locator_ids.get(locator.object_id) is Some(_) {
+      return Err("archive storage map has an unreferenced or duplicate object")
+    }
+    if !native_archive_locator_name_valid(locator.file_name) {
+      return Err("archive storage map has an invalid object filename")
+    }
+    locator_ids.set(locator.object_id, true)
+  }
+  let source_ids : Map[String, Bool] = Map([])
+  for source in sources {
+    let object_id = source.reference().object_id()
+    let expected_reference = match reference_ids.get(object_id) {
+      Some(value) => value
+      None =>
+        return Err("verified archive sources have missing or duplicate objects")
+    }
+    if expected_reference != source.reference().json() ||
+      source_ids.get(object_id) is Some(_) {
+      return Err("verified archive sources have missing or duplicate objects")
+    }
+    source_ids.set(object_id, true)
+  }
+  Ok(())
+}
+
+///|
+fn native_archive_manifest_within_limits(
+  refs : Array[@engine.ToolResultArchiveRef],
+) -> Result[Unit, String] {
+  if refs.length() > 256 {
+    return Err("archive manifest exceeds its 256 object limit")
+  }
+  let mut original_bytes = 0
+  let mut projection_bytes = 0
+  let mut hydration_expansion = 0
+  for reference in refs {
+    let raw = reference.json()
+    let content_bytes = match int_field(raw, "content_bytes") {
+      Some(value) => value
+      None => return Err("archive reference has no validated content size")
+    }
+    let pruned_bytes = match int_field(raw, "pruned_bytes") {
+      Some(value) => value
+      None => return Err("archive reference has no validated projection size")
+    }
+    original_bytes += content_bytes
+    projection_bytes += pruned_bytes
+    hydration_expansion += Int32::max(content_bytes - pruned_bytes, 0) * 3
+    if original_bytes > 16777216 || projection_bytes > 16777216 {
+      return Err("archive manifest exceeds its 16 MiB content quota")
+    }
+    if hydration_expansion > 7340032 {
+      return Err("archive manifest exceeds its 7 MiB hydration budget")
+    }
+    if (content_bytes + pruned_bytes) * 6 + 8192 > 1048576 {
+      return Err("archive reference exceeds its encoded object bound")
+    }
+  }
+  Ok(())
 }
 
 ///|
@@ -557,9 +940,32 @@ async fn NativeStore::open(data_dir : String) -> Result[NativeStore, String] {
       return Err(error)
     }
   }
+  let archive_path = canonical + "/" + NATIVE_ARCHIVE_DIRECTORY
+  @fs.mkdir(archive_path, permission=0o700, recursive=false, allow_exist=true) catch {
+    _ => {
+      root.close()
+      return Err("cannot create native archive object directory")
+    }
+  }
+  let archive_root = match SafeRoot::open(archive_path) {
+    Ok(value) => value
+    Err(error) => {
+      root.close()
+      return Err("cannot open native archive object directory: " + error)
+    }
+  }
+  match archive_root.restrict_owner_only() {
+    Ok(_) => ()
+    Err(error) => {
+      archive_root.close()
+      root.close()
+      return Err(error)
+    }
+  }
   let token = match random_hex(24) {
     Ok(value) => value
     Err(error) => {
+      archive_root.close()
       root.close()
       return Err(error)
     }
@@ -567,12 +973,14 @@ async fn NativeStore::open(data_dir : String) -> Result[NativeStore, String] {
   let hostname = match os_hostname() {
     Ok(value) => value
     Err(error) => {
+      archive_root.close()
       root.close()
       return Err(error)
     }
   }
   match NativeStore::acquire(root, token, hostname) {
     Err(error) => {
+      archive_root.close()
       root.close()
       Err(error)
     }
@@ -584,6 +992,7 @@ async fn NativeStore::open(data_dir : String) -> Result[NativeStore, String] {
         (Ok(server_id), Ok(workspace_id), Ok(host_id)) =>
           Ok({
             root,
+            archive_root,
             path: canonical,
             token,
             server_id,
@@ -594,6 +1003,7 @@ async fn NativeStore::open(data_dir : String) -> Result[NativeStore, String] {
           })
         _ => {
           ignore(root.unlink_missing_ok("host.lock"))
+          archive_root.close()
           root.close()
           Err("cannot initialize native host identity")
         }
@@ -603,7 +1013,155 @@ async fn NativeStore::open(data_dir : String) -> Result[NativeStore, String] {
 }
 
 ///|
+fn native_archive_find_locator(
+  locators : Array[NativeArchiveLocator],
+  object_id : String,
+) -> NativeArchiveLocator? {
+  for locator in locators {
+    if locator.object_id == object_id {
+      return Some(locator)
+    }
+  }
+  None
+}
+
+///|
+fn NativeStore::load_archive_sources(
+  self : NativeStore,
+  engine_snapshot : Json,
+  locators : Array[NativeArchiveLocator],
+) -> Result[Array[@engine.ToolResultArchiveSource], String] {
+  match self.archive_inventory() {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  let refs = match native_archive_snapshot_refs(engine_snapshot) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  if refs.is_empty() || refs.length() != locators.length() {
+    return Err("v2 archive manifest and storage map have different coverage")
+  }
+  match native_archive_manifest_within_limits(refs) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  let seen_names : Map[String, Bool] = Map([])
+  let sources : Array[@engine.ToolResultArchiveSource] = []
+  for reference in refs {
+    let locator = match
+      native_archive_find_locator(locators, reference.object_id()) {
+      Some(value) => value
+      None => return Err("archive manifest references a missing object locator")
+    }
+    if seen_names.get(locator.file_name) is Some(_) {
+      return Err("archive storage map reuses one object filename")
+    }
+    seen_names.set(locator.file_name, true)
+    let version = match self.archive_root.file_version(locator.file_name) {
+      Ok(value) => value
+      Err(error) => return Err("archive object is missing or unsafe: " + error)
+    }
+    if version.size() <= 0L || version.size() > 1048576L {
+      return Err("archive object exceeds its 1 MiB encoded byte limit")
+    }
+    if version.owner_uid() != os_uid() || version.permission() != 0o600 {
+      return Err("archive object has unsafe ownership or permissions")
+    }
+    let (raw_bytes, observed) = match
+      self.archive_root.read_bytes(locator.file_name, max_bytes=1048576) {
+      Ok(value) => value
+      Err(error) => return Err("cannot read archive object: " + error)
+    }
+    if !version.same(observed) {
+      return Err("archive object changed between inventory and read")
+    }
+    let raw = @utf8.decode(raw_bytes) catch {
+      _ => return Err("archive object bytes are not valid UTF-8")
+    }
+    if !native_archive_bytes_equal(raw_bytes, @utf8.encode(raw)) {
+      return Err("archive object bytes do not round-trip through UTF-8")
+    }
+    let native_reference = match
+      NativeToolResultArchiveRef::from_json(reference.json()) {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    let object = match
+      NativeToolResultArchiveObject::verify(raw, native_reference) {
+      Ok(value) => value
+      Err(error) => return Err("archive object failed validation: " + error)
+    }
+    if object.reference().object_id() != locator.object_id {
+      return Err("archive object id differs from its storage locator")
+    }
+    let source = match
+      @engine.ToolResultArchiveSource::from_object_text(reference, raw) {
+      Ok(value) => value
+      Err(error) =>
+        return Err("archive object source failed validation: " + error)
+    }
+    sources.push(source)
+  }
+  match native_archive_validate_coverage(engine_snapshot, locators, sources) {
+    Ok(_) => Ok(sources)
+    Err(error) => Err(error)
+  }
+}
+
+///|
+/// Read one original on explicit history access. This rechecks the immutable
+/// bytes and metadata from disk; a previously loaded source is not sufficient
+/// evidence if the file has since changed or disappeared.
+fn NativeStore::read_archive_object(
+  self : NativeStore,
+  locator : NativeArchiveLocator,
+  reference : NativeToolResultArchiveRef,
+) -> Result[NativeToolResultArchiveObject, String] {
+  if locator.object_id != reference.object_id() ||
+    !native_archive_locator_name_valid(locator.file_name) {
+    return Err("archive locator does not match the requested reference")
+  }
+  match self.archive_inventory() {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
+  let before = match self.archive_root.file_version(locator.file_name) {
+    Ok(value) => value
+    Err(error) => return Err("archive object is missing or unsafe: " + error)
+  }
+  if before.size() <= 0L ||
+    before.size() > 1048576L ||
+    before.owner_uid() != os_uid() ||
+    before.permission() != 0o600 {
+    return Err("archive object has invalid size, ownership, or permissions")
+  }
+  let (raw_bytes, observed) = match
+    self.archive_root.read_bytes(locator.file_name, max_bytes=1048576) {
+    Ok(value) => value
+    Err(error) => return Err("cannot read archive object: " + error)
+  }
+  if !before.same(observed) {
+    return Err("archive object changed while being retrieved")
+  }
+  let raw = @utf8.decode(raw_bytes) catch {
+    _ => return Err("archive object bytes are not valid UTF-8")
+  }
+  if !native_archive_bytes_equal(raw_bytes, @utf8.encode(raw)) {
+    return Err("archive object bytes do not round-trip through UTF-8")
+  }
+  match NativeToolResultArchiveObject::verify(raw, reference) {
+    Ok(value) => Ok(value)
+    Err(error) => Err("archive object failed validation: " + error)
+  }
+}
+
+///|
 fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
+  match self.archive_inventory() {
+    Ok(_) => ()
+    Err(error) => return Err(error)
+  }
   match
     self.root.read_text_optional("sessions.json", max_bytes=SNAPSHOT_LIMIT) {
     Err(error) => return Err(error)
@@ -611,6 +1169,8 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
       self.version = None
       return Ok({
         engine: Json::null(),
+        archive_objects: [],
+        archive_sources: [],
         receipts: [],
         acp_sessions: [],
         server_id: self.server_id,
@@ -631,7 +1191,8 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
       }
       match string_field(raw, "schema") {
         Some(schema) if schema == NATIVE_ENVELOPE_SCHEMA => {
-          if int_field(raw, "format_version") != Some(1) {
+          let format_version = int_field(raw, "format_version")
+          if format_version != Some(1) && format_version != Some(2) {
             return Err("unsupported native snapshot format version")
           }
           let engine = match object_field(raw, "engine") {
@@ -641,6 +1202,36 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
           let receipts = match object_field(raw, "receipts") {
             Some(Json::Array(values)) => values
             _ => return Err("native snapshot is missing command receipts")
+          }
+          let (archive_objects, archive_sources) = match format_version {
+            Some(1) => {
+              if object_field(raw, "archive_objects") is Some(_) {
+                return Err("native v1 snapshot cannot contain archive locators")
+              }
+              let refs = match native_archive_snapshot_refs(engine) {
+                Ok(value) => value
+                Err(error) => return Err(error)
+              }
+              if !refs.is_empty() {
+                return Err("native v1 snapshot cannot restore archived history")
+              }
+              ([], [])
+            }
+            Some(2) => {
+              let locators = match
+                native_archive_locator_array(
+                  object_field(raw, "archive_objects"),
+                ) {
+                Ok(value) => value
+                Err(error) => return Err(error)
+              }
+              let sources = match self.load_archive_sources(engine, locators) {
+                Ok(value) => value
+                Err(error) => return Err(error)
+              }
+              (locators, sources)
+            }
+            _ => return Err("unsupported native snapshot format version")
           }
           let external_mcp_catalog_hash = match
             object_field(raw, "external_mcp_catalog_hash") {
@@ -670,6 +1261,8 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
           }
           Ok({
             engine,
+            archive_objects,
+            archive_sources,
             receipts,
             acp_sessions,
             server_id: string_field(raw, "server_id").unwrap_or(self.server_id),
@@ -686,9 +1279,20 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
             lsp_catalog_hash,
           })
         }
-        Some("dsh.mbt-session-v1") | Some("deepseek-session-v4") =>
+        Some("dsh.mbt-session-v1") | Some("deepseek-session-v4") => {
+          let refs = match native_archive_snapshot_refs(raw) {
+            Ok(value) => value
+            Err(error) => return Err(error)
+          }
+          if !refs.is_empty() {
+            return Err(
+              "legacy native snapshots cannot restore archived history",
+            )
+          }
           Ok({
             engine: raw,
+            archive_objects: [],
+            archive_sources: [],
             receipts: [],
             acp_sessions: [],
             server_id: self.server_id,
@@ -700,6 +1304,7 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
             external_mcp_catalog_hash: None,
             lsp_catalog_hash: None,
           })
+        }
         _ => Err("native host cannot load this snapshot format")
       }
     }
@@ -707,16 +1312,25 @@ fn NativeStore::load(self : NativeStore) -> Result[NativeState, String] {
 }
 
 ///|
-fn NativeStore::save(
-  self : NativeStore,
-  state : NativeState,
-) -> Result[Unit, String] {
-  if self.closed {
-    return Err("native persistence is closed")
+fn native_store_encode_state(state : NativeState) -> Result[String, String] {
+  match
+    native_archive_validate_coverage(
+      state.engine,
+      state.archive_objects,
+      state.archive_sources,
+    ) {
+    Ok(_) => ()
+    Err(error) => return Err(error)
   }
   let fields : Map[String, Json] = {
     "schema": Json::string(NATIVE_ENVELOPE_SCHEMA),
-    "format_version": Json::number(1.0),
+    "format_version": Json::number(
+      if state.archive_objects.is_empty() {
+        1.0
+      } else {
+        2.0
+      },
+    ),
     "server_id": Json::string(state.server_id),
     "workspace_id": Json::string(state.workspace_id),
     "identity_key": Json::string(state.identity_key),
@@ -735,10 +1349,46 @@ fn NativeStore::save(
     Some(value) => fields["lsp_catalog_hash"] = Json::string(value)
     None => ()
   }
+  if !state.archive_objects.is_empty() {
+    fields["archive_objects"] = native_archive_locators_json(
+      state.archive_objects,
+    )
+  }
   let value = Json::object(fields)
   let raw = value.stringify()
   if @utf8.encode(raw).length() > SNAPSHOT_LIMIT {
     return Err("native snapshot exceeds the 32 MiB persistence limit")
+  }
+  Ok(raw)
+}
+
+///|
+/// Validate the exact final envelope before publishing immutable archive
+/// objects. Save repeats this validation immediately before the CAS.
+fn NativeStore::admit_state(
+  self : NativeStore,
+  state : NativeState,
+) -> Result[Unit, String] {
+  if self.closed {
+    return Err("native persistence is closed")
+  }
+  match native_store_encode_state(state) {
+    Ok(_) => Ok(())
+    Err(error) => Err(error)
+  }
+}
+
+///|
+fn NativeStore::save(
+  self : NativeStore,
+  state : NativeState,
+) -> Result[Unit, String] {
+  if self.closed {
+    return Err("native persistence is closed")
+  }
+  let raw = match native_store_encode_state(state) {
+    Ok(value) => value
+    Err(error) => return Err(error)
   }
   let write_result = match self.version {
     Some(version) =>
@@ -783,17 +1433,20 @@ fn NativeStore::close(self : NativeStore) -> Result[Unit, String] {
   let lock = match NativeStore::read_lock(self.root) {
     Ok(value) => value
     Err(error) => {
+      self.archive_root.close()
       self.root.close()
       return Err(error)
     }
   }
   if string_field(lock, "token") != Some(self.token) {
+    self.archive_root.close()
     self.root.close()
     return Err(
       "host lock ownership changed; refusing to remove another owner's lock",
     )
   }
   let result = self.root.unlink("host.lock")
+  self.archive_root.close()
   self.root.close()
   result
 }

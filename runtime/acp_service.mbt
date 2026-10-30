@@ -842,6 +842,11 @@ async fn NativeAcpService::emit_committed_events(
   session : NativeAcpSession,
   state : Json,
 ) -> Result[Unit, String] {
+  if native_session_has_archive_markers(state) {
+    return Err(
+      "This history contains archived tool results; ACP event projection is unavailable",
+    )
+  }
   session.event_gate.acquire()
   defer session.event_gate.release()
   let events = match object_field(state, "events") {

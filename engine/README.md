@@ -50,14 +50,28 @@ cannot exceed the engine's reopen budget. The engine-only test covers six
 sequential 63 KiB results in one session and a completed next turn after
 reopening; this does not prove a native store capacity improvement.
 
-This slice has no native object store, durable v2 manifest/receipt transaction,
-or API for reading original history. It is not called by `NativeRuntime`, web,
-or ACP. Those paths render `messages.content` and do not interpret archive
-references, so they must not be given archived snapshots until they have an
-archive-aware history boundary or explicitly reject them. Ordinary snapshots
-remain v1; generic v1 restore rejects archive markers, and v2 restore rejects
-forked/imported histories and validates the complete historical Read/result/
-prune chain before compacting it. Effects are never replayed on reopen.
+The engine remains a pure in-memory package: it has no filesystem store, native
+manifest, receipt transaction, or history endpoint. NativeRuntime connects the
+candidate/commit/restore boundary to its v2 immutable object store and explicit
+original-read API. Web history marks archive projections and can request the
+original. CLI uses the marked projection. Legacy MCP history and ACP history/
+event surfaces reject archived sessions rather than returning a projection as
+original content. Ordinary engine snapshots remain v1; generic v1 restore
+rejects archive markers, and v2 restore rejects forked/imported histories and
+validates the complete historical Read/result/prune chain before compacting
+it. Effects are never replayed on reopen.
+
+The runtime protects the object directory with a 64 MiB / 2,048-entry quota,
+including temporary and orphan files, and bounds the outer snapshot to 32 MiB.
+The engine's separate 256-object, 16 MiB original/projection, 7 MiB hydration
+expansion, and 16 MiB JSON-copy limits still apply.
+
+Portable MoonBit SHA-256 keeps the pure engine independent of platform C and
+native crypto providers. The native codec also uses the host system SHA-256
+adapter and independently checks the same UTF-8 object identity at storage and
+restore boundaries; the two implementations are tested against standard
+padding and Unicode vectors. This does not establish power-loss durability on
+every filesystem.
 
 | Operation | Input |
 | --- | --- |

@@ -299,7 +299,9 @@ pub fn display_messages(session : Json) -> Array[DisplayMessage] {
     if content != "" {
       let call_id = string_member(message, "tool_call_id")
       let display_label = string_member(message, "display_label")
-      let label = if display_label != "" {
+      let label = if field(message, "archive_ref") is Some(_) {
+        "ツール結果 · 原文はアーカイブから取得可能"
+      } else if display_label != "" {
         display_label
       } else if provisional && role == "assistant" {
         "アシスタント · " + stream_status
