@@ -10,6 +10,7 @@
 
 - Connect opt-in (`DSH_DESKTOP_IME=1`) Wayland desktop composition through the published gpui.mbt 0.10.2 text-input-v1 transport. Keep direct keyboard text mutually exclusive with compositor commits and fence native queued transactions on app cancellation before preedit delivery.
 - Add per-send opt-in tool-result pruning with `auto_prune_tool_results: true`; the default remains unchanged. Supported regular Read originals are archived in the same send transaction, while unsupported and oversized results remain inline.
+- Add a manual `session_compact_summary` operation that appends a provenance-bound summary event and uses its plain assistant text only in future provider context. Original events and transcript remain available, restore validates the historical source prefix without replaying effects, and existing session/storage quotas are unchanged.
 
 ### Fixed
 

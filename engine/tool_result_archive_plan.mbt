@@ -344,7 +344,11 @@ pub fn Engine::tool_result_archive_supported(
 ) -> Result[Bool, String] {
   try {
     let session = self.lookup(session_id.as_string())
-    if session.imported || self.session_is_fork_related(session) {
+    if session.imported ||
+      self.session_is_fork_related(session) ||
+      session.events.any(event => {
+        event.kind == EngineEventKind::CompactionSummary
+      }) {
       return Ok(false)
     }
     if session.status == Failed || session.status == Cancelled {
@@ -454,6 +458,13 @@ fn Engine::plan_tool_result_archive_impl(
     }
     if self.session_is_fork_related(session) {
       raise Invalid("Fork-related sessions cannot be archive planned")
+    }
+    if session.events.any(event => {
+        event.kind == EngineEventKind::CompactionSummary
+      }) {
+      raise Invalid(
+        "Sessions with compaction summaries cannot archive tool results",
+      )
     }
     if session_tool_result_is_archived(session, result_seq) {
       raise Invalid("Archive planning cannot reuse an already archived result")

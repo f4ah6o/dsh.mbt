@@ -87,6 +87,9 @@ fn Engine::fork_session(
   if session_has_archived_tool_results(source) {
     raise Invalid("Sessions with archived tool results cannot be forked")
   }
+  if source.events.any(event => event.kind == EngineEventKind::CompactionSummary) {
+    raise Invalid("Sessions with compaction summaries cannot be forked")
+  }
   if source.status != Idle &&
     source.status != Completed &&
     source.status != Failed &&
