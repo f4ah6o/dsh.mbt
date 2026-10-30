@@ -195,11 +195,80 @@ fn replay_arguments_are_valid(tool : Tool, call : ToolCall) -> Bool {
 }
 
 ///|
+const RESTORE_EVENT_BATCH_SIZE : Int32 = 64
+
+///|
+/// Mutable validation state shared by every contiguous event batch. A future
+/// parser can feed each parsed batch to apply_restore_event_batch while keeping
+/// the same correlation, approval, hook, and effect identity state alive.
+priv struct RestoreReplayState {
+  mut open_turn : Bool
+  mut admitted_user : Bool
+  mut assistant_recorded : Bool
+  mut pending_todo_call : String?
+  mut prompt_context_count : Int32
+  mut prompt_context_length : Int32
+  mut expected_subagent_context : (Int32, Int32)?
+  mut stop_subagent_context_count : Int32
+  mut stop_subagent_context_length : Int32
+  mut late_subagent_context_admission : Bool
+  mut late_subagent_context_count : Int32
+  mut late_subagent_context_length : Int32
+  mut stop_settled_pending_boundary : Bool
+  mut stop_continuation_reason_seen : Bool
+  mut stop_continuation_rejected : Bool
+  pending_hook_invocations : Map[String, PendingNativeHookInvocation]
+  pending_post_tool_contexts : Array[(String, Json)]
+  expected_admitted_post_tool_messages : Array[Json]
+}
+
+///|
+fn new_restore_replay_state() -> RestoreReplayState {
+  RestoreReplayState::{
+    open_turn: false,
+    admitted_user: false,
+    assistant_recorded: false,
+    pending_todo_call: None,
+    prompt_context_count: 0,
+    prompt_context_length: 0,
+    expected_subagent_context: None,
+    stop_subagent_context_count: 0,
+    stop_subagent_context_length: 0,
+    late_subagent_context_admission: false,
+    late_subagent_context_count: 0,
+    late_subagent_context_length: 0,
+    stop_settled_pending_boundary: false,
+    stop_continuation_reason_seen: false,
+    stop_continuation_rejected: false,
+    pending_hook_invocations: Map([]),
+    pending_post_tool_contexts: [],
+    expected_admitted_post_tool_messages: [],
+  }
+}
+
+///|
 fn restore_session(
   value : Json,
   tools : Array[Tool],
   effect_ids : Map[String, Bool],
   next_effect : Int32,
+) -> Session raise EngineError {
+  restore_session_in_batches(
+    value,
+    tools,
+    effect_ids,
+    next_effect,
+    RESTORE_EVENT_BATCH_SIZE,
+  )
+}
+
+///|
+fn restore_session_in_batches(
+  value : Json,
+  tools : Array[Tool],
+  effect_ids : Map[String, Bool],
+  next_effect : Int32,
+  batch_size : Int32,
 ) -> Session raise EngineError {
   if json_field(value, "source_format") == Some("deepseek-session-v4") {
     return restore_imported_session(value)
@@ -229,26 +298,137 @@ fn restore_session(
     raise Invalid("Snapshot session has no creation event")
   }
   let session = fresh_session(id, title, system_prompt, max_steps)
-  let mut open_turn = false
-  let mut admitted_user = false
-  let mut assistant_recorded = false
-  let mut pending_todo_call : String? = None
-  let mut prompt_context_count = 0
-  let mut prompt_context_length = 0
-  let mut expected_subagent_context : (Int32, Int32)? = None
-  let mut stop_subagent_context_count = 0
-  let mut stop_subagent_context_length = 0
-  let mut late_subagent_context_admission = false
-  let mut late_subagent_context_count = 0
-  let mut late_subagent_context_length = 0
-  let mut stop_settled_pending_boundary = false
-  let mut stop_continuation_reason_seen = false
-  let mut stop_continuation_rejected = false
-  let pending_hook_invocations : Map[String, PendingNativeHookInvocation] = Map([],
-  )
-  let pending_post_tool_contexts : Array[(String, Json)] = []
-  let expected_admitted_post_tool_messages : Array[Json] = []
-  for index, raw in events {
+  if batch_size <= 0 {
+    raise Invalid("Restore event batch size must be positive")
+  }
+  let replay = new_restore_replay_state()
+  let mut batch_start = 0
+  while batch_start < events.length() {
+    let batch_end = batch_start +
+      Int32::min(batch_size, events.length() - batch_start)
+    let batch_events : Array[Json] = []
+    for event_index in batch_start..<batch_end {
+      batch_events.push(events[event_index])
+    }
+    apply_restore_event_batch(
+      session, replay, batch_events, batch_start, tools, effect_ids, next_effect,
+    )
+    batch_start = batch_end
+  }
+  let pending_todo_call = replay.pending_todo_call
+  let pending_post_tool_contexts = replay.pending_post_tool_contexts
+  let expected_admitted_post_tool_messages = replay.expected_admitted_post_tool_messages
+  let expected_subagent_context = replay.expected_subagent_context
+  let pending_hook_invocations = replay.pending_hook_invocations
+  let open_turn = replay.open_turn
+  let stop_settled_pending_boundary = replay.stop_settled_pending_boundary
+  if pending_todo_call is Some(_) {
+    raise Invalid("Snapshot ends before the todo write tool result")
+  }
+  if !pending_post_tool_contexts.is_empty() {
+    if !session.post_tool_prompt_hook_active {
+      raise Invalid("Snapshot ends before all PostToolUse context messages")
+    }
+  }
+  if !expected_admitted_post_tool_messages.is_empty() {
+    raise Invalid("Snapshot ends before all admitted PostToolUse messages")
+  }
+  if expected_subagent_context is Some(_) {
+    raise Invalid("Snapshot ends before its SubagentStart context message")
+  }
+  if status_text(session.status) != expected_status ||
+    session.turn_id != expected_turn ||
+    session.step != expected_step {
+    raise Invalid("Snapshot state disagrees with its event log")
+  }
+  if required_field(value, "messages") != Json::array(session.messages()) {
+    raise Invalid("Snapshot messages disagree with the event log")
+  }
+  let actual_todos = fields(session.json()).get("todos").unwrap_or(Json::null())
+  match fields(value).get("todos") {
+    Some(expected) if expected != actual_todos =>
+      raise Invalid("Snapshot todo projection disagrees with its event log")
+    None if session.events.any(event => event.kind == EngineEventKind::TodoWrite) =>
+      raise Invalid("Snapshot with todo writes is missing its todo projection")
+    _ => ()
+  }
+  match fields(value).get("stream_revision") {
+    Some(revision) if revision != integer(session.stream_revision()) =>
+      raise Invalid("Snapshot stream revision disagrees with the event log")
+    _ => ()
+  }
+  let expected_approval = fields(value).get("pending_approval")
+  let actual_approval = fields(session.json()).get("pending_approval")
+  if fields(value).get("parent_session_id") !=
+    fields(session.json()).get("parent_session_id") {
+    raise Invalid("Snapshot fork lineage disagrees with its event log")
+  }
+  if expected_approval != actual_approval {
+    raise Invalid("Snapshot approval disagrees with the event log")
+  }
+  if pending_hook_invocations.length() != 0 &&
+    (!open_turn || session.status != Running) {
+    raise Invalid("Pending native hook invocation is outside an open turn")
+  }
+  if open_turn &&
+    session.active_effect is None &&
+    session.active_tool_effect_count() == 0 &&
+    session.approval is None &&
+    !session.stop_hook_pending &&
+    !stop_settled_pending_boundary &&
+    !session.post_tool_prompt_hook_active {
+    raise Invalid("Snapshot captured an impossible in-between transition")
+  }
+  let hook_result_projection = native_hook_result_capacity_projection(session)
+  if session_capacity_length(hook_result_projection.json()) > SESSION_CAPACITY {
+    raise Invalid("Snapshot leaves no room for native hook results")
+  }
+  if open_turn && hook_result_projection.events.length() + 40 > 32768 {
+    raise Invalid("Snapshot leaves no room to settle interrupted work")
+  }
+  session
+}
+
+///|
+/// Apply a contiguous range without resetting any identity or correlation state.
+/// `first_seq` is the global sequence of batch_events[0], so batches need not
+/// retain or reconstruct the preceding event array.
+/// A validation error may leave `session`, `effect_ids`, and the shared
+/// collections partially mutated while scalar replay state remains uncommitted.
+/// Callers must discard the entire restore state on error; they must not retry
+/// this batch or continue replay with the same state.
+fn apply_restore_event_batch(
+  session : Session,
+  replay : RestoreReplayState,
+  batch_events : Array[Json],
+  first_seq : Int32,
+  tools : Array[Tool],
+  effect_ids : Map[String, Bool],
+  next_effect : Int32,
+) -> Unit raise EngineError {
+  if first_seq != session.events.length() {
+    raise Invalid("Restore event batch does not continue the applied prefix")
+  }
+  let mut open_turn = replay.open_turn
+  let mut admitted_user = replay.admitted_user
+  let mut assistant_recorded = replay.assistant_recorded
+  let mut pending_todo_call = replay.pending_todo_call
+  let mut prompt_context_count = replay.prompt_context_count
+  let mut prompt_context_length = replay.prompt_context_length
+  let mut expected_subagent_context = replay.expected_subagent_context
+  let mut stop_subagent_context_count = replay.stop_subagent_context_count
+  let mut stop_subagent_context_length = replay.stop_subagent_context_length
+  let mut late_subagent_context_admission = replay.late_subagent_context_admission
+  let mut late_subagent_context_count = replay.late_subagent_context_count
+  let mut late_subagent_context_length = replay.late_subagent_context_length
+  let mut stop_settled_pending_boundary = replay.stop_settled_pending_boundary
+  let mut stop_continuation_reason_seen = replay.stop_continuation_reason_seen
+  let mut stop_continuation_rejected = replay.stop_continuation_rejected
+  let pending_hook_invocations = replay.pending_hook_invocations
+  let pending_post_tool_contexts = replay.pending_post_tool_contexts
+  let expected_admitted_post_tool_messages = replay.expected_admitted_post_tool_messages
+  for offset, raw in batch_events {
+    let index = first_seq + offset
     let seq = int_value(required_field(raw, "seq"), "event seq", 0, 32768)
     if seq != index {
       raise Invalid("Snapshot event sequence is not contiguous")
@@ -322,11 +502,12 @@ fn restore_session(
       if kind != "session/created" || turn_id != 0 || step != 0 {
         raise Invalid("Snapshot must begin with a creation event")
       }
-      if required_string(data, "id", max=128) != id ||
-        required_string(data, "title", max=512) != title ||
-        required_string(data, "system_prompt", max=16384) != system_prompt ||
+      if required_string(data, "id", max=128) != session.id ||
+        required_string(data, "title", max=512) != session.title ||
+        required_string(data, "system_prompt", max=16384) !=
+        session.system_prompt ||
         int_value(required_field(data, "max_steps"), "max_steps", 1, 64) !=
-        max_steps {
+        session.max_steps {
         raise Invalid("Creation event does not match session metadata")
       }
     } else if kind == "turn/start" {
@@ -359,7 +540,7 @@ fn restore_session(
         (session.stop_hook_pending && !session.stop_continuation_admitted) ||
         turn_id != session.turn_id ||
         step != session.step + 1 ||
-        step > max_steps {
+        step > session.max_steps {
         raise Invalid("Invalid step boundary in snapshot")
       }
       if session.stop_hook_pending {
@@ -2068,71 +2249,21 @@ fn restore_session(
       data,
     })
   }
-  if pending_todo_call is Some(_) {
-    raise Invalid("Snapshot ends before the todo write tool result")
-  }
-  if !pending_post_tool_contexts.is_empty() {
-    if !session.post_tool_prompt_hook_active {
-      raise Invalid("Snapshot ends before all PostToolUse context messages")
-    }
-  }
-  if !expected_admitted_post_tool_messages.is_empty() {
-    raise Invalid("Snapshot ends before all admitted PostToolUse messages")
-  }
-  if expected_subagent_context is Some(_) {
-    raise Invalid("Snapshot ends before its SubagentStart context message")
-  }
-  if status_text(session.status) != expected_status ||
-    session.turn_id != expected_turn ||
-    session.step != expected_step {
-    raise Invalid("Snapshot state disagrees with its event log")
-  }
-  if required_field(value, "messages") != Json::array(session.messages()) {
-    raise Invalid("Snapshot messages disagree with the event log")
-  }
-  let actual_todos = fields(session.json()).get("todos").unwrap_or(Json::null())
-  match fields(value).get("todos") {
-    Some(expected) if expected != actual_todos =>
-      raise Invalid("Snapshot todo projection disagrees with its event log")
-    None if session.events.any(event => event.kind == EngineEventKind::TodoWrite) =>
-      raise Invalid("Snapshot with todo writes is missing its todo projection")
-    _ => ()
-  }
-  match fields(value).get("stream_revision") {
-    Some(revision) if revision != integer(session.stream_revision()) =>
-      raise Invalid("Snapshot stream revision disagrees with the event log")
-    _ => ()
-  }
-  let expected_approval = fields(value).get("pending_approval")
-  let actual_approval = fields(session.json()).get("pending_approval")
-  if fields(value).get("parent_session_id") !=
-    fields(session.json()).get("parent_session_id") {
-    raise Invalid("Snapshot fork lineage disagrees with its event log")
-  }
-  if expected_approval != actual_approval {
-    raise Invalid("Snapshot approval disagrees with the event log")
-  }
-  if pending_hook_invocations.length() != 0 &&
-    (!open_turn || session.status != Running) {
-    raise Invalid("Pending native hook invocation is outside an open turn")
-  }
-  if open_turn &&
-    session.active_effect is None &&
-    session.active_tool_effect_count() == 0 &&
-    session.approval is None &&
-    !session.stop_hook_pending &&
-    !stop_settled_pending_boundary &&
-    !session.post_tool_prompt_hook_active {
-    raise Invalid("Snapshot captured an impossible in-between transition")
-  }
-  let hook_result_projection = native_hook_result_capacity_projection(session)
-  if session_capacity_length(hook_result_projection.json()) > SESSION_CAPACITY {
-    raise Invalid("Snapshot leaves no room for native hook results")
-  }
-  if open_turn && hook_result_projection.events.length() + 40 > 32768 {
-    raise Invalid("Snapshot leaves no room to settle interrupted work")
-  }
-  session
+  replay.open_turn = open_turn
+  replay.admitted_user = admitted_user
+  replay.assistant_recorded = assistant_recorded
+  replay.pending_todo_call = pending_todo_call
+  replay.prompt_context_count = prompt_context_count
+  replay.prompt_context_length = prompt_context_length
+  replay.expected_subagent_context = expected_subagent_context
+  replay.stop_subagent_context_count = stop_subagent_context_count
+  replay.stop_subagent_context_length = stop_subagent_context_length
+  replay.late_subagent_context_admission = late_subagent_context_admission
+  replay.late_subagent_context_count = late_subagent_context_count
+  replay.late_subagent_context_length = late_subagent_context_length
+  replay.stop_settled_pending_boundary = stop_settled_pending_boundary
+  replay.stop_continuation_reason_seen = stop_continuation_reason_seen
+  replay.stop_continuation_rejected = stop_continuation_rejected
 }
 
 ///|
