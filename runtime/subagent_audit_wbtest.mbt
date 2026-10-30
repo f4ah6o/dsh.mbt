@@ -302,6 +302,47 @@ test "subagent audit codec rejects nonterminal and mismatched child snapshots" {
 }
 
 ///|
+test "subagent audit codec rejects forged derived messages" {
+  let child_id = "subagent-audit-forged-messages"
+  let snapshot = native_subagent_audit_test_child_snapshot(child_id)
+  let sessions = match object_field(snapshot, "sessions") {
+    Some(Json::Array(values)) => values
+    _ => fail("test engine snapshot omitted sessions")
+  }
+  let session_fields = match sessions[0] {
+    Json::Object(fields) => fields
+    _ => fail("test child session is not an object")
+  }
+  let messages = match session_fields.get("messages") {
+    Some(Json::Array(values)) if values.length() >= 2 => values
+    _ => fail("test child snapshot omitted derived messages")
+  }
+  let forged_messages = messages.copy()
+  let forged_assistant_message = match forged_messages[1] {
+    Json::Object(fields) => fields
+    _ => fail("test assistant message is not an object")
+  }
+  forged_assistant_message["content"] = Json::string("forged derived content")
+  forged_messages[1] = Json::object(forged_assistant_message)
+  session_fields["messages"] = Json::array(forged_messages)
+  let forged_session = Json::object(session_fields)
+  let forged_sessions = sessions.copy()
+  forged_sessions[0] = forged_session
+  let snapshot_fields = match snapshot {
+    Json::Object(fields) => fields
+    _ => fail("test engine snapshot is not an object")
+  }
+  snapshot_fields["sessions"] = Json::array(forged_sessions)
+  let forged_snapshot = Json::object(snapshot_fields)
+  assert_true(
+    native_subagent_audit_encode(
+      native_subagent_audit_test_record(child_id~, snapshot=forged_snapshot),
+    )
+    is Err(_),
+  )
+}
+
+///|
 test "subagent audit codec rejects interrupted outcomes and oversized or deep input" {
   let snapshot = native_subagent_audit_test_child_snapshot(
     "subagent-audit-interrupted",
