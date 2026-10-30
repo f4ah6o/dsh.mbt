@@ -65,6 +65,72 @@ async test "native SafeRoot rejects symlinks, protects files, and detects confli
 }
 
 ///|
+async test "native SafeRoot reads bounded raw bytes and keeps text decoding rules" {
+  let fixture = @fs.tmpdir(prefix="dsh-safe-root-bytes")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    let outside = fixture + "/outside.bin"
+    @fs.mkdir(workspace)
+
+    let raw_bytes = [b'\xef', b'\xbb', b'\xbf', b'a', b'\x00', b'\xff']
+    @fs.write_file(workspace + "/raw.bin", Bytes::from_array(raw_bytes[:]))
+    @fs.write_file(outside, Bytes::from_array(raw_bytes[:]))
+    @fs.symlink(workspace + "/linked.bin", target=outside)
+    @fs.write_file(
+      workspace + "/bom.txt",
+      Bytes::from_array([b'\xef', b'\xbb', b'\xbf', b'o', b'k']),
+    )
+    @fs.write_file(
+      workspace + "/invalid.txt",
+      Bytes::from_array([b'\xff', b'\x80']),
+    )
+
+    let root = match SafeRoot::open(workspace) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => root.close())
+
+    let (bytes, raw_version) = match root.read_bytes("raw.bin") {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    assert_eq(bytes.to_array(), raw_bytes)
+    assert_eq(raw_version.size(), 6L)
+    assert_true(raw_version.same(root.read_bytes("raw.bin").unwrap().1))
+    let limit_error = match root.read_bytes("raw.bin", max_bytes=5) {
+      Ok(_) => fail("bounded byte read accepted an oversized file")
+      Err(error) => error
+    }
+    assert_eq(limit_error, "workspace file exceeds the read limit")
+    assert_true(root.read_bytes("linked.bin") is Err(_))
+
+    let (bom_text, bom_version) = match root.read_text("bom.txt") {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    assert_eq(bom_text, "\uFEFFok")
+    let text_version = root.read_bytes("bom.txt").unwrap().1
+    assert_true(bom_version.same(text_version))
+
+    let nul_error = match root.read_text("raw.bin") {
+      Ok(_) => fail("text read accepted a NUL byte")
+      Err(error) => error
+    }
+    assert_eq(nul_error, "binary files are not supported by the text tool")
+    let utf8_error = match root.read_text("invalid.txt") {
+      Ok(_) => fail("text read accepted invalid UTF-8")
+      Err(error) => error
+    }
+    assert_eq(utf8_error, "workspace file is not valid UTF-8")
+    assert_eq(root.read_bytes("invalid.txt").unwrap().0.to_array(), [
+      b'\xff', b'\x80',
+    ])
+  }
+}
+
+///|
 async test "native SafeRoot does not follow a swapped nested ancestor" {
   let fixture = @fs.tmpdir(prefix="dsh-safe-root-race")
   @async.with_task_group() <| group => {
