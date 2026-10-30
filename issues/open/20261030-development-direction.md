@@ -219,6 +219,10 @@ OpenCode は LLM provider 接続と Agent Runtime Backend を分ける。#66 の
 | [#94](https://github.com/f4ah6o/dsh.mbt/pull/94) `6314a43f1a0f14ac7a16f20c1143a63e8d2a821a` | 所有中の dispatched child effect を停止する Engine/API primitive。runtime gate / checkpoint と公開処理への接続は後続。 |
 | [#95](https://github.com/f4ah6o/dsh.mbt/pull/95) `4d0113c200d85e6c1739d2d983c7d6d35c1f8475` | 明示 opt-in の per-turn provider request byte ceiling。token window や自動 summary ではなく、tool 結果そのものが上限を超える問題は未解決。 |
 | [#96](https://github.com/f4ah6o/dsh.mbt/pull/96) `cb6ef8ecafd0e5cb9e68b1cc070b2df2fc5efdb7` | 完了 turn の縮約 prefix を選ぶ read-only planner。元 event と投影 message の両方を fingerprint するが、summary 生成・適用や保存容量の削減は未実装。 |
+| [#97](https://github.com/f4ah6o/dsh.mbt/pull/97) `b1e079210498f36b678c95ac2275087e6a61c5c7` | Wayland GUI 失敗時の診断を改善。7 件の先頭文字欠落を確認したが upstream 内部原因は未確定。GUI gate は維持。 |
+| [#98](https://github.com/f4ah6o/dsh.mbt/pull/98) `719a7ba02718ca07460b66201d3e5589563f5fa6` | opt-in の settled foreground child 監査を独立保存。競合・不明結果は中断または inert orphan とし、background・再開・結果採用は含まない。 |
+| [#99](https://github.com/f4ah6o/dsh.mbt/pull/99) `e62dae82fbb52cfc52b622619ea7bed1d04cc3ff` | 指定 summary と新鮮な計画を照合する bounded candidate。メモリ内のみで自動生成・保存・容量削減は未実装。 |
+| [#100](https://github.com/f4ah6o/dsh.mbt/pull/100) `6cf56eade503fbd863633efbcf4dd433736b8492` | owner-only local CLI で子監査を inert に閲覧。parent / workspace は相関情報であり現在の権限や再開の証明ではない。 |
 
 これらの PR は長い会話や保存の候補を進めているが、main の実利用 gate とは独立する。
 レビュー時は個別 PR の dependency / base を保ち、stack 全体を main の完了として数えない。
