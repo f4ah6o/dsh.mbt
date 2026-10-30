@@ -632,11 +632,11 @@ fn SafeRoot::stat(_self : SafeRoot, fd : Int32) -> Result[FileVersion, String] {
 }
 
 ///|
-pub fn SafeRoot::read_text(
+pub fn SafeRoot::read_bytes(
   self : SafeRoot,
   relative_path : String,
   max_bytes~ : Int32 = 1048576,
-) -> Result[(String, FileVersion), String] {
+) -> Result[(Bytes, FileVersion), String] {
   if max_bytes < 0 || max_bytes > 33554432 {
     return Err("invalid workspace read limit")
   }
@@ -672,16 +672,29 @@ pub fn SafeRoot::read_text(
     Err(error) => return Err(error)
     Ok(_) => ()
   }
-  for index = 0; index < count; index = index + 1 {
-    if buffer[index] == b'\x00' {
+  let bytes = bytes_from_fixedarray(buffer, count)
+  Ok((bytes, before))
+}
+
+///|
+pub fn SafeRoot::read_text(
+  self : SafeRoot,
+  relative_path : String,
+  max_bytes~ : Int32 = 1048576,
+) -> Result[(String, FileVersion), String] {
+  let (bytes, version) = match self.read_bytes(relative_path, max_bytes~) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  for index = 0; index < bytes.length(); index = index + 1 {
+    if bytes[index] == b'\x00' {
       return Err("binary files are not supported by the text tool")
     }
   }
-  let bytes = bytes_from_fixedarray(buffer, count)
   let text = @utf8.decode(bytes) catch {
     _ => return Err("workspace file is not valid UTF-8")
   }
-  Ok((text, before))
+  Ok((text, version))
 }
 
 ///|
