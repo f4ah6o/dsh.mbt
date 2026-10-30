@@ -185,6 +185,24 @@ test "Session v4 import is inert, read-only, atomic, and restorable" {
   assert_true(engine.take_effects().is_empty())
 
   let before = engine.snapshot()
+  let imported_capacity = success(
+    engine.invoke(
+      "session_inspect_capacity",
+      fixture("{\"session_id\":\"session-1\"}"),
+    ),
+  )
+  assert_eq(
+    required_field(imported_capacity, "serialized_utf16_units"),
+    integer(unchanged.stringify().length()),
+  )
+  assert_eq(
+    required_field(imported_capacity, "event_count"),
+    integer(
+      array_value(required_field(unchanged, "events"), "events", 16).length(),
+    ),
+  )
+  assert_eq(engine.snapshot(), before)
+  assert_true(engine.take_effects().is_empty())
   let forged_todo_projection = checked_copy(before)
   let forged_todo_sessions = array_value(
     required_field(forged_todo_projection, "sessions"),
@@ -232,6 +250,14 @@ test "Session v4 import is inert, read-only, atomic, and restorable" {
     ),
     unchanged,
   )
+  let restored_capacity = success(
+    restored.invoke(
+      "session_inspect_capacity",
+      fixture("{\"session_id\":\"session-1\"}"),
+    ),
+  )
+  assert_eq(restored_capacity, imported_capacity)
+  assert_eq(restored.snapshot(), before)
   assert_true(restored.take_effects().is_empty())
 
   let forged = engine.snapshot()

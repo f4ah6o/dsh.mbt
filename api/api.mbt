@@ -70,7 +70,7 @@ fn operation_schema(operation : String) -> @capability.Schema raise InitError {
     "session_fork" =>
       [session, field("id", string, false), field("title", string, false)]
     "session_import" => [field("jsonl", string, true)]
-    "session_get" | "session_cancel" => [session]
+    "session_get" | "session_inspect_capacity" | "session_cancel" => [session]
     "session_send" => [session, field("prompt", string, true)]
     "session_prune_tool_results" =>
       [
@@ -226,6 +226,10 @@ fn create_api(
       ),
       (
         "session_get", "Read session", "Read a session, its transcript, events, and pending tool approval.",
+        true,
+      ),
+      (
+        "session_inspect_capacity", "Inspect session capacity", "Read canonical serialized UTF-16 usage and event count against the session limits; remaining headroom is informational.",
         true,
       ),
       (

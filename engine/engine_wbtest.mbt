@@ -62,6 +62,72 @@ fn get_session(engine : Engine) -> Json {
 }
 
 ///|
+test "session capacity inspection reports canonical UTF-16 and event limits without mutation" {
+  assert_eq("😀".length(), 2)
+  let engine = Engine::new([])
+  ignore(
+    success(
+      engine.invoke(
+        "session_create",
+        object([
+          ("id", Json::string("capacity-inspection")),
+          ("title", Json::string("Unicode 😀 session")),
+        ]),
+      ),
+    ),
+  )
+  let before = engine.snapshot()
+  let session = success(
+    engine.invoke(
+      "session_get",
+      object([("session_id", Json::string("capacity-inspection"))]),
+    ),
+  )
+  let inspection = success(
+    engine.invoke(
+      "session_inspect_capacity",
+      object([("session_id", Json::string("capacity-inspection"))]),
+    ),
+  )
+  let event_count = array_value(required_field(session, "events"), "events", 16).length()
+  assert_eq(
+    required_field(inspection, "serialized_utf16_units"),
+    integer(session.stringify().length()),
+  )
+  assert_eq(
+    required_field(inspection, "capacity_accounted_utf16_units"),
+    integer(session_capacity_length(session)),
+  )
+  assert_eq(
+    required_field(inspection, "capacity_utf16_limit"),
+    integer(SESSION_CAPACITY),
+  )
+  assert_eq(required_field(inspection, "event_count"), integer(event_count))
+  assert_eq(
+    required_field(inspection, "event_limit"),
+    integer(SESSION_EVENT_LIMIT),
+  )
+  assert_eq(
+    required_field(inspection, "nominal_event_headroom"),
+    integer(SESSION_EVENT_LIMIT - event_count),
+  )
+  assert_eq(
+    required_field(inspection, "headroom_guaranteed"),
+    Json::boolean(false),
+  )
+  let typed_inspection = success(
+    engine.apply(
+      EngineCommand::InspectCapacity(
+        SessionId::new("capacity-inspection").unwrap(),
+      ),
+    ),
+  )
+  assert_eq(typed_inspection, inspection)
+  assert_eq(engine.snapshot(), before)
+  assert_true(engine.take_effects().is_empty())
+}
+
+///|
 fn id_of(effect : Json) -> String {
   required_string(effect, "id") catch {
     _ => abort("Missing effect id")

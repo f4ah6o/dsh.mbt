@@ -608,9 +608,8 @@ async fn NativeRuntime::record_native_hook_result(
 }
 
 ///|
-/// Apply an operation and make the state durable before returning effects to
-/// the caller. A read operation is checkpointed too, keeping this boundary
-/// simple until the HTTP dispatcher classifies projections separately.
+/// Apply an operation and make its state durable before returning effects.
+/// Capacity inspection is an observation and bypasses checkpointing and drain.
 async fn NativeRuntime::invoke(
   self : NativeRuntime,
   operation : String,
@@ -662,6 +661,9 @@ async fn NativeRuntime::invoke(
   let result = match self.api.invoke(operation, input) {
     Ok(value) => value
     Err(error) => return Err(error)
+  }
+  if operation == "session_inspect_capacity" {
+    return Ok((result, []))
   }
   match self.checkpoint_locked() {
     Err(error) => Err(error)
@@ -2253,8 +2255,8 @@ async fn NativeRuntime::schedule_retry(
 
 ///|
 /// Handle one gpui MCP JSON-RPC line through the same protocol server. Persist
-/// acceptance before dispatching effects in the carrier's background task so
-/// the JSON-RPC response remains immediate.
+/// command acceptance before dispatching effects; capacity inspection returns
+/// its validated query response without checkpointing or draining effects.
 async fn[X] NativeRuntime::mcp_handle(
   self : NativeRuntime,
   line : String,
@@ -2512,6 +2514,10 @@ async fn[X] NativeRuntime::mcp_handle(
     .unwrap_or("")
   } else {
     self.api.mcp_handle(prompt_dispatch_line).unwrap_or("")
+  }
+  if tool_name == "session_inspect_capacity" {
+    self.gate.release()
+    return Ok(response)
   }
   let effects = self.api.take_typed_effects()
   let checkpoint = self.checkpoint_locked()

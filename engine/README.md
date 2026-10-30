@@ -22,6 +22,7 @@ Engine::restore(snapshot : Json) -> Result[Unit, String]
 | `session_import` | `jsonl` containing an upstream Session v4 archive; returns a read-only history |
 | `session_list` | `{}` |
 | `session_get` | `session_id` |
+| `session_inspect_capacity` | `session_id`; reports serialized UTF-16 units and event count against their limits |
 | `session_send` | `session_id`, nonempty `prompt` |
 | `session_cancel` | `session_id` |
 | `tool_approve` | `session_id`, exact `call_id`, boolean `approved` |
@@ -124,6 +125,16 @@ emits no candidate effects, and keeps its previously admitted history
 reloadable. Start a new session when this limit is reached. This deliberate
 initial-port bound also keeps all 32 session views within the application's
 snapshot and API transport limits.
+
+`session_inspect_capacity` is a read-only query. `serialized_utf16_units` is the
+length of the current canonical session JSON, and `event_count` is the current
+durable event count; the response includes each limit and nominal arithmetic
+headroom. The capacity-accounted UTF-16 count excludes the fixed `todos: null`
+field for compatibility with older snapshots. Headroom is not guaranteed: the
+reported values do not subtract reservations for a full turn, interrupted
+restore closure, pending hook results, or retry starts, while later output and
+closure records can consume serialized capacity. These counts do not estimate
+tokens, file bytes, or a storage envelope.
 
 `session_import` is a separate, explicit path for a bounded Session v4 event
 subset. It retains the v4 header and raw source lines inside the v1 snapshot,
