@@ -120,6 +120,8 @@ async test "windows SafeRoot reads file metadata without decoding contents" {
     group.add_defer(() => @fs.rmdir(fixture, recursive=true))
     let workspace = fixture + "/workspace"
     @fs.mkdir(workspace)
+    let outside = fixture + "/outside.tmp"
+    @fs.write_file(outside, "outside sentinel")
     let root = match SafeRoot::open(workspace) {
       Ok(value) => value
       Err(error) => fail(error)
@@ -136,6 +138,7 @@ async test "windows SafeRoot reads file metadata without decoding contents" {
     assert_eq(version.size(), @utf8.encode(partial).length().to_int64())
     assert_true(root.file_version("missing.tmp") is Err(_))
     assert_true(root.file_version("../outside.tmp") is Err(_))
+    assert_eq(@fs.read_file(outside).text(), "outside sentinel")
   }
 }
 
