@@ -1,12 +1,62 @@
 # 0003: MoonBit native kernel と iOS / Tailscale クライアントへのロードマップ
 
-状態: 部分実装 / open。native service と SwiftUI + MoonC Simulator embedding spike はあるが、formal gpui iOS host、real Tailscale、iPhone 実機 gate は未実行。
-Updated: 2026-10-07
-Baseline: `71a33a565455e167fa9dd687155fa794b6cc2414` (`main`)
+状態: 部分実装 / open。main `8e7ec94e2436edf0db961659130c0390122fd38c` の記録には local fixture と別途報告された Simulator embedding spike がある。real Tailscale と iPhone 実機 gate は未実行、formal gpui iOS host は未実装。
+Updated: 2026-10-30
+Proposal baseline: `71a33a565455e167fa9dd687155fa794b6cc2414` (`main`)
+Current acceptance baseline: `8e7ec94e2436edf0db961659130c0390122fd38c` (`main`)
 Guide baseline: `moonbitlang/moonbit-agent-guide@7262fb823452c20ffb6a01d4b06f9de639e7c774`
 関連: [0001 upstream parity](0001-upstream-parity.md)、[認証提案 PR #9](https://github.com/f4ah6o/dsh.mbt/pull/9)、[gpui.mbt モバイル設計 PR #43](https://github.com/gpui-mbt/gpui.mbt/pull/43)
 
 実装 increment の M0–M7 / A01–A18 判定、検証範囲、未実行 gate は[実装状況](../../docs/implementation-status.md)を参照する。この proposal 全体を完了扱いにはしていない。
+
+## 2026-10-30 acceptance evidence and real-device procedure
+
+この更新の比較対象は main `8e7ec94e2436edf0db961659130c0390122fd38c`。
+[`docs/native-runtime.md` の Tailscale Serve procedure](../../docs/native-runtime.md#tailscale-serve)
+は explicit loopback port、固定 MagicDNS HTTPS hostname、owner login、Serve proxy の実設定を記録する。
+[`docs/verification.md` の iOS lifecycle record](../../docs/verification.md#ios-client-lifecycle-fencing-increment)
+は 13 scenario の Swift model fixture、generated-C ABI smoke、Simulator SDK 向け build を記録する。
+この lifecycle-fencing run 自体は Simulator を install / launch していない。一方、別の段落と
+`docs/implementation-status.md` は SwiftUI + MoonC embedding の Simulator build / install / launch を
+reported pass として記録する。両者を別の記録として扱い、どちらも実 host 接続、Serve、ChatGPT login、
+物理 iPhone の結果には数えない。
+
+| Gate | main の記録 | 合格条件 |
+| --- | --- | --- |
+| SIWC account | NOT RUN。fixture pass は別 gate。 | [0002](0002-chatgpt-subscription-siwc.md) の live sequence で eligible model を選び、validated `response.completed` と completed session を確認する。 |
+| Tailscale Serve | NOT RUN。local HTTP owner / Host / Origin fixture は実 Serve identity の検証ではない。 | Host を `127.0.0.1` のまま動かし、Serve が付けた実 user identity でのみ指定 owner を許可し、missing / unauthorized identity と許可外 Host / Origin を拒否する。Funnel や LAN bind は使わない。 |
+| iPhone PWA lifecycle | NOT RUN。13-scenario model harness、Simulator SDK build、reported Simulator install / launch は実機 gate ではない。 | 実 iPhone Safari / Home Screen から harmless write を送り承認する。lock、app kill、Tailscale disconnect / reconnect、Wi-Fi / cellular 切替の後に復帰し、host 側 run の継続、snapshot / event cursor / receipt 同期、未確認 command の再送なし、効果が一度だけであることを確認する。 |
+| Formal native iOS host | UNIMPLEMENTED。SwiftUI + MoonC spike は別範囲。 | gpui host を実装した後に Simulator と実 iPhone で共通 client、入力、accessibility、memory、callback、foreground 復帰を個別に受け入れる。 |
+
+### 実機 gate の手順と結果の記録
+
+1. host に専用 data directory と一時 workspace を用意する。`DSH_TAILNET_HOST` を実際の
+   MagicDNS HTTPS hostname、`DSH_TAILNET_ALLOWED_USERS` を許可する owner login に設定し、
+   `docs/native-runtime.md` の例と同様に固定 loopback port で `dsh web` を起動する。
+2. `tailscale serve --https=8443 http://127.0.0.1:3210` を実行する。iPhone の Tailscale
+   client を接続し、Safari で `https://<MagicDNS hostname>:8443/` を開く。Home Screen PWA
+   の受入を測る場合は Safari の Share → Add to Home Screen から追加して起動し、Safari と PWA
+   の結果を分けて記録する。
+3. iPhone から一意な marker file を作る harmless task を送る。表示された workspace / file /
+   command を確認して承認し、host と client の両方で同一 command receipt が settled となり、
+   marker が 1 つだけ存在することを確認する。
+4. 別の harmless request を送り、host が受理して receipt / in-progress 状態を返した後、terminal
+   response 前に iPhone を lock する、Safari / PWA を kill する、Tailnet を切る / 戻す、Wi-Fi と
+   cellular を切り替える。復帰後は session snapshot / cursor と同じ receipt を照合し、同じ結果が
+   同期されることを確認する。host が interruption 前に完了した場合は、その操作を in-flight gate の
+   PASS と扱わない。approval が pending の場合は自動承認せず、復帰後に同じ approval を一度だけ解決する。
+   未確定 command を新しい ID で送らず、workspace 効果が重複しないことを確認する。
+5. 対象外 user が使える場合はその identity で拒否を確認する。試験できない missing-user / tagged-device
+   case は NOT RUN と記録する。local fixture の拒否結果を実 Serve の結果へ読み替えない。
+
+証拠は source SHA / release provenance、host と iPhone の OS / browser / Tailscale version、日時、
+各操作と観測結果、receipt の相関結果、未実行 gate を含める。`Tailscale-User-Login` の値、
+OAuth code / token、credential file、tailnet key / QR code、個人の prompt や workspace 内容、
+無加工 log は含めない。安全に redact した記録だけを verification record に加える。
+
+`NOT RUN` は実試験の証拠がない状態、`BLOCKED` は試験開始前に account / device / entitlement などの
+前提が満たせなかった状態、`FAIL` は実行して期待条件を満たさなかった状態として区別する。
+この更新は実機試験を実行したものではない。
 
 ## 1. 目的と設計方針
 

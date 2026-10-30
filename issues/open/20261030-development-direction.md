@@ -190,3 +190,29 @@ OpenCode は LLM provider 接続と Agent Runtime Backend を分ける。#66 の
 ### Frontier と既存作業
 
 新規チケットの frontier は上記 2 件。優先順位は記載順とする。SIWC と PWA の受入は既存 0002 / 0003 を再利用し、実機・実アカウント・Tailnet の用意と既存証拠の照合が必要な HITL 作業として並行管理する。別セッションが着手する前に状態と claim を再確認する。
+
+### 2026-10-30 progress after main baseline
+
+受入文書の比較対象は main `8e7ec94e2436edf0db961659130c0390122fd38c`。PR #76 の head は
+`87042bb70af9fa5f9b64e4b82ef53cf4a227c5c6` で、以下の PR は GitHub 上で **OPEN / unmerged**
+として確認した。head SHA は `gh pr view` の `headRefOid`。これらの提案を baseline main の機能や
+実利用の証拠には数えない。
+
+| PR / exact head SHA | 進捗と主な制限 |
+| --- | --- |
+| [#77](https://github.com/f4ah6o/dsh.mbt/pull/77) `f4ba131c84460fd9af04908bbcca882c599fd7a4` | 新しい turn 前の opt-in tool-result pruning。default off で、summary / spill / storage capacity は増やさない。post-rename unknown commit は未検証。 |
+| [#78](https://github.com/f4ah6o/dsh.mbt/pull/78) `fe181ea431ebdc147c3afe5c584d8a1531024df0` | read-only capacity accounting。headroom は admission guarantee ではなく、長期保存容量も増やさない。 |
+| [#79](https://github.com/f4ah6o/dsh.mbt/pull/79) `e1511dac76ee29165a939a78bdadda2b6d043ff0` | batched session replay validation。初回 Wayland UI failure は同じ head の rerun で pass、原因は未確定。長期会話機能の追加ではない。 |
+| [#80](https://github.com/f4ah6o/dsh.mbt/pull/80) `6dc667358f5c05a0416f87d0b6266c535e14419a` | pending tool effect owner predicate。durable child storage / background / resume の caller はない。 |
+| [#81](https://github.com/f4ah6o/dsh.mbt/pull/81) `d210374c378baa4bdc3c0de60b3f9d76ed0195f8` | bounded atomic create primitive。archive や child audit の integration ではなく、power-loss / macOS acceptance は未実施。 |
+| [#82](https://github.com/f4ah6o/dsh.mbt/pull/82) `fcffd7f453a0eedd055402fccdee6e610fca4938` | eligible pruned Read の read-only preflight。object storage、replay integration、容量増加は含まない。 |
+| [#83](https://github.com/f4ah6o/dsh.mbt/pull/83) `e1dface0f997b0951768d0e2f041a5eaf74652c2` | bounded archive object codec。実ファイル保存、raw stored-byte validation、v2 replay は未実装。 |
+| [#84](https://github.com/f4ah6o/dsh.mbt/pull/84) `9777af34c4c8c21c5734ca468e513578c44b6655` | bounded byte-preserving SafeRoot read。archive storage や deterministic read-race coverage は含まない。 |
+| [#85](https://github.com/f4ah6o/dsh.mbt/pull/85) `169de36cf0419e02f764454f337c997f29dd336a` | engine-only v2 archive candidate / commit / verified restore。native object store、manifest / receipt transaction、history API、web / ACP は未実装。 |
+| [#86](https://github.com/f4ah6o/dsh.mbt/pull/86) `a64a335c25f9c5ae797f12a2d2c6c1b3c602ed5b` | command receipt を owner + ID で scope。過去に上書きされた receipt は復元しない。 |
+| [#87](https://github.com/f4ah6o/dsh.mbt/pull/87) `46e9efd496f874a2f8ccbc11529b89acf29c4569` | eligible regular Read result の手動 durable archive。一般 compaction ではない。専用の checked-in cancellation / power-loss guarantee はなく、PR に記録された一部 temporary cooperative-cancellation fixtures は別扱い。 |
+
+PR #77–#87 は長い会話や保存の候補を進めているが、main の実利用 gate とは独立する。
+レビュー時は個別 PR の dependency / base を保ち、stack 全体を main の完了として数えない。
+実 SIWC、Tailscale Serve、iPhone gate は[0002](0002-chatgpt-subscription-siwc.md)と
+[0003](0003-moonbit-native-ios-tailnet-roadmap.md)に記録し、fixture と実アカウント / 実機の結果を分ける。
