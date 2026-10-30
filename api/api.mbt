@@ -87,6 +87,11 @@ fn operation_schema(operation : String) -> @capability.Schema raise InitError {
         session,
         field("prompt", string, true),
         field("auto_prune_tool_results", @capability.Schema::bool(), false),
+        field(
+          "max_provider_request_utf8_bytes",
+          @capability.Schema::int(),
+          false,
+        ),
       ]
     "session_prune_tool_results" =>
       [
@@ -249,7 +254,7 @@ fn create_api(
         true,
       ),
       (
-        "session_send", "Send prompt", "Begin a turn. Returns immediately; query the session until it settles.",
+        "session_send", "Send prompt", "Begin a turn. Optionally set max_provider_request_utf8_bytes to reject any engine request in this turn before provider dispatch. This is a serialized UTF-8 byte ceiling, not a token or provider context-window limit.",
         false,
       ),
       (
@@ -316,6 +321,7 @@ fn create_api(
               Ok(command) =>
                 match command.session_send_details() {
                   Some((session_id, prompt, request_contexts, auto_prune)) => {
+                    let max_provider_request_utf8_bytes = command.session_send_request_byte_ceiling()
                     let command_result = if !native_session_start_contexts.val.is_empty() ||
                       !native_prompt_contexts.val.is_empty() {
                       let additional_contexts = request_contexts.copy()
@@ -329,6 +335,7 @@ fn create_api(
                         additional_contexts,
                         source_kind=native_hook_context_source_kind.val,
                         auto_prune_tool_results=auto_prune,
+                        max_provider_request_utf8_bytes~,
                       )
                     } else if preview_session_send.val {
                       engine.preview(command)

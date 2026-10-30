@@ -110,8 +110,19 @@ and message/tool counts. Each serialized measurement is capped at 16 MiB. These
 are request-size measurements before provider-specific wire conversion. The
 bounded walk rejects nesting beyond 128 levels, more than 16,777,216 visited
 JSON values, invalid unpaired surrogates, and serialized components over 16 MiB.
-These values do not estimate tokens, report a model context window, enforce a
-budget, or trigger compaction. A missing active provider effect returns `None`.
+The measurements do not estimate tokens, report a model context window, or
+trigger compaction. A missing active provider effect returns `None`.
+
+`session_send.max_provider_request_utf8_bytes` optionally enforces a per-turn
+ceiling from 1 byte through 16 MiB. The engine measures each constructed request
+before `emit_effect`; an over-limit or unmeasurable request closes the turn with
+reason `provider_request_limit` and does not create a provider effect. The limit
+is recorded in `turn/start`, so restoring an approval-waiting turn retains it.
+The unit is serialized engine-request UTF-8 bytes before provider-specific wire
+conversion; this is not a token count or model-window guarantee. It does not
+change durable session/event capacity or automatically prune history. Tool or
+hook outcomes already admitted before a later request is rejected remain subject
+to the existing durable session-capacity rules.
 
 Each tool descriptor has `name`, `description`, an object `input_schema`, and
 `effect: "read" | "write" | "shell"`. Read effects start automatically. Every

@@ -71,6 +71,22 @@ fn Engine::apply_command_impl(
           "hooks-claude-code",
           auto_prune_tool_results=true,
         )
+      SendPromptWithRequestByteCeiling(
+        id,
+        prompt,
+        additional_contexts,
+        auto_prune,
+        maximum
+      ) =>
+        self.send_prompt(
+          id,
+          prompt,
+          [],
+          additional_contexts,
+          "hooks-claude-code",
+          auto_prune_tool_results=auto_prune,
+          max_provider_request_utf8_bytes=Some(maximum),
+        )
       CancelSession(id) => {
         let session = self.lookup(id.as_string())
         if session.imported {
@@ -144,6 +160,7 @@ fn Engine::send_prompt(
   additional_contexts : Array[String],
   source_kind : String,
   auto_prune_tool_results~ : Bool = false,
+  max_provider_request_utf8_bytes~ : Int32? = None,
 ) -> Json raise EngineError {
   let session = self.lookup(id.as_string())
   if session.imported {
@@ -159,6 +176,14 @@ fn Engine::send_prompt(
   }
   if session.turn_id >= 1000000 {
     raise Invalid("Session turn limit reached")
+  }
+  match max_provider_request_utf8_bytes {
+    Some(value) if value < 1 ||
+      value > PROVIDER_CONTEXT_MEASUREMENT_MAX_UTF8_BYTES =>
+      raise Invalid(
+        "max_provider_request_utf8_bytes must be between 1 and 16777216",
+      )
+    _ => ()
   }
   // Reserve enough event slots for a full worst-case admitted turn,
   // including denied calls and cancellation closure.
@@ -204,7 +229,12 @@ fn Engine::send_prompt(
   session.stop_prompt_context_count = 0
   session.stop_prompt_context_length = 0
   session.todos = None
-  session.append("turn/start", object([]))
+  session.provider_request_byte_ceiling = max_provider_request_utf8_bytes
+  let turn_start = match max_provider_request_utf8_bytes {
+    Some(value) => object([("max_provider_request_utf8_bytes", integer(value))])
+    None => object([])
+  }
+  session.append("turn/start", turn_start)
   if !initial_contexts.is_empty() {
     session.append(
       "hook/subagent-start-context",
@@ -948,6 +978,38 @@ fn Engine::start_step(
       )
     }
   }
+  let request = object([
+    ("system", Json::string(session.system_prompt)),
+    ("messages", Json::array(session.model_messages())),
+    ("tools", Json::array(self.tools.map(Tool::json))),
+  ])
+  match session.provider_request_byte_ceiling {
+    Some(maximum) =>
+      match provider_context_measure_request(request) {
+        Ok(measurement) if measurement.request_json_utf8_bytes() <= maximum =>
+          ()
+        Ok(_) => {
+          self.terminate(
+            session,
+            Failed,
+            "provider_request_limit",
+            "Provider request exceeds max_provider_request_utf8_bytes",
+          )
+          return
+        }
+        Err(error) => {
+          self.terminate(
+            session,
+            Failed,
+            "provider_request_limit",
+            "Provider request could not be measured within the configured UTF-8 byte ceiling: " +
+            error,
+          )
+          return
+        }
+      }
+    None => ()
+  }
   session.step += 1
   session.open_step = true
   session.retry_count = 0
@@ -957,18 +1019,7 @@ fn Engine::start_step(
   session.pending_retry_id = None
   session.status = Running
   session.append("step/start", object([]))
-  ignore(
-    self.emit_effect(
-      session,
-      Llm,
-      object([
-        ("system", Json::string(session.system_prompt)),
-        ("messages", Json::array(session.model_messages())),
-        ("tools", Json::array(self.tools.map(Tool::json))),
-      ]),
-      None,
-    ),
-  )
+  ignore(self.emit_effect(session, Llm, request, None))
 }
 
 ///|
@@ -1123,6 +1174,7 @@ fn Engine::terminate(
     "turn/end",
     object([("reason", Json::string(reason)), ("error", Json::string(error))]),
   )
+  session.provider_request_byte_ceiling = None
   session.clear_stop_hook_state()
 }
 
@@ -1319,6 +1371,7 @@ fn Engine::complete_impl(
                 "turn/end",
                 object([("reason", Json::string("completed"))]),
               )
+              session.provider_request_byte_ceiling = None
             }
           } else {
             self.advance_tools(session)

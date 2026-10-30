@@ -486,6 +486,52 @@ test "native API measures its active provider request without draining effects" 
 }
 
 ///|
+test "session_send byte ceiling rejects before provider dispatch through the API schema" {
+  let api = @api.HarnessApi::new().unwrap()
+  api
+  .invoke("session_create", {
+    "id": "api-byte-ceiling",
+    "system_prompt": "system",
+  })
+  .unwrap()
+  |> ignore
+  let refused = api
+    .invoke("session_send", {
+      "session_id": "api-byte-ceiling",
+      "prompt": "question",
+      "max_provider_request_utf8_bytes": 1,
+    })
+    .unwrap()
+  assert_eq(get(refused, "status"), Json::string("failed"))
+  assert_true(api.take_effects().is_empty())
+  let before = api.snapshot()
+  assert_true(
+    api.invoke("session_send", {
+      "session_id": "api-byte-ceiling",
+      "prompt": "another question",
+      "max_provider_request_utf8_bytes": 0,
+    })
+    is Err(_),
+  )
+  assert_eq(api.snapshot(), before)
+  api.invoke("session_create", { "id": "api-hook-byte-ceiling" }).unwrap()
+  |> ignore
+  let hook_refused = api
+    .invoke_session_send_with_prompt_contexts(
+      {
+        "session_id": "api-hook-byte-ceiling",
+        "prompt": "question",
+        "max_provider_request_utf8_bytes": 1,
+      },
+      ["already completed hook output"],
+    )
+    .unwrap()
+  assert_eq(get(hook_refused, "status"), Json::string("failed"))
+  assert_true(api.take_effects().is_empty())
+  api.close()
+}
+
+///|
 test "closing an API drains no effects and refuses future completions or restore" {
   let api = @api.HarnessApi::new().unwrap()
   api.invoke("session_create", { "id": "closing" }).unwrap() |> ignore
