@@ -62,6 +62,15 @@ fn Engine::apply_command_impl(
           additional_contexts,
           "hooks-claude-code",
         )
+      SendPromptWithAutoPruning(id, prompt, additional_contexts) =>
+        self.send_prompt(
+          id,
+          prompt,
+          [],
+          additional_contexts,
+          "hooks-claude-code",
+          auto_prune_tool_results=true,
+        )
       CancelSession(id) => {
         let session = self.lookup(id.as_string())
         if session.imported {
@@ -134,6 +143,7 @@ fn Engine::send_prompt(
   initial_contexts : Array[String],
   additional_contexts : Array[String],
   source_kind : String,
+  auto_prune_tool_results~ : Bool = false,
 ) -> Json raise EngineError {
   let session = self.lookup(id.as_string())
   if session.imported {
@@ -160,6 +170,23 @@ fn Engine::send_prompt(
     all_contexts.push(context)
   }
   ignore(engine_validate_hook_contexts(all_contexts))
+  if auto_prune_tool_results {
+    let config = checked_prune_config(
+      DEFAULT_PRUNE_THRESHOLD,
+      DEFAULT_PRUNE_HEAD,
+      DEFAULT_PRUNE_TAIL,
+    )
+    // This mutates only the engine candidate owned by apply/preview. If
+    // pruning, prompt admission, or the final capacity check fails, the live
+    // engine retains neither the pruning event nor the provider effect.
+    // `send_prompt` has already established a closed, non-busy turn. Unlike
+    // the standalone pruning command, this path also supports a settled
+    // failed or cancelled turn because send_prompt permits those statuses.
+    ignore(session.prune_tool_results(config))
+    if session.events.length() + session.max_steps * 112 + 16 > 32768 {
+      raise Invalid("Session event limit reached; create a new session")
+    }
+  }
   session.turn_id += 1
   session.step = 0
   session.status = Running

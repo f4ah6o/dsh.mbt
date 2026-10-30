@@ -4,9 +4,10 @@
 
 ### Added
 
-- Add explicit native archiving for directly pruned regular Read results up to 65,536 UTF-8 bytes. Store verified originals as bounded immutable objects, commit the engine v2 references, manifest, receipts, and revision through one snapshot CAS, expose original history through an authenticated endpoint and browser text controls, and refuse incompatible legacy MCP / ACP history surfaces. Ordinary snapshots remain v1; archives are manual, not automatic context compaction.
+- Add explicit native archiving and default-off send-time archiving for directly pruned regular Read results up to 65,536 UTF-8 bytes. Store verified originals as bounded immutable objects, commit engine v2 references, manifest, remote send receipt, and revision through one snapshot CAS, expose original history through an authenticated endpoint and browser text controls, and refuse incompatible legacy MCP / ACP history surfaces. This is per-result threshold pruning, not token-aware context compaction.
 
 - Connect opt-in (`DSH_DESKTOP_IME=1`) Wayland desktop composition through the published gpui.mbt 0.10.2 text-input-v1 transport. Keep direct keyboard text mutually exclusive with compositor commits and fence native queued transactions on app cancellation before preedit delivery.
+- Add per-send opt-in tool-result pruning with `auto_prune_tool_results: true`; the default remains unchanged. Supported regular Read originals are archived in the same send transaction, while unsupported and oversized results remain inline.
 
 ### Fixed
 
@@ -15,6 +16,7 @@
 ### Migration
 
 - Updates the gpui dependency to 0.10.2, including the cancel/rearm fast-typing fix; no package version or Windows wiring change is needed. TextInput suppression is adapter-specific so ordinary Windows typing remains available outside active preedit. See `docs/wayland-ime-composition.md`.
+- Stores that record an automatic prune event after a failed or cancelled turn require a reader that accepts settled terminal-session pruning events.
 
 ### Limitations
 

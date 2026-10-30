@@ -671,6 +671,17 @@ async fn NativeRuntime::invoke(
   if operation == "session_prune_tool_results" {
     return self.prune_and_archive_locked(input)
   }
+  if operation == "session_send" &&
+    native_json_true(object_field(input, "auto_prune_tool_results")) {
+    return self.auto_send_and_archive_locked(
+      input,
+      [],
+      [],
+      self.hooks.context_source_kind(),
+      None,
+      "",
+    )
+  }
   let result = match self.api.invoke(operation, input) {
     Ok(value) => value
     Err(error) => return Err(error)
@@ -705,11 +716,11 @@ fn NativeRuntime::validate_user_prompt_locked(
 ) -> Result[(String, String, Int32), String] {
   let (session_id, prompt) = match
     @engine.EngineCommand::from_json("session_send", input) {
-    Ok(@engine.EngineCommand::SendPrompt(session_id, prompt)) =>
-      (session_id.as_string(), prompt)
-    Ok(@engine.EngineCommand::SendPromptWithContexts(session_id, prompt, _)) =>
-      (session_id.as_string(), prompt)
-    Ok(_) => return Err("invalid session_send command")
+    Ok(command) =>
+      match command.session_send_details() {
+        Some((session_id, prompt, _, _)) => (session_id.as_string(), prompt)
+        None => return Err("invalid session_send command")
+      }
     Err(error) => return Err(error)
   }
   let session = match
@@ -1038,7 +1049,21 @@ async fn NativeRuntime::invoke_with_user_prompt_hook(
       return Err(error)
     }
   }
-  match self.api.preview_session_send(prepared_input) {
+  let prompt_preview = if native_json_true(
+      object_field(prepared_input, "auto_prune_tool_results"),
+    ) {
+    self.preview_auto_send_locked(
+      prepared_input,
+      self.hooks.context_source_kind(),
+      None,
+      self.state.receipts,
+      "",
+      self.state.revision + 2,
+    )
+  } else {
+    self.api.preview_session_send(prepared_input).map(_ => ())
+  }
+  match prompt_preview {
     Ok(_) => ()
     Err(error) => {
       self.gate.release()
@@ -1119,19 +1144,32 @@ async fn NativeRuntime::invoke_with_user_prompt_hook(
                   native_hook_limit_reason(reason),
                 )
               NativeHookAction::Continue =>
-                match
-                  self.api.invoke_session_send_with_hook_contexts(
+                if native_json_true(
+                    object_field(prepared_input, "auto_prune_tool_results"),
+                  ) {
+                  self.auto_send_and_archive_locked(
                     prepared_input,
                     outcome.session_start_contexts,
                     outcome.additional_contexts,
-                    source_kind=self.hooks.context_source_kind(),
-                  ) {
-                  Err(error) => Err(error)
-                  Ok(value) =>
-                    match self.checkpoint_locked() {
-                      Err(error) => Err(error)
-                      Ok(_) => Ok((value, self.api.take_typed_effects()))
-                    }
+                    self.hooks.context_source_kind(),
+                    None,
+                    "",
+                  )
+                } else {
+                  match
+                    self.api.invoke_session_send_with_hook_contexts(
+                      prepared_input,
+                      outcome.session_start_contexts,
+                      outcome.additional_contexts,
+                      source_kind=self.hooks.context_source_kind(),
+                    ) {
+                    Ok(value) =>
+                      match self.checkpoint_locked() {
+                        Err(error) => Err(error)
+                        Ok(_) => Ok((value, self.api.take_typed_effects()))
+                      }
+                    Err(error) => Err(error)
+                  }
                 }
             }
         }
@@ -1791,7 +1829,11 @@ async fn NativeRuntime::accept_remote_command(
     }
   }
   if command.operation == "session_send" &&
-    (self.hooks.has_user_prompt_submit() || self.hooks.has_session_start()) {
+    (
+      self.hooks.has_user_prompt_submit() ||
+      self.hooks.has_session_start() ||
+      native_json_true(object_field(command.input, "auto_prune_tool_results"))
+    ) {
     return self.accept_remote_prompt_command(
       command, identity_key, acp_activity_session_id, fingerprint,
     )
@@ -2176,11 +2218,30 @@ async fn NativeRuntime::accept_remote_prompt_command(
           Ok(prepared) =>
             match @engine.EngineCommand::from_json("session_send", prepared) {
               Err(error) => Err(error)
-              Ok(_) =>
-                match self.api.preview_session_send(prepared) {
+              Ok(_) => {
+                let preview = if native_json_true(
+                    object_field(prepared, "auto_prune_tool_results"),
+                  ) {
+                  self.preview_auto_send_locked(
+                    prepared,
+                    self.hooks.context_source_kind(),
+                    Some({
+                      command_id: command.command_id,
+                      fingerprint,
+                      identity_key,
+                    }),
+                    retained,
+                    acp_activity_session_id,
+                    self.state.revision + 2,
+                  )
+                } else {
+                  self.api.preview_session_send(prepared).map(_ => ())
+                }
+                match preview {
                   Ok(_) => Ok((session_id, prompt, turn_id, prepared))
                   Err(error) => Err(error)
                 }
+              }
             }
         }
     }
@@ -2366,83 +2427,99 @@ async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
       }
     }
     Ok(outcome) =>
-      match
-        self.api.invoke_session_send_with_hook_contexts(
+      if native_json_true(
+          object_field(prepared_input, "auto_prune_tool_results"),
+        ) {
+        self.finish_remote_auto_send_locked(
+          control,
+          session_id,
+          command_id,
+          identity_key,
+          acp_activity_session_id,
+          fingerprint,
           prepared_input,
           outcome.session_start_contexts,
           outcome.additional_contexts,
-          source_kind=self.hooks.context_source_kind(),
-        ) {
-        Err(error) => {
-          let receipt = native_receipt(
-            self.state.workspace_id,
-            command_id,
-            fingerprint,
-            "rejected",
-            None,
-            None,
-            Some(bounded_tool_text(error)),
-          )
-          self.state.receipts = native_replace_receipt(
-            self.state.receipts,
-            command_id,
-            identity_key,
-            native_receipt_with_owner(receipt, identity_key),
-          )
-          match self.checkpoint_locked() {
-            Err(persistence_error) => {
-              self.scheduler.finish(control)
-              Err(persistence_error)
-            }
-            Ok(_) => {
-              self.scheduler.finish(control)
-              Ok((receipt, [], false, None))
-            }
-          }
-        }
-        Ok(value) => {
-          let effects = self.api.take_typed_effects()
-          if !acp_activity_session_id.is_empty() {
-            match self.record_acp_activity_locked(acp_activity_session_id) {
-              Ok(_) => ()
-              Err(error) => {
-                self.stopped = true
+        )
+      } else {
+        match
+          self.api.invoke_session_send_with_hook_contexts(
+            prepared_input,
+            outcome.session_start_contexts,
+            outcome.additional_contexts,
+            source_kind=self.hooks.context_source_kind(),
+          ) {
+          Err(error) => {
+            let receipt = native_receipt(
+              self.state.workspace_id,
+              command_id,
+              fingerprint,
+              "rejected",
+              None,
+              None,
+              Some(bounded_tool_text(error)),
+            )
+            self.state.receipts = native_replace_receipt(
+              self.state.receipts,
+              command_id,
+              identity_key,
+              native_receipt_with_owner(receipt, identity_key),
+            )
+            match self.checkpoint_locked() {
+              Err(persistence_error) => {
                 self.scheduler.finish(control)
-                return Err(error)
+                Err(persistence_error)
+              }
+              Ok(_) => {
+                self.scheduler.finish(control)
+                Ok((receipt, [], false, None))
               }
             }
           }
-          let accepted_revision = self.state.revision + 1
-          let receipt = native_receipt(
-            self.state.workspace_id,
-            command_id,
-            fingerprint,
-            "accepted",
-            Some(accepted_revision),
-            Some(value),
-            None,
-          )
-          self.state.receipts = native_replace_receipt(
-            self.state.receipts,
-            command_id,
-            identity_key,
-            native_receipt_with_owner(receipt, identity_key),
-          )
-          match self.checkpoint_locked() {
-            Err(error) => {
-              self.scheduler.finish(control)
-              Err(error)
-            }
-            Ok(_) => {
-              for effect in effects {
-                if effect.session_id().as_string() != session_id {
+          Ok(value) => {
+            let effects = self.api.take_typed_effects()
+            if !acp_activity_session_id.is_empty() {
+              match self.record_acp_activity_locked(acp_activity_session_id) {
+                Ok(_) => ()
+                Err(error) => {
+                  self.stopped = true
                   self.scheduler.finish(control)
-                  return Err(
-                    "remote effect session does not match its reservation",
-                  )
+                  return Err(error)
                 }
               }
-              Ok((receipt, effects, true, Some(control)))
+            }
+            let accepted_revision = self.state.revision + 1
+            let receipt = native_receipt(
+              self.state.workspace_id,
+              command_id,
+              fingerprint,
+              "accepted",
+              Some(accepted_revision),
+              Some(value),
+              None,
+            )
+            self.state.receipts = native_replace_receipt(
+              self.state.receipts,
+              command_id,
+              identity_key,
+              native_receipt_with_owner(receipt, identity_key),
+            )
+            match self.checkpoint_locked() {
+              Err(error) => {
+                self.scheduler.finish(control)
+                Err(error)
+              }
+              Ok(_) => {
+                for effect in effects {
+                  if effect.session_id().as_string() != session_id {
+                    self.scheduler.finish(control)
+                    return Err(
+                      "remote effect session does not match its reservation",
+                    )
+                  }
+                }
+                Ok((receipt, effects, true, Some(control)))
+              }
             }
           }
         }
@@ -2595,6 +2672,32 @@ async fn[X] NativeRuntime::mcp_handle(
   group : @async.TaskGroup[X],
 ) -> Result[String, String] {
   let (tool_name, session_id) = native_mcp_call_scope(line)
+  let auto_prune_send = match native_mcp_prompt_request(line) {
+    Some(input) =>
+      tool_name == "session_send" &&
+      native_json_true(object_field(input, "auto_prune_tool_results"))
+    None => false
+  }
+  if auto_prune_send {
+    let preview_api = match self.api.detached_copy() {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    // Preserve MCP's raw protocol and argument validation before rejecting the
+    // unsupported carrier. This preview is detached and runs no host hooks.
+    let preflight = preview_api.mcp_handle(line)
+    preview_api.close()
+    match preflight {
+      None => return Ok("")
+      Some(response) if native_mcp_response_succeeded(response) =>
+        return Ok(
+          native_mcp_error_response(
+            line, "Automatic tool-result pruning requires the native send transaction and is unavailable through MCP",
+          ),
+        )
+      Some(response) => return Ok(response)
+    }
+  }
   if tool_name == "session_prune_tool_results" || tool_name == "session_get" {
     let preview_api = match self.api.detached_copy() {
       Ok(value) => value

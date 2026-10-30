@@ -399,6 +399,7 @@ pub fn Engine::apply_session_send_with_hook_contexts(
   initial_contexts : Array[String],
   additional_contexts : Array[String],
   source_kind~ : String = "hooks-claude-code",
+  auto_prune_tool_results~ : Bool = false,
 ) -> Result[Json, String] {
   if !["hooks-claude-code", "hooks-codex"].contains(source_kind) {
     return Err("Unknown native hook context source")
@@ -416,7 +417,12 @@ pub fn Engine::apply_session_send_with_hook_contexts(
   }
   let candidate = self.copy_state()
   let value = candidate.send_prompt(
-    session_id, prompt, initial_contexts, additional_contexts, source_kind,
+    session_id,
+    prompt,
+    initial_contexts,
+    additional_contexts,
+    source_kind,
+    auto_prune_tool_results~,
   ) catch {
     Invalid(error) => return Err(error)
   }

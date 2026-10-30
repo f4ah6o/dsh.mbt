@@ -333,6 +333,99 @@ fn Engine::session_is_fork_related(self : Engine, session : Session) -> Bool {
 }
 
 ///|
+/// Return false for a well-formed result that the native archive format does
+/// not support. A regular Read candidate is checked strictly here; malformed
+/// call/result identity or invalid Read arguments are errors, not a silent
+/// fallback to inline storage.
+pub fn Engine::tool_result_archive_supported(
+  self : Engine,
+  session_id : SessionId,
+  result_seq : Int32,
+) -> Result[Bool, String] {
+  try {
+    let session = self.lookup(session_id.as_string())
+    if session.imported || self.session_is_fork_related(session) {
+      return Ok(false)
+    }
+    if session.status == Failed || session.status == Cancelled {
+      // The standalone archive planner deliberately supports only Idle and
+      // Completed sessions. Keep the existing send-time projection behavior
+      // on terminal failures while retaining their originals inline.
+      return Ok(false)
+    }
+    if self.session_has_unsettled_archive_state(session) {
+      raise Invalid("Archive planning requires a settled closed session")
+    }
+    if result_seq < 0 || result_seq >= session.events.length() {
+      raise Invalid("Archive result sequence is outside the session history")
+    }
+    let result = session.events[result_seq]
+    if result.seq != result_seq || result.kind != EngineEventKind::ToolResult {
+      raise Invalid("Archive candidate is not an original tool result")
+    }
+    if session_tool_result_is_archived(session, result_seq) {
+      return Ok(false)
+    }
+    let mut matching_prunes = 0
+    let mut has_direct_prune = false
+    for event in session.events {
+      if event.kind == EngineEventKind::ToolResultPruned &&
+        fields(event.data).get("result_seq") == Some(integer(result_seq)) {
+        matching_prunes += 1
+        has_direct_prune = has_direct_prune ||
+          fields(event.data).get("source_seq") == Some(integer(result_seq))
+      }
+    }
+    if matching_prunes != 1 || !has_direct_prune {
+      // The archive-v2 object binds a single direct projection. The engine
+      // still supports historical direct→tighter projection chains; leave
+      // those valid results inline instead of rejecting their next send.
+      return Ok(false)
+    }
+    let call_id = required_string(result.data, "tool_call_id", max=128)
+    match ToolCallId::new(call_id) {
+      Ok(_) => ()
+      Err(_) => raise Invalid("Archive candidate call identity is invalid")
+    }
+    let calls : Array[Event] = []
+    for event in session.events {
+      if event.kind == EngineEventKind::ToolCall {
+        match event.data {
+          Json::Object(data) if data.get("id") == Some(Json::string(call_id)) =>
+            calls.push(event)
+          _ => ()
+        }
+      }
+    }
+    if calls.length() != 1 {
+      raise Invalid(
+        "Archive candidate has missing or duplicate call provenance",
+      )
+    }
+    let call = calls[0]
+    if fields(call.data).length() != 3 || archive_call_id(call) != call_id {
+      raise Invalid("Archive candidate has an ambiguous tool call event")
+    }
+    let name = required_string(call.data, "name", max=128)
+    let tool = match self.find_tool(name) {
+      Some(value) => value
+      None => return Ok(false)
+    }
+    if name != "read" ||
+      tool.effect != Read ||
+      !archive_regular_read_schema(tool) {
+      return Ok(false)
+    }
+    let arguments = required_string(call.data, "arguments")
+    validate_arguments(tool.input_schema, parse_arguments(arguments))
+    ignore(archive_regular_result(result, call_id))
+    Ok(true)
+  } catch {
+    Invalid(message) => Err(message)
+  }
+}
+
+///|
 
 ///|
 /// Derive source provenance either for a new archive command or for a

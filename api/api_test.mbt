@@ -11,6 +11,19 @@ fn get(value : Json, key : String) -> Json raise {
 }
 
 ///|
+fn message_text(message : Json) -> String raise {
+  match get(message, "content") {
+    String(text) => text
+    Array(blocks) if blocks.length() == 1 =>
+      match get(blocks[0], "text") {
+        String(text) => text
+        _ => fail("expected a text block")
+      }
+    _ => fail("expected message text")
+  }
+}
+
+///|
 fn rpc(
   api : @api.HarnessApi,
   id : String,
@@ -482,4 +495,158 @@ test "closing an API preserves a quiescent tool approval for host restart" {
   assert_eq(sessions.length(), 1)
   assert_eq(get(sessions[0], "status"), "awaiting_approval")
   assert_eq(get(get(sessions[0], "pending_approval"), "call_id"), "write-call")
+}
+
+///|
+test "session_send exposes the opt-in pruning field and preserves hook context order" {
+  let api = @api.HarnessApi::new().unwrap()
+  api.invoke("session_create", { "id": "auto-prune-api" }).unwrap() |> ignore
+  let before = api.snapshot().stringify()
+  assert_true(
+    api.invoke("session_send", {
+      "session_id": "auto-prune-api",
+      "prompt": "bad flag",
+      "auto_prune_tool_results": "yes",
+    })
+    is Err(_),
+  )
+  assert_eq(api.snapshot().stringify(), before)
+
+  let sent = api
+    .invoke_session_send_with_hook_contexts(
+      {
+        "session_id": "auto-prune-api",
+        "prompt": "continue",
+        "auto_prune_tool_results": true,
+      },
+      ["session-start context"],
+      ["prompt-hook context"],
+    )
+    .unwrap()
+  let messages = match get(sent, "messages") {
+    Array(messages) => messages
+    _ => fail("expected transcript messages")
+  }
+  assert_eq(messages.length(), 3)
+  assert_eq(message_text(messages[0]), "session-start context")
+  assert_eq(message_text(messages[1]), "continue")
+  assert_eq(message_text(messages[2]), "prompt-hook context")
+
+  let effects = api.take_effects()
+  assert_eq(effects.length(), 1)
+  let request_messages = match get(get(effects[0], "request"), "messages") {
+    Array(messages) => messages
+    _ => fail("expected provider request messages")
+  }
+  assert_eq(request_messages.length(), 3)
+  assert_eq(message_text(request_messages[0]), "session-start context")
+  assert_eq(message_text(request_messages[1]), "continue")
+  assert_eq(message_text(request_messages[2]), "prompt-hook context")
+  api.close()
+}
+
+///|
+test "hook-dispatched send forwards automatic pruning for a long tool result" {
+  let api = @api.HarnessApi::new().unwrap()
+  api.invoke("session_create", { "id": "auto-prune-hook" }).unwrap() |> ignore
+  api
+  .invoke("session_send", {
+    "session_id": "auto-prune-hook",
+    "prompt": "Read the long output",
+  })
+  .unwrap()
+  |> ignore
+  let first_effects = api.take_effects()
+  assert_eq(first_effects.length(), 1)
+  let first_id = match get(first_effects[0], "id") {
+    String(value) => value
+    _ => fail("expected provider effect id")
+  }
+  api
+  .complete(first_id, {
+    "ok": true,
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "read-long",
+        "name": "read",
+        "arguments": "{\"file_path\":\"large.txt\"}",
+      },
+    ],
+    "finish_reason": "tool_calls",
+  })
+  .unwrap()
+  |> ignore
+  let tool_effects = api.take_effects()
+  assert_eq(tool_effects.length(), 1)
+  let tool_id = match get(tool_effects[0], "id") {
+    String(value) => value
+    _ => fail("expected tool effect id")
+  }
+  let original = "😀"[:].repeat(8193).to_owned()
+  api.complete(tool_id, { "ok": true, "content": original }).unwrap() |> ignore
+  let followup_effects = api.take_effects()
+  assert_eq(followup_effects.length(), 1)
+  let followup_id = match get(followup_effects[0], "id") {
+    String(value) => value
+    _ => fail("expected follow-up provider effect id")
+  }
+  api
+  .complete(followup_id, {
+    "ok": true,
+    "content": "Read complete",
+    "tool_calls": [],
+    "finish_reason": "stop",
+  })
+  .unwrap()
+  |> ignore
+  assert_eq(api.take_effects().length(), 0)
+
+  let sent = api
+    .invoke_session_send_with_hook_contexts(
+      {
+        "session_id": "auto-prune-hook",
+        "prompt": "Continue with bounded context",
+        "auto_prune_tool_results": true,
+      },
+      ["session-start context"],
+      ["prompt-hook context"],
+    )
+    .unwrap()
+  let transcript_tools = match get(sent, "messages") {
+    Array(messages) =>
+      messages.filter(message => get(message, "role") == "tool")
+    _ => fail("expected transcript messages")
+  }
+  assert_eq(transcript_tools.length(), 1)
+  assert_eq(get(transcript_tools[0], "content"), Json::string(original))
+
+  let effects = api.take_effects()
+  assert_eq(effects.length(), 1)
+  let request_messages = match get(get(effects[0], "request"), "messages") {
+    Array(messages) => messages
+    _ => fail("expected provider request messages")
+  }
+  let request_tools = request_messages.filter(message => {
+    get(message, "role") == "tool"
+  })
+  assert_eq(request_tools.length(), 1)
+  assert_eq(get(request_tools[0], "tool_call_id"), "read-long")
+  assert_eq(
+    get(request_tools[0], "content"),
+    Json::string(
+      "😀"[:].repeat(4096).to_owned() +
+      "\n\n[... tool result middle pruned ...]\n\n" +
+      "😀"[:].repeat(1024).to_owned(),
+    ),
+  )
+  assert_true(request_messages.length() >= 3)
+  let last = request_messages.length() - 1
+  assert_eq(message_text(request_messages[last - 2]), "session-start context")
+  assert_eq(
+    message_text(request_messages[last - 1]),
+    "Continue with bounded context",
+  )
+  assert_eq(message_text(request_messages[last]), "prompt-hook context")
+  api.close()
 }
