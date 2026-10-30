@@ -12,6 +12,7 @@ Engine::invoke(operation : String, input : Json) -> Result[Json, String]
 Engine::take_effects() -> Array[Json]
 Engine::complete(effect_id : String, result : Json) -> Result[Json, String]
 Engine::provider_context_measurement(session_id : SessionId) -> Result[ProviderContextMeasurement?, String]
+Engine::plan_compaction_prefix(session_id, retain_recent_turns, max_source_event_json_utf8_bytes, max_source_messages_json_utf8_bytes) -> Result[Json?, String]
 Engine::project_stream(effect_id : String, content : String, reasoning : String) -> Result[Json, String]
 Engine::snapshot() -> Json
 Engine::restore(snapshot : Json) -> Result[Unit, String]
@@ -31,6 +32,26 @@ authorization to persist data. A later storage operation must rederive the
 underlying eligibility facts inside its mutation gate; if it requires the
 same session revision, it must validate a separate freshness revision there.
 The plan intentionally contains no result text.
+
+`plan_compaction_prefix` is a read-only planning query for a later summary
+operation. It selects the longest oldest prefix of complete turns that fits
+both explicit source-event and source-message JSON UTF-8 byte budgets, while
+retaining at least the requested number of recent turns. Each budget is capped
+at 1 MiB so the source digest stays within the portable SHA-256 helper's bound.
+It accepts only settled, closed, non-imported, non-fork-related sessions. A
+missing prefix returns `None`; invalid budgets or unsupported session state
+return an error. The result contains contiguous event sequence bounds, the
+expected event count, and SHA-256 digests of both the exact source event array
+and exact projected message array. The message digest binds the session-wide
+tool-result pruning projection, including later prune events outside the
+selected range. A plan is advisory input, not authorization or proof that a
+future mutation still has fresh inputs; any mutation must replan and compare
+both digests and the event count inside its own candidate transaction. The plan
+returns no transcript text, starts no provider or tool effect, and leaves
+queued effects and the snapshot unchanged. Its byte counts exclude the future
+compaction instruction and summary output; they are not token counts,
+provider-wire sizes, or context-window guarantees. The query does not archive
+or replace history and does not increase storage capacity.
 
 The v2 engine slice can verify a canonical `dsh.tool-result-archive-object-v2`
 text object, produce a compact candidate snapshot, commit that same projection
