@@ -11,12 +11,41 @@ fn native_cli_is_value_option(argument : String) -> Bool {
 }
 
 ///|
+fn native_cli_positionals(args : Array[String]) -> Array[String] {
+  let positionals : Array[String] = []
+  let mut index = if args.length() > 0 && args[0].has_prefix("-") {
+    0
+  } else {
+    1
+  }
+  while index < args.length() {
+    let argument = args[index]
+    if argument == "--" {
+      index += 1
+      while index < args.length() {
+        positionals.push(args[index])
+        index += 1
+      }
+    } else if native_cli_is_value_option(argument) {
+      index += 2
+    } else if argument.has_prefix("-") {
+      index += 1
+    } else {
+      positionals.push(argument)
+      index += 1
+    }
+  }
+  positionals
+}
+
+///|
 fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
   if args.length() < 2 {
     return args
   }
   let commands = [
     "web", "run", "import-session", "prune-session", "fork-session", "mcp", "acp",
+    "subagent-audits",
   ]
   let value_options = [
     "--workspace", "--data-dir", "--mcp-config", "--hooks-config", "--hooks-plugin-root",
@@ -168,9 +197,13 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
     }
     "mcp" => normalized.push("--mcp")
     "acp" => normalized.push("--acp")
+    "subagent-audits" => normalized.push("--subagent-audits")
     _ => ()
   }
-  if command == "web" || command == "mcp" || command == "acp" {
+  if command == "web" ||
+    command == "mcp" ||
+    command == "acp" ||
+    command == "subagent-audits" {
     for positional in positionals {
       normalized.push(positional)
     }
@@ -188,6 +221,7 @@ fn native_cli_normalize_args(args : Array[String]) -> Array[String] {
 fn native_cli_has_unknown_command(args : Array[String]) -> Bool {
   let commands = [
     "web", "run", "import-session", "prune-session", "fork-session", "mcp", "acp",
+    "subagent-audits",
   ]
   let mut index = 1
   while index < args.length() {
@@ -214,6 +248,7 @@ fn native_cli_default_web(args : Array[String]) -> Array[String] {
     native_flag(args, "--demo") ||
     native_flag(args, "--help") ||
     native_flag(args, "-h") ||
+    native_flag(args, "--subagent-audits") ||
     native_option(args, "--run") is Some(_) ||
     native_option(args, "--import-session") is Some(_) ||
     native_option(args, "--prune-session") is Some(_) ||
@@ -248,6 +283,51 @@ fn native_cli_paths(args : Array[String]) -> Result[(String, String), String] {
 }
 
 ///|
+fn native_cli_validate_subagent_audit_args(
+  args : Array[String],
+  positionals : Array[String],
+) -> Result[Unit, String] {
+  let allowed_values = ["--session", "--workspace", "--data-dir"]
+  let allowed_flags = ["--subagent-audits", "--json", "--help", "-h"]
+  let mut index = 1
+  while index < args.length() {
+    let argument = args[index]
+    if allowed_values.contains(argument) {
+      index += 2
+    } else if allowed_flags.contains(argument) {
+      index += 1
+    } else if argument == "--" {
+      return Err("subagent-audits does not accept a -- separator")
+    } else if argument.has_prefix("-") {
+      return Err(
+        "subagent-audits accepts only --session, --data-dir, --workspace, and --json",
+      )
+    } else {
+      index += 1
+    }
+  }
+  if native_cli_options(args, "--session").length() != 1 ||
+    native_option(args, "--session").unwrap_or("").is_empty() {
+    return Err("subagent-audits requires one --session PARENT_SESSION_ID")
+  }
+  if native_cli_options(args, "--data-dir").length() > 1 ||
+    native_cli_options(args, "--workspace").length() > 1 {
+    return Err("--data-dir and --workspace may each be specified only once")
+  }
+  if native_option(args, "--data-dir") == Some("") ||
+    native_option(args, "--workspace") == Some("") {
+    return Err("--data-dir and --workspace require nonempty paths")
+  }
+  match positionals {
+    ["list"] => Ok(())
+    ["show", child_id] if native_subagent_audit_valid_child_id(child_id) =>
+      Ok(())
+    ["show", _] => Err("subagent-audits show requires a valid child ID")
+    _ => Err("use subagent-audits list or subagent-audits show CHILD_ID")
+  }
+}
+
+///|
 /// Reject syntax that the former CLI parser rejected before opening the host.
 /// The subcommand aliases have already been normalized to their long options.
 fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
@@ -261,8 +341,8 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
   ]
   let boolean_options = [
     "--serve", "--mcp", "--acp", "--demo", "--enable-skills", "--enable-subagents",
-    "--persist-subagent-audits", "--allow-shell", "--approve-writes", "--json", "--help",
-    "-h", "--auth-status", "--sign-in", "--sign-out", "--models",
+    "--persist-subagent-audits", "--subagent-audits", "--allow-shell", "--approve-writes",
+    "--json", "--help", "-h", "--auth-status", "--sign-in", "--sign-out", "--models",
   ]
   let positionals : Array[String] = []
   let mut after_separator = false
@@ -294,6 +374,12 @@ fn native_cli_validate_args(args : Array[String]) -> Result[Unit, String] {
     index += 1
   }
   let help = native_flag(args, "--help") || native_flag(args, "-h")
+  if native_flag(args, "--subagent-audits") {
+    if help {
+      return Ok(())
+    }
+    return native_cli_validate_subagent_audit_args(args, positionals)
+  }
   let is_serve = native_flag(args, "--serve")
   let is_mcp = native_flag(args, "--mcp")
   let is_acp = native_flag(args, "--acp")

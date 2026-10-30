@@ -5,6 +5,7 @@
 ### Added
 
 - Add `--persist-subagent-audits` as a separate opt-in with `--enable-subagents`. It writes complete, validated terminal child Engine snapshots as owner-only immutable files under `subagent-audits/`, with entry and byte quotas. A publication failure interrupts the parent turn before parent hooks or provider work can continue; records cannot resume or replay children, and successful files are never adopted automatically.
+- Add read-only local `subagent-audits list/show` commands for owner-scoped, validated child audit inspection. The commands filter by a parent session ID and do not start providers, tools, or hooks or mutate the session store.
 - Connect opt-in (`DSH_DESKTOP_IME=1`) Wayland desktop composition through the published gpui.mbt 0.10.2 text-input-v1 transport. Keep direct keyboard text mutually exclusive with compositor commits and fence native queued transactions on app cancellation before preedit delivery.
 
 ### Migration

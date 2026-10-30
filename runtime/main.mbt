@@ -103,6 +103,8 @@ fn native_usage() -> String {
   "  dsh --demo --data-dir PATH --workspace PATH\n\n" +
   "  dsh run PROMPT [--session ID] [--mcp-config PATH] [--hooks-config PATH] [--hooks-plugin-root PATH] [--hooks-project-dir PATH] [--hooks-dialect claude-code|codex] [--hooks-model NAME] [--lsp-config PATH] [--enable-subagents] [--persist-subagent-audits] [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh import-session PATH [--demo] --data-dir PATH --workspace PATH\n" +
+  "  dsh subagent-audits list --session PARENT_SESSION_ID [--data-dir PATH] [--workspace PATH]\n" +
+  "  dsh subagent-audits show CHILD_ID --session PARENT_SESSION_ID [--data-dir PATH] [--workspace PATH]\n" +
   "  dsh prune-session ID [--threshold-chars N --head-chars N --tail-chars N] --data-dir PATH --workspace PATH\n" +
   "  dsh fork-session ID [--demo] --data-dir PATH --workspace PATH\n" +
   "  dsh --session ID --approve-call CALL_ID --approval-revision REV [--demo] --data-dir PATH --workspace PATH\n" +
@@ -568,11 +570,25 @@ pub async fn run_cli() -> Unit {
         return
       }
   }
-  native_configure_service_signal_policy(args)
   if native_flag(args, "--help") || native_flag(args, "-h") {
     println(native_usage())
     return
   }
+  if native_flag(args, "--subagent-audits") {
+    let output = match native_cli_subagent_audit_action(args) {
+      Ok(value) => value
+      Err(error) => {
+        native_cli_fatal("subagent audit inspection failed: " + error)
+        return
+      }
+    }
+    let rendered = native_cli_render(args, output)
+    if !rendered.is_empty() {
+      println(rendered)
+    }
+    return
+  }
+  native_configure_service_signal_policy(args)
   if native_os_is_windows() {
     let unsupported = if native_flag(args, "--acp") {
       Some("dsh acp")
