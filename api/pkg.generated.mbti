@@ -45,6 +45,7 @@ pub fn HarnessApi::preview_mcp_handle(Self, String) -> String?
 pub fn HarnessApi::preview_session_send(Self, Json) -> Result[Json, String]
 pub fn HarnessApi::project_effect_stream(Self, @engine.EffectId, String, String) -> Result[Json, String]
 pub fn HarnessApi::project_stream(Self, String, String, String) -> Result[Json, String]
+pub fn HarnessApi::provider_context_measurement(Self, @engine.SessionId) -> Result[@engine.ProviderContextMeasurement?, String]
 pub fn HarnessApi::prune_tool_results_for_send(Self, @engine.SessionId) -> Result[Json, String]
 pub fn HarnessApi::record_effect_outcome(Self, @engine.EffectId, Json) -> Result[Json, String]
 pub fn HarnessApi::record_native_hook_invoked(Self, String, String, String, String?, dialect? : String) -> Result[@engine.NativeHookInvocationCheckpoint, String]

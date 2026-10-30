@@ -11,6 +11,7 @@ Engine::new(tools : Array[Json]) -> Engine
 Engine::invoke(operation : String, input : Json) -> Result[Json, String]
 Engine::take_effects() -> Array[Json]
 Engine::complete(effect_id : String, result : Json) -> Result[Json, String]
+Engine::provider_context_measurement(session_id : SessionId) -> Result[ProviderContextMeasurement?, String]
 Engine::project_stream(effect_id : String, content : String, reasoning : String) -> Result[Json, String]
 Engine::snapshot() -> Json
 Engine::restore(snapshot : Json) -> Result[Unit, String]
@@ -100,6 +101,17 @@ These provisional rows are presentation-only and never enter a later provider
 request. Successful completion must match the accumulated projection, and
 restore replays the delta events without reissuing effects. Older
 `dsh.mbt-session-v1` snapshots without `stream_revision` remain accepted.
+
+`provider_context_measurement(session_id)` reads the exact active engine request,
+including its current message projection and tool schemas, without consuming
+the effect queue. It reports UTF-8 bytes for the serialized engine request,
+messages array, and tool-schema array, system-prompt UTF-8 bytes and code points,
+and message/tool counts. Each serialized measurement is capped at 16 MiB. These
+are request-size measurements before provider-specific wire conversion. The
+bounded walk rejects nesting beyond 128 levels, more than 16,777,216 visited
+JSON values, invalid unpaired surrogates, and serialized components over 16 MiB.
+These values do not estimate tokens, report a model context window, enforce a
+budget, or trigger compaction. A missing active provider effect returns `None`.
 
 Each tool descriptor has `name`, `description`, an object `input_schema`, and
 `effect: "read" | "write" | "shell"`. Read effects start automatically. Every
