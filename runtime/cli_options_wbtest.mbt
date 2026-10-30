@@ -19,6 +19,18 @@ test "native CLI preserves subcommand arguments and bounds retry and approval op
   assert_true(native_cli_validate_args(acp_args) is Ok(_))
   assert_true(
     native_cli_validate_args([
+      "dsh-native", "--run", "Inspect files", "--persist-subagent-audits",
+    ])
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args([
+      "dsh-native", "--run", "Inspect files", "--enable-subagents", "--persist-subagent-audits",
+    ])
+    is Ok(_),
+  )
+  assert_true(
+    native_cli_validate_args([
       "dsh-native", "--lsp-config", "lsp.json", "--auth-status",
     ])
     is Ok(_),

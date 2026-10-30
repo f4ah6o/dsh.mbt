@@ -4,7 +4,7 @@ Status: open
 Model: unknown
 Created: 2026-10-30
 Updated: 2026-10-30
-Branch: feat/20261030-child-audit-publication-contract
+Branch: feat/20261030-subagent-audit-publication
 
 ## 概要
 
@@ -17,7 +17,7 @@ When separately opted in, publish the complete terminal Engine snapshot of a for
 - [PR #81](https://github.com/f4ah6o/dsh.mbt/pull/81) adds bounded no-replace atomic file creation with distinct `Exists`, `Failed`, and `OutcomeUnknown` results.
 - [PR #91](https://github.com/f4ah6o/dsh.mbt/pull/91), stacked on #81, adds anchored file metadata so quota scans can size partial temp files without reading them.
 
-The current foreground child exists only in memory, and the parent receives a bounded result that may omit transcript data. The codec and filesystem primitives do not yet define where a full settled child record is stored or how a failed save affects the parent turn.
+Without opt-in publication, a foreground child exists only in memory and the parent receives a bounded result that may omit transcript data. This issue wires the existing codec and filesystem primitives into an owner-only immutable audit directory and defines failed publication as a fatal parent-turn outcome.
 
 ## 問題
 
@@ -67,15 +67,15 @@ A remote accepted-command receipt is `uncertain`, never replayable. If the inter
 
 ## 受け入れ条件
 
-- [ ] A separate opt-in preserves default behavior and requires `--enable-subagents`.
-- [ ] Only a fully validated terminal child Engine snapshot is written as the exact #89 envelope.
-- [ ] Directory/file permissions, no-replace names, record cap, aggregate byte/count caps, and temp-file reservation are enforced.
-- [ ] Parent ownership, cancellation, turn, and workspace are checked under the runtime gate immediately before publication.
-- [ ] `Exists`, `Failed`, `OutcomeUnknown`, codec errors, and quota errors cannot settle as ordinary tool results or dispatch parent hooks/provider work.
-- [ ] Fatal interruption rechecks ownership and the open parent turn under the gate; if cancellation/settlement won, preserve that terminal state without duplicate interruption or effect completion.
-- [ ] Parent interruption is checkpointed; uncertain receipts or later cancellation do not replay provider, tool, or hook work.
-- [ ] Successful publication followed by cancellation/checkpoint uncertainty leaves an inert orphan without automatic adoption or deletion.
-- [ ] Documentation says background execution, child resume, replay, runtime reads, retention, and parent-result adoption are unsupported.
+- [x] A separate opt-in preserves default behavior and requires `--enable-subagents`.
+- [x] Only a fully validated terminal child Engine snapshot is written as the exact #89 envelope.
+- [x] Directory/file permissions, no-replace names, record cap, aggregate byte/count caps, and temp-file reservation are enforced.
+- [x] Parent ownership, cancellation, turn, and workspace are checked under the runtime gate immediately before publication.
+- [x] `Exists`, `Failed`, `OutcomeUnknown`, codec errors, and quota errors cannot settle as ordinary tool results or dispatch parent hooks/provider work.
+- [x] Fatal interruption rechecks ownership and the open parent turn under the gate; if cancellation/settlement won, preserve that terminal state without duplicate interruption or effect completion.
+- [x] Parent interruption is checkpointed; uncertain receipts or later cancellation do not replay provider, tool, or hook work.
+- [x] Successful publication followed by cancellation/checkpoint uncertainty leaves an inert orphan without automatic adoption or deletion.
+- [x] Documentation says background execution, child resume, replay, runtime reads, retention, and parent-result adoption are unsupported.
 
 ## テスト計画
 
@@ -97,6 +97,12 @@ Child prompts, hook context, and tool results can contain private data. Owner-on
 
 Proposed item: Add optional durable audit files for settled foreground children.
 
+### 2026-10-30 実装・検証記録
+
+実装: GPT-6 Codex subagent。独立レビュー: gpt-6.1-sol / xhigh。`moon check runtime desktop verification/native_fs --target native --deny-warn`、`moon fmt --check runtime desktop verification/native_fs`、`git diff --check` は PASS。native worker と subreaper を指定した `moon test runtime --target native --deny-warn --no-parallelize` は 235/235 PASS。process-global temp serial exhaustion fixture は独立 native package に分離し、同 fixture は fresh process で 1/1 PASS。独立 reviewer の audit fixture run は 23/23 PASS。
+
+この環境では Windows native CI と実際の power-loss crash test は未実施。local issue validator executable/script は workspace と `/tmp` から確認できず未実行。Native full-suite run は一時 port conflict を検出して空き loopback port に切り替えた後に完了し、1 つの承認拒否 diagnostic を出したが、235 tests はすべて PASS。
+
 ## 注記
 
-This issue defines a publication contract only; no runtime publication or read path is implemented here. PR #92 is stacked on #89. Any later implementation must keep the child snapshot inert and must not claim background execution, resume, or replay support.
+This branch implements the opt-in publication path stacked on #89. It adds no audit reader, retention manager, background execution, child resume, or replay support. The record remains inert and publication remains separate from the parent result checkpoint.

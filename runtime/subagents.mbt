@@ -29,6 +29,13 @@ priv struct NativeSubagentProviderBinding {
 }
 
 ///|
+priv enum NativeSubagentToolOutcome {
+  Result(Json)
+  Fatal(String)
+  Abandoned(String)
+}
+
+///|
 fn native_subagent_arguments(request : Json) -> Result[Json, String] {
   let value = match string_field(request, "arguments") {
     Some(raw) =>
@@ -873,16 +880,18 @@ async fn NativeRuntime::drive_subagent(
 async fn NativeRuntime::run_subagent_tool(
   self : NativeRuntime,
   effect : @engine.EngineEffect,
+  parent_turn_id~ : Int32,
   control~ : NativeJobControl? = None,
   run_timeout_ms~ : Int32 = NATIVE_SUBAGENT_MAX_RUN_MS,
-) -> Json {
+  audit_fault~ : NativeSubagentAuditAtomicFault? = None,
+) -> NativeSubagentToolOutcome {
   let request = effect.request()
   let parent_session_id = effect.session_id().as_string()
   let parent_effect_id = effect.id().as_string()
   let parent_call_id = string_field(request, "call_id").unwrap_or("")
   let arguments = match native_subagent_arguments(request) {
     Ok(value) => value
-    Err(error) => return tool_error(error)
+    Err(error) => return NativeSubagentToolOutcome::Result(tool_error(error))
   }
   let description = match
     tool_arg_string(
@@ -891,7 +900,7 @@ async fn NativeRuntime::run_subagent_tool(
       maximum=NATIVE_SUBAGENT_MAX_DESCRIPTION_UNITS,
     ) {
     Ok(value) => value.trim().to_owned()
-    Err(error) => return tool_error(error)
+    Err(error) => return NativeSubagentToolOutcome::Result(tool_error(error))
   }
   let prompt = match
     tool_arg_string(
@@ -900,43 +909,57 @@ async fn NativeRuntime::run_subagent_tool(
       maximum=NATIVE_SUBAGENT_MAX_PROMPT_UNITS,
     ) {
     Ok(value) => value
-    Err(error) => return tool_error(error)
+    Err(error) => return NativeSubagentToolOutcome::Result(tool_error(error))
   }
   if description.is_empty() ||
     native_provider_utf16_units(description) >
     NATIVE_SUBAGENT_MAX_DESCRIPTION_UNITS {
-    return tool_error("description must contain 1 to 128 UTF-16 code units")
+    return NativeSubagentToolOutcome::Result(
+      tool_error("description must contain 1 to 128 UTF-16 code units"),
+    )
   }
   if prompt.trim().is_empty() ||
     native_provider_utf16_units(prompt) > NATIVE_SUBAGENT_MAX_PROMPT_UNITS {
-    return tool_error("prompt must contain 1 to 4096 UTF-16 code units")
+    return NativeSubagentToolOutcome::Result(
+      tool_error("prompt must contain 1 to 4096 UTF-16 code units"),
+    )
   }
   if parent_call_id.is_empty() || parent_call_id.length() > 128 {
-    return tool_error("parent tool call identity is invalid")
+    return NativeSubagentToolOutcome::Result(
+      tool_error("parent tool call identity is invalid"),
+    )
   }
   let parent_session = match
     self.api.invoke("session_get", { "session_id": parent_session_id }) {
     Ok(value) => value
-    Err(error) => return tool_error("cannot inspect parent session: " + error)
+    Err(error) =>
+      return NativeSubagentToolOutcome::Result(
+        tool_error("cannot inspect parent session: " + error),
+      )
   }
   if native_subagent_calls_in_turn(parent_session) >
     NATIVE_SUBAGENT_MAX_PARENT_TURN_CALLS {
-    return tool_error(
-      "a parent turn may request at most two foreground subagents",
+    return NativeSubagentToolOutcome::Result(
+      tool_error("a parent turn may request at most two foreground subagents"),
     )
   }
   self.subagent_semaphore.acquire()
   defer self.subagent_semaphore.release()
   if control is Some(value) && value.cancelled.val {
-    return tool_error("subagent was cancelled before it started")
+    return NativeSubagentToolOutcome::Result(
+      tool_error("subagent was cancelled before it started"),
+    )
   }
   let child_id = match random_uuid() {
     Ok(value) => "subagent-" + value
-    Err(error) => return tool_error("cannot create child identity: " + error)
+    Err(error) =>
+      return NativeSubagentToolOutcome::Result(
+        tool_error("cannot create child identity: " + error),
+      )
   }
   let binding = match self.subagent_provider_binding(parent_session_id) {
     Ok(value) => value
-    Err(error) => return tool_error(error)
+    Err(error) => return NativeSubagentToolOutcome::Result(tool_error(error))
   }
   let child_tools = @plugins.builtin_tools().filter(tool => {
     match string_field(tool, "name") {
@@ -953,7 +976,10 @@ async fn NativeRuntime::run_subagent_tool(
       "max_steps": NATIVE_SUBAGENT_MAX_CHILD_STEPS,
     }) {
     Ok(value) => value
-    Err(error) => return tool_error("cannot create child session: " + error)
+    Err(error) =>
+      return NativeSubagentToolOutcome::Result(
+        tool_error("cannot create child session: " + error),
+      )
   }
   ignore(created)
   let timeout_ms = Int32::max(
@@ -1034,7 +1060,7 @@ async fn NativeRuntime::run_subagent_tool(
     }
     drive_outcome
   }
-  let (session, terminal_status, failure_reason) = match outcome {
+  let (initial_session, terminal_status, failure_reason) = match outcome {
     Some(Ok(value)) =>
       (value, string_field(value, "status").unwrap_or("failed"), None)
     Some(Err(error)) => {
@@ -1066,8 +1092,18 @@ async fn NativeRuntime::run_subagent_tool(
       )
     }
   }
+  let session = if self.persist_subagent_audits {
+    child
+    .invoke("session_get", { "session_id": child_id })
+    .map(value => value)
+    .unwrap_or(Json::null())
+  } else {
+    initial_session
+  }
   if control is Some(value) && value.cancelled.val {
-    return tool_error("subagent was cancelled with its parent turn")
+    return NativeSubagentToolOutcome::Abandoned(
+      "subagent was cancelled with its parent turn",
+    )
   }
   let (terminal_reason, terminal_error) = native_subagent_terminal_turn(session)
   let failure_reason = if terminal_status == "completed" {
@@ -1091,13 +1127,70 @@ async fn NativeRuntime::run_subagent_tool(
   let serialized = transcript.stringify()
   if native_provider_utf16_units(serialized) >
     NATIVE_SUBAGENT_MAX_TRANSCRIPT_UNITS {
-    return tool_error(
-      "bounded child transcript exceeded its serialization limit",
+    return NativeSubagentToolOutcome::Result(
+      tool_error("bounded child transcript exceeded its serialization limit"),
     )
   }
-  if terminal_status == "completed" {
-    { "ok": true, "content": serialized }
+  let result = if terminal_status == "completed" {
+    Json::object({
+      "ok": Json::boolean(true),
+      "content": Json::string(serialized),
+    })
   } else {
-    { "ok": false, "error": serialized }
+    Json::object({
+      "ok": Json::boolean(false),
+      "error": Json::string(serialized),
+    })
   }
+  if self.persist_subagent_audits {
+    let settled_status = string_field(session, "status").unwrap_or("unsettled")
+    let (settled_reason, _) = native_subagent_terminal_turn(session)
+    let eligible = if settled_status == "completed" {
+      settled_reason == Some("completed")
+    } else if settled_status == "failed" {
+      match settled_reason {
+        Some(
+          "provider_error"
+          | "max_steps"
+          | "max_tokens"
+          | "effect_limit"
+          | "session_capacity"
+          | "blocked"
+        ) => true
+        _ => false
+      }
+    } else {
+      false
+    }
+    if !eligible {
+      return NativeSubagentToolOutcome::Fatal(
+        "child audit requires a settled completed or known-failed child",
+      )
+    }
+    match
+      self.publish_subagent_audit(
+        effect,
+        parent_turn_id~,
+        parent_call_id,
+        child_id,
+        settled_status,
+        child.snapshot(),
+        control,
+        fault=audit_fault,
+      ) {
+      NativeSubagentAuditPublishOutcome::Published =>
+        if !self.confirm_subagent_audit_publication(
+            effect, parent_turn_id, parent_call_id, control,
+          ) {
+          return NativeSubagentToolOutcome::Abandoned(
+            "parent turn settled after child audit publication",
+          )
+        }
+      NativeSubagentAuditPublishOutcome::Fatal(error) =>
+        return NativeSubagentToolOutcome::Fatal(error)
+      NativeSubagentAuditPublishOutcome::Abandoned(error) =>
+        return NativeSubagentToolOutcome::Abandoned(error)
+    }
+  }
+  NativeSubagentToolOutcome::Result(result)
 }
