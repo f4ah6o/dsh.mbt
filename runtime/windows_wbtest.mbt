@@ -114,6 +114,93 @@ async test "windows SafeRoot accepts safe names and rejects traversal" {
 
 ///|
 #cfg(platform="windows")
+async test "windows SafeRoot atomically creates complete immutable files without replacement" {
+  let fixture = @fs.tmpdir(prefix="dsh-windows-atomic-create")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let root = match SafeRoot::open(workspace) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => root.close())
+
+    // The first create consumes temp serial 1. A case variant of the serial 2
+    // candidate exercises the destination-leaf collision guard.
+    match root.create_atomic_no_replace("serial-seed.bin", "seed", 8) {
+      Ok(_) => ()
+      Err(AtomicCreateNoReplaceError::Failed(error)) => fail(error)
+      Err(AtomicCreateNoReplaceError::Exists) =>
+        fail("unexpected existing file")
+      Err(AtomicCreateNoReplaceError::OutcomeUnknown(error)) => fail(error)
+    }
+    let process_id = os_pid().to_string()
+    let leaf_collision = ".DSH-" + process_id + "-2.TMP"
+    match root.create_atomic_no_replace(leaf_collision, "target", 16) {
+      Ok(_) => ()
+      Err(AtomicCreateNoReplaceError::Failed(error)) => fail(error)
+      Err(AtomicCreateNoReplaceError::Exists) =>
+        fail("unexpected existing file")
+      Err(AtomicCreateNoReplaceError::OutcomeUnknown(error)) => fail(error)
+    }
+    assert_eq(@fs.read_file(workspace + "/" + leaf_collision).text(), "target")
+
+    let temp_collision = ".dsh-" + process_id + "-3.tmp"
+    @fs.write_file(workspace + "/" + temp_collision, "keep")
+
+    let complete = "immutable-" + "x".repeat(1048576)
+    match
+      root.create_atomic_no_replace("archive.bin", complete, complete.length()) {
+      Ok(_) => ()
+      Err(AtomicCreateNoReplaceError::Failed(error)) => fail(error)
+      Err(AtomicCreateNoReplaceError::Exists) =>
+        fail("unexpected existing file")
+      Err(AtomicCreateNoReplaceError::OutcomeUnknown(error)) => fail(error)
+    }
+    let (stored, version) = match
+      root.read_text("archive.bin", max_bytes=complete.length()) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    assert_eq(stored, complete)
+    assert_eq(version.permission(), 0o600)
+
+    match root.create_atomic_no_replace("archive.bin", "replacement", 64) {
+      Err(AtomicCreateNoReplaceError::Exists) => ()
+      Err(AtomicCreateNoReplaceError::Failed(error)) => fail(error)
+      Err(AtomicCreateNoReplaceError::OutcomeUnknown(error)) => fail(error)
+      Ok(_) => fail("atomic no-replace create replaced an existing file")
+    }
+    assert_eq(
+      root.read_text("archive.bin", max_bytes=complete.length()).unwrap().0,
+      complete,
+    )
+    assert_eq(@fs.read_file(workspace + "/" + leaf_collision).text(), "target")
+    assert_eq(@fs.read_file(workspace + "/" + temp_collision).text(), "keep")
+    assert_false(@fs.exists(workspace + "/..dsh-" + process_id + "-2.tmp"))
+    assert_false(@fs.exists(workspace + "/.dsh-" + process_id + "-4.tmp"))
+    assert_false(@fs.exists(workspace + "/.dsh-" + process_id + "-5.tmp"))
+
+    for index = 6; index <= 37; index = index + 1 {
+      let candidate = ".dsh-" + process_id + "-" + index.to_string() + ".tmp"
+      @fs.write_file(workspace + "/" + candidate, "collision")
+    }
+    match root.create_atomic_no_replace("exhausted.bin", "content", 16) {
+      Err(AtomicCreateNoReplaceError::Failed(_)) => ()
+      Err(AtomicCreateNoReplaceError::Exists) =>
+        fail(
+          "temporary-name exhaustion was reported as a destination collision",
+        )
+      Err(AtomicCreateNoReplaceError::OutcomeUnknown(error)) => fail(error)
+      Ok(_) => fail("atomic create succeeded without a temporary name")
+    }
+    assert_false(@fs.exists(workspace + "/exhausted.bin"))
+  }
+}
+
+///|
+#cfg(platform="windows")
 async test "windows SafeRoot ignores inheritable parent ACEs" {
   let fixture = @fs.tmpdir(prefix="dsh-windows-inherit")
   @async.with_task_group() <| group => {
