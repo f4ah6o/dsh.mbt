@@ -85,6 +85,87 @@ fn json_copy(value : Json) -> Json {
 }
 
 ///|
+test "later pruning of a summarized tool result validates against its historical prefix" {
+  let original_content = "x"[:].repeat(DEFAULT_PRUNE_THRESHOLD + 100).to_owned()
+  let engine = completed_engine_with_tool_result(original_content)
+  compaction_plan_complete_turn(engine, "test", "middle", "answer two")
+  compaction_plan_complete_turn(engine, "test", "recent", "answer three")
+  let plan = compaction_plan_required(engine, "test", 2, 1048576, 1048576)
+  assert_eq(compaction_plan_field(plan, "source_turn_count"), 1)
+  assert_eq(compaction_plan_field(plan, "source_message_count"), 4)
+  let source_first_seq = compaction_plan_field(plan, "source_first_seq")
+  let source_last_seq = compaction_plan_field(plan, "source_last_seq")
+  let original_messages = engine.sessions.get("test").unwrap().messages()
+  let mut result_seq = -1
+  for event in engine.sessions.get("test").unwrap().events {
+    if event.kind == EngineEventKind::ToolResult && event.turn_id == 1 {
+      result_seq = event.seq
+    }
+  }
+  assert_true(result_seq >= source_first_seq && result_seq <= source_last_seq)
+  let original_result_event = engine.sessions.get("test").unwrap().events[result_seq].json()
+  ignore(
+    compaction_summary_commit(
+      engine,
+      "test",
+      plan,
+      "The original tool result supplied background context.",
+      retain_recent_turns=2,
+    ),
+  )
+  let summary_event_seq = engine.sessions.get("test").unwrap().events.length() -
+    1
+
+  ignore(
+    success(
+      engine.invoke(
+        "session_prune_tool_results",
+        pruning_input(
+          threshold_chars=code_point_length(PRUNE_MARKER) + 7,
+          head_chars=4,
+          tail_chars=3,
+        ),
+      ),
+    ),
+  )
+  let session = engine.sessions.get("test").unwrap()
+  assert_true(
+    session.events.any(event => {
+      event.kind == EngineEventKind::ToolResultPruned &&
+      required_field(event.data, "result_seq") == integer(result_seq) &&
+      event.seq > summary_event_seq
+    }),
+  )
+  assert_eq(session.events[result_seq].json(), original_result_event)
+  assert_eq(session.messages(), original_messages)
+
+  // A whole-history pruning projection now differs from the digest bound by
+  // the summary event. Restore must validate that event at its original prefix,
+  // where the later prune did not yet exist.
+  let (content_by_result, _) = session.tool_result_pruning_state()
+  let current_source_messages : Array[Json] = []
+  for event in session.events {
+    if event.seq >= source_first_seq && event.seq <= source_last_seq {
+      match compaction_source_message(event, content_by_result) {
+        Some(message) => current_source_messages.push(message)
+        None => ()
+      }
+    }
+  }
+  assert_true(
+    archive_sha256(Json::array(current_source_messages).stringify()) !=
+    required_string(plan, "source_messages_sha256"),
+  )
+  let projected = session.model_messages()
+
+  let reopened = Engine::new(test_tools())
+  assert_eq(reopened.restore(engine.snapshot()), Ok(()))
+  assert_true(reopened.take_effects().is_empty())
+  assert_eq(reopened.lookup("test").model_messages(), projected)
+  assert_eq(reopened.lookup("test").messages(), original_messages)
+}
+
+///|
 test "tool-result pruning uses upstream code-point budgets and converges at the marker limit" {
   assert_eq(PRUNE_MARKER, "\n\n[... tool result middle pruned ...]\n\n")
   assert_eq(DEFAULT_PRUNE_THRESHOLD, 8192)

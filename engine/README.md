@@ -66,6 +66,29 @@ mutation must repeat the freshness check inside its own transaction. This
 candidate API does not implement summary generation, storage reduction, or a
 durable quota.
 
+`session_compact_summary` applies caller-supplied text through a fresh plan and
+appends one validated `compaction/summary` event. The event records the whole
+plan, its options, serialized summary byte count, `origin: "caller-supplied"`,
+and `context_role: "assistant"`. Restore replans each event against the exact
+historical prefix before its append, including the pruning state at that point,
+and checks both source fingerprints. Later summaries may cover only later,
+uncovered completed turns. The summary mutation rejects malformed, overlapping,
+stale, imported, and fork-related histories. It cannot coexist with archive-v2
+tool-result references; read-only planning of an archived session retains its
+existing behavior.
+
+The summary is used as a plain assistant message in future provider context,
+with the covered source messages omitted from that projection. The event log,
+transcript, tool results, approvals, hooks, and correlation IDs remain intact.
+The command starts no provider, tool, or hook and restore never replays effects.
+This is a caller-supplied context projection, not generated model output or a
+storage compactor: the appended event and summary text use the existing
+262,144 UTF-16-unit and 32,768-event session limits. The existing 32 MiB native
+snapshot and separate archive-object quotas also remain unchanged. No event
+archive exists for summary spans; summary records are mutually exclusive with
+archive-v2 tool-result references, and a fork cannot be made from a
+summary-bearing session.
+
 The v2 engine slice can verify a canonical `dsh.tool-result-archive-object-v2`
 text object, produce a compact candidate snapshot, commit that same projection
 to in-memory state, and reopen a v2 snapshot when the caller supplies every
@@ -108,12 +131,19 @@ restore boundaries; the two implementations are tested against standard
 padding and Unicode vectors. This does not establish power-loss durability on
 every filesystem.
 
+The table below lists `HarnessApi` capabilities. `session_compaction_plan` is
+API-only; pure engine callers use `Engine::plan_compaction_prefix` from the
+public boundary above. `session_compact_summary` is also available through
+`Engine::invoke`.
+
 | Operation | Input |
 | --- | --- |
 | `session_create` | Optional `id`, `title`, `system_prompt`, `max_steps` |
 | `session_import` | `jsonl` containing an upstream Session v4 archive; returns a read-only history |
 | `session_list` | `{}` |
 | `session_get` | `session_id` |
+| `session_compaction_plan` | `session_id`, `retain_recent_turns`, and both source JSON UTF-8 byte budgets |
+| `session_compact_summary` | `session_id`, fresh plan, caller-supplied summary, matching plan options, summary JSON UTF-8 byte limit |
 | `session_send` | `session_id`, nonempty `prompt` |
 | `session_cancel` | `session_id` |
 | `tool_approve` | `session_id`, exact `call_id`, boolean `approved` |

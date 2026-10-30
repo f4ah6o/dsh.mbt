@@ -1895,7 +1895,7 @@ async fn NativeRuntime::accept_remote_command(
   if command.session_id is Some(session_id) {
     if [
         "tool_approve", "session_send", "session_cancel", "session_prune_tool_results",
-        "session_fork",
+        "session_compact_summary", "session_fork",
       ].contains(command.operation) {
       input_fields["session_id"] = Json(session_id)
     }
@@ -1908,7 +1908,7 @@ async fn NativeRuntime::accept_remote_command(
   }
   let allowed = [
     "session_create", "session_import", "session_send", "session_cancel", "session_prune_tool_results",
-    "session_fork", "tool_approve",
+    "session_compact_summary", "session_fork", "tool_approve",
   ]
   let mut status = "accepted"
   let mut error_message : String? = None
@@ -2722,7 +2722,8 @@ async fn[X] NativeRuntime::mcp_handle(
     )
   }
   if [
-      "session_send", "tool_approve", "session_prune_tool_results", "session_fork",
+      "session_send", "tool_approve", "session_prune_tool_results", "session_compact_summary",
+      "session_fork",
     ].contains(tool_name) {
     match session_id {
       Some(id) =>

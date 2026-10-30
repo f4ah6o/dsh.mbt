@@ -152,9 +152,19 @@ fn prune_text(text : String, config : ToolResultPruneConfig) -> String? {
 fn Session::tool_result_pruning_state(
   self : Session,
 ) -> (Map[Int32, String], Map[Int32, Int32]) {
+  tool_result_pruning_state_for_events(self.events)
+}
+
+///|
+/// Rebuild the historical direct-pruning projection from one event prefix.
+/// This lets compaction restore validate an older summary against the state
+/// that existed when its event was appended, even if later pruning events exist.
+fn tool_result_pruning_state_for_events(
+  events : Array[Event],
+) -> (Map[Int32, String], Map[Int32, Int32]) {
   let content_by_result : Map[Int32, String] = Map([])
   let latest_seq_by_result : Map[Int32, Int32] = Map([])
-  for event in self.events {
+  for event in events {
     if event.kind == EngineEventKind::ToolResult {
       match event.data {
         Json::Object(data) =>
@@ -173,7 +183,7 @@ fn Session::tool_result_pruning_state(
             (Some(Json::Number(number, ..)), Some(Json::String(content))) => {
               let result_seq = number.to_int()
               if result_seq >= 0 &&
-                result_seq < self.events.length() &&
+                result_seq < events.length() &&
                 result_seq.to_double() == number {
                 content_by_result[result_seq] = content
                 latest_seq_by_result[result_seq] = event.seq

@@ -161,7 +161,11 @@ native regression fixture は実際の Read effect で 60,003-byte output を同
 
 この機能は bounded per-result projection と opt-in archive です。CLI と PWA は別の maintenance command を自動発行しません。
 engine の `prepare_compaction_summary_candidate` は caller-supplied summary を read-only prefix plan に一時的に束縛し、event と projected-message の両 fingerprint を再照合します。provider を呼ばず、candidate を保存せず、原本 event を置換しません。
-token meter、aggregate pressure trigger、summary generation、自動 live compaction、spill、GC / object cleanup は含みません。
+`session_compact_summary` はこの fresh-plan check を再実行して、`compaction/summary` event として caller-supplied summary を durable session に追加します。event には full plan、plan options、summary の serialized UTF-8 byte count、`origin: caller-supplied`、`context_role: assistant` を記録します。restore は summary event の直前にあった event prefix だけで planner を再実行し、当時の tool-result pruning state と両 source fingerprint を検証します。restore 中に provider、tool、hook、approval effect は実行しません。
+
+provider projection では summary を tool call を含まない plain assistant historical context として挿入し、対象 turn の元 message をその projection から除外します。元の event、transcript、tool result、approval、hook provenance、correlation ID は保持されます。これは context projection であり storage compaction ではありません。summary event と text は既存の 262,144 UTF-16-unit / 32,768-event session cap と 32 MiB native snapshot limit を消費し、これらの quota は拡張しません。summary event は archive-v2 tool-result reference と共存できず、summary-bearing session の fork は拒否します。archived history の read-only planner compatibility は維持し、archive-v2 marker のある session への summary commit は拒否します。
+
+token meter、aggregate pressure trigger、summary generation、自動 live compaction、full-event spill、GC / object cleanup は含みません。
 運用上の条件は[次の移植作業](../issues/open/0001-upstream-parity.md)を参照してください。
 
 ### Durable provider retry

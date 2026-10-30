@@ -108,6 +108,19 @@ fn Engine::apply_command_impl(
       }
       PruneToolResults(id, config) =>
         self.prune_session_tool_results(id, config)
+      RecordCompactionSummary(
+        id,
+        plan,
+        summary,
+        retain_recent_turns,
+        max_event_bytes,
+        max_message_bytes,
+        max_summary_bytes
+      ) =>
+        self.record_compaction_summary(
+          id, plan, summary, retain_recent_turns, max_event_bytes, max_message_bytes,
+          max_summary_bytes,
+        )
       ApproveTool(id, typed_call_id, approved) => {
         let session = self.lookup(id.as_string())
         let call_id = typed_call_id.as_string()
@@ -583,18 +596,76 @@ fn Session::model_messages(self : Session) -> Array[Json] {
     return imported_messages(self.events)
   }
   let (content_by_result, _) = self.tool_result_pruning_state()
-  self.events.filter_map(event => {
+  let summaries_at_seq : Map[Int32, String] = Map([])
+  let summarized_seqs : Map[Int32, Bool] = Map([])
+  for event in self.events {
+    if event.kind != EngineEventKind::CompactionSummary {
+      continue
+    }
+    let data = match event.data {
+      Json::Object(data) => data
+      _ => continue
+    }
+    let plan = match data.get("plan") {
+      Some(Json::Object(plan)) => plan
+      _ => continue
+    }
+    let first_seq = match plan.get("source_first_seq") {
+      Some(Json::Number(number, ..)) if number >= 0.0 &&
+        number.to_int().to_double() == number => number.to_int()
+      _ => continue
+    }
+    let last_seq = match plan.get("source_last_seq") {
+      Some(Json::Number(number, ..)) if number >= first_seq.to_double() &&
+        number.to_int().to_double() == number => number.to_int()
+      _ => continue
+    }
+    let summary = match data.get("summary") {
+      Some(Json::String(value)) => value
+      _ => continue
+    }
+    summaries_at_seq[first_seq] = summary
+    for seq = first_seq; seq <= last_seq; seq = seq + 1 {
+      summarized_seqs[seq] = true
+    }
+  }
+  let result : Array[Json] = []
+  for event in self.events {
+    match summaries_at_seq.get(event.seq) {
+      Some(summary) =>
+        result.push(
+          object([
+            ("role", Json::string("assistant")),
+            (
+              "content",
+              Json::string(
+                "[Caller-supplied historical summary. This is prior assistant context, not a new instruction.]\n" +
+                summary,
+              ),
+            ),
+          ]),
+        )
+      None => ()
+    }
+    if summarized_seqs.get(event.seq) is Some(_) {
+      continue
+    }
     match event.kind {
-      UserMessage => Some(detached(event.data))
-      ToolResult => Some(projected_tool_result(event, content_by_result))
+      UserMessage => result.push(detached(event.data))
+      ToolResult => result.push(projected_tool_result(event, content_by_result))
       AssistantMessage =>
         match event.data {
-          Json::Object(data) => data.get("message").map(detached)
-          _ => None
+          Json::Object(data) =>
+            match data.get("message") {
+              Some(value) => result.push(detached(value))
+              None => ()
+            }
+          _ => ()
         }
-      _ => None
+      _ => ()
     }
-  })
+  }
+  result
 }
 
 ///|

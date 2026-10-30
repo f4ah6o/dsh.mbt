@@ -118,6 +118,7 @@ pub(all) enum EngineCommand {
   )
   CancelSession(SessionId)
   PruneToolResults(SessionId, ToolResultPruneConfig)
+  RecordCompactionSummary(SessionId, Json, String, Int32, Int32, Int32, Int32)
   ApproveTool(SessionId, ToolCallId, Bool)
 }
 
@@ -236,6 +237,36 @@ pub fn EngineCommand::from_json(
         PruneToolResults(
           decode_session_id(input),
           prune_config_from_input(input),
+        )
+      "session_compact_summary" =>
+        RecordCompactionSummary(
+          decode_session_id(input),
+          required_field(input, "plan"),
+          required_string(input, "summary", max=1048576),
+          int_value(
+            required_field(input, "retain_recent_turns"),
+            "retain_recent_turns",
+            1,
+            1000000,
+          ),
+          int_value(
+            required_field(input, "max_source_event_json_utf8_bytes"),
+            "max_source_event_json_utf8_bytes",
+            1,
+            1048576,
+          ),
+          int_value(
+            required_field(input, "max_source_messages_json_utf8_bytes"),
+            "max_source_messages_json_utf8_bytes",
+            1,
+            1048576,
+          ),
+          int_value(
+            required_field(input, "max_summary_json_utf8_bytes"),
+            "max_summary_json_utf8_bytes",
+            1,
+            1048576,
+          ),
         )
       "tool_approve" => {
         let session_id = decode_session_id(input)
@@ -414,6 +445,37 @@ fn EngineCommand::validate(self : EngineCommand) -> Result[Unit, String] {
         Ok(_) => Ok(())
         Err(error) => Err(error)
       }
+    RecordCompactionSummary(
+      _,
+      plan,
+      summary,
+      retain_recent_turns,
+      max_event_bytes,
+      max_message_bytes,
+      max_summary_bytes
+    ) => {
+      if summary.is_empty() || summary.length() > 1048576 {
+        return Err("summary must contain 1 to 1048576 characters")
+      }
+      if retain_recent_turns < 1 || retain_recent_turns > 1000000 {
+        return Err("retain_recent_turns must be between 1 and 1000000")
+      }
+      if max_event_bytes < 1 ||
+        max_event_bytes > 1048576 ||
+        max_message_bytes < 1 ||
+        max_message_bytes > 1048576 {
+        return Err("source byte budgets must be between 1 and 1048576")
+      }
+      if max_summary_bytes < 1 || max_summary_bytes > 1048576 {
+        return Err("max_summary_json_utf8_bytes must be between 1 and 1048576")
+      }
+      try {
+        ignore(checked_copy(plan))
+        Ok(())
+      } catch {
+        Invalid(error) => Err(error)
+      }
+    }
     _ => Ok(())
   }
 }
@@ -454,6 +516,7 @@ pub(all) enum EngineEventKind {
   ToolCompleted
   ToolResult
   ToolResultPruned
+  CompactionSummary
   TodoWrite
   HookInvoked
   HookResult
@@ -492,6 +555,7 @@ pub fn EngineEventKind::from_wire(value : String) -> EngineEventKind {
     "tool/completed" => ToolCompleted
     "tool/result" => ToolResult
     "tool/result/pruned" => ToolResultPruned
+    "compaction/summary" => CompactionSummary
     "todo/write" => TodoWrite
     "hook/invoked" => HookInvoked
     "hook/result" => HookResult
@@ -528,6 +592,7 @@ pub fn EngineEventKind::wire(self : EngineEventKind) -> String {
     ToolCompleted => "tool/completed"
     ToolResult => "tool/result"
     ToolResultPruned => "tool/result/pruned"
+    CompactionSummary => "compaction/summary"
     TodoWrite => "todo/write"
     HookInvoked => "hook/invoked"
     HookResult => "hook/result"

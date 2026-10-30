@@ -91,6 +91,56 @@ fn compaction_candidate_required(
 }
 
 ///|
+fn compaction_summary_commit(
+  engine : Engine,
+  session_id : String,
+  plan : Json,
+  summary : String,
+  retain_recent_turns~ : Int32 = 1,
+) -> Json {
+  success(
+    engine.invoke(
+      "session_compact_summary",
+      object([
+        ("session_id", Json::string(session_id)),
+        ("plan", plan),
+        ("summary", Json::string(summary)),
+        ("retain_recent_turns", integer(retain_recent_turns)),
+        ("max_source_event_json_utf8_bytes", integer(1048576)),
+        ("max_source_messages_json_utf8_bytes", integer(1048576)),
+        ("max_summary_json_utf8_bytes", integer(1048576)),
+      ]),
+    ),
+  )
+}
+
+///|
+fn compaction_summary_snapshot_event(snapshot : Json) -> Json raise EngineError {
+  let session = array_value(
+      required_field(snapshot, "sessions"),
+      "sessions",
+      32,
+    )[0]
+  let events = array_value(required_field(session, "events"), "events", 32768)
+  for event in events {
+    if required_string(event, "type") == "compaction/summary" {
+      return event
+    }
+  }
+  abort("Compaction summary event is missing from snapshot")
+}
+
+///|
+fn compaction_summary_restore_rejects_atomically(snapshot : Json) -> Bool {
+  let pristine = Engine::new([])
+  let before = pristine.snapshot()
+  let restore_failed = pristine.restore(snapshot) is Err(_)
+  restore_failed &&
+  pristine.snapshot() == before &&
+  pristine.take_effects().is_empty()
+}
+
+///|
 test "compaction prefix planning selects whole old turns without mutation" {
   let engine = Engine::new([])
   ignore(
@@ -779,4 +829,398 @@ test "compaction prefix keeps completed approval and tool correlation together" 
   assert_eq(tool_requests, 1)
   assert_eq(completions, 1)
   assert_eq(results, 1)
+  let original_events = session.events.copy()
+  let original_messages = session.messages()
+  ignore(
+    success(
+      engine.invoke("session_compact_summary", {
+        "session_id": "plan-approved-turn",
+        "plan": plan,
+        "summary": "The user approved the write and the correlated tool call completed.",
+        "retain_recent_turns": 1,
+        "max_source_event_json_utf8_bytes": 1048576,
+        "max_source_messages_json_utf8_bytes": 1048576,
+        "max_summary_json_utf8_bytes": 1048576,
+      }),
+    ),
+  )
+  let compacted = engine.sessions.get("plan-approved-turn").unwrap()
+  assert_eq(compacted.messages(), original_messages)
+  for seq = 0; seq < original_events.length(); seq = seq + 1 {
+    assert_eq(compacted.events[seq].json(), original_events[seq].json())
+  }
+  assert_eq(compacted.model_messages().length(), 3)
+  assert_true(engine.take_effects().is_empty())
+  let reopened = Engine::new(test_tools())
+  assert_eq(reopened.restore(engine.snapshot()), Ok(()))
+  assert_true(reopened.take_effects().is_empty())
+}
+
+///|
+test "committed compaction summary is durable assistant context and preserves original history" {
+  let engine = Engine::new([])
+  ignore(
+    success(
+      engine.invoke(
+        "session_create",
+        object([("id", Json::string("summary-commit"))]),
+      ),
+    ),
+  )
+  compaction_plan_complete_turn(
+    engine, "summary-commit", "old one", "answer one",
+  )
+  compaction_plan_complete_turn(
+    engine, "summary-commit", "old two", "answer two",
+  )
+  compaction_plan_complete_turn(
+    engine, "summary-commit", "recent one", "answer three",
+  )
+
+  let first_plan = compaction_plan_required(
+    engine, "summary-commit", 1, 1048576, 1048576,
+  )
+  let first_start = compaction_plan_field(first_plan, "source_first_seq")
+  let first_end = compaction_plan_field(first_plan, "source_last_seq")
+  let session_before = engine.sessions.get("summary-commit").unwrap()
+  let original_events = session_before.events.copy()
+  let original_messages = session_before.messages()
+  let original_effects = engine.take_effects()
+  assert_true(original_effects.is_empty())
+  let commit = engine
+    .invoke(
+      "session_compact_summary",
+      object([
+        ("session_id", Json::string("summary-commit")),
+        ("plan", first_plan),
+        (
+          "summary",
+          Json::string("The first two turns chose the safe approach."),
+        ),
+        ("retain_recent_turns", integer(1)),
+        ("max_source_event_json_utf8_bytes", integer(1048576)),
+        ("max_source_messages_json_utf8_bytes", integer(1048576)),
+        ("max_summary_json_utf8_bytes", integer(1048576)),
+      ]),
+    )
+    .unwrap()
+  let session = engine.sessions.get("summary-commit").unwrap()
+  assert_eq(session.events.length(), original_events.length() + 1)
+  for seq = 0; seq < original_events.length(); seq = seq + 1 {
+    assert_eq(session.events[seq].json(), original_events[seq].json())
+  }
+  assert_eq(session.messages(), original_messages)
+  assert_true(engine.take_effects().is_empty())
+  assert_eq(
+    required_string(session.events[original_events.length()].json(), "type"),
+    "compaction/summary",
+  )
+  assert_eq(
+    required_string(session.events[original_events.length()].data, "origin"),
+    "caller-supplied",
+  )
+  assert_eq(
+    required_string(
+      session.events[original_events.length()].data,
+      "context_role",
+    ),
+    "assistant",
+  )
+  assert_eq(commit, session.json())
+
+  let projected = session.model_messages()
+  assert_eq(projected.length(), 3)
+  assert_eq(required_string(projected[0], "role"), "assistant")
+  let summary_context = required_string(projected[0], "content")
+  assert_true(summary_context.contains("Caller-supplied historical summary"))
+  assert_true(
+    summary_context.contains("The first two turns chose the safe approach."),
+  )
+  assert_true(fields(projected[0]).get("tool_calls") is None)
+  assert_true(fields(projected[0]).get("reasoning") is None)
+  assert_eq(required_string(projected[1], "content"), "recent one")
+  assert_eq(required_string(projected[2], "content"), "answer three")
+  assert_true(first_end - first_start + 1 > 0)
+
+  let snapshot = engine.snapshot()
+  let reopened = Engine::new([])
+  assert_eq(reopened.restore(snapshot), Ok(()))
+  assert_true(reopened.take_effects().is_empty())
+  assert_eq(reopened.lookup("summary-commit").model_messages(), projected)
+  assert_eq(reopened.lookup("summary-commit").messages(), original_messages)
+
+  compaction_plan_complete_turn(
+    reopened, "summary-commit", "recent two", "answer four",
+  )
+  let second_plan = compaction_plan_required(
+    reopened, "summary-commit", 1, 1048576, 1048576,
+  )
+  assert_eq(compaction_plan_field(second_plan, "source_first_turn"), 3)
+  assert_eq(compaction_plan_field(second_plan, "source_turn_count"), 1)
+  assert_true(
+    compaction_plan_field(second_plan, "source_first_seq") >
+    compaction_plan_field(first_plan, "source_last_seq"),
+  )
+  ignore(
+    success(
+      reopened.invoke(
+        "session_compact_summary",
+        object([
+          ("session_id", Json::string("summary-commit")),
+          ("plan", second_plan),
+          ("summary", Json::string("The third turn completed the follow-up.")),
+          ("retain_recent_turns", integer(1)),
+          ("max_source_event_json_utf8_bytes", integer(1048576)),
+          ("max_source_messages_json_utf8_bytes", integer(1048576)),
+          ("max_summary_json_utf8_bytes", integer(1048576)),
+        ]),
+      ),
+    ),
+  )
+  let second_projection = reopened.lookup("summary-commit").model_messages()
+  assert_eq(second_projection.length(), 4)
+  assert_true(
+    required_string(second_projection[0], "content").contains(
+      "The first two turns chose the safe approach.",
+    ),
+  )
+  assert_true(
+    required_string(second_projection[1], "content").contains(
+      "The third turn completed the follow-up.",
+    ),
+  )
+  assert_eq(required_string(second_projection[2], "content"), "recent two")
+  assert_eq(required_string(second_projection[3], "content"), "answer four")
+  assert_true(reopened.take_effects().is_empty())
+  let reopened_twice = Engine::new([])
+  assert_eq(reopened_twice.restore(reopened.snapshot()), Ok(()))
+  assert_eq(
+    reopened_twice.lookup("summary-commit").model_messages(),
+    second_projection,
+  )
+  assert_true(reopened_twice.take_effects().is_empty())
+  let before_fork = reopened_twice.snapshot()
+  assert_true(
+    reopened_twice.invoke("session_fork", {
+      "session_id": "summary-commit",
+      "id": "summary-fork",
+    })
+    is Err(_),
+  )
+  assert_eq(reopened_twice.snapshot(), before_fork)
+  assert_true(reopened_twice.take_effects().is_empty())
+}
+
+///|
+test "summary restore rejects changed fingerprints provenance ranges and byte metadata atomically" {
+  let engine = Engine::new([])
+  ignore(success(engine.invoke("session_create", { "id": "summary-tamper" })))
+  compaction_plan_complete_turn(
+    engine, "summary-tamper", "old one", "answer one",
+  )
+  compaction_plan_complete_turn(
+    engine, "summary-tamper", "old two", "answer two",
+  )
+  compaction_plan_complete_turn(
+    engine, "summary-tamper", "recent", "answer three",
+  )
+  let plan = compaction_plan_required(
+    engine, "summary-tamper", 1, 1048576, 1048576,
+  )
+  ignore(
+    compaction_summary_commit(
+      engine, "summary-tamper", plan, "A caller-supplied summary with enough bytes.",
+    ),
+  )
+  let saved = engine.snapshot()
+
+  // Each forgery is independently rejected. A failed restore leaves the
+  // target engine byte-for-byte unchanged and never creates host effects.
+  for mutation = 0; mutation < 10; mutation = mutation + 1 {
+    let corrupted = json_copy(saved)
+    let summary_event = compaction_summary_snapshot_event(corrupted)
+    let data = required_field(summary_event, "data")
+    let plan_fields = fields(required_field(data, "plan"))
+    match mutation {
+      0 => plan_fields.set("source_events_sha256", Json::string("0".repeat(64)))
+      1 =>
+        plan_fields.set("source_messages_sha256", Json::string("0".repeat(64)))
+      2 => fields(data).set("origin", Json::string("model-generated"))
+      3 => fields(data).set("context_role", Json::string("system"))
+      4 => fields(data).set("summary", Json::string("tampered summary body"))
+      5 =>
+        fields(data).set(
+          "summary_json_utf8_bytes",
+          integer(compaction_plan_field(data, "summary_json_utf8_bytes") + 1),
+        )
+      6 => fields(data).set("max_summary_json_utf8_bytes", integer(1))
+      7 =>
+        fields(data).set(
+          "plan_options",
+          compaction_plan_replace_field(
+            required_field(data, "plan_options"),
+            "retain_recent_turns",
+            integer(2),
+          ),
+        )
+      8 =>
+        plan_fields.set(
+          "source_first_seq",
+          integer(
+            compaction_plan_field(
+              required_field(data, "plan"),
+              "source_first_seq",
+            ) +
+            1,
+          ),
+        )
+      9 =>
+        plan_fields.set(
+          "source_last_seq",
+          integer(
+            compaction_plan_field(
+              required_field(data, "plan"),
+              "source_last_seq",
+            ) +
+            1,
+          ),
+        )
+      _ => ()
+    }
+    assert_true(compaction_summary_restore_rejects_atomically(corrupted))
+  }
+}
+
+///|
+test "summary commit refuses stale plans, active work, and session-capacity overflow atomically" {
+  let engine = Engine::new([])
+  ignore(success(engine.invoke("session_create", { "id": "summary-fail" })))
+  compaction_plan_complete_turn(engine, "summary-fail", "old", "answer")
+  compaction_plan_complete_turn(engine, "summary-fail", "recent", "answer")
+  let stale = compaction_plan_required(
+    engine, "summary-fail", 1, 1048576, 1048576,
+  )
+  compaction_plan_complete_turn(engine, "summary-fail", "newer", "answer")
+  let before_stale = engine.snapshot()
+  assert_true(
+    engine.invoke("session_compact_summary", {
+      "session_id": "summary-fail",
+      "plan": stale,
+      "summary": "stale",
+      "retain_recent_turns": 1,
+      "max_source_event_json_utf8_bytes": 1048576,
+      "max_source_messages_json_utf8_bytes": 1048576,
+      "max_summary_json_utf8_bytes": 1048576,
+    })
+    is Err(_),
+  )
+  assert_eq(engine.snapshot(), before_stale)
+  assert_true(engine.take_effects().is_empty())
+
+  let current = compaction_plan_required(
+    engine, "summary-fail", 1, 1048576, 1048576,
+  )
+  let busy = engine.invoke("session_send", {
+    "session_id": "summary-fail",
+    "prompt": "continue",
+  })
+  ignore(success(busy))
+  let live_effects = engine.take_effects()
+  assert_eq(live_effects.length(), 1)
+  let before_busy = engine.snapshot()
+  assert_true(
+    engine.invoke("session_compact_summary", {
+      "session_id": "summary-fail",
+      "plan": current,
+      "summary": "must refuse a live session",
+      "retain_recent_turns": 1,
+      "max_source_event_json_utf8_bytes": 1048576,
+      "max_source_messages_json_utf8_bytes": 1048576,
+      "max_summary_json_utf8_bytes": 1048576,
+    })
+    is Err(_),
+  )
+  assert_eq(engine.snapshot(), before_busy)
+  assert_true(engine.take_effects().is_empty())
+  ignore(
+    success(engine.invoke("session_cancel", { "session_id": "summary-fail" })),
+  )
+  let cancelled_snapshot = engine.snapshot()
+  let reopened = Engine::new([])
+  assert_eq(reopened.restore(cancelled_snapshot), Ok(()))
+  assert_true(reopened.take_effects().is_empty())
+  assert_true(
+    reopened.plan_compaction_prefix(
+      SessionId::from_validated("summary-fail"),
+      1,
+      1048576,
+      1048576,
+    )
+    is Err(_),
+  )
+
+  let capacity = Engine::new([])
+  ignore(success(capacity.invoke("session_create", { "id": "summary-cap" })))
+  compaction_plan_complete_turn(capacity, "summary-cap", "old", "answer")
+  compaction_plan_complete_turn(capacity, "summary-cap", "recent", "answer")
+  let capacity_session = capacity.sessions.get("summary-cap").unwrap()
+  while capacity_session.events.length() < 32768 {
+    capacity_session.append("hook/invoked", Json::object(Map([])))
+  }
+  let capacity_plan = compaction_plan_required(
+    capacity, "summary-cap", 1, 1048576, 1048576,
+  )
+  let before_capacity = capacity.snapshot()
+  let before_capacity_effects = capacity.take_effects()
+  assert_true(before_capacity_effects.is_empty())
+  assert_true(
+    capacity.invoke("session_compact_summary", {
+      "session_id": "summary-cap",
+      "plan": capacity_plan,
+      "summary": "The event quota is already full.",
+      "retain_recent_turns": 1,
+      "max_source_event_json_utf8_bytes": 1048576,
+      "max_source_messages_json_utf8_bytes": 1048576,
+      "max_summary_json_utf8_bytes": 1048576,
+    })
+    is Err(_),
+  )
+  assert_eq(capacity.snapshot(), before_capacity)
+  assert_true(capacity.take_effects().is_empty())
+
+  let serialized_capacity = Engine::new([])
+  ignore(
+    success(
+      serialized_capacity.invoke("session_create", { "id": "summary-bytes-cap" }),
+    ),
+  )
+  compaction_plan_complete_turn(
+    serialized_capacity, "summary-bytes-cap", "old", "answer",
+  )
+  compaction_plan_complete_turn(
+    serialized_capacity, "summary-bytes-cap", "recent", "answer",
+  )
+  let serialized_plan = compaction_plan_required(
+    serialized_capacity, "summary-bytes-cap", 1, 1048576, 1048576,
+  )
+  let near_capacity_summary = "x".repeat(262000)
+  assert_true(
+    provider_context_measure_json_bytes(Json::string(near_capacity_summary)).unwrap() <
+    1048576,
+  )
+  let before_serialized_capacity = serialized_capacity.snapshot()
+  assert_true(
+    serialized_capacity.invoke("session_compact_summary", {
+      "session_id": "summary-bytes-cap",
+      "plan": serialized_plan,
+      "summary": near_capacity_summary,
+      "retain_recent_turns": 1,
+      "max_source_event_json_utf8_bytes": 1048576,
+      "max_source_messages_json_utf8_bytes": 1048576,
+      "max_summary_json_utf8_bytes": 1048576,
+    })
+    is Err(_),
+  )
+  assert_eq(serialized_capacity.snapshot(), before_serialized_capacity)
+  assert_true(serialized_capacity.take_effects().is_empty())
 }

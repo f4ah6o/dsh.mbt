@@ -1639,3 +1639,49 @@ test "archive planner rejects a stale active effect even after the queue is drai
   session.active_kind = None
   assert_true(archive_is_rejected(engine, result_seq))
 }
+
+///|
+test "archive and summary records fail closed across their incompatible identity boundary" {
+  let archived_content = "x".repeat(96)
+  let (archived, _, _) = archive_committed_fixture(archived_content)
+  compaction_plan_complete_turn(archived, "test", "recent", "answer")
+  let archived_plan = compaction_plan_required(
+    archived, "test", 1, 1048576, 1048576,
+  )
+  let archived_before = archived.snapshot()
+  assert_true(
+    archived.invoke("session_compact_summary", {
+      "session_id": "test",
+      "plan": archived_plan,
+      "summary": "Cannot bind across archived source bytes.",
+      "retain_recent_turns": 1,
+      "max_source_event_json_utf8_bytes": 1048576,
+      "max_source_messages_json_utf8_bytes": 1048576,
+      "max_summary_json_utf8_bytes": 1048576,
+    })
+    is Err(_),
+  )
+  assert_eq(archived.snapshot(), archived_before)
+  assert_true(archived.take_effects().is_empty())
+
+  let (summary_engine, result_seq) = archive_plan_fixture(archived_content)
+  compaction_plan_complete_turn(summary_engine, "test", "recent", "answer")
+  let summary_plan = compaction_plan_required(
+    summary_engine, "test", 1, 1048576, 1048576,
+  )
+  ignore(
+    compaction_summary_commit(
+      summary_engine, "test", summary_plan, "The old exchange is summarized; the recent turn remains intact.",
+    ),
+  )
+  let summary_before_archive = summary_engine.snapshot()
+  assert_true(
+    summary_engine.plan_tool_result_archive(
+      SessionId::from_validated("test"),
+      result_seq,
+    )
+    is Err(_),
+  )
+  assert_eq(summary_engine.snapshot(), summary_before_archive)
+  assert_true(summary_engine.take_effects().is_empty())
+}

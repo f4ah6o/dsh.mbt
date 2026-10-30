@@ -67,6 +67,57 @@ fn field(
 }
 
 ///|
+fn api_input_string(input : Json, name : String) -> String? {
+  match input {
+    Json::Object(values) =>
+      match values.get(name) {
+        Some(Json::String(value)) => Some(value)
+        _ => None
+      }
+    _ => None
+  }
+}
+
+///|
+fn api_input_int(input : Json, name : String) -> Int32? {
+  match input {
+    Json::Object(values) =>
+      match values.get(name) {
+        Some(Json::Number(value, ..)) if value >= -2147483648.0 &&
+          value <= 2147483647.0 &&
+          value.to_int().to_double() == value => Some(value.to_int())
+        _ => None
+      }
+    _ => None
+  }
+}
+
+///|
+fn compaction_plan_schema() -> @capability.Schema raise InitError {
+  let string = @capability.Schema::string()
+  let int = @capability.Schema::int()
+  checked(
+    @capability.Schema::record([
+      field("session_id", string, true),
+      field("expected_event_count", int, true),
+      field("source_first_seq", int, true),
+      field("source_last_seq", int, true),
+      field("source_first_turn", int, true),
+      field("source_last_turn", int, true),
+      field("source_turn_count", int, true),
+      field("retained_turn_count", int, true),
+      field("source_event_count", int, true),
+      field("source_event_json_utf8_bytes", int, true),
+      field("source_message_count", int, true),
+      field("source_messages_json_utf8_bytes", int, true),
+      field("source_events_sha256", string, true),
+      field("source_messages_sha256", string, true),
+      field("unit", string, true),
+    ]),
+  )
+}
+
+///|
 fn operation_schema(operation : String) -> @capability.Schema raise InitError {
   let string = @capability.Schema::string()
   let session = field("session_id", string, true)
@@ -82,6 +133,21 @@ fn operation_schema(operation : String) -> @capability.Schema raise InitError {
       [session, field("id", string, false), field("title", string, false)]
     "session_import" => [field("jsonl", string, true)]
     "session_get" | "session_cancel" => [session]
+    "session_compaction_plan" =>
+      [
+        session,
+        field("retain_recent_turns", @capability.Schema::int(), true),
+        field(
+          "max_source_event_json_utf8_bytes",
+          @capability.Schema::int(),
+          true,
+        ),
+        field(
+          "max_source_messages_json_utf8_bytes",
+          @capability.Schema::int(),
+          true,
+        ),
+      ]
     "session_send" =>
       [
         session,
@@ -99,6 +165,24 @@ fn operation_schema(operation : String) -> @capability.Schema raise InitError {
         field("threshold_chars", @capability.Schema::int(), false),
         field("head_chars", @capability.Schema::int(), false),
         field("tail_chars", @capability.Schema::int(), false),
+      ]
+    "session_compact_summary" =>
+      [
+        session,
+        field("plan", compaction_plan_schema(), true),
+        field("summary", string, true),
+        field("retain_recent_turns", @capability.Schema::int(), true),
+        field(
+          "max_source_event_json_utf8_bytes",
+          @capability.Schema::int(),
+          true,
+        ),
+        field(
+          "max_source_messages_json_utf8_bytes",
+          @capability.Schema::int(),
+          true,
+        ),
+        field("max_summary_json_utf8_bytes", @capability.Schema::int(), true),
       ]
     "tool_approve" =>
       [
@@ -258,7 +342,15 @@ fn create_api(
         false,
       ),
       (
+        "session_compaction_plan", "Plan summary prefix", "Select a bounded oldest prefix of settled whole turns. The query starts no provider, tool, or hook and its source byte budgets do not change session storage capacity.",
+        true,
+      ),
+      (
         "session_prune_tool_results", "Trim tool results", "Project oversized tool results to bounded head and tail text for future provider requests. Native runtime hosts store eligible verified Read originals in immutable archive objects and expose them through a separate history endpoint; this mutation is unavailable through the generic MCP carrier.",
+        false,
+      ),
+      (
+        "session_compact_summary", "Apply supplied summary", "Bind caller-supplied summary text to a fresh whole-turn plan and use it as plain assistant historical context for future provider requests. It preserves the complete original event log and transcript, makes no provider/tool/hook calls, and does not reduce durable storage.",
         false,
       ),
       (
@@ -316,6 +408,31 @@ fn create_api(
       input => {
         match name {
           "plugin_list" => Ok(plugins.manifest())
+          "session_compaction_plan" => {
+            let session_id = match api_input_string(input, "session_id") {
+              Some(value) => @engine.SessionId::new(value)
+              None => Err("session_id is missing or invalid")
+            }
+            match
+              (
+                session_id,
+                api_input_int(input, "retain_recent_turns"),
+                api_input_int(input, "max_source_event_json_utf8_bytes"),
+                api_input_int(input, "max_source_messages_json_utf8_bytes"),
+              ) {
+              (Ok(id), Some(retain), Some(event_bytes), Some(message_bytes)) =>
+                match
+                  engine.plan_compaction_prefix(
+                    id, retain, event_bytes, message_bytes,
+                  ) {
+                  Ok(Some(plan)) => Ok(plan)
+                  Ok(None) => Ok(Json::null())
+                  Err(error) => Err(domain_error(name, error))
+                }
+              (Err(error), _, _, _) => Err(domain_error(name, error))
+              _ => Err(domain_error(name, "invalid compaction plan options"))
+            }
+          }
           "session_send" =>
             match @engine.EngineCommand::from_json("session_send", input) {
               Ok(command) =>

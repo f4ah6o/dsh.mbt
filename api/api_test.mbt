@@ -390,7 +390,17 @@ test "runtime profiling is absent from direct GUI manifest and MCP capabilities"
   let tools = get(get(@json.parse(listed), "result"), "tools")
   match tools {
     Array(tools) => {
-      assert_eq(tools.length(), 10)
+      assert_eq(tools.length(), 12)
+      assert_true(
+        tools.any(tool => {
+          get(tool, "name") == Json::string("session_compaction_plan")
+        }),
+      )
+      assert_true(
+        tools.any(tool => {
+          get(tool, "name") == Json::string("session_compact_summary")
+        }),
+      )
       for tool in tools {
         assert_true(get(tool, "name") != Json::string("profile_stats"))
       }
@@ -746,5 +756,74 @@ test "hook-dispatched send forwards automatic pruning for a long tool result" {
     "Continue with bounded context",
   )
   assert_eq(message_text(request_messages[last]), "prompt-hook context")
+  api.close()
+}
+
+///|
+test "manual summary capability persists context metadata without host effects" {
+  let api = @api.HarnessApi::new().unwrap()
+  api.invoke("session_create", { "id": "summary-api" }).unwrap() |> ignore
+  api
+  .invoke("session_send", { "session_id": "summary-api", "prompt": "old" })
+  .unwrap()
+  |> ignore
+  let first_provider = api.take_typed_effects()[0]
+  api
+  .complete_effect(first_provider.id(), {
+    "ok": true,
+    "content": "answer one",
+    "tool_calls": [],
+    "finish_reason": "stop",
+  })
+  .unwrap()
+  |> ignore
+  api
+  .invoke("session_send", { "session_id": "summary-api", "prompt": "recent" })
+  .unwrap()
+  |> ignore
+  let second_provider = api.take_typed_effects()[0]
+  api
+  .complete_effect(second_provider.id(), {
+    "ok": true,
+    "content": "answer two",
+    "tool_calls": [],
+    "finish_reason": "stop",
+  })
+  .unwrap()
+  |> ignore
+  let plan = api
+    .invoke("session_compaction_plan", {
+      "session_id": "summary-api",
+      "retain_recent_turns": 1,
+      "max_source_event_json_utf8_bytes": 1048576,
+      "max_source_messages_json_utf8_bytes": 1048576,
+    })
+    .unwrap()
+  api
+  .invoke("session_compact_summary", {
+    "session_id": "summary-api",
+    "plan": plan,
+    "summary": "The first exchange supplied historical context.",
+    "retain_recent_turns": 1,
+    "max_source_event_json_utf8_bytes": 1048576,
+    "max_source_messages_json_utf8_bytes": 1048576,
+    "max_summary_json_utf8_bytes": 1048576,
+  })
+  .unwrap()
+  |> ignore
+  assert_true(api.take_typed_effects().is_empty())
+  let session = api
+    .invoke("session_get", { "session_id": "summary-api" })
+    .unwrap()
+  assert_true(
+    match get(session, "events") {
+      Array(events) =>
+        events.any(event => {
+          get(event, "type") == Json::string("compaction/summary")
+        })
+      _ => false
+    },
+  )
+  assert_true(api.take_typed_effects().is_empty())
   api.close()
 }

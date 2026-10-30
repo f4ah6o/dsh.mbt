@@ -503,6 +503,11 @@ fn restore_session_in_batches(
   if expected_approval != actual_approval {
     raise Invalid("Snapshot approval disagrees with the event log")
   }
+  ignore(validate_compaction_summary_events(session))
+  if session.fork_source is Some(_) &&
+    session.events.any(event => event.kind == EngineEventKind::CompactionSummary) {
+    raise Invalid("Forked snapshots cannot contain compaction summaries")
+  }
   if pending_hook_invocations.length() != 0 &&
     (!open_turn || session.status != Running) {
     raise Invalid("Pending native hook invocation is outside an open turn")
@@ -2407,6 +2412,13 @@ fn apply_restore_event_batch(
         }
         "session/forked" =>
           session.restore_fork_marker(data, index, turn_id, step, open_turn)
+        "compaction/summary" =>
+          if open_turn ||
+            (session.status != Idle && session.status != Completed) {
+            raise Invalid(
+              "Compaction summary is outside a settled turn boundary",
+            )
+          }
         "session/interrupted" => {
           if !open_turn {
             raise Invalid("Interruption outside an open turn")

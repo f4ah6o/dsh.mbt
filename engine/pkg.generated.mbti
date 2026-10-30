@@ -86,6 +86,7 @@ pub(all) enum EngineCommand {
   SendPromptWithRequestByteCeiling(SessionId, String, Array[String], Bool, Int)
   CancelSession(SessionId)
   PruneToolResults(SessionId, ToolResultPruneConfig)
+  RecordCompactionSummary(SessionId, Json, String, Int, Int, Int, Int)
   ApproveTool(SessionId, ToolCallId, Bool)
 }
 pub fn EngineCommand::from_json(String, Json) -> Result[Self, String]
@@ -134,6 +135,7 @@ pub(all) enum EngineEventKind {
   ToolCompleted
   ToolResult
   ToolResultPruned
+  CompactionSummary
   TodoWrite
   HookInvoked
   HookResult
