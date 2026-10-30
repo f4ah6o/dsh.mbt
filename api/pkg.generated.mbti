@@ -26,6 +26,7 @@ pub fn HarnessApi::continue_stop_hook(Self, @engine.NativeStopHookCheckpoint, Ar
 pub fn HarnessApi::event_log(Self, @engine.SessionId) -> Result[Array[@engine.EngineEvent], String]
 pub fn HarnessApi::finish_stop_hook(Self, @engine.NativeStopHookCheckpoint) -> Result[Json, String]
 pub fn HarnessApi::gui_binding(Self, String) -> @capability.GuiBinding[Json, Json]?
+pub fn HarnessApi::interrupt_owned_tool_effect(Self, @engine.EffectId, @engine.SessionId, @engine.ToolCallId) -> Result[Bool, String]
 pub fn HarnessApi::invoke(Self, String, Json, origin? : @capability.InvocationOrigin) -> Result[Json, String]
 pub fn HarnessApi::invoke_session_send_with_hook_contexts(Self, Json, Array[String], Array[String], source_kind? : String) -> Result[Json, String]
 pub fn HarnessApi::invoke_session_send_with_prompt_contexts(Self, Json, Array[String]) -> Result[Json, String]

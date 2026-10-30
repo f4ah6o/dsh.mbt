@@ -15,6 +15,7 @@ Engine::project_stream(effect_id : String, content : String, reasoning : String)
 Engine::snapshot() -> Json
 Engine::restore(snapshot : Json) -> Result[Unit, String]
 Engine::owns_pending_tool_effect(effect_id : EffectId, session_id : SessionId, call_id : ToolCallId) -> Bool
+Engine::interrupt_owned_tool_effect(effect_id : EffectId, session_id : SessionId, call_id : ToolCallId) -> Result[Bool, String]
 ```
 
 | Operation | Input |
@@ -72,6 +73,14 @@ pending; settlement or cancellation removes ownership. This typed query is
 available only to in-process hosts and is not a session or wire operation. It
 is a point-in-time predicate, not a reservation; native callers must check it
 under their runtime gate immediately before the action that relies on ownership.
+
+`interrupt_owned_tool_effect` is also in-process only. It accepts only the
+exact still-dispatched call in an open step; known outcomes, cancelled or
+settled effects are left untouched. Success records one failed
+`session/interrupted` closure and retires pending effects without replay or
+hook dispatch. Native callers must invoke it under the same gate that serializes
+cancellation and checkpointing; the Engine itself does not provide that host
+gate.
 
 Consecutive calls with static `effect: "read"` classification execute in a
 rolling pool of at most four effects. The host checkpoints the whole admitted
