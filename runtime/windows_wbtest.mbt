@@ -306,6 +306,7 @@ async test "windows runtime completes a demo turn and reloads without replay" {
     let session = object_field(result, "session").unwrap()
     let session_id = string_field(session, "id").unwrap()
     assert_eq(string_field(session, "status"), Some("completed"))
+    native_cli_assert_approved_write_events(session)
     assert_true(@fs.exists(workspace + "/native-demo.txt"))
     runtime.close().unwrap()
 

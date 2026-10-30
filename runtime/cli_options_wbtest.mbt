@@ -1,4 +1,39 @@
 ///|
+fn native_cli_assert_approved_write_events(session : Json) -> Unit raise {
+  let events = match object_field(session, "events") {
+    Some(Json::Array(values)) => values
+    _ => fail("CLI session omitted its event history")
+  }
+  let mut requested_call_id : String? = None
+  for event in events {
+    if string_field(event, "type") == Some("tool/approval/requested") {
+      requested_call_id = string_field(
+        object_field(event, "data").unwrap_or(Json::null()),
+        "call_id",
+      )
+    }
+  }
+  let call_id = match requested_call_id {
+    Some(value) => value
+    None => fail("CLI session omitted the tool approval request")
+  }
+  assert_true(
+    events.any(event => {
+      let data = object_field(event, "data").unwrap_or(Json::null())
+      string_field(event, "type") == Some("tool/approval/resolved") &&
+      string_field(data, "call_id") == Some(call_id) &&
+      object_field(data, "approved") is Some(Json::True)
+    }),
+  )
+  assert_true(
+    events.any(event => string_field(event, "type") == Some("tool/completed")),
+  )
+  assert_true(
+    events.any(event => string_field(event, "type") == Some("tool/result")),
+  )
+}
+
+///|
 test "native CLI preserves subcommand arguments and bounds retry and approval options" {
   let normalized = native_cli_normalize_args([
     "dsh-native", "run", "Find", "the", "answer", "--demo", "--json",
@@ -341,6 +376,7 @@ async test "native CLI explicit write approval completes the demo safely" {
     let session = object_field(result, "session").unwrap()
     assert_eq(string_field(session, "status"), Some("completed"))
     assert_true(@fs.exists(workspace + "/native-demo.txt"))
+    native_cli_assert_approved_write_events(session)
     runtime.close().unwrap()
   }
 }

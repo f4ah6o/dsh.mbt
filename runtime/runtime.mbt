@@ -1293,6 +1293,11 @@ fn native_safe_session(value : Json) -> Json {
 /// pruned projection with an explicit marker so they cannot mistake it for
 /// the original tool output. Archive-aware clients can fetch the source using
 /// the reference's result sequence.
+fn native_archived_tool_output_marker() -> String {
+  "[Archived tool output. The original is available from the archive history endpoint.]"
+}
+
+///|
 fn native_public_archive_messages(value : Json) -> Json {
   match value {
     Json::Array(messages) =>
@@ -1306,13 +1311,69 @@ fn native_public_archive_messages(value : Json) -> Json {
             return message
           }
           let public = fields.copy()
-          public["content"] = Json::string(
-            "[Archived tool output. The original is available from the archive history endpoint.]",
-          )
+          public["content"] = Json::string(native_archived_tool_output_marker())
           public["archive_original_available"] = Json::boolean(true)
           Json::object(public)
         }),
       )
+    _ => value
+  }
+}
+
+///|
+/// CLI JSON keeps the full event history for local audit and scripting. Replace
+/// only archived content so a pruned projection cannot be mistaken for the
+/// original tool output.
+fn native_cli_archive_events(value : Json) -> Json {
+  match value {
+    Json::Array(events) =>
+      Json::array(
+        events.map(event => {
+          let kind = string_field(event, "type").unwrap_or("")
+          let data = object_field(event, "data").unwrap_or(Json::null())
+          if (kind != "tool/completed" && kind != "tool/result") ||
+            object_field(data, "archive_ref") is None {
+            return event
+          }
+          let event_fields = match event {
+            Json::Object(fields) => fields.copy()
+            _ => return event
+          }
+          let data_fields = match data {
+            Json::Object(fields) => fields.copy()
+            _ => return event
+          }
+          data_fields["content"] = Json::string(
+            native_archived_tool_output_marker(),
+          )
+          data_fields["archive_original_available"] = Json::boolean(true)
+          event_fields["data"] = Json::object(data_fields)
+          Json::object(event_fields)
+        }),
+      )
+    _ => value
+  }
+}
+
+///|
+fn native_cli_safe_session(value : Json) -> Json {
+  if !native_session_has_archive_markers(value) {
+    return value
+  }
+  match value {
+    Json::Object(fields) => {
+      let public = fields.copy()
+      match fields.get("messages") {
+        Some(messages) =>
+          public["messages"] = native_public_archive_messages(messages)
+        None => ()
+      }
+      match fields.get("events") {
+        Some(events) => public["events"] = native_cli_archive_events(events)
+        None => ()
+      }
+      Json::object(public)
+    }
     _ => value
   }
 }
@@ -1440,7 +1501,7 @@ async fn NativeRuntime::cli_session_projection(
   if string_field(value, "id") != Some(session_id) {
     return Err("session not found")
   }
-  Ok(native_safe_session(value))
+  Ok(native_cli_safe_session(value))
 }
 
 ///|

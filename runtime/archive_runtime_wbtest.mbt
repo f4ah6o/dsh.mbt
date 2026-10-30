@@ -256,7 +256,28 @@ async test "native runtime archives cumulative Read history and reopens into a l
     assert_eq(string_field(finished, "kind"), Some("run"))
     let finished_session = object_field(finished, "session").unwrap()
     assert_eq(string_field(finished_session, "status"), Some("completed"))
+    native_cli_assert_approved_write_events(finished_session)
     assert_true(finished_session.stringify().contains("Archived tool output"))
+    assert_false(finished_session.stringify().contains("1: " + original))
+    let archived_events = match object_field(finished_session, "events") {
+      Some(Json::Array(events)) =>
+        events.filter(event => {
+          let kind = string_field(event, "type")
+          let data = object_field(event, "data").unwrap_or(Json::null())
+          (kind == Some("tool/completed") || kind == Some("tool/result")) &&
+          object_field(data, "archive_ref") is Some(_)
+        })
+      _ => fail("CLI archived session omitted its event history")
+    }
+    assert_eq(archived_events.length(), 12)
+    assert_true(
+      archived_events.all(event => {
+        let data = object_field(event, "data").unwrap_or(Json::null())
+        string_field(data, "content") ==
+        Some(native_archived_tool_output_marker()) &&
+        object_field(data, "archive_original_available") is Some(Json::True)
+      }),
+    )
     ignore(runtime.close())
 
     let reopened = NativeRuntime::open(data, workspace, false, true).unwrap()
