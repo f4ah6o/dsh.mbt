@@ -56,7 +56,7 @@ Storage integration depends on the following separate work:
 - [x] Decoding validates terminal state without dispatching effects or exposing a resume path.
 - [x] Duplicate object keys are rejected, including escaped spellings of the same key.
 - [x] Tests cover successful and failed round-trip, unknown fields, malformed identities, mismatches, interruption, byte/depth/node bounds, source detachment, and invalid engine state.
-- [ ] A separate implementation issue defines publication, quotas, orphan handling, reader behavior, and parent interruption semantics before storage integration.
+- [x] The [publication contract issue](20261030-subagent-audit-publication.md) defines the file-only reader boundary, quotas, orphan handling, and parent interruption semantics before storage integration.
 
 ## テスト計画
 
