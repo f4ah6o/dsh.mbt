@@ -4,6 +4,10 @@
 const COMPACTION_PLAN_MAX_SOURCE_BYTES : Int32 = 1048576
 
 ///|
+/// Maximum serialized summary string size accepted for an in-memory candidate.
+const COMPACTION_CANDIDATE_MAX_SUMMARY_BYTES : Int32 = 1048576
+
+///|
 /// Select an oldest contiguous prefix of complete turns for a later summary.
 /// The source event range and digest let a future transaction reject a stale
 /// plan before it archives or replaces any history.
@@ -170,6 +174,116 @@ pub fn Engine::plan_compaction_prefix(
     Ok(Some(plan))
   } catch {
     Invalid(message) => Err(message)
+  }
+}
+
+///|
+/// Bind supplied summary text to a current whole-turn prefix plan.
+///
+/// This method re-plans the session with the same selection inputs and compares
+/// every plan field, including both source fingerprints. It returns an
+/// in-memory candidate and does not persist, replace, or archive session history.
+///
+/// @param session_id - session the plan was made for.
+/// @param plan - the earlier result from `plan_compaction_prefix`.
+/// @param summary - caller-supplied summary text.
+/// @param retain_recent_turns - recent whole turns the plan must retain.
+/// @param max_source_event_json_utf8_bytes - source-event array byte budget.
+/// @param max_source_messages_json_utf8_bytes - projected-message array byte budget.
+/// @param max_summary_json_utf8_bytes - serialized JSON-string byte limit for the summary.
+/// @returns an in-memory candidate, or an error when the plan is stale or the
+///   summary exceeds its explicit limit.
+pub fn Engine::prepare_compaction_summary_candidate(
+  self : Engine,
+  session_id : SessionId,
+  plan : Json,
+  summary : String,
+  retain_recent_turns : Int32,
+  max_source_event_json_utf8_bytes : Int32,
+  max_source_messages_json_utf8_bytes : Int32,
+  max_summary_json_utf8_bytes : Int32,
+) -> Result[Json, String] {
+  try {
+    if max_summary_json_utf8_bytes < 1 ||
+      max_summary_json_utf8_bytes > COMPACTION_CANDIDATE_MAX_SUMMARY_BYTES {
+      raise Invalid("max_summary_json_utf8_bytes must be between 1 and 1048576")
+    }
+    if summary.is_empty() {
+      raise Invalid("Compaction candidate summary must not be empty")
+    }
+    let summary_json = Json::string(summary)
+    let summary_bytes = match
+      provider_context_measure_json_bytes(summary_json) {
+      Ok(value) => value
+      Err(error) => raise Invalid(error)
+    }
+    if summary_bytes > max_summary_json_utf8_bytes {
+      raise Invalid("Compaction candidate summary exceeds its byte limit")
+    }
+    let current_plan = match
+      self.plan_compaction_prefix(
+        session_id, retain_recent_turns, max_source_event_json_utf8_bytes, max_source_messages_json_utf8_bytes,
+      ) {
+      Ok(Some(value)) => value
+      Ok(None) => raise Invalid("Compaction plan has no current prefix")
+      Err(error) => raise Invalid(error)
+    }
+    if !compaction_prefix_plan_equal(plan, current_plan) {
+      raise Invalid("Compaction plan is stale or belongs to another session")
+    }
+    Ok(
+      object([
+        ("schema", Json::string("dsh.compaction-summary-candidate-v1")),
+        ("plan", detached(current_plan)),
+        (
+          "plan_options",
+          object([
+            ("retain_recent_turns", integer(retain_recent_turns)),
+            (
+              "max_source_event_json_utf8_bytes",
+              integer(max_source_event_json_utf8_bytes),
+            ),
+            (
+              "max_source_messages_json_utf8_bytes",
+              integer(max_source_messages_json_utf8_bytes),
+            ),
+          ]),
+        ),
+        ("summary", summary_json),
+        ("summary_json_utf8_bytes", integer(summary_bytes)),
+        ("max_summary_json_utf8_bytes", integer(max_summary_json_utf8_bytes)),
+        ("unit", Json::string("serialized_utf8_bytes")),
+      ]),
+    )
+  } catch {
+    Invalid(message) => Err(message)
+  }
+}
+
+///|
+/// Compare every field emitted by the current prefix planner.
+fn compaction_prefix_plan_equal(left : Json, right : Json) -> Bool {
+  let keys = [
+    "session_id", "expected_event_count", "source_first_seq", "source_last_seq",
+    "source_first_turn", "source_last_turn", "source_turn_count", "retained_turn_count",
+    "source_event_count", "source_event_json_utf8_bytes", "source_message_count",
+    "source_messages_json_utf8_bytes", "source_events_sha256", "source_messages_sha256",
+    "unit",
+  ]
+  match (left, right) {
+    (Json::Object(left_fields), Json::Object(right_fields)) => {
+      if left_fields.length() != keys.length() ||
+        right_fields.length() != keys.length() {
+        return false
+      }
+      for key in keys {
+        if left_fields.get(key) != right_fields.get(key) {
+          return false
+        }
+      }
+      true
+    }
+    _ => false
   }
 }
 
