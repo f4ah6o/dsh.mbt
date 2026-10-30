@@ -1121,6 +1121,38 @@ pub fn Engine::take_typed_effects(self : Engine) -> Array[EngineEffect] {
 }
 
 ///|
+/// Check whether the engine still owns this exact pending tool effect. The
+/// effect registry is authoritative: draining the outgoing queue does not
+/// settle or relinquish an effect.
+pub fn Engine::owns_pending_tool_effect(
+  self : Engine,
+  effect_id : EffectId,
+  session_id : SessionId,
+  call_id : ToolCallId,
+) -> Bool {
+  let effect_id_text = effect_id.as_string()
+  let session_id_text = session_id.as_string()
+  let call_id_text = call_id.as_string()
+  let effect = match self.effects.get(effect_id_text) {
+    Some(value) => value
+    None => return false
+  }
+  if effect.kind != ToolExecution ||
+    effect.session_id != session_id_text ||
+    effect.call_id != Some(call_id_text) {
+    return false
+  }
+  let session = match self.sessions.get(session_id_text) {
+    Some(value) => value
+    None => return false
+  }
+  session.status == Running &&
+  session.turn_id == effect.turn_id &&
+  session.step == effect.step &&
+  session.active_tool_effects.get(effect_id_text) == Some(call_id_text)
+}
+
+///|
 /// JSON compatibility adapter for existing hosts and JavaScript exports.
 pub fn Engine::take_effects(self : Engine) -> Array[Json] {
   self.take_typed_effects().map(EngineEffect::json)

@@ -323,6 +323,61 @@ test "native API drains and settles typed effects against typed event identity" 
 }
 
 ///|
+test "native API exposes pending tool ownership only through its typed in-process boundary" {
+  let api = @api.HarnessApi::new().unwrap()
+  assert_true(!api.manifest().contains("owns_pending_tool_effect"))
+  let session_id = @engine.SessionId::new("typed-ownership").unwrap()
+  let call_id = @engine.ToolCallId::new("api-read-call").unwrap()
+  api.invoke("session_create", { "id": session_id.as_string() }).unwrap()
+  |> ignore
+  api
+  .invoke("session_send", {
+    "session_id": session_id.as_string(),
+    "prompt": "Read a file",
+  })
+  .unwrap()
+  |> ignore
+  let provider = api.take_typed_effects()[0]
+  assert_false(api.owns_pending_tool_effect(provider.id(), session_id, call_id))
+  api
+  .complete_effect(provider.id(), {
+    "ok": true,
+    "content": "",
+    "tool_calls": [
+      {
+        "id": call_id.as_string(),
+        "name": "read",
+        "arguments": "{\"file_path\":\"notes.txt\"}",
+      },
+    ],
+    "finish_reason": "tool_calls",
+  })
+  .unwrap()
+  |> ignore
+  let tool = api.take_typed_effects()[0]
+  assert_true(api.owns_pending_tool_effect(tool.id(), session_id, call_id))
+  assert_true(api.take_typed_effects().is_empty())
+  assert_true(api.owns_pending_tool_effect(tool.id(), session_id, call_id))
+  assert_false(
+    api.owns_pending_tool_effect(
+      tool.id(),
+      @engine.SessionId::new("fake-session").unwrap(),
+      call_id,
+    ),
+  )
+  assert_false(
+    api.owns_pending_tool_effect(
+      tool.id(),
+      session_id,
+      @engine.ToolCallId::new("fake-call").unwrap(),
+    ),
+  )
+  // Closing the API cancels this still-pending tool effect.
+  api.close()
+  assert_false(api.owns_pending_tool_effect(tool.id(), session_id, call_id))
+}
+
+///|
 test "closing an API drains no effects and refuses future completions or restore" {
   let api = @api.HarnessApi::new().unwrap()
   api.invoke("session_create", { "id": "closing" }).unwrap() |> ignore
