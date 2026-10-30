@@ -79,6 +79,66 @@ fn native_runtime_unscoped_command(
 }
 
 ///|
+test "native receipt replacement scopes by owner and keeps legacy local ownership" {
+  let command_id = "018bcfe5-6800-7000-8000-000000000000"
+  let legacy = native_receipt(
+    "workspace",
+    command_id,
+    "legacy-fingerprint",
+    "accepted",
+    Some(1),
+    None,
+    None,
+  )
+  let legacy_owner = native_receipt_owner(legacy)
+  let foreign = native_receipt_with_owner(
+    native_receipt(
+      "workspace",
+      command_id,
+      "foreign-fingerprint",
+      "completed",
+      None,
+      None,
+      None,
+    ),
+    "tailscale:previous@example.com",
+  )
+  let replacement = native_receipt_with_owner(
+    native_receipt(
+      "workspace",
+      command_id,
+      "legacy-fingerprint",
+      "completed",
+      Some(1),
+      None,
+      None,
+    ),
+    legacy_owner,
+  )
+  let replaced = native_replace_receipt(
+    [legacy, foreign],
+    command_id,
+    legacy_owner,
+    replacement,
+  )
+  assert_eq(replaced.length(), 2)
+  assert_true(
+    replaced.any(receipt => {
+      native_receipt_owner(receipt) == legacy_owner &&
+      string_field(receipt, "status") == Some("completed")
+    }),
+  )
+  assert_true(
+    replaced.any(receipt => {
+      native_receipt_owner(receipt) == "tailscale:previous@example.com" &&
+      string_field(receipt, "status") == Some("completed") &&
+      string_field(receipt, "payload_fingerprint") ==
+      Some("foreign-fingerprint")
+    }),
+  )
+}
+
+///|
 fn native_runtime_session_operation_command(
   workspace_id : String,
   session_id : String,
@@ -284,6 +344,133 @@ async test "native runtime replays an accepted in-flight command before schedule
       Some("accepted"),
     )
     runtime.scheduler.finish(active)
+  }
+}
+
+///|
+async test "native receipts survive owner changes and reopen without replaying effects" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-receipt-owner-change")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let data = fixture + "/data"
+    let runtime = NativeRuntime::open(data, workspace, false, true).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_a = "receipt-owner-a-session"
+    let session_b = "receipt-owner-b-session"
+    assert_true(
+      runtime
+        .invoke("session_create", { "id": session_a, "title": "Owner A" })
+        .unwrap()
+        .1
+        .is_empty(),
+    )
+    assert_true(
+      runtime
+        .invoke("session_create", { "id": session_b, "title": "Owner B" })
+        .unwrap()
+        .1
+        .is_empty(),
+    )
+    let owner_a = runtime.state.identity_key
+    let command_id = @protocol.uuid_v7_command_id_from_entropy(
+      native_auth_now().to_int64() * 1000L,
+      "1032547698badcfe0123456789abcdef",
+    ).unwrap()
+    let command_a = native_runtime_command(
+      runtime.state.workspace_id,
+      session_a,
+      command_id,
+      "owner A prompt",
+    )
+    let (receipt_a, effects_a, started_a, control_a) = runtime
+      .accept_remote_command(command_a, owner_a)
+      .unwrap()
+    assert_eq(string_field(receipt_a, "status"), Some("accepted"))
+    assert_true(started_a)
+    assert_eq(effects_a.length(), 1)
+    runtime.scheduler.finish(control_a.unwrap())
+    runtime.finish_receipt(
+      command_id,
+      owner_a,
+      "uncertain",
+      Some("simulated interrupted effect"),
+    ).unwrap()
+
+    let owner_b = "receipt-test:owner-b"
+    let next_auth_revision = runtime.state.auth_revision + 1
+    runtime.state = {
+      ..runtime.state,
+      identity_key: owner_b,
+      auth_revision: next_auth_revision,
+    }
+    assert_true(runtime.checkpoint_locked() is Ok(_))
+    let command_b = native_runtime_command(
+      runtime.state.workspace_id,
+      session_b,
+      command_id,
+      "owner B prompt",
+    )
+    let (receipt_b, effects_b, started_b, control_b) = runtime
+      .accept_remote_command(command_b, owner_b)
+      .unwrap()
+    assert_eq(string_field(receipt_b, "status"), Some("accepted"))
+    assert_true(started_b)
+    assert_eq(effects_b.length(), 1)
+    runtime.scheduler.finish(control_b.unwrap())
+    runtime.finish_receipt(
+      command_id,
+      owner_b,
+      "uncertain",
+      Some("simulated interrupted effect"),
+    ).unwrap()
+
+    let duplicate_b = native_runtime_command(
+      runtime.state.workspace_id,
+      session_b,
+      command_id,
+      "owner B prompt",
+    )
+    let (replayed_b, replayed_effects_b, replayed_started_b, _) = runtime
+      .accept_remote_command(duplicate_b, owner_b)
+      .unwrap()
+    assert_eq(string_field(replayed_b, "status"), Some("uncertain"))
+    assert_true(replayed_effects_b.is_empty())
+    assert_false(replayed_started_b)
+
+    assert_true(runtime.close() is Ok(_))
+    let reopened = NativeRuntime::open(data, workspace, false, true).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(reopened.close()))
+    })
+    assert_eq(reopened.state.identity_key, owner_a)
+    let same_id_receipts = reopened.state.receipts.filter(receipt => {
+      string_field(receipt, "command_id") == Some(command_id)
+    })
+    assert_eq(same_id_receipts.length(), 2)
+    assert_true(same_id_receipts.any(receipt => {
+      native_receipt_owner(receipt) == owner_a &&
+      string_field(receipt, "status") == Some("uncertain")
+    }))
+    assert_true(same_id_receipts.any(receipt => {
+      native_receipt_owner(receipt) == owner_b &&
+      string_field(receipt, "status") == Some("uncertain")
+    }))
+    let retry_a = native_runtime_command(
+      reopened.state.workspace_id,
+      session_a,
+      command_id,
+      "owner A prompt",
+    )
+    let (replayed_a, replayed_effects_a, replayed_started_a, _) = reopened
+      .accept_remote_command(retry_a, owner_a)
+      .unwrap()
+    assert_eq(string_field(replayed_a, "status"), Some("uncertain"))
+    assert_true(replayed_effects_a.is_empty())
+    assert_false(replayed_started_a)
   }
 }
 

@@ -16,6 +16,44 @@ fn native_hook_test_config(
 }
 
 ///|
+fn native_hook_seed_foreign_receipt(
+  runtime : NativeRuntime,
+  command_id : String,
+) -> String {
+  let owner = "receipt-test:prior-owner"
+  runtime.state.receipts.push(
+    native_receipt_with_owner(
+      native_receipt(
+        runtime.state.workspace_id,
+        command_id,
+        "prior-owner-fingerprint",
+        "completed",
+        None,
+        None,
+        None,
+      ),
+      owner,
+    ),
+  )
+  owner
+}
+
+///|
+fn native_hook_assert_foreign_receipt_preserved(
+  runtime : NativeRuntime,
+  command_id : String,
+  owner : String,
+) -> Unit raise {
+  assert_true(runtime.state.receipts.any(receipt => {
+    native_receipt_owner(receipt) == owner &&
+    string_field(receipt, "command_id") == Some(command_id) &&
+    string_field(receipt, "payload_fingerprint") ==
+    Some("prior-owner-fingerprint") &&
+    string_field(receipt, "status") == Some("completed")
+  }))
+}
+
+///|
 fn native_hook_remote_prompt_command(
   workspace_id : String,
   session_id : String,
@@ -2353,6 +2391,7 @@ async test "UserPromptSubmit injects grouped source context before provider admi
     let command_id = @protocol.uuid_v7_command_id_from_entropy(
       command_time, "1234567890abcdeffedcba9876543210",
     ).unwrap()
+    let foreign_owner = native_hook_seed_foreign_receipt(runtime, command_id)
     let command = native_hook_remote_prompt_command(
       runtime.state.workspace_id,
       session_id,
@@ -2416,6 +2455,14 @@ async test "UserPromptSubmit injects grouped source context before provider admi
       effects,
       control~,
     )
+    native_hook_assert_foreign_receipt_preserved(
+      runtime, command_id, foreign_owner,
+    )
+    let completed_receipt = runtime
+      .find_receipt(command_id, identity)
+      .unwrap()
+      .unwrap()
+    assert_true(object_field(completed_receipt, "owner_identity_key") is None)
     let replay = native_hook_remote_prompt_command(
       runtime.state.workspace_id,
       session_id,
@@ -3348,6 +3395,7 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
     let command_id = @protocol.uuid_v7_command_id_from_entropy(
       command_time, "2234567890abcdeffedcba9876543210",
     ).unwrap()
+    let foreign_owner = native_hook_seed_foreign_receipt(runtime, command_id)
     let send = native_hook_remote_prompt_command(
       runtime.state.workspace_id,
       session_id,
@@ -3365,6 +3413,9 @@ async test "UserPromptSubmit denial is a rejected receipt and invalid prompts do
     assert_false(started)
     assert_true(control is None)
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
+    native_hook_assert_foreign_receipt_preserved(
+      runtime, command_id, foreign_owner,
+    )
     let (unchanged, _) = runtime
       .invoke("session_get", { "session_id": session_id })
       .unwrap()
@@ -3739,6 +3790,7 @@ async test "remote UserPromptSubmit owner cancellation settles the receipt witho
     let command_id = @protocol.uuid_v7_command_id_from_entropy(
       command_time, "4234567890abcdeffedcba9876543210",
     ).unwrap()
+    let foreign_owner = native_hook_seed_foreign_receipt(runtime, command_id)
     let send = native_hook_remote_prompt_command(
       runtime.state.workspace_id,
       session_id,
@@ -3774,6 +3826,9 @@ async test "remote UserPromptSubmit owner cancellation settles the receipt witho
       string_field(receipt, "error")
       .unwrap_or("")
       .contains("cancelled before admission"),
+    )
+    native_hook_assert_foreign_receipt_preserved(
+      runtime, command_id, foreign_owner,
     )
     let replay = native_hook_remote_prompt_command(
       runtime.state.workspace_id,

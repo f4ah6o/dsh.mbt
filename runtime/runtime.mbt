@@ -1441,11 +1441,13 @@ fn native_public_receipt(receipt : Json) -> Json {
 fn native_replace_receipt(
   receipts : Array[Json],
   command_id : String,
+  identity_key : String,
   replacement : Json,
 ) -> Array[Json] {
   let output : Array[Json] = []
   for receipt in receipts {
-    if string_field(receipt, "command_id") == Some(command_id) {
+    if native_receipt_owner(receipt) == identity_key &&
+      string_field(receipt, "command_id") == Some(command_id) {
       output.push(replacement)
     } else {
       output.push(receipt)
@@ -2019,6 +2021,7 @@ async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
       self.state.receipts = native_replace_receipt(
         self.state.receipts,
         command_id,
+        identity_key,
         native_receipt_with_owner(receipt, identity_key),
       )
       match self.checkpoint_locked() {
@@ -2053,6 +2056,7 @@ async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
           self.state.receipts = native_replace_receipt(
             self.state.receipts,
             command_id,
+            identity_key,
             native_receipt_with_owner(receipt, identity_key),
           )
           match self.checkpoint_locked() {
@@ -2091,6 +2095,7 @@ async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
           self.state.receipts = native_replace_receipt(
             self.state.receipts,
             command_id,
+            identity_key,
             native_receipt_with_owner(receipt, identity_key),
           )
           match self.checkpoint_locked() {
@@ -2216,6 +2221,7 @@ async fn NativeRuntime::finish_receipt(
       self.state.receipts = native_replace_receipt(
         self.state.receipts,
         command_id,
+        identity_key,
         replacement,
       )
       return self.checkpoint_locked()
