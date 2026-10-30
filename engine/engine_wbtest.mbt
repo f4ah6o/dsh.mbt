@@ -83,6 +83,89 @@ fn get_status(value : Json) -> String {
 }
 
 ///|
+fn restored_session_json_with_batch_size(
+  snapshot : Json,
+  batch_size : Int32,
+) -> Json raise EngineError {
+  let raw_session = array_value(
+      required_field(snapshot, "sessions"),
+      "sessions",
+      32,
+    )[0]
+  let next_effect = int_value(
+    required_field(snapshot, "next_effect"),
+    "next_effect",
+    1,
+    1000000000,
+  )
+  let engine = Engine::new(test_tools())
+  restore_session_in_batches(
+    raw_session,
+    engine.tools,
+    Map([]),
+    next_effect,
+    batch_size,
+  ).json()
+}
+
+///|
+fn restored_session_result_with_batch_size(
+  snapshot : Json,
+  batch_size : Int32,
+) -> Result[Json, String] {
+  Ok(restored_session_json_with_batch_size(snapshot, batch_size)) catch {
+    Invalid(message) => Err(message)
+  }
+}
+
+///|
+fn apply_restore_batch_result_for_test(
+  session : Session,
+  replay : RestoreReplayState,
+  batch_events : Array[Json],
+  first_seq : Int32,
+  tools : Array[Tool],
+  effect_ids : Map[String, Bool],
+  next_effect : Int32,
+) -> Result[Unit, String] {
+  try {
+    apply_restore_event_batch(
+      session, replay, batch_events, first_seq, tools, effect_ids, next_effect,
+    )
+    Ok(())
+  } catch {
+    Invalid(message) => Err(message)
+  }
+}
+
+///|
+fn change_snapshot_event_field(
+  snapshot : Json,
+  event_type : String,
+  key : String,
+  value : Json,
+) -> Json raise EngineError {
+  let snapshot = checked_copy(snapshot)
+  let raw_session = array_value(
+      required_field(snapshot, "sessions"),
+      "sessions",
+      32,
+    )[0]
+  let events = array_value(
+    required_field(raw_session, "events"),
+    "events",
+    32768,
+  )
+  for event in events {
+    if required_string(event, "type", max=64) == event_type {
+      fields(required_field(event, "data")).set(key, value)
+      return snapshot
+    }
+  }
+  raise Invalid("Test snapshot event is missing: " + event_type)
+}
+
+///|
 fn stop_response(text : String) -> Json {
   object([
     ("ok", boolean(true)),
@@ -2654,4 +2737,187 @@ test "restored exhausted identity counters remain reloadable" {
   let destination = Engine::new([])
   assert_eq(destination.restore(engine.snapshot()), Ok(()))
   assert_eq(destination.snapshot(), engine.snapshot())
+}
+
+///|
+test "v1 restore preserves tool approval, result, and hook state across contiguous batches" {
+  let (engine, provider) = started_engine()
+  let pre_tool = match
+    engine.record_native_hook_invoked(
+      "test",
+      "PreToolUse",
+      "claude-code:PreToolUse:1",
+      Some("bash"),
+    ) {
+    Ok(value) => value
+    Err(message) => abort(message)
+  }
+  ignore(engine.record_native_hook_result(pre_tool, "pass", Some(0), None, 1))
+  let waiting = success(
+    engine.complete(
+      id_of(provider),
+      calls_response([("approved-call", "bash", "{\"command\":\"echo batch\"}")]),
+    ),
+  )
+  assert_eq(get_status(waiting), "awaiting_approval")
+  ignore(
+    success(
+      engine.invoke(
+        "tool_approve",
+        fixture(
+          "{\"session_id\":\"test\",\"call_id\":\"approved-call\",\"approved\":true}",
+        ),
+      ),
+    ),
+  )
+  let shell = engine.take_effects()[0]
+  ignore(
+    success(
+      engine.complete(
+        id_of(shell),
+        fixture("{\"ok\":true,\"content\":\"batch result\"}"),
+      ),
+    ),
+  )
+  let followup = engine.take_effects()[0]
+  let post_tool = match
+    engine.record_native_hook_invoked(
+      "test",
+      "PostToolUse",
+      "claude-code:PostToolUse:2",
+      Some("bash"),
+    ) {
+    Ok(value) => value
+    Err(message) => abort(message)
+  }
+  ignore(engine.record_native_hook_result(post_tool, "pass", Some(0), None, 1))
+  ignore(success(engine.complete(id_of(followup), stop_response("done"))))
+
+  let snapshot = engine.snapshot()
+  let restored = Engine::new(test_tools())
+  assert_eq(restored.restore(snapshot), Ok(()))
+  let expected = get_session(restored)
+  let raw_session = array_value(
+      required_field(snapshot, "sessions"),
+      "sessions",
+      32,
+    )[0]
+  let event_count = array_value(
+    required_field(raw_session, "events"),
+    "events",
+    32768,
+  ).length()
+  for batch_size in 1..<=event_count {
+    assert_eq(
+      restored_session_json_with_batch_size(snapshot, batch_size),
+      expected,
+    )
+  }
+
+  let duplicate_effect = change_snapshot_event_field(
+    snapshot,
+    "tool/request",
+    "effect_id",
+    Json::string("effect-1"),
+  )
+  let wrong_approval = change_snapshot_event_field(
+    snapshot,
+    "tool/approval/resolved",
+    "call_id",
+    Json::string("different-call"),
+  )
+  let wrong_tool_result = change_snapshot_event_field(
+    snapshot,
+    "tool/result",
+    "tool_call_id",
+    Json::string("different-call"),
+  )
+  let unmatched_hook = change_snapshot_event_field(
+    snapshot,
+    "hook/result",
+    "handlerId",
+    Json::string("claude-code:PreToolUse:missing"),
+  )
+  for
+    forged in [
+      duplicate_effect, wrong_approval, wrong_tool_result, unmatched_hook,
+    ] {
+    let single_batch = restored_session_result_with_batch_size(
+      forged, event_count,
+    )
+    let one_event_batches = restored_session_result_with_batch_size(forged, 1)
+    assert_true(single_batch is Err(_))
+    assert_eq(one_event_batches, single_batch)
+  }
+}
+
+///|
+test "restore batch reducer rejects skipped and repeated prefixes" {
+  let engine = Engine::new(test_tools())
+  ignore(
+    success(engine.invoke("session_create", fixture("{\"id\":\"batch-test\"}"))),
+  )
+  let snapshot = engine.snapshot()
+  let raw_session = array_value(
+      required_field(snapshot, "sessions"),
+      "sessions",
+      32,
+    )[0]
+  let events = array_value(
+    required_field(raw_session, "events"),
+    "events",
+    32768,
+  )
+  let creation_event = events[0]
+  let session = fresh_session(
+    required_string(raw_session, "id", max=128),
+    required_string(raw_session, "title", max=512),
+    required_string(raw_session, "system_prompt", max=16384),
+    int_value(required_field(raw_session, "max_steps"), "max_steps", 1, 64),
+  )
+  let replay = new_restore_replay_state()
+  let effect_ids : Map[String, Bool] = Map([])
+  assert_eq(
+    apply_restore_batch_result_for_test(
+      session,
+      replay,
+      [creation_event],
+      0,
+      engine.tools,
+      effect_ids,
+      1,
+    ),
+    Ok(()),
+  )
+  assert_eq(session.events.length(), 1)
+
+  let expected_error = Err(
+    "Restore event batch does not continue the applied prefix",
+  )
+  assert_eq(
+    apply_restore_batch_result_for_test(
+      session,
+      replay,
+      [creation_event],
+      2,
+      engine.tools,
+      effect_ids,
+      1,
+    ),
+    expected_error,
+  )
+  assert_eq(session.events.length(), 1)
+  assert_eq(
+    apply_restore_batch_result_for_test(
+      session,
+      replay,
+      [creation_event],
+      0,
+      engine.tools,
+      effect_ids,
+      1,
+    ),
+    expected_error,
+  )
+  assert_eq(session.events.length(), 1)
 }
