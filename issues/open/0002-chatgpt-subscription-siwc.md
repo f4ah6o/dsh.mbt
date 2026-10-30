@@ -1,10 +1,41 @@
 # 0002: Sign in with ChatGPT で ChatGPT subscription を利用する
 
-状態: 実装差分あり / open。fixture 検証済み、実アカウント SIWC smoke は未実行。
+状態: 実装差分あり / open。main `8e7ec94e2436edf0db961659130c0390122fd38c` の repository 記録では fixture 検証のみ。実アカウント SIWC smoke の成功証拠は未掲載。
 Model: gpt-5.6-sol
-Updated: 2026-10-07
+Updated: 2026-10-30
 
 実装結果と残る受入条件は[実装状況](../../docs/implementation-status.md#issue-9-sign-in-with-chatgpt)に記録する。
+
+## 2026-10-30 acceptance evidence and live procedure
+
+確認対象の main は `8e7ec94e2436edf0db961659130c0390122fd38c` である。
+[`docs/native-runtime.md` の Optional live SIWC smoke](../../docs/native-runtime.md#optional-live-siwc-smoke)
+には host browser を使う実手順がある。既存の OAuth / JWKS / Responses fixture は
+wire と状態遷移の決定的な検証であり、実アカウントの成功証拠には数えない。
+
+実アカウント gate は、ChatGPT plan usage が有効な account を使える Mac host 上で
+次の順に実行する。既存 profile を流用せず、専用 data directory と一時 workspace を使う。
+
+1. `DSH_MODE=openai-responses` と `DSH_AUTH=chatgpt` を設定し、host 上で
+   `--sign-in` を実行する。続けて `--auth-status` で接続状態を確認する。
+2. 同じ data directory で `--models` を実行し、account が返した model slug を選ぶ。
+   `--select-model MODEL_SLUG` で選択を保存する。
+3. `--run 'Reply with exactly: SIWC acceptance passed.'` を一度実行する。
+   合格には session の `completed` terminal status と、runtime が validated
+   `response.completed` を terminal として処理したことが必要である。HTTP 200 や stream EOF
+   だけでは合格にしない。記録が terminal event 自体を公開しない場合は session status のみを報告し、
+   `response.completed` を直接観測したとは書かない。
+4. `response.failed`、`response.incomplete`、権限拒否、または plan usage limit は
+   観測結果として記録し、OpenAI Platform API key 経路へ切り替えて再試行しない。
+
+証拠には source SHA、実行日時、OS / toolchain、選択した model slug、終了状態、
+session の terminal status、観測できた request ID / terminal event を記録する。
+OAuth code / state / verifier、access / refresh / ID token、credential file、認証 header、
+account の個人情報、無加工 log は保存・添付しない。安全に redact した結果のみ
+verification record へ追記する。
+
+この review では上記 live gate の実行結果を追加していない。repository 上の記録は
+fixture pass と実アカウント gate の未実行を区別して維持する。
 
 ## 目的
 
