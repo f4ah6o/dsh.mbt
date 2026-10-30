@@ -40,6 +40,7 @@ pub fn Engine::continue_stop_hook(Self, NativeStopHookCheckpoint, Array[String])
 pub fn Engine::event_log(Self, SessionId) -> Result[Array[EngineEvent], String]
 pub fn Engine::finish_stop_hook(Self, NativeStopHookCheckpoint) -> Result[Json, String]
 pub fn Engine::inject_hook_contexts(Self, String, Array[String], source_kind? : String) -> Result[Bool, String]
+pub fn Engine::interrupt_owned_tool_effect(Self, EffectId, SessionId, ToolCallId) -> Result[Bool, String]
 pub fn Engine::invoke(Self, String, Json) -> Result[Json, String]
 pub fn Engine::new(Array[Json]) -> Self
 pub fn Engine::owns_pending_tool_effect(Self, EffectId, SessionId, ToolCallId) -> Bool
