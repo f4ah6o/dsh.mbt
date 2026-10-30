@@ -45,6 +45,7 @@ pub fn Engine::new(Array[Json]) -> Self
 pub fn Engine::pending_post_tool_prompt_hook(Self, SessionId) -> NativePostToolPromptHookCheckpoint?
 pub fn Engine::pending_stop_hook(Self, SessionId) -> NativeStopHookCheckpoint?
 pub fn Engine::pending_subagent_prompt_hook(Self, String) -> NativeSubagentPromptHookCheckpoint?
+pub fn Engine::plan_tool_result_archive(Self, SessionId, Int) -> Result[ToolResultArchivePlan, String]
 pub fn Engine::prepare_stop_continuation(Self, NativeStopHookCheckpoint, String) -> Result[Json, String]
 pub fn Engine::preview(Self, EngineCommand) -> Result[Json, String]
 pub fn Engine::project_effect_stream(Self, EffectId, String, String) -> Result[Json, String]
@@ -168,6 +169,20 @@ pub fn ToolCallId::as_string(Self) -> String
 pub fn ToolCallId::equal(Self, Self) -> Bool
 pub fn ToolCallId::new(String) -> Result[Self, String]
 pub fn ToolCallId::not_equal(Self, Self) -> Bool
+
+pub struct ToolResultArchivePlan {
+  // private fields
+}
+pub fn ToolResultArchivePlan::call_id(Self) -> ToolCallId
+pub fn ToolResultArchivePlan::call_sequence(Self) -> Int
+pub fn ToolResultArchivePlan::chars_after(Self) -> Int
+pub fn ToolResultArchivePlan::chars_before(Self) -> Int
+pub fn ToolResultArchivePlan::completed_sequence(Self) -> Int
+pub fn ToolResultArchivePlan::effect_id(Self) -> EffectId
+pub fn ToolResultArchivePlan::pruned_sequence(Self) -> Int
+pub fn ToolResultArchivePlan::request_sequence(Self) -> Int
+pub fn ToolResultArchivePlan::result_sequence(Self) -> Int
+pub fn ToolResultArchivePlan::session_id(Self) -> SessionId
 
 pub struct ToolResultPruneConfig {
   threshold_chars : Int

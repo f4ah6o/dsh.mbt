@@ -16,6 +16,18 @@ Engine::snapshot() -> Json
 Engine::restore(snapshot : Json) -> Result[Unit, String]
 ```
 
+The in-process typed method `Engine::plan_tool_result_archive(session_id,
+result_seq)` can inspect one already-pruned `read` tool result and return an
+opaque `ToolResultArchivePlan` containing only identity, event sequences, and
+Unicode lengths. `glob`, `grep`, `skill`, `subagent`, and other read-classified
+tools are outside this first slice. The plan has no event-count or freshness
+stamp, so it cannot prove by itself that no state changed after it was made.
+It is a read-only eligibility observation, not a wire operation or
+authorization to persist data. A later storage operation must rederive the
+underlying eligibility facts inside its mutation gate; if it requires the
+same session revision, it must validate a separate freshness revision there.
+The plan intentionally contains no result text.
+
 | Operation | Input |
 | --- | --- |
 | `session_create` | Optional `id`, `title`, `system_prompt`, `max_steps` |
