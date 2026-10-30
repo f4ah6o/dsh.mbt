@@ -500,6 +500,121 @@ async test "native MCP carrier checkpoints gpui protocol operations" {
 }
 
 ///|
+async test "native capacity inspection preserves active sessions queued effects and storage" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-capacity-inspection")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let runtime = match
+      NativeRuntime::open(fixture + "/data", workspace, false, true) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+
+    let active_id = "capacity-active-session"
+    runtime
+    .invoke("session_create", { "id": active_id, "title": "Active" })
+    .unwrap()
+    |> ignore
+    let (_, active_effects) = runtime
+      .invoke("session_send", {
+        "session_id": active_id,
+        "prompt": "Keep this turn active while inspecting capacity",
+      })
+      .unwrap()
+    assert_eq(active_effects.length(), 1)
+
+    runtime.api
+    .invoke("session_create", {
+      "id": "capacity-direct-queue",
+      "title": "Queued effect source",
+    })
+    .unwrap()
+    |> ignore
+    runtime.api
+    .invoke("session_send", {
+      "session_id": "capacity-direct-queue",
+      "prompt": "Leave this effect queued in the engine",
+    })
+    .unwrap()
+    |> ignore
+
+    let revision_before = runtime.state.revision
+    let stored_before = @fs.read_file(runtime.store.path() + "/sessions.json").text()
+    let (inspection, returned_effects) = runtime
+      .invoke("session_inspect_capacity", { "session_id": active_id })
+      .unwrap()
+    assert_eq(string_field(inspection, "session_id"), Some(active_id))
+    assert_true(returned_effects.is_empty())
+    let active_after_query = runtime.api
+      .invoke("session_get", { "session_id": active_id })
+      .unwrap()
+    assert_eq(string_field(active_after_query, "status"), Some("running"))
+    assert_eq(runtime.state.revision, revision_before)
+    assert_eq(
+      @fs.read_file(runtime.store.path() + "/sessions.json").text(),
+      stored_before,
+    )
+    let pending = runtime.api.take_typed_effects()
+    assert_eq(pending.length(), 1)
+    assert_eq(pending[0].session_id().as_string(), "capacity-direct-queue")
+
+    runtime.api
+    .invoke("session_create", {
+      "id": "capacity-mcp-queue",
+      "title": "MCP queued effect source",
+    })
+    .unwrap()
+    |> ignore
+    runtime.api
+    .invoke("session_send", {
+      "session_id": "capacity-mcp-queue",
+      "prompt": "Keep the queued effect through MCP inspection",
+    })
+    .unwrap()
+    |> ignore
+    let mcp_revision_before = runtime.state.revision
+    let mcp_stored_before = @fs.read_file(
+      runtime.store.path() + "/sessions.json",
+    ).text()
+    let capacity_line = native_fixture_mcp_line(
+      "capacity-query",
+      "session_inspect_capacity",
+      { "session_id": active_id },
+    )
+    let capacity_response = runtime.mcp_handle(capacity_line, group).unwrap()
+    assert_true(native_mcp_response_succeeded(capacity_response))
+    let mcp_inspection = native_fixture_mcp_structured(capacity_response)
+    assert_eq(string_field(mcp_inspection, "session_id"), Some(active_id))
+    assert_eq(runtime.state.revision, mcp_revision_before)
+    assert_eq(
+      @fs.read_file(runtime.store.path() + "/sessions.json").text(),
+      mcp_stored_before,
+    )
+
+    let invalid_line = native_fixture_mcp_line(
+      "capacity-query-invalid",
+      "session_inspect_capacity",
+      { "session_id": "missing-capacity-session" },
+    )
+    let invalid_response = runtime.mcp_handle(invalid_line, group).unwrap()
+    assert_true(!native_mcp_response_succeeded(invalid_response))
+    assert_eq(runtime.state.revision, mcp_revision_before)
+    assert_eq(
+      @fs.read_file(runtime.store.path() + "/sessions.json").text(),
+      mcp_stored_before,
+    )
+    let mcp_pending = runtime.api.take_typed_effects()
+    assert_eq(mcp_pending.length(), 1)
+    assert_eq(mcp_pending[0].session_id().as_string(), "capacity-mcp-queue")
+  }
+}
+
+///|
 async test "native remote fork rejects a live source without creating a child or effects" {
   let fixture = @fs.tmpdir(prefix="dsh-native-session-fork-live")
   @async.with_task_group() <| group => {

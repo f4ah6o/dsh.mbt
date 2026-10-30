@@ -68,6 +68,7 @@ pub(all) enum EngineCommand {
   ListSessions
   ImportSession(String)
   GetSession(SessionId)
+  InspectCapacity(SessionId)
   SendPrompt(SessionId, String)
   SendPromptWithContexts(SessionId, String, Array[String])
   CancelSession(SessionId)

@@ -226,7 +226,7 @@ fn Session::prune_tool_results(
     match prune_text(original, config) {
       None => ()
       Some(content) => {
-        if self.events.length() >= 32768 {
+        if self.events.length() >= SESSION_EVENT_LIMIT {
           raise Invalid("Session event limit reached; create a new session")
         }
         let call_id = required_string(event.data, "tool_call_id", max=128)

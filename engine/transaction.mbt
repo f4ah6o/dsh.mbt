@@ -5,6 +5,10 @@
 const SESSION_CAPACITY : Int32 = 262144
 
 ///|
+/// Maximum number of durable events in one session.
+const SESSION_EVENT_LIMIT : Int32 = 32768
+
+///|
 /// `todos: null` is fixed presentation metadata introduced after v1 snapshots
 /// were already allowed up to SESSION_CAPACITY. Exclude only that optional
 /// 13-unit serialized field from admission accounting; actual todo arrays count
@@ -174,7 +178,8 @@ fn Engine::within_capacity(
     if session_capacity_length(projected.json()) > SESSION_CAPACITY ||
       (
         session.status == Running &&
-        projected.events.length() + NATIVE_HOOK_EVENT_CLOSURE_RESERVE > 32768
+        projected.events.length() + NATIVE_HOOK_EVENT_CLOSURE_RESERVE >
+        SESSION_EVENT_LIMIT
       ) {
       return false
     }
@@ -204,7 +209,8 @@ fn Engine::within_capacity(
     if session_capacity_length(projected.json()) > SESSION_CAPACITY ||
       (
         session.status == Running &&
-        projected.events.length() + NATIVE_HOOK_EVENT_CLOSURE_RESERVE > 32768
+        projected.events.length() + NATIVE_HOOK_EVENT_CLOSURE_RESERVE >
+        SESSION_EVENT_LIMIT
       ) {
       return false
     }
@@ -234,7 +240,7 @@ fn Engine::within_capacity(
         "Interrupted before durable completion; effect outcome is unknown",
       )
       if session_capacity_length(session.json()) > SESSION_CAPACITY ||
-        session.events.length() > 32768 {
+        session.events.length() > SESSION_EVENT_LIMIT {
         return false
       }
     }
@@ -361,7 +367,8 @@ pub fn Engine::apply(
     Err(error) => Err(error)
     Ok(_) =>
       match command {
-        ListSessions | GetSession(_) => self.apply_command_impl(command)
+        ListSessions | GetSession(_) | InspectCapacity(_) =>
+          self.apply_command_impl(command)
         _ => {
           let candidate = self.copy_state()
           match candidate.apply_command_impl(command) {

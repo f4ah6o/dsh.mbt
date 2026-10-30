@@ -52,6 +52,25 @@ test "GUI and direct capability paths share state and input validation" {
 }
 
 ///|
+test "session capacity inspection is exposed as a read-only query" {
+  let api = @api.HarnessApi::new().unwrap()
+  api.invoke("session_create", { "id": "capacity-query", "title": "Query" })
+  |> ignore
+  let before = api.snapshot()
+  let binding = api.gui_binding("session_inspect_capacity").unwrap()
+  let result = api
+    .invoke("session_inspect_capacity", { "session_id": "capacity-query" })
+    .unwrap()
+  assert_eq(get(result, "event_limit"), 32768)
+  assert_eq(get(result, "headroom_guaranteed"), false)
+  assert_eq(api.snapshot(), before)
+  assert_true(binding.trigger({ "session_id": "capacity-query" }) is Ok(_))
+  assert_eq(api.snapshot(), before)
+  assert_true(api.take_effects().is_empty())
+  api.close()
+}
+
+///|
 test "MCP explicit session identity prevents duplicate session creation" {
   let api = @api.HarnessApi::new().unwrap()
   let first = rpc(api, "create-once", "session_create", {
@@ -279,7 +298,7 @@ test "runtime profiling is absent from direct GUI manifest and MCP capabilities"
   let tools = get(get(@json.parse(listed), "result"), "tools")
   match tools {
     Array(tools) => {
-      assert_eq(tools.length(), 10)
+      assert_eq(tools.length(), 11)
       for tool in tools {
         assert_true(get(tool, "name") != Json::string("profile_stats"))
       }

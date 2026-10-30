@@ -205,7 +205,8 @@ pub fn Engine::accept_subagent_prompt_hook(
     ignore(engine_validate_hook_contexts(all_contexts))
     if checkpoint.initial {
       let prompt = session.subagent_prompt_hook_prompt.unwrap()
-      if session.events.length() + session.max_steps * 112 + 16 > 32768 {
+      if session.events.length() + session.max_steps * 112 + 16 >
+        SESSION_EVENT_LIMIT {
         raise Invalid("Session event limit reached; create a new session")
       }
       session.turn_id += 1

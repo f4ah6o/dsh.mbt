@@ -230,6 +230,7 @@ public deployment や multi-user authentication は未実装です。
 | `session_import` | `jsonl` に upstream Session v4 archive | 検証済み read-only history |
 | `session_list` | `{}` | `id`, `title`, `status`, `turn_id`, `step` の要約配列 |
 | `session_get` | `session_id` | events / messages / pending approval を含む session |
+| `session_inspect_capacity` | `session_id` | canonical JSON の UTF-16 使用量、event 数、各上限と参考値の headroom |
 | `session_send` | `session_id`, `prompt` | 受理後の session |
 | `session_prune_tool_results` | `session_id` と任意の pruning budgets | session、pruned result summary、removed code point 数 |
 | `session_cancel` | `session_id` | 停止した session |
@@ -242,6 +243,7 @@ import 済み history は `session_send`、`session_prune_tool_results`、`sessi
 元の履歴としてだけ保持し、host の設定や capability admission に反映しません。
 クライアントが再送する create には明示的な `id` を使用できます。
 JSON-RPC の `id` は応答の相関用であり、同じ ID の request を自動 deduplicate するものではありません。
+`session_inspect_capacity` は read-only query で、canonical JSON の UTF-16 code units と event 数を各上限とともに返します。headroom は計算上の参考値です。表示値は full turn、interrupted-restore closure、pending hook result、retry start の admission reserve を差し引きません。後続の出力や closure 記録も serialized capacity を使うため、次の操作が入る保証にはなりません。
 
 ### gpui MCP の具体例
 

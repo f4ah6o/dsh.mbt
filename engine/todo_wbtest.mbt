@@ -330,6 +330,28 @@ test "legacy sessions at the capacity boundary reopen with null todo metadata" {
   let reopened = Engine::new(todo_test_tools())
   assert_eq(reopened.restore(current), Ok(()))
   assert_eq(reopened.snapshot(), current)
+  let inspection = success(
+    reopened.invoke(
+      "session_inspect_capacity",
+      object([("session_id", Json::string("todo-capacity-legacy"))]),
+    ),
+  )
+  assert_eq(
+    required_field(inspection, "capacity_accounted_utf16_units"),
+    integer(legacy_size),
+  )
+  assert_eq(
+    required_field(inspection, "serialized_utf16_units"),
+    integer(legacy_size + 13),
+  )
+  assert_eq(
+    required_field(inspection, "nominal_utf16_headroom"),
+    integer(SESSION_CAPACITY - legacy_size),
+  )
+  assert_eq(
+    required_field(inspection, "event_count"),
+    integer(todo_array(current_session, "events").length()),
+  )
   let before_overflow = reopened.snapshot().stringify()
   assert_true(
     reopened.invoke(
@@ -523,6 +545,27 @@ test "todo_write replaces whole lists at an exclusive barrier and clears only wh
   )
   let expected : Json = [{ "content": "Ship", "status": "completed" }]
   assert_eq(todo_get(projected, "todos"), expected)
+  let before_capacity_inspection = engine.snapshot()
+  let capacity_inspection = success(
+    engine.apply(
+      EngineCommand::InspectCapacity(
+        SessionId::new("todo-replacement").unwrap(),
+      ),
+    ),
+  )
+  assert_eq(
+    required_field(capacity_inspection, "serialized_utf16_units"),
+    integer(projected.stringify().length()),
+  )
+  assert_eq(
+    required_field(capacity_inspection, "capacity_accounted_utf16_units"),
+    integer(projected.stringify().length()),
+  )
+  assert_eq(
+    required_field(capacity_inspection, "nominal_event_headroom"),
+    integer(SESSION_EVENT_LIMIT - todo_array(projected, "events").length()),
+  )
+  assert_eq(engine.snapshot(), before_capacity_inspection)
   assert_eq(todo_count_events(projected, "todo/write"), 2)
   assert_eq(todo_count_events(projected, "tool/request"), 0)
   assert_eq(todo_count_events(projected, "tool/approval/requested"), 0)

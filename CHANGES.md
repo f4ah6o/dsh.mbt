@@ -4,6 +4,7 @@
 
 ### Added
 
+- Expose `session_inspect_capacity` as a read-only query with canonical serialized UTF-16 usage, event count, explicit limits and non-guaranteed nominal headroom for session capacity management.
 - Connect opt-in (`DSH_DESKTOP_IME=1`) Wayland desktop composition through the published gpui.mbt 0.10.2 text-input-v1 transport. Keep direct keyboard text mutually exclusive with compositor commits and fence native queued transactions on app cancellation before preedit delivery.
 
 ### Migration

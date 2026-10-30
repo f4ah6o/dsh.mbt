@@ -102,6 +102,7 @@ pub(all) enum EngineCommand {
   ListSessions
   ImportSession(String)
   GetSession(SessionId)
+  InspectCapacity(SessionId)
   SendPrompt(SessionId, String)
   SendPromptWithContexts(SessionId, String, Array[String])
   CancelSession(SessionId)
@@ -155,6 +156,7 @@ pub fn EngineCommand::from_json(
       "session_import" =>
         ImportSession(required_string(input, "jsonl", max=262144))
       "session_get" => GetSession(decode_session_id(input))
+      "session_inspect_capacity" => InspectCapacity(decode_session_id(input))
       "session_send" => {
         let session_id = decode_session_id(input)
         let prompt = required_string(input, "prompt", max=16384)

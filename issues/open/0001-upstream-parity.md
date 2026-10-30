@@ -113,6 +113,8 @@ upstream branch semantics は実装しません。本 issue は open のまま�
 
 ## 2. 長い会話と stream projection
 
+保存容量の観測は [session の保存使用量を観測する](20261030-session-capacity-inspection.md) で追跡する。値は既存上限の使用状況であり、容量拡張、summary、spill の完了を意味しない。契約調査は [PR #76](https://github.com/f4ah6o/dsh.mbt/pull/76) を参照する。
+
 Live compaction、tool result pruning、spill を導入し、262,144-unit 上限に依存しない長い会話を支える。
 provider SSE の delta を engine event と UI に逐次反映し、切断時の未完了 tool を実行しない。
 

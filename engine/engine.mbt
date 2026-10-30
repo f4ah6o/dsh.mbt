@@ -50,6 +50,7 @@ fn Engine::apply_command_impl(
       ListSessions => Json::array(self.order.map(id => self.lookup(id).json()))
       ImportSession(jsonl) => self.import_upstream_v4(jsonl).json()
       GetSession(id) => self.lookup(id.as_string()).json()
+      InspectCapacity(id) => self.inspect_capacity(id)
       ForkSession(id, child_id, title) =>
         self.fork_session(id.as_string(), child_id, title).json()
       SendPrompt(id, prompt) =>
@@ -152,7 +153,8 @@ fn Engine::send_prompt(
   }
   // Reserve enough event slots for a full worst-case admitted turn,
   // including denied calls and cancellation closure.
-  if session.events.length() + session.max_steps * 112 + 16 > 32768 {
+  if session.events.length() + session.max_steps * 112 + 16 >
+    SESSION_EVENT_LIMIT {
     raise Invalid("Session event limit reached; create a new session")
   }
   let all_contexts = initial_contexts.copy()
@@ -271,7 +273,8 @@ fn Engine::project_stream_impl(
     if content.length() + reasoning.length() > STREAM_DELTA_CAPACITY {
       raise Invalid("Stream delta batch exceeds its 4096-character limit")
     }
-    if session.events.length() + session.max_steps * 112 + 16 > 32768 {
+    if session.events.length() + session.max_steps * 112 + 16 >
+      SESSION_EVENT_LIMIT {
       raise Invalid("Session event limit reached; create a new session")
     }
     session.append(
@@ -294,6 +297,42 @@ fn Engine::lookup(self : Engine, id : String) -> Session raise EngineError {
     Some(session) => session
     None => raise Invalid("Session not found: \{id}")
   }
+}
+
+///|
+/// Read the current serialized and event counts without changing session state.
+fn Engine::inspect_capacity(
+  self : Engine,
+  id : SessionId,
+) -> Json raise EngineError {
+  let session = self.lookup(id.as_string())
+  let canonical = session.json()
+  let serialized_utf16_units = canonical.stringify().length()
+  let accounted_utf16_units = session_capacity_length(canonical)
+  let event_count = session.events.length()
+  object([
+    ("session_id", Json::string(session.id)),
+    ("serialized_utf16_units", integer(serialized_utf16_units)),
+    ("capacity_accounted_utf16_units", integer(accounted_utf16_units)),
+    ("capacity_utf16_limit", integer(SESSION_CAPACITY)),
+    (
+      "nominal_utf16_headroom",
+      integer(Int32::max(0, SESSION_CAPACITY - accounted_utf16_units)),
+    ),
+    ("event_count", integer(event_count)),
+    ("event_limit", integer(SESSION_EVENT_LIMIT)),
+    (
+      "nominal_event_headroom",
+      integer(Int32::max(0, SESSION_EVENT_LIMIT - event_count)),
+    ),
+    ("headroom_guaranteed", boolean(false)),
+    (
+      "headroom_note",
+      Json::string(
+        "Remaining values are arithmetic only and omit admission reservations for a full turn, interrupted-restore closure, pending hook results, and retry starts. Later output and closure records also consume serialized capacity, so headroom does not guarantee that a next operation will fit.",
+      ),
+    ),
+  ])
 }
 
 ///|
