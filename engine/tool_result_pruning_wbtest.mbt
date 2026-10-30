@@ -244,6 +244,322 @@ test "manual pruning keeps original transcript and reloads an idempotent provide
 }
 
 ///|
+test "automatic pruning is opt-in, Unicode-safe, and retained across restore" {
+  let original = "😀"[:].repeat(DEFAULT_PRUNE_THRESHOLD + 1).to_owned()
+  let source = completed_engine_with_tool_result(original)
+  let base = source.snapshot()
+
+  // Omitting the flag preserves the existing full provider context.
+  let default_engine = Engine::new(test_tools())
+  assert_true(default_engine.restore(json_copy(base)) is Ok(_))
+  let default_session = success(
+    default_engine.invoke(
+      "session_send",
+      fixture("{\"session_id\":\"test\",\"prompt\":\"Continue\"}"),
+    ),
+  )
+  let default_events = array_value(
+    required_field(default_session, "events"),
+    "events",
+    32768,
+  )
+  assert_false(
+    default_events.any(event => {
+      required_string(event, "type") == "tool/result/pruned"
+    }),
+  )
+  let default_effects = default_engine.take_effects()
+  assert_eq(default_effects.length(), 1)
+  let default_messages = array_value(
+    required_field(required_field(default_effects[0], "request"), "messages"),
+    "messages",
+    32768,
+  )
+  assert_eq(
+    required_string(only_tool_result(default_messages), "content"),
+    original,
+  )
+
+  let preview_engine = Engine::new(test_tools())
+  assert_true(preview_engine.restore(json_copy(base)) is Ok(_))
+  let preview_before = preview_engine.snapshot().stringify()
+  let preview_command = EngineCommand::from_json(
+    "session_send",
+    object([
+      ("session_id", Json::string("test")),
+      ("prompt", Json::string("Preview with pruning")),
+      ("auto_prune_tool_results", boolean(true)),
+    ]),
+  ).unwrap()
+  assert_true(preview_engine.preview(preview_command) is Ok(_))
+  assert_eq(preview_engine.snapshot().stringify(), preview_before)
+  assert_eq(preview_engine.take_effects().length(), 0)
+
+  let engine = Engine::new(test_tools())
+  assert_true(engine.restore(json_copy(base)) is Ok(_))
+  let sent = success(
+    engine.invoke(
+      "session_send",
+      object([
+        ("session_id", Json::string("test")),
+        ("prompt", Json::string("Continue with pruning")),
+        ("auto_prune_tool_results", boolean(true)),
+      ]),
+    ),
+  )
+  let messages = array_value(
+    required_field(sent, "messages"),
+    "messages",
+    32768,
+  )
+  assert_eq(required_string(only_tool_result(messages), "content"), original)
+  let events = array_value(required_field(sent, "events"), "events", 32768)
+  let result_event = events.filter(event => {
+      required_string(event, "type") == "tool/result"
+    })[0]
+  let prune_events = events.filter(event => {
+    required_string(event, "type") == "tool/result/pruned"
+  })
+  assert_eq(prune_events.length(), 1)
+  let prune_event = prune_events[0]
+  let prune_data = required_field(prune_event, "data")
+  assert_eq(
+    required_field(prune_data, "result_seq"),
+    required_field(result_event, "seq"),
+  )
+  assert_eq(
+    required_field(prune_data, "source_seq"),
+    required_field(result_event, "seq"),
+  )
+  assert_eq(required_string(prune_data, "call_id"), "read-long")
+  assert_eq(
+    required_string(prune_data, "content"),
+    "😀"[:].repeat(DEFAULT_PRUNE_HEAD).to_owned() +
+    PRUNE_MARKER +
+    "😀"[:].repeat(DEFAULT_PRUNE_TAIL).to_owned(),
+  )
+  let starts = events.filter(event => {
+    required_string(event, "type") == "turn/start"
+  })
+  assert_eq(starts.length(), 2)
+  assert_true(
+    int_value(required_field(prune_event, "seq"), "seq", 0, 32767) <
+    int_value(required_field(starts[1], "seq"), "seq", 0, 32767),
+  )
+
+  let effects = engine.take_effects()
+  assert_eq(effects.length(), 1)
+  let request_messages = array_value(
+    required_field(required_field(effects[0], "request"), "messages"),
+    "messages",
+    32768,
+  )
+  let projected = only_tool_result(request_messages)
+  let projected_content = required_string(projected, "content")
+  assert_eq(
+    projected_content,
+    "😀"[:].repeat(DEFAULT_PRUNE_HEAD).to_owned() +
+    PRUNE_MARKER +
+    "😀"[:].repeat(DEFAULT_PRUNE_TAIL).to_owned(),
+  )
+  assert_eq(required_string(projected, "tool_call_id"), "read-long")
+  assert_eq(required_field(projected, "is_error"), boolean(false))
+
+  ignore(
+    success(engine.complete(id_of(effects[0]), stop_response("Continued"))),
+  )
+  assert_eq(engine.take_effects().length(), 0)
+  let saved = engine.snapshot()
+  let reopened = Engine::new(test_tools())
+  assert_true(reopened.restore(saved) is Ok(_))
+  assert_eq(reopened.take_effects().length(), 0)
+  let repeated = success(
+    reopened.invoke(
+      "session_send",
+      object([
+        ("session_id", Json::string("test")),
+        ("prompt", Json::string("Prune once more")),
+        ("auto_prune_tool_results", boolean(true)),
+      ]),
+    ),
+  )
+  let repeated_events = array_value(
+    required_field(repeated, "events"),
+    "events",
+    32768,
+  )
+  assert_eq(
+    repeated_events
+    .filter(event => required_string(event, "type") == "tool/result/pruned")
+    .length(),
+    1,
+  )
+  let repeated_effects = reopened.take_effects()
+  assert_eq(repeated_effects.length(), 1)
+  let repeated_request_messages = array_value(
+    required_field(required_field(repeated_effects[0], "request"), "messages"),
+    "messages",
+    32768,
+  )
+  assert_eq(
+    required_string(only_tool_result(repeated_request_messages), "content"),
+    projected_content,
+  )
+  ignore(
+    success(
+      reopened.complete(
+        id_of(repeated_effects[0]),
+        stop_response("Pruned projection still fits"),
+      ),
+    ),
+  )
+  assert_eq(reopened.take_effects().length(), 0)
+  let following = success(
+    reopened.invoke(
+      "session_send",
+      fixture("{\"session_id\":\"test\",\"prompt\":\"After restore\"}"),
+    ),
+  )
+  let reopened_effects = reopened.take_effects()
+  assert_eq(reopened_effects.length(), 1)
+  let reopened_request_messages = array_value(
+    required_field(required_field(reopened_effects[0], "request"), "messages"),
+    "messages",
+    32768,
+  )
+  assert_eq(
+    required_string(only_tool_result(reopened_request_messages), "content"),
+    projected_content,
+  )
+  assert_eq(
+    required_string(
+      only_tool_result(
+        array_value(required_field(following, "messages"), "messages", 32768),
+      ),
+      "content",
+    ),
+    original,
+  )
+}
+
+///|
+test "automatic pruning accepts settled cancelled sessions that can continue" {
+  let engine = completed_engine_with_tool_result(
+    "x"[:].repeat(DEFAULT_PRUNE_THRESHOLD + 1).to_owned(),
+  )
+  ignore(
+    success(
+      engine.invoke(
+        "session_send",
+        fixture("{\"session_id\":\"test\",\"prompt\":\"Will be cancelled\"}"),
+      ),
+    ),
+  )
+  assert_eq(engine.take_effects().length(), 1)
+  let cancelled = success(
+    engine.invoke("session_cancel", fixture("{\"session_id\":\"test\"}")),
+  )
+  assert_eq(get_status(cancelled), "cancelled")
+
+  let sent = success(
+    engine.invoke(
+      "session_send",
+      object([
+        ("session_id", Json::string("test")),
+        ("prompt", Json::string("Continue after cancellation")),
+        ("auto_prune_tool_results", boolean(true)),
+      ]),
+    ),
+  )
+  assert_eq(get_status(sent), "running")
+  assert_true(
+    array_value(required_field(sent, "events"), "events", 32768).any(event => {
+      required_string(event, "type") == "tool/result/pruned"
+    }),
+  )
+
+  // Restore validates the prune event at its original cancelled-turn boundary
+  // without replaying the provider request.
+  let reopened = Engine::new(test_tools())
+  assert_true(reopened.restore(engine.snapshot()) is Ok(_))
+  assert_eq(reopened.take_effects().length(), 0)
+
+  let failed_engine = completed_engine_with_tool_result(
+    "y"[:].repeat(DEFAULT_PRUNE_THRESHOLD + 1).to_owned(),
+  )
+  ignore(
+    success(
+      failed_engine.invoke(
+        "session_send",
+        fixture("{\"session_id\":\"test\",\"prompt\":\"Will fail\"}"),
+      ),
+    ),
+  )
+  let failed_effects = failed_engine.take_effects()
+  assert_eq(failed_effects.length(), 1)
+  let failed = success(
+    failed_engine.complete(
+      id_of(failed_effects[0]),
+      object([
+        ("ok", boolean(false)),
+        ("error", Json::string("provider unavailable")),
+      ]),
+    ),
+  )
+  assert_eq(get_status(failed), "failed")
+  let continued = success(
+    failed_engine.invoke(
+      "session_send",
+      object([
+        ("session_id", Json::string("test")),
+        ("prompt", Json::string("Continue after failure")),
+        ("auto_prune_tool_results", boolean(true)),
+      ]),
+    ),
+  )
+  assert_eq(get_status(continued), "running")
+  let failed_reopen = Engine::new(test_tools())
+  assert_true(failed_reopen.restore(failed_engine.snapshot()) is Ok(_))
+  assert_eq(failed_reopen.take_effects().length(), 0)
+}
+
+///|
+test "automatic pruning rolls back its event and provider effect on capacity refusal" {
+  // The original result is represented in the completed-tool event, result
+  // event, and public transcript. A default prune event would exceed the
+  // remaining serialized-session budget even though an ordinary short send
+  // still fits.
+  let base = completed_engine_with_tool_result("\n"[:].repeat(42000).to_owned())
+  let saved = base.snapshot()
+  let control = Engine::new(test_tools())
+  assert_true(control.restore(json_copy(saved)) is Ok(_))
+  ignore(
+    success(
+      control.invoke(
+        "session_send",
+        fixture("{\"session_id\":\"test\",\"prompt\":\"Continue\"}"),
+      ),
+    ),
+  )
+  assert_eq(control.take_effects().length(), 1)
+
+  let engine = Engine::new(test_tools())
+  assert_true(engine.restore(json_copy(saved)) is Ok(_))
+  let before = engine.snapshot().stringify()
+  let automatic = engine.invoke(
+    "session_send",
+    object([
+      ("session_id", Json::string("test")),
+      ("prompt", Json::string("Continue")),
+      ("auto_prune_tool_results", boolean(true)),
+    ]),
+  )
+  assert_true(automatic is Err(_))
+  assert_eq(engine.snapshot().stringify(), before)
+  assert_eq(engine.take_effects().length(), 0)
+}
+
+///|
 test "a tighter later policy chains from the current projection and restore rejects forged pruning" {
   let original = "😀"[:].repeat(60).to_owned()
   let engine = completed_engine_with_tool_result(original)

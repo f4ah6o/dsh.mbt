@@ -5,10 +5,12 @@
 ### Added
 
 - Connect opt-in (`DSH_DESKTOP_IME=1`) Wayland desktop composition through the published gpui.mbt 0.10.2 text-input-v1 transport. Keep direct keyboard text mutually exclusive with compositor commits and fence native queued transactions on app cancellation before preedit delivery.
+- Add per-send opt-in tool-result pruning with `auto_prune_tool_results: true`; the default remains unchanged and pruning keeps the original transcript while shortening later provider context.
 
 ### Migration
 
 - Updates the gpui dependency to 0.10.2, including the cancel/rearm fast-typing fix; no package version or Windows wiring change is needed. TextInput suppression is adapter-specific so ordinary Windows typing remains available outside active preedit. See `docs/wayland-ime-composition.md`.
+- Stores that record an automatic prune event after a failed or cancelled turn require a reader that accepts settled terminal-session pruning events.
 
 ### Limitations
 

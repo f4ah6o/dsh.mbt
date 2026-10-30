@@ -322,7 +322,12 @@ fn Session::validate_tool_result_prune(
   if result_seq >= self.events.length() || source_seq >= self.events.length() {
     raise Invalid("Tool result pruning references a future event")
   }
-  if (self.status != Idle && self.status != Completed) ||
+  if (
+      self.status != Idle &&
+      self.status != Completed &&
+      self.status != Failed &&
+      self.status != Cancelled
+    ) ||
     self.open_step ||
     self.active_effect is Some(_) ||
     self.active_tool_effect_count() > 0 ||

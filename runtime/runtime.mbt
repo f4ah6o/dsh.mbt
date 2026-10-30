@@ -688,11 +688,11 @@ fn NativeRuntime::validate_user_prompt_locked(
 ) -> Result[(String, String, Int32), String] {
   let (session_id, prompt) = match
     @engine.EngineCommand::from_json("session_send", input) {
-    Ok(@engine.EngineCommand::SendPrompt(session_id, prompt)) =>
-      (session_id.as_string(), prompt)
-    Ok(@engine.EngineCommand::SendPromptWithContexts(session_id, prompt, _)) =>
-      (session_id.as_string(), prompt)
-    Ok(_) => return Err("invalid session_send command")
+    Ok(command) =>
+      match command.session_send_details() {
+        Some((session_id, prompt, _, _)) => (session_id.as_string(), prompt)
+        None => return Err("invalid session_send command")
+      }
     Err(error) => return Err(error)
   }
   let session = match

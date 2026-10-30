@@ -71,7 +71,12 @@ fn operation_schema(operation : String) -> @capability.Schema raise InitError {
       [session, field("id", string, false), field("title", string, false)]
     "session_import" => [field("jsonl", string, true)]
     "session_get" | "session_cancel" => [session]
-    "session_send" => [session, field("prompt", string, true)]
+    "session_send" =>
+      [
+        session,
+        field("prompt", string, true),
+        field("auto_prune_tool_results", @capability.Schema::bool(), false),
+      ]
     "session_prune_tool_results" =>
       [
         session,
@@ -293,42 +298,35 @@ fn create_api(
           "plugin_list" => Ok(plugins.manifest())
           "session_send" =>
             match @engine.EngineCommand::from_json("session_send", input) {
-              Ok(@engine.EngineCommand::SendPrompt(session_id, prompt)) => {
-                let command_result = if !native_session_start_contexts.val.is_empty() ||
-                  !native_prompt_contexts.val.is_empty() {
-                  engine.apply_session_send_with_hook_contexts(
-                    session_id,
-                    prompt,
-                    native_session_start_contexts.val,
-                    native_prompt_contexts.val,
-                    source_kind=native_hook_context_source_kind.val,
-                  )
-                } else {
-                  let command = @engine.EngineCommand::SendPrompt(
-                    session_id, prompt,
-                  )
-                  if preview_session_send.val {
-                    engine.preview(command)
-                  } else {
-                    engine.apply(command)
-                  }
-                }
-                match command_result {
-                  Ok(value) => Ok(value)
-                  Err(error) => Err(domain_error(name, error))
-                }
-              }
               Ok(command) =>
-                if preview_session_send.val {
-                  match engine.preview(command) {
-                    Ok(value) => Ok(value)
-                    Err(error) => Err(domain_error(name, error))
+                match command.session_send_details() {
+                  Some((session_id, prompt, request_contexts, auto_prune)) => {
+                    let command_result = if !native_session_start_contexts.val.is_empty() ||
+                      !native_prompt_contexts.val.is_empty() {
+                      let additional_contexts = request_contexts.copy()
+                      for context in native_prompt_contexts.val {
+                        additional_contexts.push(context)
+                      }
+                      engine.apply_session_send_with_hook_contexts(
+                        session_id,
+                        prompt,
+                        native_session_start_contexts.val,
+                        additional_contexts,
+                        source_kind=native_hook_context_source_kind.val,
+                        auto_prune_tool_results=auto_prune,
+                      )
+                    } else if preview_session_send.val {
+                      engine.preview(command)
+                    } else {
+                      engine.apply(command)
+                    }
+                    match command_result {
+                      Ok(value) => Ok(value)
+                      Err(error) => Err(domain_error(name, error))
+                    }
                   }
-                } else {
-                  match engine.apply(command) {
-                    Ok(value) => Ok(value)
-                    Err(error) => Err(domain_error(name, error))
-                  }
+                  None =>
+                    Err(domain_error(name, "invalid session_send command"))
                 }
               Err(error) => Err(domain_error(name, error))
             }
