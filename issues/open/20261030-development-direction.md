@@ -210,7 +210,7 @@ OpenCode は LLM provider 接続と Agent Runtime Backend を分ける。#66 の
 | [#84](https://github.com/f4ah6o/dsh.mbt/pull/84) `9777af34c4c8c21c5734ca468e513578c44b6655` | bounded byte-preserving SafeRoot read。archive storage や deterministic read-race coverage は含まない。 |
 | [#85](https://github.com/f4ah6o/dsh.mbt/pull/85) `169de36cf0419e02f764454f337c997f29dd336a` | engine-only v2 archive candidate / commit / verified restore。native object store、manifest / receipt transaction、history API、web / ACP は未実装。 |
 | [#86](https://github.com/f4ah6o/dsh.mbt/pull/86) `a64a335c25f9c5ae797f12a2d2c6c1b3c602ed5b` | command receipt を owner + ID で scope。過去に上書きされた receipt は復元しない。 |
-| [#87](https://github.com/f4ah6o/dsh.mbt/pull/87) `46e9efd496f874a2f8ccbc11529b89acf29c4569` | eligible regular Read result の手動 durable archive。一般 compaction ではない。専用の checked-in cancellation / power-loss guarantee はなく、PR に記録された一部 temporary cooperative-cancellation fixtures は別扱い。 |
+| [#87](https://github.com/f4ah6o/dsh.mbt/pull/87) `76c5cd8d48e36e7bcbe36cd4435ba7f115fc17f5` | eligible regular Read result の手動 durable archive。一般 compaction ではない。旧 head の Linux fixture 失敗は修正し新 head の CI は進行中。旧 head の Windows smoke で CLI の承認 event 欠落が見つかり修正中。power-loss は未検証。 |
 
 PR #77–#87 は長い会話や保存の候補を進めているが、main の実利用 gate とは独立する。
 レビュー時は個別 PR の dependency / base を保ち、stack 全体を main の完了として数えない。

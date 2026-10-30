@@ -31,8 +31,9 @@ reported pass として記録する。両者を別の記録として扱い、ど
 ### 実機 gate の手順と結果の記録
 
 1. host に専用 data directory と一時 workspace を用意する。`DSH_TAILNET_HOST` を実際の
-   MagicDNS HTTPS hostname、`DSH_TAILNET_ALLOWED_USERS` を許可する owner login に設定し、
-   `docs/native-runtime.md` の例と同様に固定 loopback port で `dsh web` を起動する。
+   MagicDNS HTTPS hostname、`DSH_TAILNET_ALLOWED_USERS` を許可する owner login、
+   `DSH_TAILNET_PORT=8443` を公開 HTTPS port に設定し、`docs/native-runtime.md` の例と同様に
+   `dsh web ... --port 3210` を起動する。
 2. `tailscale serve --https=8443 http://127.0.0.1:3210` を実行する。iPhone の Tailscale
    client を接続し、Safari で `https://<MagicDNS hostname>:8443/` を開く。Home Screen PWA
    の受入を測る場合は Safari の Share → Add to Home Screen から追加して起動し、Safari と PWA
