@@ -48,6 +48,7 @@ pub fn Engine::new(Array[Json]) -> Self
 pub fn Engine::pending_post_tool_prompt_hook(Self, SessionId) -> NativePostToolPromptHookCheckpoint?
 pub fn Engine::pending_stop_hook(Self, SessionId) -> NativeStopHookCheckpoint?
 pub fn Engine::pending_subagent_prompt_hook(Self, String) -> NativeSubagentPromptHookCheckpoint?
+pub fn Engine::plan_compaction_prefix(Self, SessionId, Int, Int, Int) -> Result[Json?, String]
 pub fn Engine::plan_tool_result_archive(Self, SessionId, Int) -> Result[ToolResultArchivePlan, String]
 pub fn Engine::prepare_stop_continuation(Self, NativeStopHookCheckpoint, String) -> Result[Json, String]
 pub fn Engine::preview(Self, EngineCommand) -> Result[Json, String]
