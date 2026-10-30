@@ -127,6 +127,10 @@ pruning event は保存量を増やし、canonical session の 262,144 UTF-16 co
 capacity refusal は candidate snapshot を採用せず、元の transcript / event queue を保ちます。運用上の条件は
 [次の移植作業](../issues/open/0001-upstream-parity.md) を参照してください。
 
+Engine には v2 archive object の検証、candidate / in-memory commit、検証済み source を使う reopen の限定的な実装があります。通常の `snapshot()` は引き続き v1 を出し、archive marker がある snapshot は v1 restore で拒否します。これは durable archive の実装ではありません。NativeRuntime の object store、atomic manifest / receipt、original history の読み取り API、web / ACP の archive-aware 表示には接続していません。現行 UI と ACP は `messages.content` を表示して archive ref を解釈しないため、product path から v2 archive snapshot を渡してはいけません。Engine の sequential 6 × 63 KiB reopen test は 262,144 code-unit cap を超える original の再構築可能性を検証しますが、保存後の runtime capacity 改善を示すものではありません。
+
+Engine は portable MoonBit SHA-256 で canonical object の UTF-8 content、projection、payload identity を再検証します。Native runtime codec は host system SHA-256 adapter を使うため、runtime と engine の二つの境界で照合します。Archive admission は最大 256 object、各 original / projection 65,536 bytes、各 encoded object 1 MiB、original と projection それぞれ aggregate 16 MiB に加え、hydration 時の追加 expansion を 7 MiB 以下に制限します。candidate、in-memory commit、restore は同じ expansion 上限と 16 MiB JSON-copy budget を検証し、受理した state がこの engine の reopen limit を超えないようにします。
+
 ### Durable provider retry
 
 `engine/retry.mbt` が retry eligibility、attempt budget、delay、effect / turn / step identity を決めます。native runtime は provider error を

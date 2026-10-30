@@ -84,6 +84,9 @@ fn Engine::fork_session(
   if source.imported {
     raise Invalid("Imported Session v4 histories cannot be forked")
   }
+  if session_has_archived_tool_results(source) {
+    raise Invalid("Sessions with archived tool results cannot be forked")
+  }
   if source.status != Idle &&
     source.status != Completed &&
     source.status != Failed &&

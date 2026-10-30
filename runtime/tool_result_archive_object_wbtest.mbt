@@ -257,6 +257,22 @@ test "archive object codec preserves Unicode content and emits a content-free re
   ).unwrap()
   assert_eq(verified.original_content(), original)
   assert_eq(verified.pruned_content(), expected_projection)
+  let engine_reference = match
+    @engine.ToolResultArchiveRef::from_json(reference.json()) {
+    Ok(value) => value
+    Err(error) =>
+      abort("Engine rejected the native archive reference: " + error)
+  }
+  let engine_source = match
+    @engine.ToolResultArchiveSource::from_object_text(
+      engine_reference,
+      archive.encoded_object(),
+    ) {
+    Ok(value) => value
+    Err(error) => abort("Engine rejected the native archive object: " + error)
+  }
+  assert_eq(engine_source.content(), original)
+  assert_eq(engine_source.pruned_content(), expected_projection)
 }
 
 ///|

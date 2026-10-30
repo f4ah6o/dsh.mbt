@@ -14,6 +14,9 @@ Engine::complete(effect_id : String, result : Json) -> Result[Json, String]
 Engine::project_stream(effect_id : String, content : String, reasoning : String) -> Result[Json, String]
 Engine::snapshot() -> Json
 Engine::restore(snapshot : Json) -> Result[Unit, String]
+Engine::restore_archived(snapshot : Json, sources : Array[ToolResultArchiveSource]) -> Result[Unit, String]
+Engine::tool_result_archive_candidate(plan, source) -> Result[Json, String]
+Engine::commit_tool_result_archive(plan, source) -> Result[Unit, String]
 ```
 
 The in-process typed method `Engine::plan_tool_result_archive(session_id,
@@ -27,6 +30,34 @@ authorization to persist data. A later storage operation must rederive the
 underlying eligibility facts inside its mutation gate; if it requires the
 same session revision, it must validate a separate freshness revision there.
 The plan intentionally contains no result text.
+
+The v2 engine slice can verify a canonical `dsh.tool-result-archive-object-v2`
+text object, produce a compact candidate snapshot, commit that same projection
+to in-memory state, and reopen a v2 snapshot when the caller supplies every
+verified source object. Candidate generation does not mutate the live engine;
+commit is an in-memory operation and is not a durable checkpoint. The engine
+rehashes UTF-8 content, projection, and canonical object payload with portable
+SHA-256. The runtime codec also uses the host system SHA-256 adapter, so each
+boundary verifies the object independently.
+
+The engine enforces at most 256 objects, at most 65,536 bytes per original or
+projection, at most 1 MiB per encoded object, and 16 MiB aggregate limits for
+original and projected bytes. A separate 7 MiB hydration-expansion limit and
+the exact 16 MiB JSON copy budget account for original text appearing in the
+completion, result, and transcript during restore. Candidate, commit, and
+restore apply the same admission check so a live snapshot accepted for archive
+cannot exceed the engine's reopen budget. The engine-only test covers six
+sequential 63 KiB results in one session and a completed next turn after
+reopening; this does not prove a native store capacity improvement.
+
+This slice has no native object store, durable v2 manifest/receipt transaction,
+or API for reading original history. It is not called by `NativeRuntime`, web,
+or ACP. Those paths render `messages.content` and do not interpret archive
+references, so they must not be given archived snapshots until they have an
+archive-aware history boundary or explicitly reject them. Ordinary snapshots
+remain v1; generic v1 restore rejects archive markers, and v2 restore rejects
+forked/imported histories and validates the complete historical Read/result/
+prune chain before compacting it. Effects are never replayed on reopen.
 
 | Operation | Input |
 | --- | --- |

@@ -333,12 +333,17 @@ fn Engine::session_is_fork_related(self : Engine, session : Session) -> Bool {
 }
 
 ///|
-/// Derive a content-free archive eligibility plan for one already-pruned
-/// regular Read result. This query only inspects validated in-memory state.
-pub fn Engine::plan_tool_result_archive(
+
+///|
+/// Derive source provenance either for a new archive command or for a
+/// reference already tied to a historical direct prune. The historical mode
+/// deliberately ignores the session's current status because later turns may
+/// be active, but it still validates the exact original tool/effect/result.
+fn Engine::plan_tool_result_archive_impl(
   self : Engine,
   session_id : SessionId,
   result_seq : Int32,
+  historical_pruned_seq : Int32?,
 ) -> Result[ToolResultArchivePlan, String] {
   try {
     match self.config_error {
@@ -347,11 +352,18 @@ pub fn Engine::plan_tool_result_archive(
       None => ()
     }
     let session = self.lookup(session_id.as_string())
-    if self.session_has_unsettled_archive_state(session) {
+    if historical_pruned_seq is None &&
+      self.session_has_unsettled_archive_state(session) {
       raise Invalid("Archive planning requires a settled closed session")
+    }
+    if session.imported {
+      raise Invalid("Imported histories cannot be archive planned")
     }
     if self.session_is_fork_related(session) {
       raise Invalid("Fork-related sessions cannot be archive planned")
+    }
+    if session_tool_result_is_archived(session, result_seq) {
+      raise Invalid("Archive planning cannot reuse an already archived result")
     }
     if result_seq < 0 || result_seq >= session.events.length() {
       raise Invalid("Archive result sequence is outside the session history")
@@ -392,7 +404,11 @@ pub fn Engine::plan_tool_result_archive(
             SESSION_CAPACITY,
           )
           if candidate_result_seq == result_seq {
-            prunings.push(event)
+            match historical_pruned_seq {
+              Some(sequence) if event.seq == sequence => prunings.push(event)
+              Some(_) => ()
+              None => prunings.push(event)
+            }
           }
         }
         _ => ()
@@ -510,4 +526,15 @@ pub fn Engine::plan_tool_result_archive(
   } catch {
     Invalid(message) => Err(message)
   }
+}
+
+///|
+/// Derive a content-free archive eligibility plan for one already-pruned
+/// regular Read result. This query only inspects validated in-memory state.
+pub fn Engine::plan_tool_result_archive(
+  self : Engine,
+  session_id : SessionId,
+  result_seq : Int32,
+) -> Result[ToolResultArchivePlan, String] {
+  self.plan_tool_result_archive_impl(session_id, result_seq, None)
 }
