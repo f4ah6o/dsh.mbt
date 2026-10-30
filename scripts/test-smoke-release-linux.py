@@ -525,6 +525,60 @@ class ProtocolTests(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     smoke.pending_pid(path)
 
+    def test_early_active_worker_exit_reports_inner_failure_and_still_fails(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            log = root / 'active-term-app.log'
+            cause = 'desktop failed: real keyboard input did not produce the expected prompt'
+            log.write_text('protocol trace\n' + cause)
+            for backend, returncode in [('wayland', 1), ('x11', 0)]:
+                with self.subTest(backend=backend, returncode=returncode):
+                    harness = smoke.Harness(root / 'dsh', root, root)
+                    harness.env['DSH_DESKTOP_BACKEND'] = backend
+                    app = mock.Mock(returncode=returncode)
+                    app.poll.return_value = returncode
+                    with self.assertRaises(RuntimeError) as error:
+                        harness.run_until_exit(app, log, interrupt_pid_file=root / 'missing.pid')
+                    diagnostic = str(error.exception)
+                    self.assertIn('GUI exited before active-worker TERM test', diagnostic)
+                    self.assertIn(cause, diagnostic)
+                    self.assertIn('backend=' + backend, diagnostic)
+                    self.assertIn('returncode=' + str(returncode), diagnostic)
+                    self.assertIn('log=' + str(log), diagnostic)
+                    app.terminate.assert_not_called()
+
+    def test_exit_diagnostics_wait_for_final_log_and_bound_failure_message(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = smoke.Harness(root / 'dsh', root, root)
+            app = mock.Mock(returncode=1)
+            app.poll.return_value = 1
+            final = 'private protocol trace\ndesktop failed: ' + 'x' * 2000
+            log = mock.Mock()
+            log.read_text.side_effect = ['partial\n', final, final, final]
+            with self.assertRaises(RuntimeError) as error:
+                harness.run_until_exit(app, log)
+            diagnostic = str(error.exception)
+            self.assertIn('Packaged desktop exited', diagnostic)
+            self.assertIn('desktop failed: ' + 'x' * 100, diagnostic)
+            self.assertNotIn('x' * 1001, diagnostic)
+            self.assertNotIn('private protocol trace', diagnostic)
+
+    def test_exit_without_app_diagnostic_still_reports_status_and_log(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = smoke.Harness(root / 'dsh', root, root)
+            log = root / 'app.log'
+            log.write_text('protocol trace only\n')
+            app = mock.Mock(returncode=-11)
+            app.poll.return_value = -11
+            with self.assertRaises(RuntimeError) as error:
+                harness.run_until_exit(app, log)
+            diagnostic = str(error.exception)
+            self.assertIn('returncode=-11', diagnostic)
+            self.assertIn('log=' + str(log), diagnostic)
+            self.assertIn('no desktop failure diagnostic in log', diagnostic)
+
     def test_cleanup_never_signals_reaped_process_group(self):
         harness = smoke.Harness.__new__(smoke.Harness)
         harness.owned_descendants, harness.streams = {}, []

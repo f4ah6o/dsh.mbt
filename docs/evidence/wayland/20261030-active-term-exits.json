@@ -1,0 +1,373 @@
+{
+  "schema": "dsh-wayland-ci-exit-evidence-v1",
+  "observed_date": "2026-10-30",
+  "expected_prompt": "Create and verify a durable file. via Linux keyboard",
+  "gpui_version_from_completed_job_logs": "0.10.2",
+  "scope": "Seven first-attempt failed Wayland jobs. Extracted from retained GitHub Actions artifacts; no application cancellation or native queue revocation instrumentation was present.",
+  "observations": [
+    {
+      "pr": 87,
+      "architecture": "aarch64",
+      "run_id": 41123549025,
+      "job_id": 124296182756,
+      "job_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41123549025/job/124296182756",
+      "artifact_id": 13009583076,
+      "artifact_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41123549025/artifacts/13009583076",
+      "artifact_zip_sha256": "f170520954b3ede87dddd5d5d9a535cdf22ca62bebf917d7c40d1fe8d292b0d3",
+      "log_path": "wayland/active-term-app.log",
+      "session_path": "wayland/active-term/data/sessions.json",
+      "wayland_error": "GUI exited before active-worker TERM test",
+      "preceding_demo_completed": true,
+      "x11_status": "passed",
+      "user_messages": [
+        "reate and verify a durable file. via Linux keyboard"
+      ],
+      "trace": [
+        {
+          "line_number": 634,
+          "text": "DSH_DESKTOP_INPUT {\"x\":1032,\"y\":725}"
+        },
+        {
+          "line_number": 644,
+          "text": "[3290701.549] zwp_text_input_v1@19.preedit_string(74, \"r\", \"r\")"
+        },
+        {
+          "line_number": 1553,
+          "text": "[3290820.306] wl_keyboard@13.key(241, 2391292599, 29, 1)"
+        },
+        {
+          "line_number": 1555,
+          "text": "[3290820.320] wl_keyboard@13.key(243, 2391292605, 30, 1)"
+        },
+        {
+          "line_number": 1561,
+          "text": "[3290820.338] wl_keyboard@13.key(253, 2391292632, 46, 1)"
+        },
+        {
+          "line_number": 1562,
+          "text": "[3290820.355]  -> zwp_text_input_v1@19.hide_input_panel()"
+        },
+        {
+          "line_number": 1565,
+          "text": "[3290821.700]  -> zwp_text_input_v1@19.deactivate(wl_seat@7)"
+        },
+        {
+          "line_number": 1880,
+          "text": "desktop failed: real keyboard input did not produce the expected prompt"
+        }
+      ]
+    },
+    {
+      "pr": 89,
+      "architecture": "x86_64",
+      "run_id": 41124884673,
+      "job_id": 124300570730,
+      "job_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41124884673/job/124300570730",
+      "artifact_id": 13010293496,
+      "artifact_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41124884673/artifacts/13010293496",
+      "artifact_zip_sha256": "9ad6e5c43c5787f3b2e5c9674ec83233b5e179e7941b0b525f77d655e2cda720",
+      "log_path": "wayland/active-term-app.log",
+      "session_path": "wayland/active-term/data/sessions.json",
+      "wayland_error": "GUI exited before active-worker TERM test",
+      "preceding_demo_completed": true,
+      "x11_status": "passed",
+      "user_messages": [
+        "reate and verify a durable file. via Linux keyboard"
+      ],
+      "trace": [
+        {
+          "line_number": 610,
+          "text": "DSH_DESKTOP_INPUT {\"x\":1032,\"y\":725}"
+        },
+        {
+          "line_number": 620,
+          "text": "[3832777.264] zwp_text_input_v1@19.preedit_string(70, \"r\", \"r\")"
+        },
+        {
+          "line_number": 1109,
+          "text": "[3832884.763] wl_keyboard@13.key(243, 2391834666, 29, 1)"
+        },
+        {
+          "line_number": 1111,
+          "text": "[3832884.776] wl_keyboard@13.key(247, 2391834675, 30, 1)"
+        },
+        {
+          "line_number": 1117,
+          "text": "[3832884.798] wl_keyboard@13.key(255, 2391834700, 46, 1)"
+        },
+        {
+          "line_number": 1118,
+          "text": "[3832884.816]  -> zwp_text_input_v1@19.hide_input_panel()"
+        },
+        {
+          "line_number": 1131,
+          "text": "[3832893.440]  -> zwp_text_input_v1@19.deactivate(wl_seat@7)"
+        },
+        {
+          "line_number": 1436,
+          "text": "desktop failed: real keyboard input did not produce the expected prompt"
+        }
+      ]
+    },
+    {
+      "pr": 91,
+      "architecture": "aarch64",
+      "run_id": 41126983626,
+      "job_id": 124307995315,
+      "job_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41126983626/job/124307995315",
+      "artifact_id": 13012155654,
+      "artifact_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41126983626/artifacts/13012155654",
+      "artifact_zip_sha256": "27205af86d75ac365b13c36e3fadd6cd43e15bab7376596c0d74fad242954364",
+      "log_path": "wayland/active-term-app.log",
+      "session_path": "wayland/active-term/data/sessions.json",
+      "wayland_error": "GUI exited before active-worker TERM test",
+      "preceding_demo_completed": true,
+      "x11_status": "passed",
+      "user_messages": [
+        "reate and verify a durable file. via Linux keyboard"
+      ],
+      "trace": [
+        {
+          "line_number": 718,
+          "text": "DSH_DESKTOP_INPUT {\"x\":1032,\"y\":725}"
+        },
+        {
+          "line_number": 728,
+          "text": "[ 550475.473] zwp_text_input_v1@19.preedit_string(88, \"r\", \"r\")"
+        },
+        {
+          "line_number": 1403,
+          "text": "[ 550592.494] wl_keyboard@13.key(239, 2392847339, 29, 1)"
+        },
+        {
+          "line_number": 1405,
+          "text": "[ 550592.508] wl_keyboard@13.key(243, 2392847348, 30, 1)"
+        },
+        {
+          "line_number": 1411,
+          "text": "[ 550592.526] wl_keyboard@13.key(251, 2392847369, 46, 1)"
+        },
+        {
+          "line_number": 1416,
+          "text": "[ 550592.556]  -> zwp_text_input_v1@19.hide_input_panel()"
+        },
+        {
+          "line_number": 1703,
+          "text": "[ 551393.954]  -> zwp_text_input_v1@19.deactivate(wl_seat@7)"
+        },
+        {
+          "line_number": 1727,
+          "text": "desktop failed: real keyboard input did not produce the expected prompt"
+        }
+      ]
+    },
+    {
+      "pr": 94,
+      "architecture": "aarch64",
+      "run_id": 41129567354,
+      "job_id": 124316802877,
+      "job_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41129567354/job/124316802877",
+      "artifact_id": 13012443094,
+      "artifact_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41129567354/artifacts/13012443094",
+      "artifact_zip_sha256": "3ac615e3e5e25a3f26deaee36b007ac373e50e69072b88bc13d413e7a1c6df1a",
+      "log_path": "wayland/active-term-app.log",
+      "session_path": "wayland/active-term/data/sessions.json",
+      "wayland_error": "GUI exited before active-worker TERM test",
+      "preceding_demo_completed": true,
+      "x11_status": "passed",
+      "user_messages": [
+        "reate and verify a durable file. via Linux keyboard"
+      ],
+      "trace": [
+        {
+          "line_number": 250,
+          "text": "DSH_DESKTOP_INPUT {\"x\":1032,\"y\":725}"
+        },
+        {
+          "line_number": 270,
+          "text": "[1697248.947] zwp_text_input_v1@19.preedit_string(10, \"d\", \"d\")"
+        },
+        {
+          "line_number": 777,
+          "text": "[1697356.467] wl_keyboard@13.key(242, 2393994102, 29, 1)"
+        },
+        {
+          "line_number": 779,
+          "text": "[1697356.479] wl_keyboard@13.key(244, 2393994108, 30, 1)"
+        },
+        {
+          "line_number": 785,
+          "text": "[1697356.497] wl_keyboard@13.key(254, 2393994132, 46, 1)"
+        },
+        {
+          "line_number": 790,
+          "text": "[1697356.524]  -> zwp_text_input_v1@19.hide_input_panel()"
+        },
+        {
+          "line_number": 1069,
+          "text": "[1698096.297]  -> zwp_text_input_v1@19.deactivate(wl_seat@7)"
+        },
+        {
+          "line_number": 1093,
+          "text": "desktop failed: real keyboard input did not produce the expected prompt"
+        }
+      ]
+    },
+    {
+      "pr": 95,
+      "architecture": "x86_64",
+      "run_id": 41130295936,
+      "job_id": 124319233198,
+      "job_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41130295936/job/124319233198",
+      "artifact_id": 13012712921,
+      "artifact_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41130295936/artifacts/13012712921",
+      "artifact_zip_sha256": "0fa0e8b517af7b805643b3c38b59bb6fb475608284fd850d55289b3f67f80c7d",
+      "log_path": "wayland/active-term-app.log",
+      "session_path": "wayland/active-term/data/sessions.json",
+      "wayland_error": "GUI exited before active-worker TERM test",
+      "preceding_demo_completed": true,
+      "x11_status": "passed",
+      "user_messages": [
+        "reate and verify a durable file. via Linux keyboard"
+      ],
+      "trace": [
+        {
+          "line_number": 880,
+          "text": "DSH_DESKTOP_INPUT {\"x\":1032,\"y\":725}"
+        },
+        {
+          "line_number": 890,
+          "text": "[2034812.227] zwp_text_input_v1@19.preedit_string(115, \"r\", \"r\")"
+        },
+        {
+          "line_number": 1685,
+          "text": "[2034921.452] wl_keyboard@13.key(243, 2394331675, 29, 1)"
+        },
+        {
+          "line_number": 1687,
+          "text": "[2034921.463] wl_keyboard@13.key(247, 2394331681, 30, 1)"
+        },
+        {
+          "line_number": 1693,
+          "text": "[2034921.481] wl_keyboard@13.key(255, 2394331704, 46, 1)"
+        },
+        {
+          "line_number": 1694,
+          "text": "[2034921.497]  -> zwp_text_input_v1@19.hide_input_panel()"
+        },
+        {
+          "line_number": 1697,
+          "text": "[2034925.655]  -> zwp_text_input_v1@19.deactivate(wl_seat@7)"
+        },
+        {
+          "line_number": 2000,
+          "text": "desktop failed: real keyboard input did not produce the expected prompt"
+        }
+      ]
+    },
+    {
+      "pr": 95,
+      "architecture": "aarch64",
+      "run_id": 41130295936,
+      "job_id": 124319233369,
+      "job_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41130295936/job/124319233369",
+      "artifact_id": 13012364315,
+      "artifact_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41130295936/artifacts/13012364315",
+      "artifact_zip_sha256": "1188d63c2e0852f79e502b77976ece9196f3bd4b36525b4bc11d8ab22a18261c",
+      "log_path": "wayland/active-term-app.log",
+      "session_path": "wayland/active-term/data/sessions.json",
+      "wayland_error": "GUI exited before active-worker TERM test",
+      "preceding_demo_completed": true,
+      "x11_status": "passed",
+      "user_messages": [
+        "reate and verify a durable file. via Linux keyboard"
+      ],
+      "trace": [
+        {
+          "line_number": 844,
+          "text": "DSH_DESKTOP_INPUT {\"x\":1032,\"y\":725}"
+        },
+        {
+          "line_number": 854,
+          "text": "[2079601.192] zwp_text_input_v1@19.preedit_string(109, \"r\", \"r\")"
+        },
+        {
+          "line_number": 1775,
+          "text": "[2079715.300] wl_keyboard@13.key(240, 2394376463, 29, 1)"
+        },
+        {
+          "line_number": 1777,
+          "text": "[2079715.313] wl_keyboard@13.key(244, 2394376473, 30, 1)"
+        },
+        {
+          "line_number": 1783,
+          "text": "[2079715.347] wl_keyboard@13.key(252, 2394376498, 46, 1)"
+        },
+        {
+          "line_number": 1784,
+          "text": "[2079715.364]  -> zwp_text_input_v1@19.hide_input_panel()"
+        },
+        {
+          "line_number": 1787,
+          "text": "[2079717.508]  -> zwp_text_input_v1@19.deactivate(wl_seat@7)"
+        },
+        {
+          "line_number": 2100,
+          "text": "desktop failed: real keyboard input did not produce the expected prompt"
+        }
+      ]
+    },
+    {
+      "pr": 96,
+      "architecture": "aarch64",
+      "run_id": 41132704806,
+      "job_id": 124327504606,
+      "job_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41132704806/job/124327504606",
+      "artifact_id": 13014336571,
+      "artifact_url": "https://github.com/f4ah6o/dsh.mbt/actions/runs/41132704806/artifacts/13014336571",
+      "artifact_zip_sha256": "c9cedea1609c1b44240d4ad18a10e153fbcf25475215746215470d8b8d4cf671",
+      "log_path": "wayland/active-term-app.log",
+      "session_path": "wayland/active-term/data/sessions.json",
+      "wayland_error": "GUI exited before active-worker TERM test",
+      "preceding_demo_completed": true,
+      "x11_status": "passed",
+      "user_messages": [
+        "reate and verify a durable file. via Linux keyboard"
+      ],
+      "trace": [
+        {
+          "line_number": 298,
+          "text": "DSH_DESKTOP_INPUT {\"x\":1032,\"y\":725}"
+        },
+        {
+          "line_number": 308,
+          "text": "[3244624.617] zwp_text_input_v1@19.preedit_string(18, \"r\", \"r\")"
+        },
+        {
+          "line_number": 1115,
+          "text": "[3244739.671] wl_keyboard@13.key(239, 2395541488, 29, 1)"
+        },
+        {
+          "line_number": 1117,
+          "text": "[3244739.684] wl_keyboard@13.key(243, 2395541497, 30, 1)"
+        },
+        {
+          "line_number": 1123,
+          "text": "[3244739.701] wl_keyboard@13.key(251, 2395541518, 46, 1)"
+        },
+        {
+          "line_number": 1124,
+          "text": "[3244739.716]  -> zwp_text_input_v1@19.hide_input_panel()"
+        },
+        {
+          "line_number": 1127,
+          "text": "[3244740.316]  -> zwp_text_input_v1@19.deactivate(wl_seat@7)"
+        },
+        {
+          "line_number": 1442,
+          "text": "desktop failed: real keyboard input did not produce the expected prompt"
+        }
+      ]
+    }
+  ]
+}

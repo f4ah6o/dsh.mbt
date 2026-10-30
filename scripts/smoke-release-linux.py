@@ -476,11 +476,19 @@ class Harness:
                         'child_running_before_term': True, 'child_running_after_term': False,
                         'observed_descendants': descendants, 'all_observed_descendants_exited': True}, count
             if app.poll() is not None:
-                require(interrupt_pid_file is None, 'GUI exited before active-worker TERM test')
                 # The process might exit between reading its log and poll().
                 if log.read_text(errors='replace') != text:
                     continue
-                require(app.returncode == 0, f'Packaged desktop exited {app.returncode}; see {log}')
+                detail = (f'backend={self.env["DSH_DESKTOP_BACKEND"]}, '
+                          f'returncode={app.returncode}, log={log}')
+                # Surface the app's bounded failure message without dumping its
+                # protocol trace or session data into the CI summary.
+                failure = next((line for line in reversed(text.splitlines())
+                                if line.startswith('desktop failed: ')), None)
+                detail += '; ' + (failure[:1000] if failure else 'no desktop failure diagnostic in log')
+                require(interrupt_pid_file is None,
+                        f'GUI exited before active-worker TERM test; {detail}')
+                require(app.returncode == 0, f'Packaged desktop exited; {detail}')
                 return text, count
             require(time.monotonic() < deadline, 'Packaged desktop exceeded 90-second deadline')
             time.sleep(0.05)
