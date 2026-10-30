@@ -53,6 +53,7 @@ pub fn Engine::prepare_stop_continuation(Self, NativeStopHookCheckpoint, String)
 pub fn Engine::preview(Self, EngineCommand) -> Result[Json, String]
 pub fn Engine::project_effect_stream(Self, EffectId, String, String) -> Result[Json, String]
 pub fn Engine::project_stream(Self, String, String, String) -> Result[Json, String]
+pub fn Engine::provider_context_measurement(Self, SessionId) -> Result[ProviderContextMeasurement?, String]
 pub fn Engine::prune_tool_results_for_send(Self, SessionId) -> Result[Json, String]
 pub fn Engine::record_effect_outcome(Self, String, Json) -> Result[Json, String]
 pub fn Engine::record_native_hook_invoked(Self, String, String, String, String?, dialect? : String) -> Result[NativeHookInvocationCheckpoint, String]
@@ -163,6 +164,18 @@ pub struct NativeSubagentPromptHookCheckpoint {
 pub fn NativeSubagentPromptHookCheckpoint::contexts(Self) -> Array[String]
 pub fn NativeSubagentPromptHookCheckpoint::is_initial(Self) -> Bool
 pub fn NativeSubagentPromptHookCheckpoint::prompt(Self) -> String
+
+pub struct ProviderContextMeasurement {
+  // private fields
+}
+pub fn ProviderContextMeasurement::json(Self) -> Json
+pub fn ProviderContextMeasurement::message_count(Self) -> Int
+pub fn ProviderContextMeasurement::messages_json_utf8_bytes(Self) -> Int
+pub fn ProviderContextMeasurement::request_json_utf8_bytes(Self) -> Int
+pub fn ProviderContextMeasurement::system_text_code_points(Self) -> Int
+pub fn ProviderContextMeasurement::system_text_utf8_bytes(Self) -> Int
+pub fn ProviderContextMeasurement::tool_count(Self) -> Int
+pub fn ProviderContextMeasurement::tools_json_utf8_bytes(Self) -> Int
 
 pub struct SessionId {
   // private fields

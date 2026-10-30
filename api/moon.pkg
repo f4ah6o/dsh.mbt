@@ -12,4 +12,5 @@ import {
   "f4ah6o/dsh/api",
   "f4ah6o/dsh/engine",
   "moonbitlang/core/json",
+  "moonbitlang/core/encoding/utf8",
 } for "test"

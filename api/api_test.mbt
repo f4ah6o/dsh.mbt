@@ -434,6 +434,58 @@ test "native API drains and settles typed effects against typed event identity" 
 }
 
 ///|
+test "native API measures its active provider request without draining effects" {
+  let api = @api.HarnessApi::new().unwrap()
+  api
+  .invoke("session_create", {
+    "id": "context-measurement-api",
+    "system_prompt": "System 🌙",
+  })
+  .unwrap()
+  |> ignore
+  api
+  .invoke("session_send", {
+    "session_id": "context-measurement-api",
+    "prompt": "Question 😀",
+  })
+  .unwrap()
+  |> ignore
+
+  let session_id = @engine.SessionId::new("context-measurement-api").unwrap()
+  let before = api.snapshot()
+  let measurement = api
+    .provider_context_measurement(session_id)
+    .unwrap()
+    .unwrap()
+  assert_eq(api.snapshot(), before)
+  assert_eq(measurement.message_count(), 1)
+  assert_eq(
+    measurement.system_text_code_points(),
+    "System 🌙"[:].char_length(),
+  )
+  let effects = api.take_typed_effects()
+  assert_eq(effects.length(), 1)
+  assert_eq(
+    measurement.request_json_utf8_bytes(),
+    @utf8.encode(effects[0].request().stringify()).length(),
+  )
+  assert_true(api.provider_context_measurement(session_id) is Ok(Some(_)))
+  assert_true(api.take_typed_effects().is_empty())
+
+  api
+  .complete_effect(effects[0].id(), {
+    "ok": true,
+    "content": "done",
+    "tool_calls": [],
+    "finish_reason": "stop",
+  })
+  .unwrap()
+  |> ignore
+  assert_true(api.provider_context_measurement(session_id) is Ok(None))
+  api.close()
+}
+
+///|
 test "closing an API drains no effects and refuses future completions or restore" {
   let api = @api.HarnessApi::new().unwrap()
   api.invoke("session_create", { "id": "closing" }).unwrap() |> ignore

@@ -625,6 +625,19 @@ pub fn HarnessApi::take_typed_effects(
 }
 
 ///|
+/// Measure the exact active provider request for one session without draining
+/// its host-effect queue. The result reports serialized UTF-8 sizes, not tokens.
+pub fn HarnessApi::provider_context_measurement(
+  self : HarnessApi,
+  session_id : @engine.SessionId,
+) -> Result[@engine.ProviderContextMeasurement?, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.provider_context_measurement(session_id)
+}
+
+///|
 pub fn HarnessApi::complete(
   self : HarnessApi,
   id : String,

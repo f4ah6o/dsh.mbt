@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add a read-only measurement of the active provider request's serialized UTF-8 size, system text length, message count, and tool-schema count. The measurement is not a token or model-window estimate.
 - Add explicit native archiving and default-off send-time archiving for directly pruned regular Read results up to 65,536 UTF-8 bytes. Store verified originals as bounded immutable objects, commit engine v2 references, manifest, remote send receipt, and revision through one snapshot CAS, expose original history through an authenticated endpoint and browser text controls, and refuse incompatible legacy MCP / ACP history surfaces. This is per-result threshold pruning, not token-aware context compaction.
 
 - Connect opt-in (`DSH_DESKTOP_IME=1`) Wayland desktop composition through the published gpui.mbt 0.10.2 text-input-v1 transport. Keep direct keyboard text mutually exclusive with compositor commits and fence native queued transactions on app cancellation before preedit delivery.
