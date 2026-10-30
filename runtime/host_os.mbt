@@ -632,6 +632,28 @@ fn SafeRoot::stat(_self : SafeRoot, fd : Int32) -> Result[FileVersion, String] {
 }
 
 ///|
+/// Read metadata for a regular file without reading or decoding its contents.
+/// This is useful for bounded accounting of interrupted temporary files.
+pub fn SafeRoot::file_version(
+  self : SafeRoot,
+  relative_path : String,
+) -> Result[FileVersion, String] {
+  let fd = match self.open_regular(relative_path) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  defer ignore(c_close(fd))
+  let version = match self.stat(fd) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  match self.verify_mapping(relative_path, false) {
+    Ok(_) => Ok(version)
+    Err(error) => Err(error)
+  }
+}
+
+///|
 pub fn SafeRoot::read_text(
   self : SafeRoot,
   relative_path : String,
