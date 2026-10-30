@@ -44,13 +44,15 @@ fn native_hook_assert_foreign_receipt_preserved(
   command_id : String,
   owner : String,
 ) -> Unit raise {
-  assert_true(runtime.state.receipts.any(receipt => {
-    native_receipt_owner(receipt) == owner &&
-    string_field(receipt, "command_id") == Some(command_id) &&
-    string_field(receipt, "payload_fingerprint") ==
-    Some("prior-owner-fingerprint") &&
-    string_field(receipt, "status") == Some("completed")
-  }))
+  assert_true(
+    runtime.state.receipts.any(receipt => {
+      native_receipt_owner(receipt) == owner &&
+      string_field(receipt, "command_id") == Some(command_id) &&
+      string_field(receipt, "payload_fingerprint") ==
+      Some("prior-owner-fingerprint") &&
+      string_field(receipt, "status") == Some("completed")
+    }),
+  )
 }
 
 ///|

@@ -363,17 +363,13 @@ async test "native receipts survive owner changes and reopen without replaying e
     let session_b = "receipt-owner-b-session"
     assert_true(
       runtime
-        .invoke("session_create", { "id": session_a, "title": "Owner A" })
-        .unwrap()
-        .1
-        .is_empty(),
+      .invoke("session_create", { "id": session_a, "title": "Owner A" })
+      .unwrap().1.is_empty(),
     )
     assert_true(
       runtime
-        .invoke("session_create", { "id": session_b, "title": "Owner B" })
-        .unwrap()
-        .1
-        .is_empty(),
+      .invoke("session_create", { "id": session_b, "title": "Owner B" })
+      .unwrap().1.is_empty(),
     )
     let owner_a = runtime.state.identity_key
     let command_id = @protocol.uuid_v7_command_id_from_entropy(
@@ -393,12 +389,14 @@ async test "native receipts survive owner changes and reopen without replaying e
     assert_true(started_a)
     assert_eq(effects_a.length(), 1)
     runtime.scheduler.finish(control_a.unwrap())
-    runtime.finish_receipt(
+    runtime
+    .finish_receipt(
       command_id,
       owner_a,
       "uncertain",
       Some("simulated interrupted effect"),
-    ).unwrap()
+    )
+    .unwrap()
 
     let owner_b = "receipt-test:owner-b"
     let next_auth_revision = runtime.state.auth_revision + 1
@@ -421,12 +419,14 @@ async test "native receipts survive owner changes and reopen without replaying e
     assert_true(started_b)
     assert_eq(effects_b.length(), 1)
     runtime.scheduler.finish(control_b.unwrap())
-    runtime.finish_receipt(
+    runtime
+    .finish_receipt(
       command_id,
       owner_b,
       "uncertain",
       Some("simulated interrupted effect"),
-    ).unwrap()
+    )
+    .unwrap()
 
     let duplicate_b = native_runtime_command(
       runtime.state.workspace_id,
@@ -451,14 +451,18 @@ async test "native receipts survive owner changes and reopen without replaying e
       string_field(receipt, "command_id") == Some(command_id)
     })
     assert_eq(same_id_receipts.length(), 2)
-    assert_true(same_id_receipts.any(receipt => {
-      native_receipt_owner(receipt) == owner_a &&
-      string_field(receipt, "status") == Some("uncertain")
-    }))
-    assert_true(same_id_receipts.any(receipt => {
-      native_receipt_owner(receipt) == owner_b &&
-      string_field(receipt, "status") == Some("uncertain")
-    }))
+    assert_true(
+      same_id_receipts.any(receipt => {
+        native_receipt_owner(receipt) == owner_a &&
+        string_field(receipt, "status") == Some("uncertain")
+      }),
+    )
+    assert_true(
+      same_id_receipts.any(receipt => {
+        native_receipt_owner(receipt) == owner_b &&
+        string_field(receipt, "status") == Some("uncertain")
+      }),
+    )
     let retry_a = native_runtime_command(
       reopened.state.workspace_id,
       session_a,
