@@ -52,6 +52,45 @@ fn compaction_plan_required(
 }
 
 ///|
+fn compaction_plan_replace_field(
+  value : Json,
+  key : String,
+  replacement : Json,
+) -> Json {
+  match value {
+    Json::Object(items) => {
+      let copy = items.copy()
+      copy.set(key, replacement)
+      Json::object(copy)
+    }
+    _ => abort("Compaction planner fixture expected an object")
+  }
+}
+
+///|
+fn compaction_candidate_required(
+  engine : Engine,
+  session_id : String,
+  plan : Json,
+  summary : String,
+  max_summary_bytes : Int32,
+) -> Json {
+  match
+    engine.prepare_compaction_summary_candidate(
+      SessionId::from_validated(session_id),
+      plan,
+      summary,
+      1,
+      1048576,
+      1048576,
+      max_summary_bytes,
+    ) {
+    Ok(candidate) => candidate
+    Err(error) => abort(error)
+  }
+}
+
+///|
 test "compaction prefix planning selects whole old turns without mutation" {
   let engine = Engine::new([])
   ignore(
@@ -351,8 +390,167 @@ test "compaction prefix fingerprint detects same-count archive projection change
 }
 
 ///|
+test "compaction summary candidate binds a bounded summary without mutation" {
+  let engine = Engine::new([])
+  ignore(
+    success(
+      engine.invoke(
+        "session_create",
+        object([("id", Json::string("candidate-history"))]),
+      ),
+    ),
+  )
+  compaction_plan_complete_turn(engine, "candidate-history", "old", "answer")
+  compaction_plan_complete_turn(
+    engine, "candidate-history", "recent", "recent answer",
+  )
+  let plan = compaction_plan_required(
+    engine, "candidate-history", 1, 1048576, 1048576,
+  )
+  let summary = "Keep the old decision 🌙 and quote \"the source\"."
+  let summary_bytes = @utf8.encode(Json::string(summary).stringify()).length()
+  assert_eq(
+    provider_context_measure_json_bytes(Json::string(summary)).unwrap(),
+    summary_bytes,
+  )
+  let before = engine.snapshot()
+  let candidate = compaction_candidate_required(
+    engine, "candidate-history", plan, summary, summary_bytes,
+  )
+
+  assert_eq(engine.snapshot(), before)
+  assert_true(engine.take_effects().is_empty())
+  assert_eq(
+    required_string(candidate, "schema"),
+    "dsh.compaction-summary-candidate-v1",
+  )
+  assert_eq(required_field(candidate, "plan"), plan)
+  assert_eq(required_string(candidate, "summary"), summary)
+  assert_eq(
+    compaction_plan_field(candidate, "summary_json_utf8_bytes"),
+    summary_bytes,
+  )
+  assert_eq(required_string(candidate, "unit"), "serialized_utf8_bytes")
+  assert_eq(
+    required_string(required_field(candidate, "plan"), "source_events_sha256"),
+    required_string(plan, "source_events_sha256"),
+  )
+  assert_eq(
+    required_string(required_field(candidate, "plan"), "source_messages_sha256"),
+    required_string(plan, "source_messages_sha256"),
+  )
+
+  let forged_event_fingerprint = compaction_plan_replace_field(
+    plan,
+    "source_events_sha256",
+    Json::string("0".repeat(64)),
+  )
+  let forged_message_fingerprint = compaction_plan_replace_field(
+    plan,
+    "source_messages_sha256",
+    Json::string("0".repeat(64)),
+  )
+  assert_true(
+    engine.prepare_compaction_summary_candidate(
+      SessionId::from_validated("candidate-history"),
+      Json::string("not a plan"),
+      summary,
+      1,
+      1048576,
+      1048576,
+      1048576,
+    )
+    is Err(_),
+  )
+  assert_true(
+    engine.prepare_compaction_summary_candidate(
+      SessionId::from_validated("candidate-history"),
+      forged_event_fingerprint,
+      summary,
+      1,
+      1048576,
+      1048576,
+      1048576,
+    )
+    is Err(_),
+  )
+  assert_true(
+    engine.prepare_compaction_summary_candidate(
+      SessionId::from_validated("candidate-history"),
+      forged_message_fingerprint,
+      summary,
+      1,
+      1048576,
+      1048576,
+      1048576,
+    )
+    is Err(_),
+  )
+
+  assert_true(
+    engine.prepare_compaction_summary_candidate(
+      SessionId::from_validated("candidate-history"),
+      plan,
+      summary,
+      1,
+      1048576,
+      1048576,
+      summary_bytes - 1,
+    )
+    is Err(_),
+  )
+  assert_eq(engine.snapshot(), before)
+  assert_true(engine.take_effects().is_empty())
+}
+
+///|
+test "compaction summary candidate rejects changed source event fingerprint" {
+  let original = "x".repeat(96)
+  let (engine, result_seq) = archive_plan_fixture(original)
+  compaction_plan_complete_turn(engine, "test", "recent", "answer")
+  let plan = compaction_plan_required(engine, "test", 1, 1048576, 1048576)
+  let archive = engine
+    .plan_tool_result_archive(SessionId::from_validated("test"), result_seq)
+    .unwrap()
+  let prune_event = engine.sessions.get("test").unwrap().events[archive.pruned_sequence()]
+  let projection = required_string(prune_event.data, "content")
+  let config = prune_config_from_event(prune_event.data) catch {
+    Invalid(message) => abort(message)
+  }
+  let source = archive_test_object_source(archive, original, projection, config)
+  ignore(engine.commit_tool_result_archive(archive, source))
+  let current = compaction_plan_required(engine, "test", 1, 1048576, 1048576)
+  assert_eq(
+    compaction_plan_field(plan, "expected_event_count"),
+    compaction_plan_field(current, "expected_event_count"),
+  )
+  assert_true(
+    required_string(plan, "source_events_sha256") !=
+    required_string(current, "source_events_sha256"),
+  )
+  let before_candidate = engine.snapshot()
+
+  assert_true(
+    engine.prepare_compaction_summary_candidate(
+      SessionId::from_validated("test"),
+      plan,
+      "summary",
+      1,
+      1048576,
+      1048576,
+      1048576,
+    )
+    is Err(_),
+  )
+  assert_eq(engine.snapshot(), before_candidate)
+  assert_true(engine.take_effects().is_empty())
+}
+
+///|
 test "compaction prefix message digest tracks pruning dependencies in retained turns" {
-  let engine = completed_engine_with_tool_result("x".repeat(96))
+  let engine = completed_engine_with_tool_result(
+    "a".repeat(48) + "b".repeat(48),
+  )
   compaction_plan_complete_turn(engine, "test", "recent", "answer")
   let before = compaction_plan_required(engine, "test", 1, 1048576, 1048576)
   let before_event_count = compaction_plan_field(before, "expected_event_count")
@@ -382,6 +580,69 @@ test "compaction prefix message digest tracks pruning dependencies in retained t
     required_string(before, "source_messages_sha256") !=
     required_string(after, "source_messages_sha256"),
   )
+
+  // Change a valid pruning policy on an event outside the selected range while
+  // keeping its projected text the same byte length.
+  let session = engine.sessions.get("test").unwrap()
+  let prune_seq = session.events.length() - 1
+  let prune_event = session.events[prune_seq]
+  let result_seq = compaction_plan_field(prune_event.data, "result_seq")
+  let original = required_string(session.events[result_seq].data, "content")
+  let old_projection = required_string(prune_event.data, "content")
+  let config = ToolResultPruneConfig::new(
+    code_point_length(PRUNE_MARKER) + 7,
+    5,
+    2,
+  ).unwrap()
+  let new_projection = prune_text(original, config).unwrap()
+  assert_true(old_projection != new_projection)
+  assert_eq(
+    @utf8.encode(old_projection).length(),
+    @utf8.encode(new_projection).length(),
+  )
+  assert_true(prune_seq > compaction_plan_field(after, "source_last_seq"))
+  archive_replace_event_field(
+    session,
+    prune_seq,
+    "content",
+    Json::string(new_projection),
+  )
+  archive_replace_event_field(session, prune_seq, "head_chars", integer(5))
+  archive_replace_event_field(session, prune_seq, "tail_chars", integer(2))
+
+  let after_same_count_change = compaction_plan_required(
+    engine, "test", 1, 1048576, 1048576,
+  )
+  assert_eq(
+    compaction_plan_field(after, "expected_event_count"),
+    compaction_plan_field(after_same_count_change, "expected_event_count"),
+  )
+  assert_eq(
+    required_string(after, "source_events_sha256"),
+    required_string(after_same_count_change, "source_events_sha256"),
+  )
+  assert_true(
+    required_string(after, "source_messages_sha256") !=
+    required_string(after_same_count_change, "source_messages_sha256"),
+  )
+  let current_snapshot = engine.snapshot()
+  let restored = Engine::new(test_tools())
+  assert_true(restored.restore(current_snapshot) is Ok(_))
+  assert_true(restored.take_effects().is_empty())
+  assert_true(
+    engine.prepare_compaction_summary_candidate(
+      SessionId::from_validated("test"),
+      after,
+      "summary",
+      1,
+      1048576,
+      1048576,
+      1048576,
+    )
+    is Err(_),
+  )
+  assert_eq(engine.snapshot(), current_snapshot)
+  assert_true(engine.take_effects().is_empty())
 }
 
 ///|
@@ -454,6 +715,17 @@ test "compaction prefix keeps completed approval and tool correlation together" 
 
   let plan = compaction_plan_required(
     engine, "plan-approved-turn", 1, 1048576, 1048576,
+  )
+  let before_candidate = engine.snapshot()
+  let candidate = compaction_candidate_required(
+    engine, "plan-approved-turn", plan, "The approved write was completed and correlated with its result.",
+    1048576,
+  )
+  assert_eq(engine.snapshot(), before_candidate)
+  assert_true(engine.take_effects().is_empty())
+  assert_eq(
+    required_string(required_field(candidate, "plan"), "source_events_sha256"),
+    required_string(plan, "source_events_sha256"),
   )
   let session = engine.sessions.get("plan-approved-turn").unwrap()
   let first_seq = compaction_plan_field(plan, "source_first_seq")

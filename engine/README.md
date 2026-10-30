@@ -13,6 +13,7 @@ Engine::take_effects() -> Array[Json]
 Engine::complete(effect_id : String, result : Json) -> Result[Json, String]
 Engine::provider_context_measurement(session_id : SessionId) -> Result[ProviderContextMeasurement?, String]
 Engine::plan_compaction_prefix(session_id, retain_recent_turns, max_source_event_json_utf8_bytes, max_source_messages_json_utf8_bytes) -> Result[Json?, String]
+Engine::prepare_compaction_summary_candidate(session_id, plan, summary, retain_recent_turns, max_source_event_json_utf8_bytes, max_source_messages_json_utf8_bytes, max_summary_json_utf8_bytes) -> Result[Json, String]
 Engine::project_stream(effect_id : String, content : String, reasoning : String) -> Result[Json, String]
 Engine::snapshot() -> Json
 Engine::restore(snapshot : Json) -> Result[Unit, String]
@@ -52,6 +53,18 @@ queued effects and the snapshot unchanged. Its byte counts exclude the future
 compaction instruction and summary output; they are not token counts,
 provider-wire sizes, or context-window guarantees. The query does not archive
 or replace history and does not increase storage capacity.
+
+`prepare_compaction_summary_candidate` re-plans with the same explicit options
+and compares every plan field, including `source_events_sha256` and
+`source_messages_sha256`, before binding caller-supplied summary text to the
+fresh plan. It measures the serialized JSON string against the caller's summary
+byte limit, capped at 1 MiB. A stale plan, missing prefix, or oversized summary
+returns an error. The result is an in-memory candidate envelope with the exact
+fresh plan and planning options; it does not append events, replace or archive
+history, enqueue provider/tool/hook effects, or survive restore. A later
+mutation must repeat the freshness check inside its own transaction. This
+candidate API does not implement summary generation, storage reduction, or a
+durable quota.
 
 The v2 engine slice can verify a canonical `dsh.tool-result-archive-object-v2`
 text object, produce a compact candidate snapshot, commit that same projection

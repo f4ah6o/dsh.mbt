@@ -160,6 +160,7 @@ native regression fixture は実際の Read effect で 60,003-byte output を同
 隔離 test filesystem での結果は、実端末の電源断、全 OS/filesystem の durability、長時間 storage soak を証明するものではありません。
 
 この機能は bounded per-result projection と opt-in archive です。CLI と PWA は別の maintenance command を自動発行しません。
+engine の `prepare_compaction_summary_candidate` は caller-supplied summary を read-only prefix plan に一時的に束縛し、event と projected-message の両 fingerprint を再照合します。provider を呼ばず、candidate を保存せず、原本 event を置換しません。
 token meter、aggregate pressure trigger、summary generation、自動 live compaction、spill、GC / object cleanup は含みません。
 運用上の条件は[次の移植作業](../issues/open/0001-upstream-parity.md)を参照してください。
 
