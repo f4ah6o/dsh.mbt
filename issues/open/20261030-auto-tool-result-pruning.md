@@ -72,4 +72,4 @@ pruning は保存量を増やし得る。token budget、巨大 prompt、同一 t
 
 ### 2026-10-30 実装・検証記録
 
-実装担当: gpt-6-luna / max。独立レビュー: gpt-6.1-sol / xhigh、修正後の差分に指摘なし。`moon test engine api --target all` は各 backend 146/146 PASS、`moon check engine api runtime --target all` と `moon fmt --check engine api runtime` PASS。native runtime 全体は worker を指定して 207/211、外部 MCP 子プロセス cleanup 3 件と signal cleanup 1 件が FAIL（原因未確定）。auto-prune を伴う native store 保存失敗の専用試験は未実行。実アカウント、iPhone、macOS、Tailnet は未実行。最終 CI と PR は別途確認する。
+実装担当: gpt-6-luna / max。独立レビュー: gpt-6.1-sol / xhigh、修正後の差分に指摘なし。`moon test engine api --target all` は各 backend 146/146 PASS、`moon check engine api runtime --target all` と `moon fmt --check engine api runtime` PASS。native runtime 全体は worker を指定して 207/211、外部 MCP 子プロセス cleanup 3 件と signal cleanup 1 件が FAIL（原因未確定）。追加テスト `moon test --target native --filter 'native auto-prune *' runtime` は 2/2 PASS。予約 checkpoint の CAS 失敗で hook 0 回、最終 checkpoint の CAS 失敗で effect 未返却と reopen 後の原本保持を確認。rename 後の結果不明は未検証。実アカウント、iPhone、macOS、Tailnet は未実行。最終 CI と PR は別途確認する。
