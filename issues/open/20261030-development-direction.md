@@ -210,7 +210,7 @@ OpenCode は LLM provider 接続と Agent Runtime Backend を分ける。#66 の
 | [#84](https://github.com/f4ah6o/dsh.mbt/pull/84) `9777af34c4c8c21c5734ca468e513578c44b6655` | bounded byte-preserving SafeRoot read。archive storage や deterministic read-race coverage は含まない。 |
 | [#85](https://github.com/f4ah6o/dsh.mbt/pull/85) `169de36cf0419e02f764454f337c997f29dd336a` | engine-only v2 archive candidate / commit / verified restore。native object store、manifest / receipt transaction、history API、web / ACP は未実装。 |
 | [#86](https://github.com/f4ah6o/dsh.mbt/pull/86) `a64a335c25f9c5ae797f12a2d2c6c1b3c602ed5b` | command receipt を owner + ID で scope。過去に上書きされた receipt は復元しない。 |
-| [#87](https://github.com/f4ah6o/dsh.mbt/pull/87) `0ec05cbdc7ff02a3150fa7a01984567a5ef6fa06` | eligible regular Read result の手動 durable archive。旧 head の CLI 承認 event 欠落は修正し、固定 head の独立レビューは完了、CI は進行中。一般 compaction ではなく、power-loss は未検証。 |
+| [#87](https://github.com/f4ah6o/dsh.mbt/pull/87) `0ec05cbdc7ff02a3150fa7a01984567a5ef6fa06` | eligible regular Read result の手動 durable archive。旧 head の CLI 承認 event 欠落は修正し、固定 head の独立レビューは完了。portable/native と Node 不在 verifier は pass、ARM GUI build は失敗し原因調査中、残る CI は進行中。一般 compaction ではなく、power-loss は未検証。 |
 | [#89](https://github.com/f4ah6o/dsh.mbt/pull/89) `a2e5b3ae74bbb5eaf20e69933770dbba19546709` | 停止済み foreground child の bounded audit envelope を検証する inert codec。独立レビュー済み。保存、live owner 認証、background、再開、結果採用は未実装。 |
 | [#90](https://github.com/f4ah6o/dsh.mbt/pull/90) `c31926bfb608bb145d8eaf332dfa8ec0f09adc15` | 明示 opt-in の送信前 pruning と eligible Read 原本の durable archive。独立レビュー済み。MCP opt-in は拒否し、最新 result が縮約前に上限を超える場合や一般 context budget / summary は未解決。 |
 
