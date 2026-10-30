@@ -102,11 +102,19 @@ provisional row は accessible name と Canvas scene label で writing / partial
 effect は再発行しません。通常 CLI text stdout は final assistant message のみを表示し、`--json` は session snapshot
 を返すため partial / failed / cancelled turn の provisional row も含むことがあります。live compaction と spill は後続 parity work です。
 
-### Manual tool-result pruning
+### Tool-result pruning
 
 `session_prune_tool_results` は、idle または completed の native v1 session に対する明示的な state-change operation です。
 active turn、approval 待ち、read-only Session v4 import には適用できません。browser の **Trim outputs**、HTTP / gpui API、
 または `dsh prune-session SESSION_ID` から実行できます。
+
+`session_send` の任意 boolean `auto_prune_tool_results` を `true` にすると、新しい turn を開始する同じ transaction 内で
+この既定 policy を先に適用します。省略時と `false` は従来どおりです。auto path は settled な idle / completed / failed / cancelled
+session で使えます。failed / cancelled session の prune event も restore 時に検証されます。候補 session の容量確認が通るまで
+prune event、prompt、provider effect のいずれも live engine に公開しません。native runtime は admitted snapshot を保存してから
+effect を dispatch します。保存に失敗すると runtime は停止し、未保存の provider request は開始しません。
+failed / cancelled boundary に新しい prune event が記録された store は、当該 status を prune 対象外としていた旧 reader では拒否されます。
+その store はこの validation を含む版以降で開いてください。
 
 この処理は upstream の pinned
 [compaction-tool-result-pruner](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/compaction/compaction-tool-result-pruner)
@@ -122,7 +130,7 @@ pruning は original `tool/result` を変更せず、source / call identity、bu
 次の provider request は replay 検証済み event から組み立てた projection を使います。native runtime の serialized mutation path が
 成功した操作を checkpoint してから応答するため、保存失敗は session update を公開せず、provider/tool I/O も開始しません。
 
-これは手動の bounded projection です。token meter、pressure trigger、summary generation、自動 live compaction、spill は含みません。
+これは code point を基準にした bounded projection です。送信時の pruning も呼び出し単位で明示 opt-in します。token meter、pressure trigger、summary generation、自動 live compaction、spill は含みません。
 pruning event は保存量を増やし、canonical session の 262,144 UTF-16 code unit 上限と 32,768 event 上限は引き続き適用されます。
 capacity refusal は candidate snapshot を採用せず、元の transcript / event queue を保ちます。運用上の条件は
 [次の移植作業](../issues/open/0001-upstream-parity.md) を参照してください。
