@@ -2,7 +2,7 @@
 /// This is dsh.mbt's own bounded event format, not upstream Session v4. Effects
 /// are deliberately absent: restoring interrupted work never repeats I/O.
 pub fn Engine::snapshot(self : Engine) -> Json {
-  object([
+  let base = object([
     ("schema", Json::string("dsh.mbt-session-v1")),
     ("next_session", integer(self.next_session)),
     ("next_effect", integer(self.next_effect)),
@@ -13,13 +13,84 @@ pub fn Engine::snapshot(self : Engine) -> Json {
       ),
     ),
   ])
+  let mut has_archives = false
+  for id in self.order {
+    match self.sessions.get(id) {
+      Some(session) =>
+        for event in session.events {
+          if event.kind == EngineEventKind::ToolCompleted {
+            match event.data {
+              Json::Object(data) if data.get("archive_ref") is Some(_) =>
+                has_archives = true
+              _ => ()
+            }
+          }
+        }
+      None => ()
+    }
+  }
+  if has_archives {
+    let snapshot_fields = match base {
+      Json::Object(data) => data.copy()
+      _ => Map([])
+    }
+    snapshot_fields.set("schema", Json::string("dsh.mbt-session-v2"))
+    snapshot_fields.set("archives", native_archive_manifest_from_engine(self))
+    Json::object(snapshot_fields)
+  } else {
+    base
+  }
+}
+
+///|
+fn native_archive_manifest_from_engine(engine : Engine) -> Json {
+  let references : Array[Json] = []
+  let seen : Map[String, Bool] = Map([])
+  for id in engine.order {
+    match engine.sessions.get(id) {
+      Some(session) =>
+        for event in session.events {
+          if event.kind != EngineEventKind::ToolCompleted {
+            continue
+          }
+          match event.data {
+            Json::Object(data) =>
+              match data.get("archive_ref") {
+                Some(reference) => {
+                  let object_id = match reference {
+                    Json::Object(fields) =>
+                      match fields.get("object_id") {
+                        Some(Json::String(value)) => value
+                        _ => ""
+                      }
+                    _ => ""
+                  }
+                  if !object_id.is_empty() && seen.get(object_id) is None {
+                    seen[object_id] = true
+                    references.push(detached(reference))
+                  }
+                }
+                None => ()
+              }
+            _ => ()
+          }
+        }
+      None => ()
+    }
+  }
+  Json::array(references)
 }
 
 ///|
 /// Validate and replay an entire snapshot before replacing any live state.
 /// Derived messages are checked against the log rather than trusted. Running
 /// work is closed as interrupted; quiescent approval requests remain resumable.
-fn Engine::restore_impl(self : Engine, snapshot : Json) -> Result[Unit, String] {
+fn Engine::restore_impl(
+  self : Engine,
+  snapshot : Json,
+  archive_sources~ : Array[ToolResultArchiveSource] = [],
+  allow_archive_overflow~ : Bool = false,
+) -> Result[Unit, String] {
   try {
     match self.config_error {
       Some(message) => raise Invalid("Invalid tool configuration: \{message}")
@@ -33,6 +104,9 @@ fn Engine::restore_impl(self : Engine, snapshot : Json) -> Result[Unit, String] 
     let snapshot = checked_copy(snapshot)
     if required_string(snapshot, "schema", max=64) != "dsh.mbt-session-v1" {
       raise Invalid("Unsupported snapshot schema")
+    }
+    if native_archive_snapshot_has_markers(snapshot) {
+      raise Invalid("Archive references require verified v2 restore")
     }
     let next_session = int_value(
       required_field(snapshot, "next_session"),
@@ -51,7 +125,17 @@ fn Engine::restore_impl(self : Engine, snapshot : Json) -> Result[Unit, String] 
     let effect_ids : Map[String, Bool] = Map([])
     for
       value in array_value(required_field(snapshot, "sessions"), "sessions", 32) {
-      let session = restore_session(value, self.tools, effect_ids, next_effect)
+      let session_id = required_string(value, "id", max=128)
+      let has_archive_source = archive_sources.any(source => {
+        source.reference.session_id == session_id
+      })
+      let session = restore_session(
+        value,
+        self.tools,
+        effect_ids,
+        next_effect,
+        allow_archive_overflow=allow_archive_overflow && has_archive_source,
+      )
       if loaded.get(session.id) is Some(_) {
         raise Invalid("Duplicate snapshot session id")
       }
@@ -59,6 +143,55 @@ fn Engine::restore_impl(self : Engine, snapshot : Json) -> Result[Unit, String] 
       order.push(session.id)
     }
     validate_fork_lineage(loaded, order)
+    if !archive_sources.is_empty() {
+      let validator = self.copy_state()
+      validator.sessions.clear()
+      validator.order.clear()
+      validator.effects.clear()
+      validator.queued.clear()
+      for id in order {
+        validator.sessions.set(id, loaded.get(id).unwrap())
+        validator.order.push(id)
+      }
+      for source in archive_sources {
+        let reference = source.reference
+        let session_id = match SessionId::new(reference.session_id) {
+          Ok(value) => value
+          Err(_) => raise Invalid("Archive reference session id is invalid")
+        }
+        let plan = match
+          validator.plan_tool_result_archive_impl(
+            session_id,
+            reference.result_seq,
+            Some(reference.pruned_seq),
+          ) {
+          Ok(value) => value
+          Err(error) =>
+            raise Invalid("Archived history provenance failed: " + error)
+        }
+        let session = validator.lookup(reference.session_id)
+        let (content, _) = archive_regular_result(
+          session.events[reference.result_seq],
+          reference.call_id,
+        )
+        let prune = session.events[reference.pruned_seq]
+        let projection = required_string(prune.data, "content")
+        let config = prune_config_from_event(prune.data)
+        if !archive_ref_matches_plan(
+            reference, plan, content, projection, config,
+          ) ||
+          content != source.content ||
+          projection != source.pruned_content {
+          raise Invalid(
+            "Archive source does not match eligible Read provenance",
+          )
+        }
+      }
+      for id in order {
+        let session = loaded.get(id).unwrap()
+        native_archive_compact_session(session, archive_sources)
+      }
+    }
     // A live native hook invocation reserves its largest valid result together
     // with the interrupted closure that restore will append. Check both on a
     // candidate engine before replacing state, without simulating retry starts
@@ -252,6 +385,7 @@ fn restore_session(
   tools : Array[Tool],
   effect_ids : Map[String, Bool],
   next_effect : Int32,
+  allow_archive_overflow~ : Bool = false,
 ) -> Session raise EngineError {
   restore_session_in_batches(
     value,
@@ -259,6 +393,7 @@ fn restore_session(
     effect_ids,
     next_effect,
     RESTORE_EVENT_BATCH_SIZE,
+    allow_archive_overflow~,
   )
 }
 
@@ -269,11 +404,13 @@ fn restore_session_in_batches(
   effect_ids : Map[String, Bool],
   next_effect : Int32,
   batch_size : Int32,
+  allow_archive_overflow~ : Bool = false,
 ) -> Session raise EngineError {
   if json_field(value, "source_format") == Some("deepseek-session-v4") {
     return restore_imported_session(value)
   }
-  if session_capacity_length(value) > SESSION_CAPACITY {
+  if !allow_archive_overflow &&
+    session_capacity_length(value) > SESSION_CAPACITY {
     raise Invalid("Snapshot session exceeds the 262144-character capacity")
   }
   let id = identifier(required_string(value, "id", max=128), "session id")
@@ -380,7 +517,8 @@ fn restore_session_in_batches(
     raise Invalid("Snapshot captured an impossible in-between transition")
   }
   let hook_result_projection = native_hook_result_capacity_projection(session)
-  if session_capacity_length(hook_result_projection.json()) > SESSION_CAPACITY {
+  if !allow_archive_overflow &&
+    session_capacity_length(hook_result_projection.json()) > SESSION_CAPACITY {
     raise Invalid("Snapshot leaves no room for native hook results")
   }
   if open_turn && hook_result_projection.events.length() + 40 > 32768 {

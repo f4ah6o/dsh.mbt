@@ -1,6 +1,7 @@
 import {
   "f4ah6o/dsh/verification/retry_math",
   "moonbitlang/core/json",
+  "moonbitlang/core/encoding/utf8",
 }
 
 import {

@@ -193,17 +193,17 @@ fn projected_tool_result(
   event : Event,
   content_by_result : Map[Int32, String],
 ) -> Json {
-  match content_by_result.get(event.seq) {
-    None => detached(event.data)
-    Some(content) =>
-      match event.data {
-        Json::Object(values) => {
-          let data = values.copy()
-          data.set("content", Json::string(content))
-          Json::object(data)
-        }
-        _ => detached(event.data)
+  match event.data {
+    Json::Object(values) => {
+      let data = values.copy()
+      ignore(data.remove("archive_ref"))
+      match content_by_result.get(event.seq) {
+        Some(content) => data.set("content", Json::string(content))
+        None => ()
       }
+      Json::object(data)
+    }
+    _ => detached(event.data)
   }
 }
 
