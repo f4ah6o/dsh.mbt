@@ -18,8 +18,10 @@ The reviewed C surface is limited to these `extern "C"` symbols:
 dsh_auth_open_url              dsh_auth_random
 dsh_auth_unix_time             dsh_crypto_sha256
 dsh_crypto_verify_rs256        dsh_exec_worker
-dsh_fs_atomic_write            dsh_fs_close
+dsh_fs_atomic_create_no_replace dsh_fs_atomic_write
+dsh_fs_close
 dsh_fs_create_exclusive        dsh_fs_list_dir
+dsh_fs_list_dir_strict
 dsh_fs_mapping_matches         dsh_fs_open_file
 dsh_fs_open_root               dsh_fs_read_fd
 dsh_fs_root_matches            dsh_fs_set_root_mode
@@ -48,6 +50,8 @@ stdout/stderr flushing, and the low-level SHA-256 / RS256 primitives used by
 MoonBit authentication code. Its filesystem walk rejects absolute paths and
 `.` / `..` components as a syscall-level guard; MoonBit still owns workspace
 admission, path normalization, bounds, tool policy, and error semantics.
+The strict directory enumerator reports symbolic links and special entries so
+quota inventories can reject them rather than silently omit their size.
 The process trampoline pins and verifies the workspace before changing
 directory, applies resource limits, then closes every inherited descriptor
 above stdin/stdout/stderr before executing the requested program. This also
@@ -65,6 +69,20 @@ task-drain behavior. It also compares an OS error code with the platform's
 address-in-use constant; MoonBit decides whether an implicit default port may
 fall back, performs the loopback bind, and reports the selected endpoint.
 
+POSIX `SafeRoot::create_atomic_no_replace` writes and syncs a same-directory
+temporary, verifies its no-follow inode identity, and publishes it with
+`linkat` so an existing name is not replaced. It checks the destination inode
+after publication, gives the temporary a different number of leading dots from
+the destination leaf to avoid case-fold aliases, removes only the staged inode
+on ordinary cleanup, and syncs the parent directory. A reported
+`OutcomeUnknown` requires the caller to reconcile the path before retrying.
+Process termination can leave a `.dsh-*.tmp` or `..dsh-*.tmp` entry; it starts
+owner-only while content is written and is never a valid destination. No
+power-loss guarantee is claimed. SafeRoot does not isolate
+against a hostile process with the same user identity: such a process can race
+the temporary-name checks, and the post-publication check can only detect some
+of those races after the destination has become visible.
+
 `host_os_win32.c` implements the same SafeRoot contract on Windows x64 without
 `openat`: every component is opened with `FILE_FLAG_OPEN_REPARSE_POINT` and must
 not carry `FILE_ATTRIBUTE_REPARSE_POINT`, the configured root handle is
@@ -76,6 +94,13 @@ temporary, `ReplaceFileW` / `MoveFileExW(MOVEFILE_WRITE_THROUGH)`, an identity
 check after the commit, and cleanup on failure. `set_root_mode(0700)` and 0600
 file creates install an owner-only DACL; stat maps the owner SID to a stable
 `uid` and reports 0600 / 0700 only when the DACL grants no other trustee.
+Atomic no-replace creation uses a flushed same-directory `CREATE_NEW`
+temporary and `MoveFileExW(MOVEFILE_WRITE_THROUGH)` without
+`MOVEFILE_REPLACE_EXISTING`, so an existing destination is preserved. A
+failure reported after the move may still leave the destination published and
+must be reconciled by the caller. Windows does not provide the POSIX parent
+directory `fsync` contract here, and process termination can leave a temporary
+file; no power-loss guarantee is claimed.
 `oauth_os_win32.c` supplies BCrypt CSPRNG bytes, `ShellExecuteW` for validated
 http(s) URLs, and the Unix clock. `signal_os.c` installs a
 `SetConsoleCtrlHandler` that maps CTRL_C / CTRL_BREAK to SIGINT (2) and

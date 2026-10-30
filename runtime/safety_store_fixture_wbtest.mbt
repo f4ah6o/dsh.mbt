@@ -43,6 +43,8 @@ async test "native store persists one private versioned envelope and locks write
 
     let state = {
       engine: Json::object({ "checkpoint": Json::string("fixture") }),
+      archive_objects: [],
+      archive_sources: [],
       receipts: [
         Json::object({
           "command_id": Json::string("019a-test-fixture-command"),
@@ -114,6 +116,8 @@ async test "native store persists one private versioned envelope and locks write
     )
     let changed = {
       engine: Json::object({ "checkpoint": Json::string("stale") }),
+      archive_objects: [],
+      archive_sources: [],
       receipts: [],
       server_id: reopened.server_id,
       workspace_id: reopened.workspace_id,
@@ -149,7 +153,7 @@ async test "native store rejects unsupported receipt envelope versions" {
     assert_true(
       store.root.write_atomic(
         "sessions.json",
-        "{\"schema\":\"dsh.native-host-v1\",\"format_version\":2,\"engine\":null,\"receipts\":[]}",
+        "{\"schema\":\"dsh.native-host-v1\",\"format_version\":3,\"engine\":null,\"receipts\":[]}",
         permission=0o600,
       )
       is Ok(_),

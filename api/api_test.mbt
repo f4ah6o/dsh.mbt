@@ -100,6 +100,104 @@ test "tool-result pruning is a validated state-change capability for idle sessio
 }
 
 ///|
+test "detached API candidates isolate session pruning until explicit adoption" {
+  let api = @api.HarnessApi::new().unwrap()
+  api.invoke("session_create", { "id": "detached-api" }).unwrap() |> ignore
+  api
+  .invoke("session_send", {
+    "session_id": "detached-api",
+    "prompt": "read one file",
+  })
+  .unwrap()
+  |> ignore
+  let provider = api.take_typed_effects()[0]
+  api
+  .complete_effect(provider.id(), {
+    "ok": true,
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "detached-read",
+        "name": "read",
+        "arguments": "{\"file_path\":\"large.txt\"}",
+      },
+    ],
+    "finish_reason": "tool_calls",
+  })
+  .unwrap()
+  |> ignore
+  let read = api.take_typed_effects()[0]
+  match
+    api.complete_effect(read.id(), {
+      "ok": true,
+      "content": "x".repeat(512),
+      "is_error": false,
+    }) {
+    Ok(_) => ()
+    Err(error) => fail("read effect failed: " + error)
+  }
+  let follow_up = api.take_typed_effects()[0]
+  api
+  .complete_effect(follow_up.id(), {
+    "ok": true,
+    "content": "done",
+    "tool_calls": [],
+    "finish_reason": "stop",
+  })
+  .unwrap()
+  |> ignore
+  api.invoke("session_create", { "id": "detached-other" }).unwrap() |> ignore
+  api
+  .invoke("session_send", {
+    "session_id": "detached-other",
+    "prompt": "keep this turn pending",
+  })
+  .unwrap()
+  |> ignore
+  let other_effect = api.take_typed_effects()[0]
+  let before = api.snapshot()
+  let candidate = api.detached_copy().unwrap()
+  let prune = candidate
+    .invoke("session_prune_tool_results", {
+      "session_id": "detached-api",
+      "threshold_chars": 100,
+      "head_chars": 40,
+      "tail_chars": 20,
+    })
+    .unwrap()
+  assert_eq(get(prune, "chars_removed"), 413)
+  assert_eq(api.snapshot(), before)
+  assert_true(candidate.snapshot() != before)
+  assert_eq(
+    get(
+      candidate
+      .invoke("session_get", { "session_id": "detached-other" })
+      .unwrap(),
+      "status",
+    ),
+    "running",
+  )
+  candidate
+  .complete_effect(other_effect.id(), {
+    "ok": true,
+    "content": "candidate only",
+    "tool_calls": [],
+    "finish_reason": "stop",
+  })
+  .unwrap()
+  |> ignore
+  assert_eq(
+    get(
+      api.invoke("session_get", { "session_id": "detached-other" }).unwrap(),
+      "status",
+    ),
+    "running",
+  )
+  candidate.close()
+  api.close()
+}
+
+///|
 test "session fork is exposed as a validated GUI capability and returns lineage" {
   let api = @api.HarnessApi::new().unwrap()
   api.invoke("session_create", { "id": "fork-api", "max_steps": 3 }).unwrap()

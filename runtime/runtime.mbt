@@ -355,7 +355,12 @@ async fn NativeRuntime::open(
   match loaded.engine {
     Json::Null => ()
     engine_snapshot =>
-      match api.restore(engine_snapshot) {
+      match
+        (if loaded.archive_sources.is_empty() {
+          api.restore(engine_snapshot)
+        } else {
+          api.restore_archived(engine_snapshot, loaded.archive_sources)
+        }) {
         Ok(_) => ()
         Err(error) => {
           api.close()
@@ -471,6 +476,8 @@ async fn NativeRuntime::open(
     session_start_semaphore: @async.Semaphore::Semaphore(1, initial_value=1),
     state: {
       engine: api.snapshot(),
+      archive_objects: loaded.archive_objects,
+      archive_sources: loaded.archive_sources,
       receipts: recovered_receipts,
       acp_sessions: loaded.acp_sessions,
       server_id: loaded.server_id,
@@ -512,6 +519,8 @@ fn NativeRuntime::checkpoint_locked(
   }
   let next = {
     engine: self.api.snapshot(),
+    archive_objects: self.state.archive_objects,
+    archive_sources: self.state.archive_sources,
     receipts: self.state.receipts,
     acp_sessions: self.state.acp_sessions,
     server_id: self.state.server_id,
@@ -659,9 +668,17 @@ async fn NativeRuntime::invoke(
   } else {
     input
   }
+  if operation == "session_prune_tool_results" {
+    return self.prune_and_archive_locked(input)
+  }
   let result = match self.api.invoke(operation, input) {
     Ok(value) => value
     Err(error) => return Err(error)
+  }
+  if operation == "session_get" && native_session_has_archive_markers(result) {
+    return Err(
+      "This history contains archived tool results; use the native archive-aware history endpoint",
+    )
   }
   match self.checkpoint_locked() {
     Err(error) => Err(error)
@@ -1177,6 +1194,33 @@ fn native_remote_cursor(
 }
 
 ///|
+fn native_session_has_archive_markers(value : Json) -> Bool {
+  match object_field(value, "messages") {
+    Some(Json::Array(messages)) =>
+      if messages.any(message => {
+          string_field(message, "role") == Some("tool") &&
+          object_field(message, "archive_ref") is Some(_)
+        }) {
+        return true
+      }
+    _ => ()
+  }
+  match object_field(value, "events") {
+    Some(Json::Array(events)) =>
+      events.any(event => {
+        let kind = string_field(event, "type")
+        (kind == Some("tool/completed") || kind == Some("tool/result")) &&
+        object_field(
+          object_field(event, "data").unwrap_or(Json::null()),
+          "archive_ref",
+        )
+        is Some(_)
+      })
+    _ => false
+  }
+}
+
+///|
 fn native_safe_session(value : Json) -> Json {
   let allowed = [
     "id", "title", "status", "turn_id", "step", "messages", "todos", "stream_revision",
@@ -1187,7 +1231,11 @@ fn native_safe_session(value : Json) -> Json {
     Json::Object(fields) =>
       for key in allowed {
         if fields.get(key) is Some(field) {
-          result[key] = field
+          if key == "messages" {
+            result[key] = native_public_archive_messages(field)
+          } else {
+            result[key] = field
+          }
         }
       }
     _ => ()
@@ -1241,6 +1289,96 @@ fn native_safe_session(value : Json) -> Json {
 }
 
 ///|
+/// Protocol-v1 clients may not understand archive references. Replace the
+/// pruned projection with an explicit marker so they cannot mistake it for
+/// the original tool output. Archive-aware clients can fetch the source using
+/// the reference's result sequence.
+fn native_archived_tool_output_marker() -> String {
+  "[Archived tool output. The original is available from the archive history endpoint.]"
+}
+
+///|
+fn native_public_archive_messages(value : Json) -> Json {
+  match value {
+    Json::Array(messages) =>
+      Json::array(
+        messages.map(message => {
+          let fields = match message {
+            Json::Object(value) => value
+            _ => return message
+          }
+          if fields.get("archive_ref") is None {
+            return message
+          }
+          let public = fields.copy()
+          public["content"] = Json::string(native_archived_tool_output_marker())
+          public["archive_original_available"] = Json::boolean(true)
+          Json::object(public)
+        }),
+      )
+    _ => value
+  }
+}
+
+///|
+/// CLI JSON keeps the full event history for local audit and scripting. Replace
+/// only archived content so a pruned projection cannot be mistaken for the
+/// original tool output.
+fn native_cli_archive_events(value : Json) -> Json {
+  match value {
+    Json::Array(events) =>
+      Json::array(
+        events.map(event => {
+          let kind = string_field(event, "type").unwrap_or("")
+          let data = object_field(event, "data").unwrap_or(Json::null())
+          if (kind != "tool/completed" && kind != "tool/result") ||
+            object_field(data, "archive_ref") is None {
+            return event
+          }
+          let event_fields = match event {
+            Json::Object(fields) => fields.copy()
+            _ => return event
+          }
+          let data_fields = match data {
+            Json::Object(fields) => fields.copy()
+            _ => return event
+          }
+          data_fields["content"] = Json::string(
+            native_archived_tool_output_marker(),
+          )
+          data_fields["archive_original_available"] = Json::boolean(true)
+          event_fields["data"] = Json::object(data_fields)
+          Json::object(event_fields)
+        }),
+      )
+    _ => value
+  }
+}
+
+///|
+fn native_cli_safe_session(value : Json) -> Json {
+  if !native_session_has_archive_markers(value) {
+    return value
+  }
+  match value {
+    Json::Object(fields) => {
+      let public = fields.copy()
+      match fields.get("messages") {
+        Some(messages) =>
+          public["messages"] = native_public_archive_messages(messages)
+        None => ()
+      }
+      match fields.get("events") {
+        Some(events) => public["events"] = native_cli_archive_events(events)
+        None => ()
+      }
+      Json::object(public)
+    }
+    _ => value
+  }
+}
+
+///|
 async fn NativeRuntime::remote_snapshot(
   self : NativeRuntime,
   identity_key : String,
@@ -1268,7 +1406,7 @@ async fn NativeRuntime::remote_snapshot(
     let detail = match
       self.api.invoke("session_get", { "session_id": session_id }) {
       Ok(value) => native_safe_session(value)
-      Err(_) => continue
+      Err(error) => return Err(error)
     }
     summaries.push(detail)
   }
@@ -1339,6 +1477,91 @@ async fn NativeRuntime::remote_session(
     "revision": self.state.revision,
     "cursor": cursor,
     "projection": { "session": detail },
+  })
+}
+
+///|
+/// CLI status reads must not return an archived projection as if it were the
+/// original tool output. Keep the read under the runtime gate and use the same
+/// explicit archived-output marker as the web history projection.
+async fn NativeRuntime::cli_session_projection(
+  self : NativeRuntime,
+  session_id : String,
+) -> Result[Json, String] {
+  self.gate.acquire()
+  defer self.gate.release()
+  if self.stopped || self.closed {
+    return Err("native runtime is stopped")
+  }
+  let value = match
+    self.api.invoke("session_get", { "session_id": session_id }) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  if string_field(value, "id") != Some(session_id) {
+    return Err("session not found")
+  }
+  Ok(native_cli_safe_session(value))
+}
+
+///|
+/// Return the original bytes for one verified native archive reference. The
+/// persisted object is reread and revalidated on every request.
+async fn NativeRuntime::archive_original(
+  self : NativeRuntime,
+  session_id : String,
+  result_sequence : Int32,
+  identity_key : String,
+) -> Result[Json, String] {
+  self.gate.acquire()
+  defer self.gate.release()
+  if self.stopped || self.closed {
+    return Err("native runtime is stopped")
+  }
+  if identity_key != self.state.identity_key {
+    return Err("caller identity is no longer authorized")
+  }
+  if result_sequence < 0 || result_sequence >= 32768 {
+    return Err("archive result sequence is invalid")
+  }
+  let mut selected_source : @engine.ToolResultArchiveSource? = None
+  for source in self.state.archive_sources {
+    let reference = source.reference().json()
+    if string_field(reference, "session_id") == Some(session_id) &&
+      int_field(reference, "result_seq") == Some(result_sequence) {
+      selected_source = Some(source)
+    }
+  }
+  let source = match selected_source {
+    Some(value) => value
+    None => return Err("archived tool result was not found")
+  }
+  let engine_reference = source.reference().json()
+  let reference = match
+    NativeToolResultArchiveRef::from_json(engine_reference) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  let mut selected_locator : NativeArchiveLocator? = None
+  for locator in self.state.archive_objects {
+    if locator.object_id == reference.object_id() {
+      selected_locator = Some(locator)
+    }
+  }
+  let locator = match selected_locator {
+    Some(value) => value
+    None => return Err("archive object locator was not found")
+  }
+  let object = match self.store.read_archive_object(locator, reference) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  Ok({
+    "session_id": session_id,
+    "result_sequence": result_sequence,
+    "call_id": string_field(object.reference().json(), "call_id").unwrap_or(""),
+    "object_id": object.reference().object_id(),
+    "content": object.original_content(),
   })
 }
 
@@ -1441,11 +1664,13 @@ fn native_public_receipt(receipt : Json) -> Json {
 fn native_replace_receipt(
   receipts : Array[Json],
   command_id : String,
+  identity_key : String,
   replacement : Json,
 ) -> Array[Json] {
   let output : Array[Json] = []
   for receipt in receipts {
-    if string_field(receipt, "command_id") == Some(command_id) {
+    if native_receipt_owner(receipt) == identity_key &&
+      string_field(receipt, "command_id") == Some(command_id) {
       output.push(replacement)
     } else {
       output.push(receipt)
@@ -1683,6 +1908,113 @@ async fn NativeRuntime::accept_remote_command(
     }
     if status == "rejected" {
       ()
+    } else if command.operation == "session_prune_tool_results" {
+      let session_id = match command.session_id {
+        Some(value) => value
+        None => {
+          status = "rejected"
+          error_message = Some("tool-result pruning requires a session id")
+          ""
+        }
+      }
+      if status == "accepted" {
+        let control = match
+          @async.protect_from_cancel(async fn() {
+            self.scheduler.begin(
+              session_id,
+              command.command_id,
+              self.state.revision + 1,
+            )
+          }) {
+          Ok(value) => value
+          Err(error) => return Err(error)
+        }
+        let reservation_revision = self.state.revision + 1
+        let reservation = native_receipt(
+          self.state.workspace_id,
+          command.command_id,
+          fingerprint,
+          "accepted",
+          Some(reservation_revision),
+          None,
+          None,
+        )
+        retained.push(native_receipt_with_owner(reservation, identity_key))
+        self.state.receipts = retained
+        match self.checkpoint_locked() {
+          Err(error) => {
+            @async.protect_from_cancel(async fn() {
+              self.scheduler.finish(control)
+            })
+            return Err(error)
+          }
+          Ok(_) => ()
+        }
+        match
+          self.prune_and_archive_locked(
+            dispatch_input,
+            receipt=Some({
+              command_id: command.command_id,
+              fingerprint,
+              identity_key,
+            }),
+          ) {
+          Ok((_, archive_effects)) => {
+            @async.protect_from_cancel(async fn() {
+              self.scheduler.finish(control)
+            })
+            if !archive_effects.is_empty() {
+              self.stopped = true
+              return Err("archive prune unexpectedly produced effects")
+            }
+            let completed = match
+              self.existing_command_receipt_locked(
+                command, identity_key, fingerprint,
+              ) {
+              Some(value) => value
+              None => {
+                self.stopped = true
+                return Err("durable archive receipt disappeared")
+              }
+            }
+            return Ok((completed, [], false, None))
+          }
+          Err(error) => {
+            @async.protect_from_cancel(async fn() {
+              self.scheduler.finish(control)
+            })
+            if self.stopped {
+              return Err(error)
+            }
+            let rejected = native_receipt(
+              self.state.workspace_id,
+              command.command_id,
+              fingerprint,
+              "rejected",
+              None,
+              None,
+              Some(bounded_tool_text(error)),
+            )
+            self.state.receipts = native_replace_receipt(
+              self.state.receipts,
+              command.command_id,
+              identity_key,
+              native_receipt_with_owner(rejected, identity_key),
+            )
+            match self.checkpoint_locked() {
+              Err(persistence_error) => return Err(persistence_error)
+              Ok(_) => {
+                let final_receipt = self
+                  .existing_command_receipt_locked(
+                    command, identity_key, fingerprint,
+                  )
+                  .unwrap_or(Json::null())
+                return Ok((final_receipt, [], false, None))
+              }
+            }
+          }
+        }
+      }
     } else {
       match self.api.invoke(command.operation, dispatch_input) {
         Err(error) => {
@@ -2019,6 +2351,7 @@ async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
       self.state.receipts = native_replace_receipt(
         self.state.receipts,
         command_id,
+        identity_key,
         native_receipt_with_owner(receipt, identity_key),
       )
       match self.checkpoint_locked() {
@@ -2053,6 +2386,7 @@ async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
           self.state.receipts = native_replace_receipt(
             self.state.receipts,
             command_id,
+            identity_key,
             native_receipt_with_owner(receipt, identity_key),
           )
           match self.checkpoint_locked() {
@@ -2091,6 +2425,7 @@ async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
           self.state.receipts = native_replace_receipt(
             self.state.receipts,
             command_id,
+            identity_key,
             native_receipt_with_owner(receipt, identity_key),
           )
           match self.checkpoint_locked() {
@@ -2117,9 +2452,7 @@ async fn NativeRuntime::finish_remote_prompt_after_hook_locked(
 
 ///|
 fn native_session_effect_mutation(operation : String) -> Bool {
-  ["session_send", "tool_approve", "session_prune_tool_results", "session_fork"].contains(
-    operation,
-  )
+  ["session_send", "tool_approve", "session_fork"].contains(operation)
 }
 
 ///|
@@ -2216,6 +2549,7 @@ async fn NativeRuntime::finish_receipt(
       self.state.receipts = native_replace_receipt(
         self.state.receipts,
         command_id,
+        identity_key,
         replacement,
       )
       return self.checkpoint_locked()
@@ -2261,6 +2595,29 @@ async fn[X] NativeRuntime::mcp_handle(
   group : @async.TaskGroup[X],
 ) -> Result[String, String] {
   let (tool_name, session_id) = native_mcp_call_scope(line)
+  if tool_name == "session_prune_tool_results" || tool_name == "session_get" {
+    let preview_api = match self.api.detached_copy() {
+      Ok(value) => value
+      Err(error) => return Err(error)
+    }
+    // Run the raw ProtocolServer validation on an isolated engine. A valid
+    // prune may mutate only this detached candidate; it is discarded below.
+    let preflight = preview_api.mcp_handle(line)
+    preview_api.close()
+    match preflight {
+      None => return Ok("")
+      Some(response) if !native_mcp_response_succeeded(response) =>
+        return Ok(response)
+      Some(_) => ()
+    }
+  }
+  if tool_name == "session_prune_tool_results" {
+    return Ok(
+      native_mcp_error_response(
+        line, "Tool-result pruning requires the native archive transaction and is unavailable through MCP",
+      ),
+    )
+  }
   if [
       "session_send", "tool_approve", "session_prune_tool_results", "session_fork",
     ].contains(tool_name) {
@@ -2277,6 +2634,23 @@ async fn[X] NativeRuntime::mcp_handle(
   if self.stopped || self.closed {
     self.gate.release()
     return Err("native runtime is stopped")
+  }
+  if tool_name == "session_get" {
+    match session_id {
+      Some(id) =>
+        match self.api.invoke("session_get", { "session_id": id }) {
+          Ok(session) if native_session_has_archive_markers(session) => {
+            self.gate.release()
+            return Ok(
+              native_mcp_error_response(
+                line, "This history contains archived tool results; use the native archive-aware history endpoint",
+              ),
+            )
+          }
+          _ => ()
+        }
+      None => ()
+    }
   }
   let prompt_hooks_enabled = tool_name == "session_send" &&
     (self.hooks.has_user_prompt_submit() || self.hooks.has_session_start())

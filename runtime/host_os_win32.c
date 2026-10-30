@@ -1419,6 +1419,234 @@ int dsh_fs_create_exclusive(int root_fd, const char *path, const uint8_t *data,
   return status;
 }
 
+/* The same-directory MoveFileExW call omits MOVEFILE_REPLACE_EXISTING, so the
+ * final name is published atomically only when absent. MOVEFILE_WRITE_THROUGH
+ * asks Windows to flush the move before returning. A failure after a successful
+ * move is reported with `published` set; callers must reconcile the final path. */
+int dsh_fs_atomic_create_no_replace(int root_fd, const char *root_path,
+                                    const char *path, const uint8_t *data,
+                                    int length, int max_bytes,
+                                    int requested_mode, int *published) {
+  if (published) *published = 0;
+  if (!published || !root_path || !path || !data || length < 0 ||
+      max_bytes < 0 || max_bytes > 33554432 || length > max_bytes) {
+    return DSH_EINVAL;
+  }
+  int status = dsh_fs_mapping_matches(root_fd, root_path, path, 0);
+  if (status != 1) return status < 0 ? -status : DSH_ESTALE;
+
+  wchar_t *relative = NULL;
+  status = dsh_utf8_to_wide(path, &relative);
+  if (status != 0) return status;
+  for (wchar_t *cursor = relative; *cursor; ++cursor) {
+    if (dsh_is_separator(*cursor)) *cursor = L'\\';
+  }
+  status = dsh_validate_relative(relative);
+  if (status != 0) {
+    free(relative);
+    return status;
+  }
+
+  wchar_t root[DSH_MAX_WIDE_PATH];
+  status = dsh_table_root_path(root_fd, root, DSH_MAX_WIDE_PATH);
+  if (status != 0) {
+    free(relative);
+    return status;
+  }
+  wchar_t *target = dsh_join(root, relative);
+  if (!target) {
+    free(relative);
+    return DSH_ENOMEM;
+  }
+  const wchar_t *destination_leaf = wcsrchr(relative, L'\\');
+  destination_leaf = destination_leaf ? destination_leaf + 1 : relative;
+  wchar_t *parent = _wcsdup(target);
+  if (!parent) {
+    free(target);
+    free(relative);
+    return DSH_ENOMEM;
+  }
+  wchar_t *separator = wcsrchr(parent, L'\\');
+  if (separator && separator != parent + 2) {
+    *separator = L'\0';
+  } else if (separator) {
+    parent[3] = L'\0';
+  }
+
+  int mode = requested_mode & 0777;
+  SECURITY_ATTRIBUTES attributes;
+  PSECURITY_DESCRIPTOR descriptor = NULL;
+  PACL acl = NULL;
+  SECURITY_ATTRIBUTES *attributes_pointer = NULL;
+  if (mode == 0600) {
+    status = dsh_owner_only_security(0, &attributes, &descriptor, &acl);
+    if (status != 0) {
+      free(parent);
+      free(target);
+      free(relative);
+      return status;
+    }
+    attributes_pointer = &attributes;
+  }
+
+  static volatile LONG dsh_atomic_create_serial = 0;
+  HANDLE temporary_handle = INVALID_HANDLE_VALUE;
+  wchar_t *temporary = NULL;
+  int64_t temporary_device = 0;
+  int64_t temporary_index = 0;
+  int have_temporary_identity = 0;
+  const wchar_t *temporary_prefix =
+      destination_leaf[0] == L'.' && destination_leaf[1] != L'.'
+          ? L"..dsh"
+          : L".dsh";
+  for (int attempt = 0; attempt < 32; ++attempt) {
+    wchar_t name[64];
+    LONG serial = InterlockedIncrement(&dsh_atomic_create_serial);
+    int written = _snwprintf(name, 64, L"%ls-%lu-%ld.tmp", temporary_prefix,
+                             (unsigned long)GetCurrentProcessId(), (long)serial);
+    if (written <= 0 || written >= 64) {
+      status = DSH_ENAMETOOLONG;
+      break;
+    }
+    temporary = dsh_join(parent, name);
+    if (!temporary) {
+      status = DSH_ENOMEM;
+      break;
+    }
+    wchar_t *api = dsh_api_path(temporary);
+    if (!api) {
+      status = DSH_ENOMEM;
+      break;
+    }
+    temporary_handle = CreateFileW(
+        api, GENERIC_WRITE | FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
+        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+        attributes_pointer, CREATE_NEW,
+        FILE_ATTRIBUTE_NORMAL | FILE_FLAG_OPEN_REPARSE_POINT, NULL);
+    DWORD error = GetLastError();
+    free(api);
+    if (temporary_handle != INVALID_HANDLE_VALUE) {
+      if (dsh_identity(temporary_handle, &temporary_device,
+                       &temporary_index) == 0) {
+        have_temporary_identity = 1;
+        status = 0;
+      } else {
+        status = DSH_EIO;
+      }
+      break;
+    }
+    status = dsh_map_win_error(error);
+    if (error != ERROR_ALREADY_EXISTS && error != ERROR_FILE_EXISTS) break;
+    free(temporary);
+    temporary = NULL;
+  }
+  if (acl) LocalFree(acl);
+  if (descriptor) LocalFree(descriptor);
+  if (temporary_handle == INVALID_HANDLE_VALUE) {
+    if (status == DSH_EEXIST) status = DSH_EAGAIN;
+    free(temporary);
+    free(parent);
+    free(target);
+    free(relative);
+    return status;
+  }
+
+  int offset = 0;
+  while (status == 0 && offset < length) {
+    DWORD chunk = (DWORD)(length - offset);
+    if (chunk > (1u << 20)) chunk = 1u << 20;
+    DWORD written = 0;
+    if (!WriteFile(temporary_handle, data + offset, chunk, &written, NULL)) {
+      status = dsh_map_win_error(GetLastError());
+      break;
+    }
+    if (written == 0) {
+      status = DSH_EIO;
+      break;
+    }
+    offset += (int)written;
+  }
+  if (status == 0 && !FlushFileBuffers(temporary_handle)) {
+    status = dsh_map_win_error(GetLastError());
+  }
+  CloseHandle(temporary_handle);
+  temporary_handle = INVALID_HANDLE_VALUE;
+
+  if (status == 0) {
+    int mapping = dsh_fs_mapping_matches(root_fd, root_path, path, 0);
+    if (mapping != 1) status = mapping < 0 ? -mapping : DSH_ESTALE;
+  }
+  if (status == 0) {
+    int64_t staged[10];
+    if (dsh_stat_path(temporary, 0, staged) != 0 ||
+        staged[0] != temporary_device || staged[1] != temporary_index) {
+      status = DSH_ESTALE;
+    }
+  }
+  if (status == 0) {
+    wchar_t *target_api = dsh_api_path(target);
+    wchar_t *temporary_api = dsh_api_path(temporary);
+    if (!target_api || !temporary_api) {
+      status = DSH_ENOMEM;
+    } else if (!MoveFileExW(temporary_api, target_api,
+                            MOVEFILE_WRITE_THROUGH)) {
+      DWORD error = GetLastError();
+      status = dsh_map_win_error(error);
+      int64_t current[10];
+      int target_status = dsh_stat_path(target, 0, current);
+      if (target_status == 0 && current[0] == temporary_device &&
+          current[1] == temporary_index) {
+        *published = 1;
+      } else {
+        int64_t staged[10];
+        int temporary_status = dsh_stat_path(temporary, 0, staged);
+        if (temporary_status != 0 || !have_temporary_identity ||
+            staged[0] != temporary_device || staged[1] != temporary_index) {
+          /* Neither pathname proves that the staged inode stayed private. */
+          *published = 1;
+        }
+      }
+    } else {
+      *published = 1;
+    }
+    free(target_api);
+    free(temporary_api);
+  }
+
+  if (*published) {
+    int64_t committed[10];
+    if (status == 0 &&
+        (dsh_stat_path(target, 0, committed) != 0 ||
+         committed[0] != temporary_device ||
+         committed[1] != temporary_index)) {
+      status = DSH_ESTALE;
+    }
+    int mapping = dsh_fs_mapping_matches(root_fd, root_path, path, 0);
+    if (status == 0 && mapping != 1) {
+      status = mapping < 0 ? -mapping : DSH_ESTALE;
+    }
+  }
+
+  /* Ordinary failures remove only the temporary inode we created. If the
+   * publication outcome is uncertain, never remove the final name. */
+  if (temporary && have_temporary_identity) {
+    int64_t staged[10];
+    if (dsh_stat_path(temporary, 0, staged) == 0 &&
+        staged[0] == temporary_device && staged[1] == temporary_index) {
+      wchar_t *api = dsh_api_path(temporary);
+      if (api) {
+        DeleteFileW(api);
+        free(api);
+      }
+    }
+  }
+  free(temporary);
+  free(parent);
+  free(target);
+  free(relative);
+  return status;
+}
+
 int dsh_fs_unlink(int root_fd, const char *path) {
   if (!path || !*path) return DSH_EINVAL;
   wchar_t *relative = NULL;
@@ -1488,8 +1716,9 @@ static int dsh_append_list_entry(uint8_t *buffer, int capacity, size_t *used,
   return 0;
 }
 
-int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
-                    int capacity) {
+static int dsh_fs_list_dir_impl(int root_fd, const char *path,
+                                uint8_t *buffer, int capacity,
+                                int include_special) {
   if (capacity < 0 || !buffer) return -DSH_EINVAL;
   wchar_t *relative = NULL;
   int status = dsh_utf8_to_wide(path ? path : ".", &relative);
@@ -1556,13 +1785,17 @@ int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
         wcscmp(data.cFileName, L"..") == 0) {
       continue;
     }
-    if (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) continue;
     char kind = 0;
-    if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+    if (data.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) {
+      kind = 'X';
+    } else if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
       kind = 'D';
     } else if (!(data.dwFileAttributes & FILE_ATTRIBUTE_DEVICE)) {
       kind = 'F';
     } else {
+      kind = 'X';
+    }
+    if (kind == 'X' && !include_special) {
       continue;
     }
     int append =
@@ -1580,6 +1813,16 @@ int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
   }
   FindClose(find);
   return result == 0 ? (int)used : result;
+}
+
+int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
+                    int capacity) {
+  return dsh_fs_list_dir_impl(root_fd, path, buffer, capacity, 0);
+}
+
+int dsh_fs_list_dir_strict(int root_fd, const char *path, uint8_t *buffer,
+                           int capacity) {
+  return dsh_fs_list_dir_impl(root_fd, path, buffer, capacity, 1);
 }
 
 int dsh_fs_sync_directory(const char *path) {

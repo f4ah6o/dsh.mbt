@@ -13,6 +13,33 @@ priv struct RemoteClient {
 }
 
 ///|
+fn browser_archive_original_response(
+  payload : Json,
+  session_id : String,
+  result_sequence : String,
+  object_id : String,
+) -> Result[String, String] {
+  let sequence_matches = match browser_json_field(payload, "result_sequence") {
+    Some(Json::Number(number, ..)) if number == number.trunc() &&
+      number >= 0.0 &&
+      number < 32768.0 => number.trunc().to_int().to_string() == result_sequence
+    _ => false
+  }
+  if browser_json_string(payload, "session_id") != session_id ||
+    !sequence_matches ||
+    browser_json_string(payload, "object_id") != object_id {
+    return Err(
+      "アーカイブ履歴の応答が要求と一致しません。",
+    )
+  }
+  match browser_json_field(payload, "content") {
+    Some(Json::String(content)) => Ok(content)
+    _ =>
+      Err("アーカイブ履歴に元のツール出力がありません。")
+  }
+}
+
+///|
 fn browser_state_result(value : Json) -> Json {
   match browser_json_field(value, "state") {
     Some(state) => state
@@ -266,6 +293,28 @@ async fn RemoteClient::selected_session(
       }
       Ok(browser_state_result(result))
     }
+  }
+}
+
+///|
+/// Fetch one archived tool result through the authenticated, byte-verifying
+/// native history endpoint.
+async fn RemoteClient::archive_original(
+  _self : RemoteClient,
+  session_id : String,
+  result_sequence : String,
+  object_id : String,
+) -> Result[String, String] {
+  let path = "/api/v1/archive/" +
+    browser_encode_uri_component(session_id) +
+    "/" +
+    result_sequence
+  match request_json(path) {
+    Err(error) => Err(error.message)
+    Ok(payload) =>
+      browser_archive_original_response(
+        payload, session_id, result_sequence, object_id,
+      )
   }
 }
 

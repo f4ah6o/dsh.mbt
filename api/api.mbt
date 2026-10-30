@@ -7,6 +7,10 @@ pub struct HarnessApi {
   priv registry : @capability.Registry
   priv protocol : @mcp.ProtocolServer
   priv operations : Map[String, @capability.TypedCapability[Json, Json]]
+  priv external_mcp_tools : Array[Json]
+  priv skill_tool : Json?
+  priv lsp_tool : Json?
+  priv subagent_tool : Json?
   priv native_prompt_contexts : Ref[Array[String]]
   priv native_session_start_contexts : Ref[Array[String]]
   priv native_hook_context_source_kind : Ref[String]
@@ -16,6 +20,13 @@ pub struct HarnessApi {
 ///|
 priv suberror InitError {
   InitError(String)
+}
+
+///|
+fn api_detached_json(value : Json) -> Json raise InitError {
+  @json.parse(value.stringify()) catch {
+    _ => raise InitError("cannot detach configured tool descriptor")
+  }
 }
 
 ///|
@@ -161,6 +172,7 @@ fn create_api(
   skill_tool : Json?,
   lsp_tool : Json?,
   subagent_tool : Json?,
+  engine_override? : @engine.Engine,
 ) -> HarnessApi raise InitError {
   let owner = checked(@core.App::new())
   checked(owner.start())
@@ -200,7 +212,10 @@ fn create_api(
       }
     None => ()
   }
-  let engine = @engine.Engine::new(plugins.tools())
+  let engine = match engine_override {
+    Some(value) => value
+    None => @engine.Engine::new(plugins.tools())
+  }
   let native_prompt_contexts : Ref[Array[String]] = Ref([])
   let native_session_start_contexts : Ref[Array[String]] = Ref([])
   let native_hook_context_source_kind = Ref("hooks-claude-code")
@@ -233,7 +248,7 @@ fn create_api(
         false,
       ),
       (
-        "session_prune_tool_results", "Trim tool results", "Durably project oversized tool results to bounded head and tail text for future provider requests. The full original results remain in session history.",
+        "session_prune_tool_results", "Trim tool results", "Project oversized tool results to bounded head and tail text for future provider requests. Native runtime hosts store eligible verified Read originals in immutable archive objects and expose them through a separate history endpoint; this mutation is unavailable through the generic MCP carrier.",
         false,
       ),
       (
@@ -371,6 +386,10 @@ fn create_api(
     registry,
     protocol,
     operations,
+    external_mcp_tools: external_mcp_tools.map(api_detached_json),
+    skill_tool: skill_tool.map(api_detached_json),
+    lsp_tool: lsp_tool.map(api_detached_json),
+    subagent_tool: subagent_tool.map(api_detached_json),
     native_prompt_contexts,
     native_session_start_contexts,
     native_hook_context_source_kind,
@@ -386,6 +405,30 @@ pub fn HarnessApi::new(
   subagent_tool~ : Json? = None,
 ) -> Result[HarnessApi, String] {
   Ok(create_api(external_mcp_tools, skill_tool, lsp_tool, subagent_tool)) catch {
+    InitError(error) => Err(error)
+  }
+}
+
+///|
+/// Build a detached API with the same configured capability inventory and
+/// restore the current durable history into it. The returned API owns an
+/// independent engine; callers can stage state changes there and adopt its
+/// snapshot only after a durable checkpoint succeeds.
+pub fn HarnessApi::detached_copy(
+  self : HarnessApi,
+) -> Result[HarnessApi, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  Ok(
+    create_api(
+      self.external_mcp_tools,
+      self.skill_tool,
+      self.lsp_tool,
+      self.subagent_tool,
+      engine_override=self.engine.detached_copy(),
+    ),
+  ) catch {
     InitError(error) => Err(error)
   }
 }
@@ -852,6 +895,67 @@ pub fn HarnessApi::record_native_hook_result(
 ///|
 pub fn HarnessApi::snapshot(self : HarnessApi) -> Json {
   self.engine.snapshot()
+}
+
+///|
+/// Restore a v2 archived engine snapshot only after the caller has verified
+/// every immutable object source. The engine revalidates source identity and
+/// historical provenance during hydration.
+pub fn HarnessApi::restore_archived(
+  self : HarnessApi,
+  snapshot : Json,
+  sources : Array[@engine.ToolResultArchiveSource],
+) -> Result[Unit, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.restore_archived(snapshot, sources)
+}
+
+///|
+/// Re-derive the exact direct-prune provenance for one native archive
+/// candidate. This method is read-only; the native host must hold its mutation
+/// gate and validate the persisted object before calling it.
+pub fn HarnessApi::plan_tool_result_archive(
+  self : HarnessApi,
+  session_id : @engine.SessionId,
+  result_seq : Int32,
+) -> Result[@engine.ToolResultArchivePlan, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.plan_tool_result_archive(session_id, result_seq)
+}
+
+///|
+/// Build a compact archive snapshot without changing this API's authoritative
+/// engine. The native host must durably publish the object and checkpoint this
+/// returned snapshot before invoking `commit_tool_result_archive` or
+/// `restore_archived` on the live API.
+pub fn HarnessApi::tool_result_archive_candidate(
+  self : HarnessApi,
+  plan : @engine.ToolResultArchivePlan,
+  source : @engine.ToolResultArchiveSource,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.tool_result_archive_candidate(plan, source)
+}
+
+///|
+/// Apply one verified archive to this API's engine. Native callers must invoke
+/// this only after the matching object and v2 manifest checkpoint are known to
+/// have been published.
+pub fn HarnessApi::commit_tool_result_archive(
+  self : HarnessApi,
+  plan : @engine.ToolResultArchivePlan,
+  source : @engine.ToolResultArchiveSource,
+) -> Result[Unit, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.commit_tool_result_archive(plan, source)
 }
 
 ///|

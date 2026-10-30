@@ -518,6 +518,175 @@ int dsh_fs_create_exclusive(int root_fd, const char *path, const uint8_t *data,
   return status;
 }
 
+static int dsh_unlink_if_same(int parent, const char *name,
+                              const struct stat *identity) {
+  for (;;) {
+    struct stat current;
+    if (fstatat(parent, name, &current, AT_SYMLINK_NOFOLLOW) != 0) {
+      return errno == ENOENT ? 0 : errno;
+    }
+    if (current.st_dev != identity->st_dev ||
+        current.st_ino != identity->st_ino) {
+      return EAGAIN;
+    }
+    if (unlinkat(parent, name, 0) == 0 || errno == ENOENT) return 0;
+    if (errno == EINTR) continue;
+    return errno;
+  }
+}
+
+static int dsh_entry_matches_identity(int parent, const char *name,
+                                      const struct stat *identity) {
+  struct stat current;
+  if (fstatat(parent, name, &current, AT_SYMLINK_NOFOLLOW) != 0) {
+    return errno == ENOENT ? 0 : -errno;
+  }
+  if (!S_ISREG(current.st_mode) || current.st_dev != identity->st_dev ||
+      current.st_ino != identity->st_ino) {
+    return 0;
+  }
+  return 1;
+}
+
+/* Publish only a complete, synced inode. linkat() supplies the atomic
+ * no-replace point; a post-publication cleanup or directory-sync error is
+ * reported with `published` set so callers know the destination may exist. */
+int dsh_fs_atomic_create_no_replace(int root_fd, const char *root_path,
+                                    const char *path, const uint8_t *data,
+                                    int length, int max_bytes,
+                                    int requested_mode, int *published) {
+  if (published) *published = 0;
+  if (!published || !root_path || !path || length < 0 || !data ||
+      max_bytes < 0 || max_bytes > 33554432) {
+    return EINVAL;
+  }
+  if (length > max_bytes) return EFBIG;
+  int mapping = dsh_fs_mapping_matches(root_fd, root_path, path, 0);
+  if (mapping != 1) return mapping < 0 ? -mapping : EAGAIN;
+
+  char name[NAME_MAX + 1];
+  int parent = dsh_open_parent(root_fd, path, name, sizeof(name));
+  if (parent < 0) return errno;
+  mapping = dsh_fs_mapping_matches(root_fd, root_path, path, 0);
+  if (mapping != 1) {
+    int saved = mapping < 0 ? -mapping : EAGAIN;
+    close(parent);
+    return saved;
+  }
+
+  mode_t mode = (mode_t)(requested_mode & 0777);
+  static volatile unsigned long serial = 0;
+  char temporary[NAME_MAX + 1];
+  int fd = -1;
+  for (int attempt = 0; attempt < 32; ++attempt) {
+    unsigned long next = __sync_add_and_fetch(&serial, 1);
+    const char *prefix = name[0] == '.' && name[1] != '.' ? "..dsh" : ".dsh";
+    int n = snprintf(temporary, sizeof(temporary), "%s-%ld-%lu.tmp", prefix,
+                     (long)getpid(), next);
+    if (n < 0 || (size_t)n >= sizeof(temporary)) {
+      close(parent);
+      return ENAMETOOLONG;
+    }
+    fd = openat(parent, temporary,
+                O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd >= 0 || errno != EEXIST) break;
+  }
+  if (fd < 0) {
+    int saved = errno;
+    close(parent);
+    return saved == EEXIST ? EAGAIN : saved;
+  }
+
+  int status = 0;
+  size_t offset = 0;
+  while (offset < (size_t)length) {
+    ssize_t count = write(fd, data + offset, (size_t)length - offset);
+    if (count < 0) {
+      if (errno == EINTR) continue;
+      status = errno;
+      break;
+    }
+    if (count == 0) {
+      status = EIO;
+      break;
+    }
+    offset += (size_t)count;
+  }
+  if (!status && fchmod(fd, mode) != 0) status = errno;
+  if (!status) {
+    int sync_status;
+    do {
+      sync_status = fsync(fd);
+    } while (sync_status != 0 && errno == EINTR);
+    if (sync_status != 0) status = errno;
+  }
+  struct stat temporary_identity;
+  int have_temporary_identity = fstat(fd, &temporary_identity) == 0;
+  if (!status && !have_temporary_identity) status = errno ? errno : EIO;
+  if (close(fd) != 0 && !status) status = errno;
+
+  if (!status) {
+    mapping = dsh_fs_mapping_matches(root_fd, root_path, path, 0);
+    if (mapping != 1) status = mapping < 0 ? -mapping : EAGAIN;
+  }
+  if (!status) {
+    int staged = dsh_entry_matches_identity(parent, temporary,
+                                            &temporary_identity);
+    if (staged != 1) status = staged < 0 ? -staged : EAGAIN;
+  }
+  if (!status) {
+    if (linkat(parent, temporary, parent, name, 0) != 0) {
+      int link_error = errno;
+      int destination_matches = dsh_entry_matches_identity(
+          parent, name, &temporary_identity);
+      int temporary_matches = dsh_entry_matches_identity(
+          parent, temporary, &temporary_identity);
+      if (destination_matches == 1) {
+        /* EEXIST can be reported after an earlier successful attempt or when
+         * another hard link names this exact staged inode. The caller cannot
+         * tell whether this operation or an earlier one created that link. */
+        *published = 1;
+        if (link_error == EEXIST) status = link_error;
+      } else {
+        status = link_error;
+        /* An I/O or interruption error can be returned after a remote
+         * filesystem has applied linkat(). If the final inode cannot be
+         * proven, callers must reconcile it before retrying. */
+        if (link_error != EEXIST || temporary_matches != 1 ||
+            destination_matches < 0) {
+          *published = 1;
+        }
+      }
+    } else {
+      *published = 1;
+    }
+  }
+
+  if (*published) {
+    int destination_matches = dsh_entry_matches_identity(
+        parent, name, &temporary_identity);
+    if (!status && destination_matches != 1) {
+      status = destination_matches < 0 ? -destination_matches : EAGAIN;
+    }
+    int cleanup_status = dsh_unlink_if_same(parent, temporary,
+                                            &temporary_identity);
+    int sync_status;
+    do {
+      sync_status = fsync(parent);
+    } while (sync_status != 0 && errno == EINTR);
+    if (!status && cleanup_status != 0) status = cleanup_status;
+    if (!status && sync_status != 0) status = errno;
+    mapping = dsh_fs_mapping_matches(root_fd, root_path, path, 0);
+    if (!status && mapping != 1) status = mapping < 0 ? -mapping : EAGAIN;
+  } else {
+    if (have_temporary_identity) {
+      (void)dsh_unlink_if_same(parent, temporary, &temporary_identity);
+    }
+  }
+  close(parent);
+  return status;
+}
+
 int dsh_fs_unlink(int root_fd, const char *path) {
   char name[NAME_MAX + 1];
   int parent = dsh_open_parent(root_fd, path, name, sizeof(name));
@@ -528,8 +697,9 @@ int dsh_fs_unlink(int root_fd, const char *path) {
   return status;
 }
 
-int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
-                    int capacity) {
+static int dsh_fs_list_dir_impl(int root_fd, const char *path,
+                                uint8_t *buffer, int capacity,
+                                int include_special) {
   if (capacity < 0) return -EINVAL;
   int fd = dsh_open_directory_beneath(root_fd, path);
   if (fd < 0) return -errno;
@@ -571,7 +741,7 @@ int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
       return -saved;
     }
     char kind = S_ISDIR(st.st_mode) ? 'D' : S_ISREG(st.st_mode) ? 'F' : 'X';
-    if (kind == 'X') continue;
+    if (kind == 'X' && !include_special) continue;
     size_t name_len = strlen(entry->d_name);
     if (used + name_len + 2 > (size_t)capacity) {
       closedir(dir);
@@ -584,6 +754,16 @@ int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
   }
   closedir(dir);
   return (int)used;
+}
+
+int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer,
+                    int capacity) {
+  return dsh_fs_list_dir_impl(root_fd, path, buffer, capacity, 0);
+}
+
+int dsh_fs_list_dir_strict(int root_fd, const char *path, uint8_t *buffer,
+                           int capacity) {
+  return dsh_fs_list_dir_impl(root_fd, path, buffer, capacity, 1);
 }
 
 int dsh_fs_sync_directory(const char *path) {
@@ -973,7 +1153,9 @@ int dsh_fs_stat_fd(int fd, int64_t *out) { (void)fd; (void)out; return ENOTSUP; 
 int dsh_fs_stat_root(int fd, int64_t *out) { (void)fd; (void)out; return ENOTSUP; }
 int dsh_fs_read_fd(int fd, uint8_t *buffer, int capacity) { (void)fd; (void)buffer; (void)capacity; return -ENOTSUP; }
 int dsh_fs_atomic_write(int root_fd, const char *root_path, const char *path, const uint8_t *data, int length, int mode, int create_parents, int has_expected, int force_mode, const int64_t *expected) { (void)root_fd; (void)root_path; (void)path; (void)data; (void)length; (void)mode; (void)create_parents; (void)has_expected; (void)force_mode; (void)expected; return ENOTSUP; }
+int dsh_fs_atomic_create_no_replace(int root_fd, const char *root_path, const char *path, const uint8_t *data, int length, int max_bytes, int mode, int *published) { (void)root_fd; (void)root_path; (void)path; (void)data; (void)length; (void)max_bytes; (void)mode; if (published) *published = 0; return ENOTSUP; }
 int dsh_fs_list_dir(int root_fd, const char *path, uint8_t *buffer, int capacity) { (void)root_fd; (void)path; (void)buffer; (void)capacity; return -ENOTSUP; }
+int dsh_fs_list_dir_strict(int root_fd, const char *path, uint8_t *buffer, int capacity) { (void)root_fd; (void)path; (void)buffer; (void)capacity; return -ENOTSUP; }
 int dsh_fs_sync_directory(const char *path) { (void)path; return ENOTSUP; }
 int dsh_os_uid(void) { return -1; }
 int dsh_os_pid(void) { return -1; }

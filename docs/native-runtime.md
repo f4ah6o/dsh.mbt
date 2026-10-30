@@ -47,6 +47,34 @@ moon run native --target native --release -- \
   --workspace /absolute/path/to/project
 ```
 
+## Archived Read results
+
+The explicit prune operation can move the original content of a directly
+pruned regular Read result into a bounded immutable object when its UTF-8
+content is at most 65,536 bytes. The engine stores the projection and archive
+reference in the transcript; the native manifest stores the matching object
+locator in the same versioned snapshot as the receipt and revision. The browser
+text transcript labels the projection and offers an explicit action that
+reopens and verifies the original object. CLI status views use the same explicit
+archived marker.
+
+Ordinary snapshots remain v1 when no archive references exist. A native archive
+uses the v2 outer envelope; older readers that do not understand archive
+references reject it. MCP legacy session history and ACP session history /
+event emission reject archived sessions. Forks, imports, active turns, and
+approval-waiting sessions are not eligible for externalization. Failed or
+unknown object publication is never adopted or retried automatically; an
+unknown final snapshot result stops the runtime so reopen can resolve the
+durable receipt.
+
+Limits are 256 referenced objects, 16 MiB aggregate original bytes, 16 MiB
+aggregate projection bytes, 7 MiB hydration expansion, 1 MiB per encoded object,
+64 MiB / 2,048 entries in the object directory (including temporary and orphan
+files), and 32 MiB for the outer snapshot. Unknown directory entry types fail
+closed. This operation is a manual archive boundary, not automatic context
+compaction, and it has no garbage collector. Back up the data directory before
+testing a build that changes the reader format.
+
 ## Windows x64 profile
 
 The Windows x64 profile is a bounded native host, not a port of every macOS /

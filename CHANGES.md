@@ -4,13 +4,21 @@
 
 ### Added
 
+- Add explicit native archiving for directly pruned regular Read results up to 65,536 UTF-8 bytes. Store verified originals as bounded immutable objects, commit the engine v2 references, manifest, receipts, and revision through one snapshot CAS, expose original history through an authenticated endpoint and browser text controls, and refuse incompatible legacy MCP / ACP history surfaces. Ordinary snapshots remain v1; archives are manual, not automatic context compaction.
+
 - Connect opt-in (`DSH_DESKTOP_IME=1`) Wayland desktop composition through the published gpui.mbt 0.10.2 text-input-v1 transport. Keep direct keyboard text mutually exclusive with compositor commits and fence native queued transactions on app cancellation before preedit delivery.
+
+### Fixed
+
+- Keep command receipts scoped to both owner identity and command ID when updating them, so a reopened host preserves receipts from earlier Tailnet owners.
 
 ### Migration
 
 - Updates the gpui dependency to 0.10.2, including the cancel/rearm fast-typing fix; no package version or Windows wiring change is needed. TextInput suppression is adapter-specific so ordinary Windows typing remains available outside active preedit. See `docs/wayland-ime-composition.md`.
 
 ### Limitations
+
+- Runtime storage is capped at 256 archive objects, 16 MiB each for aggregate original and projection bytes, 7 MiB hydration expansion, 64 MiB and 2,048 directory entries including temporary/orphan files, and a 32 MiB snapshot. Non-Read, oversized, imported, forked, active, and approval-waiting history remains unsupported for externalization. The checked-in Chromium smoke retrieves an archived original and verifies tamper rejection; power-loss durability across filesystems is not verified, and native filesystem regression tests run on the local Linux test host.
 
 - Wayland text-input-v1 only. X11/XIM is unchanged. Application-requested finish commits cached preedit rather than selecting an IME candidate. Physical IBus/Mozc and candidate popup qualification remain NOT RUN.
 

@@ -6,6 +6,8 @@ cd "$DSH_ROOT"
 
 DSH_TEST_ROOT=$(mktemp -d "${TMPDIR:-/tmp}/dsh-native-browser.XXXXXX")
 DSH_SERVER_LOG="$DSH_TEST_ROOT/server.log"
+DSH_ARCHIVE_SERVER_LOG="$DSH_TEST_ROOT/archive-server.log"
+DSH_ARCHIVE_FIXTURE_ROOT="$DSH_TEST_ROOT/archive-fixture"
 DSH_NATIVE_TARGET_DIR="_build/native/release"
 if [ "$(uname -s)" = "Darwin" ]; then
   DSH_NATIVE_TARGET_DIR="_build/native-macos-${MACOSX_DEPLOYMENT_TARGET:-13.0}/native/release"
@@ -23,6 +25,10 @@ if [ ! -d "$DSH_WEB_CWD" ]; then
   exit 1
 fi
 mkdir -p "$DSH_TEST_ROOT/data" "$DSH_TEST_ROOT/workspace"
+DSH_BROWSER_ARCHIVE_FIXTURE_ROOT="$DSH_ARCHIVE_FIXTURE_ROOT" \
+  moon test runtime/archive_runtime_wbtest.mbt \
+    --target native --deny-warn --no-parallelize --index 0 \
+    --target-dir "$DSH_TEST_ROOT/archive-tests"
 
 (
   cd "$DSH_WEB_CWD"
@@ -33,7 +39,17 @@ mkdir -p "$DSH_TEST_ROOT/data" "$DSH_TEST_ROOT/workspace"
     --port 0
 ) >"$DSH_SERVER_LOG" 2>&1 &
 DSH_SERVER_PID=$!
-trap 'kill "$DSH_SERVER_PID" 2>/dev/null || true; wait "$DSH_SERVER_PID" 2>/dev/null || true; rm -rf "$DSH_TEST_ROOT"' EXIT HUP INT TERM
+
+(
+  cd "$DSH_WEB_CWD"
+  "$DSH_NATIVE" web \
+    --demo \
+    --data-dir "$DSH_ARCHIVE_FIXTURE_ROOT/data" \
+    --workspace "$DSH_ARCHIVE_FIXTURE_ROOT/workspace" \
+    --port 0
+) >"$DSH_ARCHIVE_SERVER_LOG" 2>&1 &
+DSH_ARCHIVE_SERVER_PID=$!
+trap 'kill "$DSH_SERVER_PID" "$DSH_ARCHIVE_SERVER_PID" 2>/dev/null || true; wait "$DSH_SERVER_PID" 2>/dev/null || true; wait "$DSH_ARCHIVE_SERVER_PID" 2>/dev/null || true; rm -rf "$DSH_TEST_ROOT"' EXIT HUP INT TERM
 
 DSH_BROWSER_URL=
 DSH_ATTEMPT=0
@@ -55,5 +71,27 @@ if [ -z "$DSH_BROWSER_URL" ]; then
   echo "Native browser fixture did not report its loopback port." >&2
   exit 1
 fi
+DSH_BROWSER_ARCHIVE_URL=
+DSH_ATTEMPT=0
+while [ "$DSH_ATTEMPT" -lt 100 ]; do
+  DSH_BROWSER_ARCHIVE_URL=$(sed -n 's/^native service listening at \(http:\/\/127\.0\.0\.1:[0-9][0-9]*\)$/\1/p' "$DSH_ARCHIVE_SERVER_LOG" | head -n 1)
+  if [ -n "$DSH_BROWSER_ARCHIVE_URL" ]; then
+    break
+  fi
+  if ! kill -0 "$DSH_ARCHIVE_SERVER_PID" 2>/dev/null; then
+    cat "$DSH_ARCHIVE_SERVER_LOG" >&2
+    echo "Native archive browser fixture exited before it opened its port." >&2
+    exit 1
+  fi
+  DSH_ATTEMPT=$((DSH_ATTEMPT + 1))
+  sleep 0.1
+done
+if [ -z "$DSH_BROWSER_ARCHIVE_URL" ]; then
+  cat "$DSH_ARCHIVE_SERVER_LOG" >&2
+  echo "Native archive browser fixture did not report its loopback port." >&2
+  exit 1
+fi
 export DSH_BROWSER_URL
+export DSH_BROWSER_ARCHIVE_URL
+export DSH_BROWSER_ARCHIVE_FIXTURE_ROOT="$DSH_ARCHIVE_FIXTURE_ROOT"
 node web/browser-smoke.mjs

@@ -118,6 +118,20 @@ test "accessible transcript preserves literal content, pruning labels, and provi
 }
 
 ///|
+test "archived tool projections are labeled as non-original content" {
+  let session = parse_fixture(
+    "{\"messages\":[{\"role\":\"tool\",\"tool_call_id\":\"c1\",\"content\":\"[Archived tool output. Original available.]\",\"archive_ref\":{\"session_id\":\"s1\",\"call_id\":\"c1\",\"result_seq\":4,\"object_id\":\"digest\"}}]}",
+  )
+  let rows = @browser.display_messages(session)
+  assert_eq(rows.length(), 1)
+  assert_eq(
+    rows[0].label,
+    "ツール結果 · 原文はアーカイブから取得可能",
+  )
+  assert_true(rows[0].text.contains("Archived tool output"))
+}
+
+///|
 test "hook contexts retain a distinct accessible label" {
   let session = parse_fixture(
     "{\"messages\":[{\"role\":\"user\",\"content\":\"hook detail\",\"source\":{\"kind\":\"hooks-claude-code\"},\"display_label\":\"フック補足\"}]}",

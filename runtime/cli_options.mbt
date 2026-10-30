@@ -734,14 +734,37 @@ fn native_cli_render(args : Array[String], result : Json) -> String {
           Some(Json::Array(values)) => values.length()
           _ => 0
         }
+        let archive_count = match object_field(pruned, "session") {
+          Some(session) =>
+            match object_field(session, "messages") {
+              Some(Json::Array(messages)) =>
+                messages
+                .filter(message => {
+                  object_field(message, "archive_ref") is Some(_)
+                })
+                .length()
+              _ => 0
+            }
+          None => 0
+        }
         if entries == 0 {
-          "No oversized tool results needed trimming. Full originals remain in session history."
+          if archive_count > 0 {
+            "No new tool results needed trimming. \{archive_count} originals are stored in separately verified archive objects; retrieve them through the native archive history API or transcript controls."
+          } else {
+            "No oversized tool results needed trimming. Full originals remain in session history."
+          }
         } else {
-          "Trimmed " +
-          entries.to_string() +
-          " tool results; removed " +
-          int_field(pruned, "chars_removed").unwrap_or(0).to_string() +
-          " Unicode code points. Full originals remain in session history."
+          let summary = "Trimmed " +
+            entries.to_string() +
+            " tool results; removed " +
+            int_field(pruned, "chars_removed").unwrap_or(0).to_string() +
+            " Unicode code points."
+          if archive_count > 0 {
+            summary +
+            " \{archive_count} originals are stored in separately verified archive objects; retrieve them through the native archive history API or transcript controls."
+          } else {
+            summary + " Full originals remain in session history."
+          }
         }
       }
       Some("fork") => {

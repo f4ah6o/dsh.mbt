@@ -121,6 +121,19 @@ extern "C" fn c_atomic_write(
 ) -> Int32 = "dsh_fs_atomic_write"
 
 ///|
+#borrow(root_path, path, data, published)
+extern "C" fn c_atomic_create_no_replace(
+  root : Int32,
+  root_path : Bytes,
+  path : Bytes,
+  data : Bytes,
+  length : Int32,
+  max_bytes : Int32,
+  mode : Int32,
+  published : FixedArray[Int32],
+) -> Int32 = "dsh_fs_atomic_create_no_replace"
+
+///|
 #borrow(path, data)
 extern "C" fn c_create_exclusive(
   root : Int32,
@@ -142,6 +155,15 @@ extern "C" fn c_list_dir(
   buffer : FixedArray[Byte],
   capacity : Int32,
 ) -> Int32 = "dsh_fs_list_dir"
+
+///|
+#borrow(path, buffer)
+extern "C" fn c_list_dir_strict(
+  root : Int32,
+  path : Bytes,
+  buffer : FixedArray[Byte],
+  capacity : Int32,
+) -> Int32 = "dsh_fs_list_dir_strict"
 
 ///|
 #borrow(data, output)
@@ -229,6 +251,16 @@ pub struct SafeRoot {
   priv fd : Int32
   priv path : String
   priv mut closed : Bool
+}
+
+///|
+/// A failure from `create_atomic_no_replace`. `OutcomeUnknown` means the
+/// publication attempt may have succeeded even though an error was reported;
+/// callers must inspect or reconcile the destination before retrying.
+pub enum AtomicCreateNoReplaceError {
+  Exists
+  Failed(String)
+  OutcomeUnknown(String)
 }
 
 ///|
@@ -330,6 +362,68 @@ pub fn SafeRoot::create_exclusive_code(
     }
   } else {
     Err(status)
+  }
+}
+
+///|
+/// Atomically publish a complete file if `relative_path` does not exist.
+/// `max_bytes` is checked against encoded UTF-8 bytes and is capped at 32 MiB.
+/// A destination that already exists is never replaced. The method writes and
+/// syncs a same-directory temporary before publication, then syncs the
+/// containing directory where the host API supports it. A returned
+/// `OutcomeUnknown` may follow publication, so callers must reconcile the
+/// destination before retrying. The method does not make a power-loss
+/// durability guarantee.
+pub fn SafeRoot::create_atomic_no_replace(
+  self : SafeRoot,
+  relative_path : String,
+  content : String,
+  max_bytes : Int32,
+  permission~ : Int32 = 0o600,
+) -> Result[Unit, AtomicCreateNoReplaceError] {
+  if max_bytes < 0 || max_bytes > 33554432 {
+    return Err(
+      AtomicCreateNoReplaceError::Failed("invalid atomic create size limit"),
+    )
+  }
+  match self.ensure_open() {
+    Err(error) => return Err(AtomicCreateNoReplaceError::Failed(error))
+    Ok(_) => ()
+  }
+  let data = @utf8.encode(content)
+  if data.length() > max_bytes {
+    return Err(
+      AtomicCreateNoReplaceError::Failed(
+        "atomic create exceeds the configured byte limit",
+      ),
+    )
+  }
+  match self.verify_mapping(relative_path, false) {
+    Err(error) => return Err(AtomicCreateNoReplaceError::Failed(error))
+    Ok(_) => ()
+  }
+  let published : FixedArray[Int32] = FixedArray::make(1, 0)
+  let status = c_atomic_create_no_replace(
+    self.fd,
+    c_path(self.path),
+    c_path(relative_path),
+    data,
+    data.length(),
+    max_bytes,
+    permission,
+    published,
+  )
+  if status == 0 {
+    Ok(())
+  } else {
+    let error = os_error("atomic no-replace file create", status)
+    if published[0] != 0 {
+      Err(AtomicCreateNoReplaceError::OutcomeUnknown(error))
+    } else if status == 17 {
+      Err(AtomicCreateNoReplaceError::Exists)
+    } else {
+      Err(AtomicCreateNoReplaceError::Failed(error))
+    }
   }
 }
 
@@ -547,11 +641,34 @@ fn SafeRoot::stat(_self : SafeRoot, fd : Int32) -> Result[FileVersion, String] {
 }
 
 ///|
-pub fn SafeRoot::read_text(
+/// Read metadata for a bounded inventory without allocating file contents.
+/// The opened entry must be a regular file and the rooted mapping must remain
+/// stable for the check.
+pub fn SafeRoot::file_version(
+  self : SafeRoot,
+  relative_path : String,
+) -> Result[FileVersion, String] {
+  let fd = match self.open_regular(relative_path) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  defer ignore(c_close(fd))
+  let version = match self.stat(fd) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  match self.verify_mapping(relative_path, false) {
+    Err(error) => Err(error)
+    Ok(_) => Ok(version)
+  }
+}
+
+///|
+pub fn SafeRoot::read_bytes(
   self : SafeRoot,
   relative_path : String,
   max_bytes~ : Int32 = 1048576,
-) -> Result[(String, FileVersion), String] {
+) -> Result[(Bytes, FileVersion), String] {
   if max_bytes < 0 || max_bytes > 33554432 {
     return Err("invalid workspace read limit")
   }
@@ -587,16 +704,29 @@ pub fn SafeRoot::read_text(
     Err(error) => return Err(error)
     Ok(_) => ()
   }
-  for index = 0; index < count; index = index + 1 {
-    if buffer[index] == b'\x00' {
+  let bytes = bytes_from_fixedarray(buffer, count)
+  Ok((bytes, before))
+}
+
+///|
+pub fn SafeRoot::read_text(
+  self : SafeRoot,
+  relative_path : String,
+  max_bytes~ : Int32 = 1048576,
+) -> Result[(String, FileVersion), String] {
+  let (bytes, version) = match self.read_bytes(relative_path, max_bytes~) {
+    Ok(value) => value
+    Err(error) => return Err(error)
+  }
+  for index = 0; index < bytes.length(); index = index + 1 {
+    if bytes[index] == b'\x00' {
       return Err("binary files are not supported by the text tool")
     }
   }
-  let bytes = bytes_from_fixedarray(buffer, count)
   let text = @utf8.decode(bytes) catch {
     _ => return Err("workspace file is not valid UTF-8")
   }
-  Ok((text, before))
+  Ok((text, version))
 }
 
 ///|
@@ -729,6 +859,69 @@ pub fn SafeRoot::list_directory(
       _ => return Err("workspace contains a non-UTF-8 filename")
     }
     let kind = if kind_byte == b'D' { "directory" } else { "file" }
+    entries.push((name, kind))
+    offset += 2
+  }
+  Ok(entries)
+}
+
+///|
+/// List every directory entry, including links and special files. Unlike the
+/// workspace-facing listing, this inventory rejects unsupported entry kinds
+/// instead of silently hiding them; quota accounting must see every name.
+pub fn SafeRoot::list_directory_strict(
+  self : SafeRoot,
+  relative_path : String,
+) -> Result[Array[(String, String)], String] {
+  match self.ensure_open() {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  match self.verify_mapping(relative_path, true) {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  let buffer : FixedArray[Byte] = FixedArray::make(1048576, b'\x00')
+  let count = c_list_dir_strict(
+    self.fd,
+    c_path(relative_path),
+    buffer,
+    buffer.length(),
+  )
+  if count < 0 {
+    return Err(os_error("strict workspace directory listing", -count))
+  }
+  match self.verify_mapping(relative_path, true) {
+    Err(error) => return Err(error)
+    Ok(_) => ()
+  }
+  let entries : Array[(String, String)] = []
+  let mut offset = 0
+  while offset < count {
+    let start = offset
+    while offset < count && buffer[offset] != b'\x00' {
+      offset += 1
+    }
+    if offset >= count || offset + 1 >= count {
+      return Err("native directory listing returned a malformed entry")
+    }
+    let length = offset - start
+    let kind_byte = buffer[offset + 1]
+    let name_array : FixedArray[Byte] = FixedArray::makei(length, index => {
+      buffer[start + index]
+    })
+    let name = @utf8.decode(
+      bytes_from_fixedarray(name_array, name_array.length()),
+    ) catch {
+      _ => return Err("workspace contains a non-UTF-8 filename")
+    }
+    let kind = if kind_byte == b'D' {
+      "directory"
+    } else if kind_byte == b'F' {
+      "file"
+    } else {
+      return Err("directory inventory contains a link or special file")
+    }
     entries.push((name, kind))
     offset += 2
   }

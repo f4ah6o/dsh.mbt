@@ -38,6 +38,7 @@ pub fn Engine::complete_effect(Self, EffectId, Json) -> Result[Json, String]
 pub fn Engine::complete_effect_with_post_tool_prompt_hook(Self, EffectId, Json) -> Result[Json, String]
 pub fn Engine::complete_effect_with_stop_hook(Self, EffectId, Json) -> Result[Json, String]
 pub fn Engine::continue_stop_hook(Self, NativeStopHookCheckpoint, Array[String]) -> Result[Json, String]
+pub fn Engine::detached_copy(Self) -> Self
 pub fn Engine::event_log(Self, SessionId) -> Result[Array[EngineEvent], String]
 pub fn Engine::finish_stop_hook(Self, NativeStopHookCheckpoint) -> Result[Json, String]
 pub fn Engine::inject_hook_contexts(Self, String, Array[String], source_kind? : String) -> Result[Bool, String]

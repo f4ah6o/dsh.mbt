@@ -18,11 +18,13 @@ pub fn HarnessApi::accept_post_tool_prompt_hook(Self, @engine.NativePostToolProm
 pub fn HarnessApi::block_post_tool_prompt_hook(Self, @engine.NativePostToolPromptHookCheckpoint, String) -> Result[Json, String]
 pub fn HarnessApi::block_stop_continuation(Self, @engine.NativeStopHookCheckpoint, String) -> Result[Json, String]
 pub fn HarnessApi::close(Self) -> Unit
+pub fn HarnessApi::commit_tool_result_archive(Self, @engine.ToolResultArchivePlan, @engine.ToolResultArchiveSource) -> Result[Unit, String]
 pub fn HarnessApi::complete(Self, String, Json) -> Result[Json, String]
 pub fn HarnessApi::complete_effect(Self, @engine.EffectId, Json) -> Result[Json, String]
 pub fn HarnessApi::complete_effect_with_post_tool_prompt_hook(Self, @engine.EffectId, Json) -> Result[Json, String]
 pub fn HarnessApi::complete_effect_with_stop_hook(Self, @engine.EffectId, Json) -> Result[Json, String]
 pub fn HarnessApi::continue_stop_hook(Self, @engine.NativeStopHookCheckpoint, Array[String]) -> Result[Json, String]
+pub fn HarnessApi::detached_copy(Self) -> Result[Self, String]
 pub fn HarnessApi::event_log(Self, @engine.SessionId) -> Result[Array[@engine.EngineEvent], String]
 pub fn HarnessApi::finish_stop_hook(Self, @engine.NativeStopHookCheckpoint) -> Result[Json, String]
 pub fn HarnessApi::gui_binding(Self, String) -> @capability.GuiBinding[Json, Json]?
@@ -36,6 +38,7 @@ pub fn HarnessApi::mcp_handle_with_prompt_contexts(Self, String, Array[String]) 
 pub fn HarnessApi::new(external_mcp_tools? : Array[Json], skill_tool? : Json?, lsp_tool? : Json?, subagent_tool? : Json?) -> Result[Self, String]
 pub fn HarnessApi::pending_post_tool_prompt_hook(Self, @engine.SessionId) -> @engine.NativePostToolPromptHookCheckpoint?
 pub fn HarnessApi::pending_stop_hook(Self, @engine.SessionId) -> @engine.NativeStopHookCheckpoint?
+pub fn HarnessApi::plan_tool_result_archive(Self, @engine.SessionId, Int) -> Result[@engine.ToolResultArchivePlan, String]
 pub fn HarnessApi::prepare_stop_continuation(Self, @engine.NativeStopHookCheckpoint, String) -> Result[Json, String]
 pub fn HarnessApi::preview_mcp_handle(Self, String) -> String?
 pub fn HarnessApi::preview_session_send(Self, Json) -> Result[Json, String]
@@ -45,11 +48,13 @@ pub fn HarnessApi::record_effect_outcome(Self, @engine.EffectId, Json) -> Result
 pub fn HarnessApi::record_native_hook_invoked(Self, String, String, String, String?, dialect? : String) -> Result[@engine.NativeHookInvocationCheckpoint, String]
 pub fn HarnessApi::record_native_hook_result(Self, @engine.NativeHookInvocationCheckpoint, String, Int?, String?, Int) -> Result[Json, String]
 pub fn HarnessApi::restore(Self, Json) -> Result[Unit, String]
+pub fn HarnessApi::restore_archived(Self, Json, Array[@engine.ToolResultArchiveSource]) -> Result[Unit, String]
 pub fn HarnessApi::schedule_retry(Self, String, Json) -> Result[Json, String]
 pub fn HarnessApi::snapshot(Self) -> Json
 pub fn HarnessApi::start_retry(Self, String, String) -> Result[Json, String]
 pub fn HarnessApi::take_effects(Self) -> Array[Json]
 pub fn HarnessApi::take_typed_effects(Self) -> Array[@engine.EngineEffect]
+pub fn HarnessApi::tool_result_archive_candidate(Self, @engine.ToolResultArchivePlan, @engine.ToolResultArchiveSource) -> Result[Json, String]
 
 // Type aliases
 

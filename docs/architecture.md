@@ -116,20 +116,40 @@ marker は `\n\n[... tool result middle pruned ...]\n\n` です。API の任意 
 CLI はそれぞれ `--threshold-chars`、`--head-chars`、`--tail-chars` を受け付けます。切り出しは MoonBit の Unicode code point
 境界で行うため surrogate pair を分割しません。同じ policy の再適用は idempotent で、より小さい policy は現在の projection から続けます。
 
-pruning は original `tool/result` を変更せず、source / call identity、budgets、code point counts、projected content を持つ
-`tool/result/pruned` event を追加します。restore は参照 sequence、call identity、budgets、counts、再計算した content を照合します。
-`Session.messages()` と transcript には full original output を残し、browser は該当する行に “trimmed for model context” と表示します。
-次の provider request は replay 検証済み event から組み立てた projection を使います。native runtime の serialized mutation path が
-成功した操作を checkpoint してから応答するため、保存失敗は session update を公開せず、provider/tool I/O も開始しません。
+pruning は元の tool/result を保持したまま、source / call identity、budgets、code point counts、projected content を持つ
+tool/result/pruned event を追加します。restore は参照 sequence、call identity、budgets、counts、再計算した content を照合します。
+通常の Engine v1 session では Session.messages() と transcript に原文を inline で残します。次の provider request は replay 検証済み
+event から組み立てた projection を使います。
 
-これは手動の bounded projection です。token meter、pressure trigger、summary generation、自動 live compaction、spill は含みません。
-pruning event は保存量を増やし、canonical session の 262,144 UTF-16 code unit 上限と 32,768 event 上限は引き続き適用されます。
-capacity refusal は candidate snapshot を採用せず、元の transcript / event queue を保ちます。運用上の条件は
+native runtime の明示的な prune 操作は、settled native session の直接 prune 済み通常 read result をさらに検証し、
+原文が 65,536 UTF-8 bytes 以下のものを object store へ外置きできます。candidate 上で result / completion event と tool message
+を projection + 明示 archive reference に置換し、manifest、receipt、revision を一つの sessions.json compare-and-swap
+checkpoint に含めます。新 object はその CAS より前に fresh name で no-replace publish され、KnownSuccess だけを採用します。
+失敗時は candidate を破棄し、unknown publication は自動 adopt / retry しません。manifest 書込みが不確定なら runtime を止め、
+reopen 後に receipt が completed / uncertain のどちらかを決めます。未縮約、65,536 bytes 超、通常 read 以外は inline のままです。
+
+Browser の transcript は archive projection を原文と誤認させず、テキスト表示に原文を取得する操作を示します。HTTP には
+session / result sequence / object identity を確認して disk object を再検証する history endpoint があります。CLI は status
+表示に安全な archive marker を使います。MCP の旧 session_get / prune carrier と ACP history / committed-event surfaces は
+archive projection を原文として返さず明示拒否します。fork、import、active / approval 待ち session の archive 化は対象外で、
+old v1 readers は archive marker を拒否します。普通の snapshot() は archive なしなら従来 v1 を出します。Effects は reopen
+時に再実行しません。
+
+quota は engine manifest 256 objects、各 original / projection 65,536 bytes、各 encoded object 1 MiB、original と projection
+各 16 MiB aggregate、hydration expansion 7 MiB、engine JSON copy 16 MiB、native object store 64 MiB / 2,048 directory entries、
+outer snapshot 32 MiB です。store quota は temp / orphan files も数え、未知の entry type は拒否します。engine SHA は portable
+MoonBit 実装で canonical UTF-8 content、projection、payload identity を再検証します。Engine は OS crypto に直接依存しない純粋な
+MoonBit package のため portable SHA を持ちます。Native codec は host system SHA-256 adapter も使い、保存境界と restore 境界で
+独立に照合します。標準 padding / Unicode vectors は portable SHA と host adapter の両方にあります。
+
+native regression fixture は実際の Read effect で 60,003-byte output を 6 回同一 session に記録し、毎回 disk close / reopen、
+原文 endpoint、effect なし、次 turn の完了を確認します。累積原文は 360,018 bytes で旧 262,144-unit session limit を超えます。
+この証拠は隔離 test filesystem 上の Linux native run で、実端末の電源断、全 OS/filesystem の durability、長時間 storage soak
+を証明するものではありません。
+
+これは明示的な bounded prune/archive です。CLI と browser は自動 context compaction / auto-pruning を行いません。
+token meter、pressure trigger、summary generation、自動 live compaction、spill、GC / object cleanup は含みません。運用上の条件は
 [次の移植作業](../issues/open/0001-upstream-parity.md) を参照してください。
-
-Engine には v2 archive object の検証、candidate / in-memory commit、検証済み source を使う reopen の限定的な実装があります。通常の `snapshot()` は引き続き v1 を出し、archive marker がある snapshot は v1 restore で拒否します。これは durable archive の実装ではありません。NativeRuntime の object store、atomic manifest / receipt、original history の読み取り API、web / ACP の archive-aware 表示には接続していません。現行 UI と ACP は `messages.content` を表示して archive ref を解釈しないため、product path から v2 archive snapshot を渡してはいけません。Engine の sequential 6 × 63 KiB reopen test は 262,144 code-unit cap を超える original の再構築可能性を検証しますが、保存後の runtime capacity 改善を示すものではありません。
-
-Engine は portable MoonBit SHA-256 で canonical object の UTF-8 content、projection、payload identity を再検証します。Native runtime codec は host system SHA-256 adapter を使うため、runtime と engine の二つの境界で照合します。Archive admission は最大 256 object、各 original / projection 65,536 bytes、各 encoded object 1 MiB、original と projection それぞれ aggregate 16 MiB に加え、hydration 時の追加 expansion を 7 MiB 以下に制限します。candidate、in-memory commit、restore は同じ expansion 上限と 16 MiB JSON-copy budget を検証し、受理した state がこの engine の reopen limit を超えないようにします。
 
 ### Durable provider retry
 
