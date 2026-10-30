@@ -121,6 +121,19 @@ extern "C" fn c_atomic_write(
 ) -> Int32 = "dsh_fs_atomic_write"
 
 ///|
+#borrow(root_path, path, data, published)
+extern "C" fn c_atomic_create_no_replace(
+  root : Int32,
+  root_path : Bytes,
+  path : Bytes,
+  data : Bytes,
+  length : Int32,
+  max_bytes : Int32,
+  mode : Int32,
+  published : FixedArray[Int32],
+) -> Int32 = "dsh_fs_atomic_create_no_replace"
+
+///|
 #borrow(path, data)
 extern "C" fn c_create_exclusive(
   root : Int32,
@@ -232,6 +245,16 @@ pub struct SafeRoot {
 }
 
 ///|
+/// A failure from `create_atomic_no_replace`. `OutcomeUnknown` means the
+/// publication attempt may have succeeded even though an error was reported;
+/// callers must inspect or reconcile the destination before retrying.
+pub enum AtomicCreateNoReplaceError {
+  Exists
+  Failed(String)
+  OutcomeUnknown(String)
+}
+
+///|
 pub fn SafeRoot::open(path : String) -> Result[SafeRoot, String] {
   let normalized = native_path_normalize(path)
   if !native_path_is_absolute(normalized) {
@@ -330,6 +353,68 @@ pub fn SafeRoot::create_exclusive_code(
     }
   } else {
     Err(status)
+  }
+}
+
+///|
+/// Atomically publish a complete file if `relative_path` does not exist.
+/// `max_bytes` is checked against encoded UTF-8 bytes and is capped at 32 MiB.
+/// A destination that already exists is never replaced. The method writes and
+/// syncs a same-directory temporary before publication, then syncs the
+/// containing directory where the host API supports it. A returned
+/// `OutcomeUnknown` may follow publication, so callers must reconcile the
+/// destination before retrying. The method does not make a power-loss
+/// durability guarantee.
+pub fn SafeRoot::create_atomic_no_replace(
+  self : SafeRoot,
+  relative_path : String,
+  content : String,
+  max_bytes : Int32,
+  permission~ : Int32 = 0o600,
+) -> Result[Unit, AtomicCreateNoReplaceError] {
+  if max_bytes < 0 || max_bytes > 33554432 {
+    return Err(
+      AtomicCreateNoReplaceError::Failed("invalid atomic create size limit"),
+    )
+  }
+  match self.ensure_open() {
+    Err(error) => return Err(AtomicCreateNoReplaceError::Failed(error))
+    Ok(_) => ()
+  }
+  let data = @utf8.encode(content)
+  if data.length() > max_bytes {
+    return Err(
+      AtomicCreateNoReplaceError::Failed(
+        "atomic create exceeds the configured byte limit",
+      ),
+    )
+  }
+  match self.verify_mapping(relative_path, false) {
+    Err(error) => return Err(AtomicCreateNoReplaceError::Failed(error))
+    Ok(_) => ()
+  }
+  let published : FixedArray[Int32] = FixedArray::make(1, 0)
+  let status = c_atomic_create_no_replace(
+    self.fd,
+    c_path(self.path),
+    c_path(relative_path),
+    data,
+    data.length(),
+    max_bytes,
+    permission,
+    published,
+  )
+  if status == 0 {
+    Ok(())
+  } else {
+    let error = os_error("atomic no-replace file create", status)
+    if published[0] != 0 {
+      Err(AtomicCreateNoReplaceError::OutcomeUnknown(error))
+    } else if status == 17 {
+      Err(AtomicCreateNoReplaceError::Exists)
+    } else {
+      Err(AtomicCreateNoReplaceError::Failed(error))
+    }
   }
 }
 
