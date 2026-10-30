@@ -57,10 +57,10 @@ The CLI path must bypass `NativeRuntime::open`, including provider configuration
 
 ## テスト計画
 
-- CLI parser fixtures cover list/show argument counts, required parent session, and rejection of unrelated execution modes.
-- Native filesystem fixtures cover owner/mode checks, missing audit directory, wrong parent/workspace filters, strict decoder failures, filename mismatch, per-record cap, 32 entries, 128 MiB logical bytes, and nested directory rejection.
+- CLI parser fixtures cover list/show argument counts, required/unique parent session, and rejection of run, service, hook, and unsafe child-ID arguments.
+- Native filesystem fixtures cover owner/mode checks, missing audit directory, wrong parent/workspace filters, strict decoder failures, filename mismatch, per-record cap, 32 entries, 128 MiB logical bytes including an ignored sparse temp, and nested directory rejection.
 - Verify list exposes only matching metadata and show exposes only the selected matching envelope; use fixtures with different parent sessions to check no cross-session disclosure.
-- Verify the inspection action is routed before native runtime startup and no mutation is made to the data directory, sessions, host lock, or audit files.
+- Verify a subprocess CLI list/show succeeds against a deliberately invalid host lock, proving inspection bypasses store startup; confirm no mutation is made to the data directory, sessions, host lock, or audit files.
 - Run focused runtime native checks, the relevant runtime fixture, formatting, diff check, local issue validation, and independent review.
 
 ## リスク

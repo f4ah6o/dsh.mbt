@@ -42,6 +42,22 @@ fn native_subagent_audit_inspection_test_write(
 }
 
 ///|
+async fn native_subagent_audit_inspection_test_sparse_file(
+  path : String,
+  last_position : Int64,
+) -> Unit {
+  let file = @fs.open(
+    path,
+    mode=@fs.WriteOnly,
+    create_mode=@fs.CreateNew,
+    permission=0o600,
+  )
+  file.write_at(b"x", position=last_position)
+  file.close()
+  @fs.chmod(path, 0o600)
+}
+
+///|
 async test "child audit inspection filters by parent and workspace without exposing snapshots in list" {
   let fixture = @fs.tmpdir(prefix="dsh-subagent-audit-inspection")
   @async.with_task_group() <| group => {
@@ -142,6 +158,163 @@ async test "child audit inspection reports missing directories without creating 
       is Err(_),
     )
     assert_false(@fs.exists(data_dir + "/subagent-audits"))
+  }
+}
+
+///|
+async test "child audit inspection rejects malformed, mismatched, and oversized records" {
+  let fixture = @fs.tmpdir(prefix="dsh-subagent-audit-inspection-records")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let data_dir = fixture + "/data"
+    native_subagent_audit_inspection_test_store(data_dir)
+    let malformed_id = "subagent-123e4567-e89b-42d3-a456-426614174000"
+    let unsupported_id = "subagent-223e4567-e89b-42d3-a456-426614174000"
+    let requested_id = "subagent-323e4567-e89b-42d3-a456-426614174000"
+    let envelope_id = "subagent-423e4567-e89b-42d3-a456-426614174000"
+    let large_id = "subagent-523e4567-e89b-42d3-a456-426614174000"
+    let root = SafeRoot::open(data_dir).unwrap()
+    assert_true(
+      root.create_exclusive(
+        "subagent-audits/" + malformed_id + ".json",
+        "not-json",
+        permission=0o600,
+      )
+      is Ok(_),
+    )
+    let unsupported = match
+      native_subagent_audit_test_record(child_id=unsupported_id) {
+      Json::Object(fields) => fields
+      _ => fail("audit fixture is not an object")
+    }
+    unsupported["schema"] = Json::string("future-audit-schema")
+    assert_true(
+      root.create_exclusive(
+        "subagent-audits/" + unsupported_id + ".json",
+        Json::object(unsupported).stringify(),
+        permission=0o600,
+      )
+      is Ok(_),
+    )
+    assert_true(
+      root.create_exclusive(
+        "subagent-audits/" + requested_id + ".json",
+        native_subagent_audit_encode(
+          native_subagent_audit_test_record(child_id=envelope_id),
+        ).unwrap(),
+        permission=0o600,
+      )
+      is Ok(_),
+    )
+    root.close()
+    native_subagent_audit_inspection_test_sparse_file(
+      data_dir + "/subagent-audits/" + large_id + ".json",
+      NATIVE_SUBAGENT_AUDIT_MAX_BYTES.to_int64(),
+    )
+
+    for child_id in [malformed_id, unsupported_id, requested_id, large_id] {
+      assert_true(
+        native_subagent_audit_inspect_data_dir(
+          data_dir,
+          "parent-audit-session",
+          Some(child_id),
+        )
+        is Err(_),
+      )
+    }
+  }
+}
+
+///|
+async test "child audit inspection counts ignored temporary bytes against the directory cap" {
+  let fixture = @fs.tmpdir(prefix="dsh-subagent-audit-inspection-total-bytes")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let data_dir = fixture + "/data"
+    native_subagent_audit_inspection_test_store(data_dir)
+    if native_os_is_windows() {
+      // The Windows fixture may allocate the hole physically; bound arithmetic
+      // is covered by the shared metadata cap path on POSIX sparse files.
+      assert_false(
+        native_subagent_audit_inspection_byte_add_fits(
+          NATIVE_SUBAGENT_AUDIT_MAX_TOTAL_BYTES,
+          1L,
+        ),
+      )
+    } else {
+      native_subagent_audit_inspection_test_sparse_file(
+        data_dir + "/subagent-audits/..dsh-interrupted.tmp",
+        NATIVE_SUBAGENT_AUDIT_MAX_TOTAL_BYTES,
+      )
+      assert_true(
+        native_subagent_audit_inspect_data_dir(
+          data_dir,
+          "parent-audit-session",
+          None,
+        )
+        is Err(_),
+      )
+    }
+  }
+}
+
+///|
+async test "subagent audit CLI inspects without opening an invalid native store" {
+  if native_os_is_windows() {
+    // The shared native-worker fixture currently uses POSIX absolute paths.
+    ()
+  } else {
+    let fixture = @fs.tmpdir(prefix="dsh-subagent-audit-cli")
+    @async.with_task_group() <| group => {
+      group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+      let data_dir = fixture + "/data"
+      native_subagent_audit_inspection_test_store(data_dir)
+      let child_id = "subagent-123e4567-e89b-42d3-a456-426614174000"
+      native_subagent_audit_inspection_test_write(
+        data_dir,
+        native_subagent_audit_test_record(child_id~),
+      )
+      let root = SafeRoot::open(data_dir).unwrap()
+      assert_true(
+        root.create_exclusive("host.lock", "not-json", permission=0o600)
+        is Ok(_),
+      )
+      root.close()
+      assert_true(NativeStore::open(data_dir) is Err(_))
+      let executable = safety_native_worker_launcher().unwrap()
+      let parent_session_id = "parent-audit-session"
+      let (list_status, list_stdout, list_stderr) = match
+        @async.with_timeout_opt(10000, async fn() {
+          @process.collect_output(executable, [
+            "subagent-audits", "list", "--session", parent_session_id, "--data-dir",
+            data_dir, "--json",
+          ])
+        }) {
+        Some(result) => result
+        None => fail("subagent audit list CLI did not exit within 10 seconds")
+      }
+      assert_eq(list_status, 0)
+      assert_true(list_stdout.text().contains(child_id))
+      assert_false(
+        list_stdout.text().contains("Finish the fixture child task."),
+      )
+      assert_eq(list_stderr.text(), "")
+      let (show_status, show_stdout, show_stderr) = match
+        @async.with_timeout_opt(10000, async fn() {
+          @process.collect_output(executable, [
+            "subagent-audits", "show", child_id, "--session", parent_session_id,
+            "--data-dir", data_dir, "--json",
+          ])
+        }) {
+        Some(result) => result
+        None => fail("subagent audit show CLI did not exit within 10 seconds")
+      }
+      assert_eq(show_status, 0)
+      assert_true(show_stdout.text().contains("Finish the fixture child task."))
+      assert_eq(show_stderr.text(), "")
+      assert_eq(@fs.read_file(data_dir + "/host.lock").text(), "not-json")
+      assert_false(@fs.exists(data_dir + "/sessions"))
+    }
   }
 }
 

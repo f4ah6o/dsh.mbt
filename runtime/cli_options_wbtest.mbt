@@ -43,10 +43,44 @@ test "native CLI preserves subcommand arguments and bounds retry and approval op
     is Err(_),
   )
   assert_true(
-    native_cli_validate_args([
-      "dsh-native", "subagent-audits", "list", "--session", "session-12345678901234567890123456789012",
-      "--hooks-config", "hooks.json",
-    ])
+    native_cli_validate_args(
+      native_cli_normalize_args(["dsh-native", "subagent-audits", "list"]),
+    )
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args(
+      native_cli_normalize_args([
+        "dsh-native", "subagent-audits", "list", "--session", "first-session", "--session",
+        "second-session",
+      ]),
+    )
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args(
+      native_cli_normalize_args([
+        "dsh-native", "subagent-audits", "list", "--session", "parent-session", "--hooks-config",
+        "hooks.json",
+      ]),
+    )
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args(
+      native_cli_normalize_args([
+        "dsh-native", "subagent-audits", "list", "--session", "parent-session", "--run",
+        "perform work",
+      ]),
+    )
+    is Err(_),
+  )
+  assert_true(
+    native_cli_validate_args(
+      native_cli_normalize_args([
+        "dsh-native", "subagent-audits", "list", "--session", "parent-session", "--serve",
+      ]),
+    )
     is Err(_),
   )
   assert_true(
