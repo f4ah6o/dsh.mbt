@@ -634,6 +634,11 @@ fn SafeRoot::stat(_self : SafeRoot, fd : Int32) -> Result[FileVersion, String] {
 ///|
 /// Read metadata for a regular file without reading or decoding its contents.
 /// This is useful for bounded accounting of interrupted temporary files.
+/// The result samples the opened inode once; it does not lock the file or
+/// guarantee stable contents or a current path entry against concurrent
+/// replacement or in-place writes. Callers must serialize writers when they
+/// use this metadata for accounting. Same-user hostile races are outside the
+/// host trust boundary.
 pub fn SafeRoot::file_version(
   self : SafeRoot,
   relative_path : String,
