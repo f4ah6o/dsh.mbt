@@ -210,9 +210,15 @@ OpenCode は LLM provider 接続と Agent Runtime Backend を分ける。#66 の
 | [#84](https://github.com/f4ah6o/dsh.mbt/pull/84) `9777af34c4c8c21c5734ca468e513578c44b6655` | bounded byte-preserving SafeRoot read。archive storage や deterministic read-race coverage は含まない。 |
 | [#85](https://github.com/f4ah6o/dsh.mbt/pull/85) `169de36cf0419e02f764454f337c997f29dd336a` | engine-only v2 archive candidate / commit / verified restore。native object store、manifest / receipt transaction、history API、web / ACP は未実装。 |
 | [#86](https://github.com/f4ah6o/dsh.mbt/pull/86) `a64a335c25f9c5ae797f12a2d2c6c1b3c602ed5b` | command receipt を owner + ID で scope。過去に上書きされた receipt は復元しない。 |
-| [#87](https://github.com/f4ah6o/dsh.mbt/pull/87) `0ec05cbdc7ff02a3150fa7a01984567a5ef6fa06` | eligible regular Read result の手動 durable archive。旧 head の CLI 承認 event 欠落は修正し、固定 head の独立レビューは完了。portable/native と Node 不在 verifier は pass、ARM GUI build は失敗し原因調査中、残る CI は進行中。一般 compaction ではなく、power-loss は未検証。 |
-| [#89](https://github.com/f4ah6o/dsh.mbt/pull/89) `a2e5b3ae74bbb5eaf20e69933770dbba19546709` | 停止済み foreground child の bounded audit envelope を検証する inert codec。独立レビュー済み。保存、live owner 認証、background、再開、結果採用は未実装。 |
+| [#87](https://github.com/f4ah6o/dsh.mbt/pull/87) `0ec05cbdc7ff02a3150fa7a01984567a5ef6fa06` | eligible regular Read result の手動 durable archive。旧 head の CLI 承認 event 欠落は修正し、固定 head の独立レビューは完了。ARM Wayland GUI の初回失敗は原因未確定で、同じ head の再実行を含め全 CI は pass。一般 compaction ではなく、power-loss は未検証。 |
+| [#89](https://github.com/f4ah6o/dsh.mbt/pull/89) `1941b9454f11cb19f42fd30dbe0a9792ad8a7ba7` | 停止済み foreground child の bounded audit envelope を検証する inert codec。独立レビュー済み。保存、live owner 認証、background、再開、結果採用は未実装。 |
 | [#90](https://github.com/f4ah6o/dsh.mbt/pull/90) `c31926bfb608bb145d8eaf332dfa8ec0f09adc15` | 明示 opt-in の送信前 pruning と eligible Read 原本の durable archive。独立レビュー済み。MCP opt-in は拒否し、最新 result が縮約前に上限を超える場合や一般 context budget / summary は未解決。 |
+| [#91](https://github.com/f4ah6o/dsh.mbt/pull/91) `ac17898211afef63b5c27009a0426c8f3e37064c` | 原子公開の一時ファイルを内容読込なしに計測する metadata API。writer の直列化が必要で、storage publication は含まない。 |
+| [#92](https://github.com/f4ah6o/dsh.mbt/pull/92) `74cdb026c2a65dd6be896e0bb414788e0866503e` | 子監査公開の容量・所有権・取消・不明結果の契約。runtime 実装自体ではない。 |
+| [#93](https://github.com/f4ah6o/dsh.mbt/pull/93) `79de7a5a41f4e17646dc648bf2a234bd56780d52` | active provider request の bounded UTF-8 サイズ計測。token 数や provider の wire サイズではない。 |
+| [#94](https://github.com/f4ah6o/dsh.mbt/pull/94) `6314a43f1a0f14ac7a16f20c1143a63e8d2a821a` | 所有中の dispatched child effect を停止する Engine/API primitive。runtime gate / checkpoint と公開処理への接続は後続。 |
+| [#95](https://github.com/f4ah6o/dsh.mbt/pull/95) `4d0113c200d85e6c1739d2d983c7d6d35c1f8475` | 明示 opt-in の per-turn provider request byte ceiling。token window や自動 summary ではなく、tool 結果そのものが上限を超える問題は未解決。 |
+| [#96](https://github.com/f4ah6o/dsh.mbt/pull/96) `cb6ef8ecafd0e5cb9e68b1cc070b2df2fc5efdb7` | 完了 turn の縮約 prefix を選ぶ read-only planner。元 event と投影 message の両方を fingerprint するが、summary 生成・適用や保存容量の削減は未実装。 |
 
 これらの PR は長い会話や保存の候補を進めているが、main の実利用 gate とは独立する。
 レビュー時は個別 PR の dependency / base を保ち、stack 全体を main の完了として数えない。
