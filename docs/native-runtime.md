@@ -222,6 +222,24 @@ continuable children, child session listing / resume, independent child
 provider selection, configurable tool filters / personas / output schemas,
 or full upstream provider and lifecycle parity.
 
+The runtime package now has a pure bounded codec for the proposed
+`dsh-subagent-audit-v1` envelope. It accepts only one fully validated terminal
+child snapshot and syntax-valid parent session/turn/effect/call and workspace
+fields; validation uses a throwaway pure Engine and confirms that no effects
+remain. It does not check those parent or workspace fields against live state.
+The codec does not write or expose audit files, add a read surface, or enable
+restore-to-run / resume. Child snapshots contain prompts and tool results, so a
+future store must keep them owner-only and apply strict byte and count quotas.
+Publication must recheck the exact pending parent tool effect and cancellation
+under the native runtime gate, then use no-replace atomic publication. PRs
+[#80](https://github.com/f4ah6o/dsh.mbt/pull/80) and
+[#81](https://github.com/f4ah6o/dsh.mbt/pull/81) provide those prerequisites;
+quota, orphan handling, and unknown publication outcomes remain separate work.
+An ambiguous save must interrupt the parent turn rather than return a normal
+tool error that could lead the model to request the child again. An archive
+published before a later parent cancellation remains an inert orphan and is
+never adopted automatically.
+
 ## External MCP stdio tools
 
 `run`, `web`, `mcp`, and `desktop` accept `--mcp-config PATH` to start configured
