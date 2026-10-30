@@ -113,6 +113,8 @@ upstream branch semantics は実装しません。本 issue は open のまま�
 
 ## 2. 長い会話と stream projection
 
+2026-10-30: [送信前の任意 tool-result 縮約](20261030-auto-tool-result-pruning.md) を最初の増分として追跡する。契約調査と親 map は未マージの [PR #76](https://github.com/f4ah6o/dsh.mbt/pull/76) を参照する。provider context の縮小と durable storage の容量問題は別であり、summary / spill と実機受入は引き続き未完了。
+
 Live compaction、tool result pruning、spill を導入し、262,144-unit 上限に依存しない長い会話を支える。
 provider SSE の delta を engine event と UI に逐次反映し、切断時の未完了 tool を実行しない。
 

@@ -1142,3 +1142,256 @@ async test "native runtime preserves a pending approval across host restart" {
     )
   }
 }
+
+///|
+async test "native auto-prune hook reservation failure runs no hook and keeps the durable turn unchanged" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-auto-prune-reservation-failure")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let data = fixture + "/data"
+    let hooks_path = fixture + "/hooks.json"
+    let marker = workspace + "/hook-count.txt"
+    let command = "cat >/dev/null; printf x >> \"${CLAUDE_PROJECT_DIR}/hook-count.txt\"; printf '{}'"
+    @fs.write_file(
+      hooks_path,
+      @utf8.encode(native_hook_test_config("UserPromptSubmit", "*", command)),
+    )
+    let runtime = NativeRuntime::open(
+      data,
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "auto-prune-reservation-failure"
+    runtime
+    .invoke("session_create", {
+      "id": session_id,
+      "title": "Reservation failure",
+    })
+    .unwrap()
+    |> ignore
+
+    // A competing SafeRoot write changes only the file version while leaving
+    // a valid snapshot. The runtime's next reservation checkpoint must fail.
+    let competing_root = SafeRoot::open(data).unwrap()
+    let (saved_text, saved_version) = competing_root
+      .read_text("sessions.json")
+      .unwrap()
+    assert_true(
+      competing_root.write_atomic(
+        "sessions.json",
+        saved_text + "\n",
+        expected=saved_version,
+        permission=0o600,
+      )
+      is Ok(_),
+    )
+    let failed_send = runtime.invoke("session_send", {
+      "session_id": session_id,
+      "prompt": "Continue with automatic pruning",
+      "auto_prune_tool_results": true,
+    })
+    match failed_send {
+      Err(error) => assert_true(error.contains("native checkpoint failed:"))
+      Ok(_) => fail("expected the reservation checkpoint to fail")
+    }
+    assert_true(runtime.stopped)
+    assert_false(@fs.exists(marker))
+    assert_true(runtime.api.take_typed_effects().is_empty())
+    assert_true(runtime.close() is Err(_))
+    competing_root.close()
+
+    let reopened = NativeRuntime::open(
+      data,
+      workspace,
+      false,
+      true,
+      hooks_config_path=Some(hooks_path),
+    ).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(reopened.close()))
+    })
+    assert_false(@fs.exists(marker))
+    let (durable, effects) = reopened
+      .invoke("session_get", { "session_id": session_id })
+      .unwrap()
+    assert_true(effects.is_empty())
+    assert_false(@fs.exists(marker))
+    assert_eq(string_field(durable, "status"), Some("idle"))
+    assert_eq(int_field(durable, "turn_id"), Some(0))
+    let durable_events = match object_field(durable, "events") {
+      Some(Json::Array(values)) => values
+      _ => fail("durable session omitted its events")
+    }
+    assert_false(
+      durable_events.any(event => {
+        string_field(event, "type") == Some("tool/result/pruned")
+      }),
+    )
+  }
+}
+
+///|
+async test "native auto-prune final checkpoint failure returns no provider effect and preserves durable tool output" {
+  let fixture = @fs.tmpdir(prefix="dsh-native-auto-prune-final-failure")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    @fs.mkdir(workspace)
+    let data = fixture + "/data"
+    let runtime = NativeRuntime::open(data, workspace, false, true).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(runtime.close()))
+    })
+    let session_id = "auto-prune-final-checkpoint-failure"
+    let original_tool_result = StringView::repeat("x"[:], 9000).to_owned()
+    runtime
+    .invoke("session_create", {
+      "id": session_id,
+      "title": "Final checkpoint failure",
+    })
+    .unwrap()
+    |> ignore
+
+    // Seed one completed turn with an oversized tool result using the same
+    // effect-completion boundary as an ordinary native provider/tool cycle.
+    let (_, initial_effects) = runtime
+      .invoke("session_send", {
+        "session_id": session_id,
+        "prompt": "Read the large result",
+      })
+      .unwrap()
+    let provider = native_effect_by_kind(
+      initial_effects,
+      @engine.EffectType::Provider,
+    ).unwrap_or_else(() => fail("expected initial provider effect"))
+    let (_, tool_effects) = runtime
+      .complete(provider.id(), {
+        "ok": true,
+        "content": "",
+        "tool_calls": [
+          {
+            "id": "read-large-result",
+            "name": "read",
+            "arguments": "{\"file_path\":\"large.txt\"}",
+          },
+        ],
+        "finish_reason": "tool_calls",
+      })
+      .unwrap()
+    let tool = native_effect_by_kind(tool_effects, @engine.EffectType::Tool).unwrap_or_else(() => {
+        fail("expected read tool effect")
+      },
+    )
+    let (_, followup_effects) = runtime
+      .complete(tool.id(), { "ok": true, "content": original_tool_result })
+      .unwrap()
+    let followup = native_effect_by_kind(
+      followup_effects,
+      @engine.EffectType::Provider,
+    ).unwrap_or_else(() => fail("expected follow-up provider effect"))
+    let (_, trailing_effects) = runtime
+      .complete(followup.id(), {
+        "ok": true,
+        "content": "Read complete",
+        "tool_calls": [],
+        "finish_reason": "stop",
+      })
+      .unwrap()
+    assert_true(trailing_effects.is_empty())
+    let engine_before = runtime.api.snapshot()
+
+    // Keep the external writer's replacement valid so reopen can prove the
+    // old durable engine contents survive the failed final checkpoint.
+    let competing_root = SafeRoot::open(data).unwrap()
+    let (saved_text, saved_version) = competing_root
+      .read_text("sessions.json")
+      .unwrap()
+    let saved_envelope = @json.parse(saved_text)
+    assert_eq(object_field(saved_envelope, "engine"), Some(engine_before))
+    assert_true(
+      competing_root.write_atomic(
+        "sessions.json",
+        saved_text + "\n",
+        expected=saved_version,
+        permission=0o600,
+      )
+      is Ok(_),
+    )
+
+    // The detached send candidate is published as an archive object, then its
+    // final CAS loses. The authoritative engine remains untouched and no
+    // provider effect reaches the host.
+    let failed_send = runtime.invoke("session_send", {
+      "session_id": session_id,
+      "prompt": "Continue with automatic pruning",
+      "auto_prune_tool_results": true,
+    })
+    match failed_send {
+      Err(error) => assert_true(error.contains("native checkpoint failed:"))
+      Ok(_) => fail("expected the final checkpoint to fail")
+    }
+    assert_true(runtime.stopped)
+    assert_true(runtime.api.take_typed_effects().is_empty())
+    let live_session = runtime.api
+      .invoke("session_get", { "session_id": session_id })
+      .unwrap()
+    assert_eq(string_field(live_session, "status"), Some("completed"))
+    assert_eq(int_field(live_session, "turn_id"), Some(1))
+    let live_events = match object_field(live_session, "events") {
+      Some(Json::Array(values)) => values
+      _ => fail("live session omitted its events")
+    }
+    assert_false(
+      live_events.any(event => {
+        string_field(event, "type") == Some("tool/result/pruned")
+      }),
+    )
+    assert_eq(runtime.state.archive_objects.length(), 0)
+    assert_eq(runtime.store.archive_inventory().unwrap().1, 1)
+
+    let (durable_text, _) = competing_root.read_text("sessions.json").unwrap()
+    let durable_envelope = @json.parse(durable_text)
+    assert_eq(object_field(durable_envelope, "engine"), Some(engine_before))
+    assert_eq(object_field(durable_envelope, "archive_objects"), None)
+    ignore(runtime.close())
+    competing_root.close()
+
+    let reopened = NativeRuntime::open(data, workspace, false, true).unwrap()
+    group.add_defer(() => {
+      @async.protect_from_cancel(() => ignore(reopened.close()))
+    })
+    let (durable, effects) = reopened
+      .invoke("session_get", { "session_id": session_id })
+      .unwrap()
+    assert_true(effects.is_empty())
+    assert_true(reopened.api.take_typed_effects().is_empty())
+    assert_eq(string_field(durable, "status"), Some("completed"))
+    assert_eq(int_field(durable, "turn_id"), Some(1))
+    let durable_events = match object_field(durable, "events") {
+      Some(Json::Array(values)) => values
+      _ => fail("reopened session omitted its events")
+    }
+    assert_false(
+      durable_events.any(event => {
+        string_field(event, "type") == Some("tool/result/pruned")
+      }),
+    )
+    assert_eq(reopened.state.archive_objects.length(), 0)
+    assert_eq(reopened.store.archive_inventory().unwrap().1, 1)
+    let tool_results = durable_events.filter(event => {
+      string_field(event, "type") == Some("tool/result")
+    })
+    assert_eq(tool_results.length(), 1)
+    assert_eq(
+      string_field(object_field(tool_results[0], "data").unwrap(), "content"),
+      Some(original_tool_result),
+    )
+  }
+}

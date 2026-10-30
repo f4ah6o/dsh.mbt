@@ -102,11 +102,23 @@ provisional row は accessible name と Canvas scene label で writing / partial
 effect は再発行しません。通常 CLI text stdout は final assistant message のみを表示し、`--json` は session snapshot
 を返すため partial / failed / cancelled turn の provisional row も含むことがあります。live compaction と spill は後続 parity work です。
 
-### Manual tool-result pruning
+### Tool-result pruning and archival
 
-`session_prune_tool_results` は、idle または completed の native v1 session に対する明示的な state-change operation です。
+`session_prune_tool_results` は idle / completed の native v1 session に対する明示的な state-change operation です。
 active turn、approval 待ち、read-only Session v4 import には適用できません。browser の **Trim outputs**、HTTP / gpui API、
 または `dsh prune-session SESSION_ID` から実行できます。
+
+`session_send` の任意 boolean `auto_prune_tool_results` を `true` にすると、新しい turn を開始する同じ candidate transaction 内で
+既定 policy を先に一度適用します。省略時と `false` は従来どおりです。auto path は settled な idle / completed / failed / cancelled
+session で使えます。failed / cancelled boundary の prune event も restore 時に検証されます。prune、prompt、provider effect は
+capacity が確認された candidate 内だけで作られ、native runtime はその admitted state を durable checkpoint してから effect を返します。
+保存に失敗した場合は未保存の provider request を開始しません。failed / cancelled boundary に prune event を含む store は、
+それらの event を検証できない旧 reader では拒否されます。
+
+この opt-in は native send transaction が扱う入口だけで有効です。MCP `session_send` は protocol validation 後に `true` を明示エラーで拒否し、
+外部 hook を起動せず live engine state も変更しません。各ターンで新しく生成した tool result は次の送信まで原本を inline に保持するため、
+結果自体が 262,144 UTF-16 unit の session 上限を超えると、次の送信時に外置きする前に容量拒否される場合があります。
+threshold / head / tail は Unicode code point の文字数 policy であり provider token limit の推定値ではありません。
 
 この処理は upstream の pinned
 [compaction-tool-result-pruner](https://github.com/deepseek-ai/deepseek-harness/tree/5badb15009ae1756c3afe0ae0cef1faafc290ccc/packages/compaction/compaction-tool-result-pruner)
@@ -116,40 +128,40 @@ marker は `\n\n[... tool result middle pruned ...]\n\n` です。API の任意 
 CLI はそれぞれ `--threshold-chars`、`--head-chars`、`--tail-chars` を受け付けます。切り出しは MoonBit の Unicode code point
 境界で行うため surrogate pair を分割しません。同じ policy の再適用は idempotent で、より小さい policy は現在の projection から続けます。
 
-pruning は元の tool/result を保持したまま、source / call identity、budgets、code point counts、projected content を持つ
-tool/result/pruned event を追加します。restore は参照 sequence、call identity、budgets、counts、再計算した content を照合します。
-通常の Engine v1 session では Session.messages() と transcript に原文を inline で残します。次の provider request は replay 検証済み
-event から組み立てた projection を使います。
+pruning は元の `tool/result` を保持し、source / call identity、budgets、code point counts、projected content を持つ
+`tool/result/pruned` event を追加します。restore は参照 sequence、call identity、budgets、counts、再計算した content を照合します。
+通常の Engine v1 session では `Session.messages()` と transcript に原文を inline で残します。次の provider request は replay 検証済み
+event から組み立てた projection を使います。既定 policy は個々の result を縮めますが、aggregate context budget や token-pressure
+trigger を測りません。
 
-native runtime の明示的な prune 操作は、settled native session の直接 prune 済み通常 read result をさらに検証し、
-原文が 65,536 UTF-8 bytes 以下のものを object store へ外置きできます。candidate 上で result / completion event と tool message
-を projection + 明示 archive reference に置換し、manifest、receipt、revision を一つの sessions.json compare-and-swap
-checkpoint に含めます。新 object はその CAS より前に fresh name で no-replace publish され、KnownSuccess だけを採用します。
-失敗時は candidate を破棄し、unknown publication は自動 adopt / retry しません。manifest 書込みが不確定なら runtime を止め、
-reopen 後に receipt が completed / uncertain のどちらかを決めます。未縮約、65,536 bytes 超、通常 read 以外は inline のままです。
+native runtime の explicit prune と opted-in send は、直接 prune された通常 Read result の原文を追加検証し、65,536 UTF-8 bytes
+以下なら immutable archive object に保存できます。非 Read tool と上限超過の正当な結果は inline のままです。identity、provenance、
+digest、object encoding に矛盾がある場合は破損として操作全体を拒否します。candidate 上で result / completion event と tool message
+を projection + archive reference に置換し、manifest、receipt、revision、send admission を一つの `sessions.json` compare-and-swap
+checkpoint に含めます。新 object は CAS 前に fresh name で no-replace publish され、KnownSuccess の後だけ candidate を採用します。
+事前失敗は candidate を捨てて provider effect を返しません。publication または manifest の結果が不確定なら runtime を停止し、
+reopen 後の receipt で completed / uncertain を判断します。同じ command ID の再送は保存済み receipt を返し、archive、event、revision、
+provider effect を追加しません。
 
 Browser の transcript は archive projection を原文と誤認させず、テキスト表示に原文を取得する操作を示します。HTTP には
 session / result sequence / object identity を確認して disk object を再検証する history endpoint があります。CLI は status
-表示に安全な archive marker を使います。MCP の旧 session_get / prune carrier と ACP history / committed-event surfaces は
+表示に安全な archive marker を使います。MCP の旧 `session_get` / prune carrier と ACP history / committed-event surfaces は
 archive projection を原文として返さず明示拒否します。fork、import、active / approval 待ち session の archive 化は対象外で、
-old v1 readers は archive marker を拒否します。普通の snapshot() は archive なしなら従来 v1 を出します。Effects は reopen
-時に再実行しません。
+old v1 readers は archive marker を拒否します。Effects は reopen 時に再実行しません。
 
 quota は engine manifest 256 objects、各 original / projection 65,536 bytes、各 encoded object 1 MiB、original と projection
 各 16 MiB aggregate、hydration expansion 7 MiB、engine JSON copy 16 MiB、native object store 64 MiB / 2,048 directory entries、
 outer snapshot 32 MiB です。store quota は temp / orphan files も数え、未知の entry type は拒否します。engine SHA は portable
-MoonBit 実装で canonical UTF-8 content、projection、payload identity を再検証します。Engine は OS crypto に直接依存しない純粋な
-MoonBit package のため portable SHA を持ちます。Native codec は host system SHA-256 adapter も使い、保存境界と restore 境界で
-独立に照合します。標準 padding / Unicode vectors は portable SHA と host adapter の両方にあります。
+MoonBit 実装で canonical UTF-8 content、projection、payload identity を再検証します。Native codec は host system SHA-256 adapter も使い、
+保存境界と restore 境界で独立に照合します。標準 padding / Unicode vectors は portable SHA と host adapter の両方にあります。
 
-native regression fixture は実際の Read effect で 60,003-byte output を 6 回同一 session に記録し、毎回 disk close / reopen、
-原文 endpoint、effect なし、次 turn の完了を確認します。累積原文は 360,018 bytes で旧 262,144-unit session limit を超えます。
-この証拠は隔離 test filesystem 上の Linux native run で、実端末の電源断、全 OS/filesystem の durability、長時間 storage soak
-を証明するものではありません。
+native regression fixture は実際の Read effect で 60,003-byte output を同一 session に複数 turn 記録し、disk close / reopen、
+原文 endpoint、effect なし、次 turn の完了を確認します。archive object は通常 session の累積 inline history とは別に保存されます。
+隔離 test filesystem での結果は、実端末の電源断、全 OS/filesystem の durability、長時間 storage soak を証明するものではありません。
 
-これは明示的な bounded prune/archive です。CLI と browser は自動 context compaction / auto-pruning を行いません。
-token meter、pressure trigger、summary generation、自動 live compaction、spill、GC / object cleanup は含みません。運用上の条件は
-[次の移植作業](../issues/open/0001-upstream-parity.md) を参照してください。
+この機能は bounded per-result projection と opt-in archive です。CLI と PWA は別の maintenance command を自動発行しません。
+token meter、aggregate pressure trigger、summary generation、自動 live compaction、spill、GC / object cleanup は含みません。
+運用上の条件は[次の移植作業](../issues/open/0001-upstream-parity.md)を参照してください。
 
 ### Durable provider retry
 

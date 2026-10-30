@@ -82,7 +82,12 @@ fn operation_schema(operation : String) -> @capability.Schema raise InitError {
       [session, field("id", string, false), field("title", string, false)]
     "session_import" => [field("jsonl", string, true)]
     "session_get" | "session_cancel" => [session]
-    "session_send" => [session, field("prompt", string, true)]
+    "session_send" =>
+      [
+        session,
+        field("prompt", string, true),
+        field("auto_prune_tool_results", @capability.Schema::bool(), false),
+      ]
     "session_prune_tool_results" =>
       [
         session,
@@ -308,42 +313,35 @@ fn create_api(
           "plugin_list" => Ok(plugins.manifest())
           "session_send" =>
             match @engine.EngineCommand::from_json("session_send", input) {
-              Ok(@engine.EngineCommand::SendPrompt(session_id, prompt)) => {
-                let command_result = if !native_session_start_contexts.val.is_empty() ||
-                  !native_prompt_contexts.val.is_empty() {
-                  engine.apply_session_send_with_hook_contexts(
-                    session_id,
-                    prompt,
-                    native_session_start_contexts.val,
-                    native_prompt_contexts.val,
-                    source_kind=native_hook_context_source_kind.val,
-                  )
-                } else {
-                  let command = @engine.EngineCommand::SendPrompt(
-                    session_id, prompt,
-                  )
-                  if preview_session_send.val {
-                    engine.preview(command)
-                  } else {
-                    engine.apply(command)
-                  }
-                }
-                match command_result {
-                  Ok(value) => Ok(value)
-                  Err(error) => Err(domain_error(name, error))
-                }
-              }
               Ok(command) =>
-                if preview_session_send.val {
-                  match engine.preview(command) {
-                    Ok(value) => Ok(value)
-                    Err(error) => Err(domain_error(name, error))
+                match command.session_send_details() {
+                  Some((session_id, prompt, request_contexts, auto_prune)) => {
+                    let command_result = if !native_session_start_contexts.val.is_empty() ||
+                      !native_prompt_contexts.val.is_empty() {
+                      let additional_contexts = request_contexts.copy()
+                      for context in native_prompt_contexts.val {
+                        additional_contexts.push(context)
+                      }
+                      engine.apply_session_send_with_hook_contexts(
+                        session_id,
+                        prompt,
+                        native_session_start_contexts.val,
+                        additional_contexts,
+                        source_kind=native_hook_context_source_kind.val,
+                        auto_prune_tool_results=auto_prune,
+                      )
+                    } else if preview_session_send.val {
+                      engine.preview(command)
+                    } else {
+                      engine.apply(command)
+                    }
+                    match command_result {
+                      Ok(value) => Ok(value)
+                      Err(error) => Err(domain_error(name, error))
+                    }
                   }
-                } else {
-                  match engine.apply(command) {
-                    Ok(value) => Ok(value)
-                    Err(error) => Err(domain_error(name, error))
-                  }
+                  None =>
+                    Err(domain_error(name, "invalid session_send command"))
                 }
               Err(error) => Err(domain_error(name, error))
             }
@@ -928,6 +926,35 @@ pub fn HarnessApi::plan_tool_result_archive(
 }
 
 ///|
+/// Classify whether a direct-pruned result is supported by the native archive
+/// format. False means a well-formed unsupported result remains inline; an
+/// error means the result's archive provenance is malformed.
+pub fn HarnessApi::tool_result_archive_supported(
+  self : HarnessApi,
+  session_id : @engine.SessionId,
+  result_seq : Int32,
+) -> Result[Bool, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.tool_result_archive_supported(session_id, result_seq)
+}
+
+///|
+/// Apply the default send-time projection to a detached native candidate.
+/// Capacity is admitted after native archive compaction and send admission are
+/// staged together by NativeRuntime.
+pub fn HarnessApi::prune_tool_results_for_send(
+  self : HarnessApi,
+  session_id : @engine.SessionId,
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.prune_tool_results_for_send(session_id)
+}
+
+///|
 /// Build a compact archive snapshot without changing this API's authoritative
 /// engine. The native host must durably publish the object and checkpoint this
 /// returned snapshot before invoking `commit_tool_result_archive` or
@@ -944,6 +971,20 @@ pub fn HarnessApi::tool_result_archive_candidate(
 }
 
 ///|
+/// Build one candidate snapshot for a batch of archive objects without
+/// changing this API's authoritative engine.
+pub fn HarnessApi::tool_result_archives_candidate(
+  self : HarnessApi,
+  plans : Array[@engine.ToolResultArchivePlan],
+  sources : Array[@engine.ToolResultArchiveSource],
+) -> Result[Json, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.tool_result_archives_candidate(plans, sources)
+}
+
+///|
 /// Apply one verified archive to this API's engine. Native callers must invoke
 /// this only after the matching object and v2 manifest checkpoint are known to
 /// have been published.
@@ -956,6 +997,21 @@ pub fn HarnessApi::commit_tool_result_archive(
     return Err("application is closed")
   }
   self.engine.commit_tool_result_archive(plan, source)
+}
+
+///|
+/// Apply one previously published archive batch to this API's candidate
+/// engine. Native callers invoke this only after the matching object files and
+/// manifest checkpoint are known to have been published.
+pub fn HarnessApi::commit_tool_result_archives(
+  self : HarnessApi,
+  plans : Array[@engine.ToolResultArchivePlan],
+  sources : Array[@engine.ToolResultArchiveSource],
+) -> Result[Unit, String] {
+  if !self.registry.is_alive() {
+    return Err("application is closed")
+  }
+  self.engine.commit_tool_result_archives(plans, sources)
 }
 
 ///|

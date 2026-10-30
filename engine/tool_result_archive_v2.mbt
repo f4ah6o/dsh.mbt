@@ -1347,38 +1347,78 @@ pub fn Engine::tool_result_archive_candidate(
   plan : ToolResultArchivePlan,
   source : ToolResultArchiveSource,
 ) -> Result[Json, String] {
+  self.tool_result_archives_candidate([plan], [source])
+}
+
+///|
+/// Build one compact archive snapshot for a batch of independently verified
+/// Read results. Applying all replacements to one snapshot lets the native
+/// host admit the final compact history even when no individual replacement
+/// would make an over-capacity intermediate history fit.
+pub fn Engine::tool_result_archives_candidate(
+  self : Engine,
+  plans : Array[ToolResultArchivePlan],
+  sources : Array[ToolResultArchiveSource],
+) -> Result[Json, String] {
   try {
-    let reference = source.reference
-    let current = match
-      self.plan_tool_result_archive(plan.session_id, plan.result_seq) {
-      Ok(value) => value
-      Err(error) => raise Invalid(error)
+    if plans.length() != sources.length() || plans.length() > 256 {
+      raise Invalid("Archive batch has an invalid item count")
     }
-    if !archive_plan_equal(plan, current) {
-      raise Invalid("Archive plan is stale or belongs to another engine state")
+    if plans.is_empty() {
+      return Ok(self.snapshot())
     }
-    let session = self.lookup(plan.session_id.as_string())
-    let result = session.events[plan.result_seq]
-    let (content, _) = archive_regular_result(result, plan.call_id.as_string())
-    let prune = session.events[plan.pruned_seq]
-    let projection = required_string(prune.data, "content")
-    let config = prune_config_from_event(prune.data)
-    if content != source.content ||
-      projection != source.pruned_content ||
-      prune_text(content, config) != Some(projection) ||
-      !archive_ref_matches_plan(reference, plan, content, projection, config) {
-      raise Invalid(
-        "Archive reference does not match the verified pruning candidate",
+    let seen : Map[String, Bool] = Map([])
+    let mut compact = self.snapshot()
+    for index, plan in plans {
+      let source = sources[index]
+      let key = plan.session_id.as_string() + "\n" + plan.result_seq.to_string()
+      if seen.get(key) is Some(_) {
+        raise Invalid("Archive batch contains a duplicate result")
+      }
+      seen[key] = true
+      let current = match
+        self.plan_tool_result_archive(plan.session_id, plan.result_seq) {
+        Ok(value) => value
+        Err(error) => raise Invalid(error)
+      }
+      if !archive_plan_equal(plan, current) {
+        raise Invalid(
+          "Archive plan is stale or belongs to another engine state",
+        )
+      }
+      let session = self.lookup(plan.session_id.as_string())
+      let result = session.events[plan.result_seq]
+      let (content, _) = archive_regular_result(
+        result,
+        plan.call_id.as_string(),
+      )
+      let prune = session.events[plan.pruned_seq]
+      let projection = required_string(prune.data, "content")
+      let config = prune_config_from_event(prune.data)
+      if content != source.content ||
+        projection != source.pruned_content ||
+        prune_text(content, config) != Some(projection) ||
+        !archive_ref_matches_plan(
+          source.reference,
+          plan,
+          content,
+          projection,
+          config,
+        ) {
+        raise Invalid(
+          "Archive reference does not match the verified pruning candidate",
+        )
+      }
+      compact = archive_candidate_snapshot(
+        compact,
+        plan,
+        source.reference,
+        content,
+        projection,
       )
     }
-    let candidate = archive_candidate_snapshot(
-      self.snapshot(),
-      plan,
-      reference,
-      content,
-      projection,
-    )
-    Ok(candidate)
+    native_archive_snapshot_sources_within_limits(compact)
+    Ok(compact)
   } catch {
     Invalid(message) => Err(message)
   }
@@ -1392,55 +1432,82 @@ pub fn Engine::commit_tool_result_archive(
   plan : ToolResultArchivePlan,
   source : ToolResultArchiveSource,
 ) -> Result[Unit, String] {
+  self.commit_tool_result_archives([plan], [source])
+}
+
+///|
+/// Apply a previously published archive batch to one candidate engine. The
+/// combined candidate is checked for session capacity only after every object
+/// has compacted its corresponding original.
+pub fn Engine::commit_tool_result_archives(
+  self : Engine,
+  plans : Array[ToolResultArchivePlan],
+  sources : Array[ToolResultArchiveSource],
+) -> Result[Unit, String] {
+  if plans.is_empty() && sources.is_empty() {
+    return Ok(())
+  }
   try {
-    let reference = source.reference
-    let current = match
-      self.plan_tool_result_archive(plan.session_id, plan.result_seq) {
+    let staged = match self.tool_result_archives_candidate(plans, sources) {
       Ok(value) => value
       Err(error) => raise Invalid(error)
     }
-    if !archive_plan_equal(plan, current) {
-      raise Invalid("Archive plan is stale or belongs to another engine state")
-    }
-    let candidate = self.lookup(plan.session_id.as_string()).copy_state()
-    let result = candidate.events[plan.result_seq]
-    let (content, _) = archive_regular_result(result, plan.call_id.as_string())
-    let prune = candidate.events[plan.pruned_seq]
-    let projection = required_string(prune.data, "content")
-    let config = prune_config_from_event(prune.data)
-    if content != source.content ||
-      projection != source.pruned_content ||
-      prune_text(content, config) != Some(projection) ||
-      !archive_ref_matches_plan(reference, plan, content, projection, config) {
-      raise Invalid(
-        "Archive reference does not match the verified pruning candidate",
+    let candidate = self.copy_state()
+    for index, plan in plans {
+      let source = sources[index]
+      let session = candidate.lookup(plan.session_id.as_string())
+      let result = session.events[plan.result_seq]
+      let (content, _) = archive_regular_result(
+        result,
+        plan.call_id.as_string(),
       )
+      let prune = session.events[plan.pruned_seq]
+      let projection = required_string(prune.data, "content")
+      let config = prune_config_from_event(prune.data)
+      if content != source.content ||
+        projection != source.pruned_content ||
+        prune_text(content, config) != Some(projection) ||
+        !archive_ref_matches_plan(
+          source.reference,
+          plan,
+          content,
+          projection,
+          config,
+        ) {
+        raise Invalid(
+          "Archive reference does not match the verified pruning candidate",
+        )
+      }
+      let events = session.events.map(Event::json)
+      let with_completion = replace_archive_event_content(
+        events,
+        plan.completed_seq,
+        "tool/completed",
+        projection,
+        source.reference,
+      )
+      let with_result = replace_archive_event_content(
+        with_completion,
+        plan.result_seq,
+        "tool/result",
+        projection,
+        source.reference,
+      )
+      for event_index, event in with_result {
+        session.events[event_index] = native_archive_restore_event(event)
+      }
     }
-    let events = candidate.events.map(Event::json)
-    let with_completion = replace_archive_event_content(
-      events,
-      plan.completed_seq,
-      "tool/completed",
-      projection,
-      reference,
-    )
-    let with_result = replace_archive_event_content(
-      with_completion,
-      plan.result_seq,
-      "tool/result",
-      projection,
-      reference,
-    )
-    for index, event in with_result {
-      candidate.events[index] = native_archive_restore_event(event)
-    }
-    if session_capacity_length(candidate.json()) > SESSION_CAPACITY {
+    if !candidate.within_capacity() {
       raise Invalid("Archived session still exceeds its capacity limit")
     }
-    let prospective = self.copy_state()
-    prospective.sessions.set(candidate.id, candidate)
-    native_archive_snapshot_sources_within_limits(prospective.snapshot())
-    self.sessions.set(candidate.id, candidate)
+    let compact = candidate.snapshot()
+    native_archive_snapshot_sources_within_limits(compact)
+    if compact != staged {
+      raise Invalid(
+        "Committed archive batch differs from its admitted snapshot",
+      )
+    }
+    self.adopt(candidate)
     Ok(())
   } catch {
     Invalid(message) => Err(message)

@@ -104,6 +104,9 @@ pub(all) enum EngineCommand {
   GetSession(SessionId)
   SendPrompt(SessionId, String)
   SendPromptWithContexts(SessionId, String, Array[String])
+  /// Start a prompt after applying the existing default tool-result pruning
+  /// policy inside the same engine transaction.
+  SendPromptWithAutoPruning(SessionId, String, Array[String])
   CancelSession(SessionId)
   PruneToolResults(SessionId, ToolResultPruneConfig)
   ApproveTool(SessionId, ToolCallId, Bool)
@@ -187,7 +190,15 @@ pub fn EngineCommand::from_json(
             "additional_contexts exceeds the aggregate length limit",
           )
         }
-        if additional_contexts.is_empty() {
+        let auto_prune_tool_results = match
+          fields(input).get("auto_prune_tool_results") {
+          None | Some(Json::False) => false
+          Some(Json::True) => true
+          Some(_) => raise Invalid("auto_prune_tool_results must be a boolean")
+        }
+        if auto_prune_tool_results {
+          SendPromptWithAutoPruning(session_id, prompt, additional_contexts)
+        } else if additional_contexts.is_empty() {
           SendPrompt(session_id, prompt)
         } else {
           SendPromptWithContexts(session_id, prompt, additional_contexts)
@@ -212,6 +223,22 @@ pub fn EngineCommand::from_json(
     Ok(command)
   } catch {
     Invalid(message) => Err(message)
+  }
+}
+
+///|
+/// Return the validated prompt payload for a session-send command. The final
+/// flag reports whether the command opted into pre-send tool-result pruning.
+pub fn EngineCommand::session_send_details(
+  self : EngineCommand,
+) -> (SessionId, String, Array[String], Bool)? {
+  match self {
+    SendPrompt(session_id, prompt) => Some((session_id, prompt, [], false))
+    SendPromptWithContexts(session_id, prompt, contexts) =>
+      Some((session_id, prompt, contexts, false))
+    SendPromptWithAutoPruning(session_id, prompt, contexts) =>
+      Some((session_id, prompt, contexts, true))
+    _ => None
   }
 }
 
@@ -273,9 +300,29 @@ fn EngineCommand::validate(self : EngineCommand) -> Result[Unit, String] {
       Err("prompt must not be empty")
     SendPromptWithContexts(_, prompt, _) if prompt.length() > 16384 =>
       Err("prompt exceeds the length limit")
+    SendPromptWithAutoPruning(_, prompt, _) if prompt.is_empty() =>
+      Err("prompt must not be empty")
+    SendPromptWithAutoPruning(_, prompt, _) if prompt.length() > 16384 =>
+      Err("prompt exceeds the length limit")
     SendPromptWithContexts(_, _, additional_contexts) if additional_contexts.length() >
       32 => Err("additional_contexts must contain at most 32 items")
+    SendPromptWithAutoPruning(_, _, additional_contexts) if additional_contexts.length() >
+      32 => Err("additional_contexts must contain at most 32 items")
     SendPromptWithContexts(_, _, additional_contexts) => {
+      let mut total_length = 0
+      for context in additional_contexts {
+        if context.is_empty() || context.length() > 4096 {
+          return Err("additional_contexts contains an invalid item")
+        }
+        total_length += context.length()
+      }
+      if total_length > 16384 {
+        Err("additional_contexts exceeds the aggregate length limit")
+      } else {
+        Ok(())
+      }
+    }
+    SendPromptWithAutoPruning(_, _, additional_contexts) => {
       let mut total_length = 0
       for context in additional_contexts {
         if context.is_empty() || context.length() > 4096 {

@@ -41,7 +41,7 @@ MoonBit で agent の基本実行経路を動かす最初の移植です。
 - 依存を upstream Git revision に固定し、互換性が確認できていない latest へ自動更新しない。
 - SSE は MoonBit で逐次解析し、text / reasoning を host が bounded event batch として永続化して session / browser / scene に投影する。live compaction と spill は後続作業とする。
 - retry は同じ active provider effect に限定し、retry schedule と start の checkpoint が成功してから待機・次の request を始める。restore は未完了の retry を interruption として閉じ、再送しない。利用可能な request を使うため retry ごとに provider 側で再課金される場合がある。
-- tool-result pruning は明示操作のみ。defaults は threshold 8,192 Unicode code points、head 4,096、tail 1,024。eligible な直接-pruned Read は元 content を archive object に移し、engine/manifest/receipt を checkpoint する。同一 session の 6 × 60,003-byte Read + reopen / next-turn test は旧 262,144-unit limit を超える。CLI / browser の自動 compaction は行わない。
+- tool-result pruning は明示操作と default-off の送信時 opt-in (`auto_prune_tool_results: true`) で利用できます。defaults は threshold 8,192 Unicode code points、head 4,096、tail 1,024。eligible な直接-pruned Read は元 content を archive object に移し、send の engine / manifest / remote receipt を一つの checkpoint で確定します。同一 session の 6 × 44,003-byte Read + reopen / next-turn test は旧 262,144-unit limit を超えます。各新規 tool result は次の opt-in 送信まで inline のままなので、その時点で session 上限を超える結果は扱えません。MCP の `session_send` は opt-in を拒否します。threshold は文字数 policy で、token limit ではありません。CLI / browser の自動 compaction は行いません。
 - 1 session 262,144 serialized UTF-16 units、最大 32 sessions。stream projection と pruning event もこの上限内で、容量超過は candidate 更新を拒否して既存状態を保つ。長い会話向け自動 live compaction / token meter / summary / spill は未実装。
 - Native service は loopback 専用。利用者が Tailscale Serve と owner allowlist を設定した場合だけ proxy identity header を信頼する。実 Tailnet / public hosting はこの実装検証の範囲外。
 

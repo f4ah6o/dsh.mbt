@@ -300,6 +300,55 @@ fn Engine::prune_session_tool_results(
 }
 
 ///|
+/// Add the default pre-send projection to an isolated native candidate. The
+/// caller stages eligible archive objects and the send before it admits the
+/// combined snapshot, so this intermediate mutation deliberately does not run
+/// the canonical session capacity check. Unlike the explicit prune command,
+/// send-time pruning accepts settled failed and cancelled sessions too.
+pub fn Engine::prune_tool_results_for_send(
+  self : Engine,
+  id : SessionId,
+) -> Result[Json, String] {
+  if self.config_error is Some(_) {
+    return Err("Invalid tool configuration")
+  }
+  let candidate = self.copy_state()
+  let session = match candidate.sessions.get(id.as_string()) {
+    Some(value) => value
+    None => return Err("Unknown session: " + id.as_string())
+  }
+  if session.imported {
+    return Err(
+      "Imported Session v4 histories are read-only and cannot be continued",
+    )
+  }
+  if (
+      session.status != Idle &&
+      session.status != Completed &&
+      session.status != Failed &&
+      session.status != Cancelled
+    ) ||
+    session.open_step ||
+    session.active_effect is Some(_) ||
+    session.active_tool_effect_count() > 0 ||
+    session.approval is Some(_) {
+    return Err("Automatic tool-result pruning requires a settled closed turn")
+  }
+  let config = checked_prune_config(
+    DEFAULT_PRUNE_THRESHOLD,
+    DEFAULT_PRUNE_HEAD,
+    DEFAULT_PRUNE_TAIL,
+  ) catch {
+    Invalid(error) => return Err(error)
+  }
+  let result = session.prune_tool_results(config) catch {
+    Invalid(error) => return Err(error)
+  }
+  self.adopt(candidate)
+  Ok(result)
+}
+
+///|
 /// Validate one persisted projection against its exact source and policy.
 /// The source must be the latest projection of the cited original result.
 fn Session::validate_tool_result_prune(
@@ -322,7 +371,12 @@ fn Session::validate_tool_result_prune(
   if result_seq >= self.events.length() || source_seq >= self.events.length() {
     raise Invalid("Tool result pruning references a future event")
   }
-  if (self.status != Idle && self.status != Completed) ||
+  if (
+      self.status != Idle &&
+      self.status != Completed &&
+      self.status != Failed &&
+      self.status != Cancelled
+    ) ||
     self.open_step ||
     self.active_effect is Some(_) ||
     self.active_tool_effect_count() > 0 ||

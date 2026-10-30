@@ -2401,6 +2401,7 @@ async test "UserPromptSubmit injects grouped source context before provider admi
       {
         "prompt": Json::string("Use the user's original request"),
         "additional_contexts": Json::array([Json::string("forged context")]),
+        "auto_prune_tool_results": Json::boolean(true),
       },
     )
     let identity = runtime.state.identity_key
@@ -2472,6 +2473,7 @@ async test "UserPromptSubmit injects grouped source context before provider admi
       {
         "prompt": Json::string("Use the user's original request"),
         "additional_contexts": Json::array([Json::string("forged context")]),
+        "auto_prune_tool_results": Json::boolean(true),
       },
     )
     let (replayed, replay_effects, replay_started, _) = runtime
@@ -2505,6 +2507,7 @@ async test "UserPromptSubmit injects grouped source context before provider admi
       {
         "prompt": Json::string("Use the user's original request"),
         "additional_contexts": Json::array([Json::string("forged context")]),
+        "auto_prune_tool_results": Json::boolean(true),
       },
     )
     let (_, restart_effects, restart_started, _) = reopened
@@ -3888,15 +3891,11 @@ async test "remote session_cancel rejects a running UserPromptSubmit prompt" {
     group.add_defer(() => {
       @async.protect_from_cancel(() => ignore(runtime.close()))
     })
-    let session_id = "prompt-hook-remote-explicit-cancel-session"
-    ignore(
-      runtime
-      .invoke("session_create", {
-        "id": session_id,
-        "title": "Remote prompt hook cancellation",
-      })
-      .unwrap(),
-    )
+    let session_id = "archive-codec"
+    let original = "auto-cancel-source".repeat(1000)
+    let (seed, _, _, _, _, _) = archive_codec_test_candidate(original)
+    runtime.api.restore(seed.snapshot()).unwrap()
+    runtime.checkpoint_locked().unwrap()
     let identity = runtime.state.identity_key
     let command_time = native_auth_now().to_int64() * 1000L
     let command_id = @protocol.uuid_v7_command_id_from_entropy(
@@ -3906,7 +3905,10 @@ async test "remote session_cancel rejects a running UserPromptSubmit prompt" {
       runtime.state.workspace_id,
       session_id,
       command_id,
-      { "prompt": "remote explicit cancellation before admission" },
+      {
+        "prompt": "remote explicit cancellation before admission",
+        "auto_prune_tool_results": Json::boolean(true),
+      },
     )
     let send_task = group.spawn(
       async fn() { runtime.accept_remote_command(send, identity).unwrap() },
@@ -3961,6 +3963,24 @@ async test "remote session_cancel rejects a running UserPromptSubmit prompt" {
     assert_true(send_effects.is_empty())
     assert_false(send_started)
     assert_true(send_control is None)
+    assert_eq(runtime.state.archive_objects.length(), 0)
+    assert_eq(runtime.store.archive_inventory().unwrap().1, 0)
+    let session = runtime.api
+      .invoke("session_get", { "session_id": session_id })
+      .unwrap()
+    let session_events = match object_field(session, "events") {
+      Some(Json::Array(values)) => values
+      _ => fail("cancelled archive session omitted its events")
+    }
+    let mut original_result : Json? = None
+    for event in session_events {
+      if string_field(event, "type") == Some("tool/result") {
+        original_result = Some(event)
+      }
+    }
+    let original_data = object_field(original_result.unwrap(), "data").unwrap()
+    assert_eq(string_field(original_data, "content"), Some(original))
+    assert_true(object_field(original_data, "archive_ref") is None)
     assert_eq(@fs.read_file(workspace + "/hook-count.txt").text(), "x")
     @fs.write_file(workspace + "/hook-release", @utf8.encode("release"))
     @async.sleep(100)
@@ -3970,7 +3990,10 @@ async test "remote session_cancel rejects a running UserPromptSubmit prompt" {
       runtime.state.workspace_id,
       session_id,
       command_id,
-      { "prompt": "remote explicit cancellation before admission" },
+      {
+        "prompt": "remote explicit cancellation before admission",
+        "auto_prune_tool_results": Json::boolean(true),
+      },
     )
     let (replayed, replay_effects, replay_started, replay_control) = runtime
       .accept_remote_command(replay, identity)

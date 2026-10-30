@@ -27,12 +27,13 @@ pub struct Engine {
 pub fn Engine::accept_post_tool_prompt_hook(Self, NativePostToolPromptHookCheckpoint, Array[String]) -> Result[Json, String]
 pub fn Engine::accept_subagent_prompt_hook(Self, NativeSubagentPromptHookCheckpoint, Array[String], source_kind? : String) -> Result[Json, String]
 pub fn Engine::apply(Self, EngineCommand) -> Result[Json, String]
-pub fn Engine::apply_session_send_with_hook_contexts(Self, SessionId, String, Array[String], Array[String], source_kind? : String) -> Result[Json, String]
+pub fn Engine::apply_session_send_with_hook_contexts(Self, SessionId, String, Array[String], Array[String], source_kind? : String, auto_prune_tool_results? : Bool) -> Result[Json, String]
 pub fn Engine::begin_subagent_prompt_hook(Self, String, String, Bool) -> Result[NativeSubagentPromptHookCheckpoint, String]
 pub fn Engine::block_post_tool_prompt_hook(Self, NativePostToolPromptHookCheckpoint, String) -> Result[Json, String]
 pub fn Engine::block_stop_continuation(Self, NativeStopHookCheckpoint, String) -> Result[Json, String]
 pub fn Engine::block_subagent_prompt_hook(Self, NativeSubagentPromptHookCheckpoint, String) -> Result[Json, String]
 pub fn Engine::commit_tool_result_archive(Self, ToolResultArchivePlan, ToolResultArchiveSource) -> Result[Unit, String]
+pub fn Engine::commit_tool_result_archives(Self, Array[ToolResultArchivePlan], Array[ToolResultArchiveSource]) -> Result[Unit, String]
 pub fn Engine::complete(Self, String, Json) -> Result[Json, String]
 pub fn Engine::complete_effect(Self, EffectId, Json) -> Result[Json, String]
 pub fn Engine::complete_effect_with_post_tool_prompt_hook(Self, EffectId, Json) -> Result[Json, String]
@@ -52,6 +53,7 @@ pub fn Engine::prepare_stop_continuation(Self, NativeStopHookCheckpoint, String)
 pub fn Engine::preview(Self, EngineCommand) -> Result[Json, String]
 pub fn Engine::project_effect_stream(Self, EffectId, String, String) -> Result[Json, String]
 pub fn Engine::project_stream(Self, String, String, String) -> Result[Json, String]
+pub fn Engine::prune_tool_results_for_send(Self, SessionId) -> Result[Json, String]
 pub fn Engine::record_effect_outcome(Self, String, Json) -> Result[Json, String]
 pub fn Engine::record_native_hook_invoked(Self, String, String, String, String?, dialect? : String) -> Result[NativeHookInvocationCheckpoint, String]
 pub fn Engine::record_native_hook_result(Self, NativeHookInvocationCheckpoint, String, Int?, String?, Int) -> Result[Json, String]
@@ -66,6 +68,8 @@ pub fn Engine::stop_continuation_prompt(Self, NativeStopHookCheckpoint) -> Resul
 pub fn Engine::take_effects(Self) -> Array[Json]
 pub fn Engine::take_typed_effects(Self) -> Array[EngineEffect]
 pub fn Engine::tool_result_archive_candidate(Self, ToolResultArchivePlan, ToolResultArchiveSource) -> Result[Json, String]
+pub fn Engine::tool_result_archive_supported(Self, SessionId, Int) -> Result[Bool, String]
+pub fn Engine::tool_result_archives_candidate(Self, Array[ToolResultArchivePlan], Array[ToolResultArchiveSource]) -> Result[Json, String]
 
 pub(all) enum EngineCommand {
   CreateSession(String?, String, String, Int?)
@@ -75,11 +79,13 @@ pub(all) enum EngineCommand {
   GetSession(SessionId)
   SendPrompt(SessionId, String)
   SendPromptWithContexts(SessionId, String, Array[String])
+  SendPromptWithAutoPruning(SessionId, String, Array[String])
   CancelSession(SessionId)
   PruneToolResults(SessionId, ToolResultPruneConfig)
   ApproveTool(SessionId, ToolCallId, Bool)
 }
 pub fn EngineCommand::from_json(String, Json) -> Result[Self, String]
+pub fn EngineCommand::session_send_details(Self) -> (SessionId, String, Array[String], Bool)?
 
 pub struct EngineEffect {
   // private fields
