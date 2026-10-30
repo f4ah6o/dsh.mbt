@@ -101,7 +101,7 @@ Proposed item: Add optional durable audit files for settled foreground children.
 
 実装: GPT-6 Codex subagent。独立レビュー: gpt-6.1-sol / xhigh。`moon check runtime desktop verification/native_fs --target native --deny-warn`、`moon fmt --check runtime desktop verification/native_fs`、`git diff --check` は PASS。native worker と subreaper を指定した `moon test runtime --target native --deny-warn --no-parallelize` は 235/235 PASS。process-global temp serial exhaustion fixture は独立 native package に分離し、同 fixture は fresh process で 1/1 PASS。独立 reviewer の audit fixture run は 23/23 PASS。
 
-この環境では Windows native CI と実際の power-loss crash test は未実施。local issue validator executable/script は workspace と `/tmp` から確認できず未実行。Native full-suite run は一時 port conflict を検出して空き loopback port に切り替えた後に完了し、1 つの承認拒否 diagnostic を出したが、235 tests はすべて PASS。
+この環境では Windows native CI と実際の power-loss crash test は未実施。`python3 /tmp/dsh-local-issues.py --repository-root /workspace/dsh-subagent-audit-publication validate --issue-root issues --path issues/open/20261030-subagent-audit-publication.md` は violations なしで PASS。Native full-suite run は一時 port conflict を検出して空き loopback port に切り替えた後に完了し、1 つの承認拒否 diagnostic を出したが、235 tests はすべて PASS。
 
 ## 注記
 
