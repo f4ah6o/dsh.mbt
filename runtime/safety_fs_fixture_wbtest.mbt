@@ -165,6 +165,37 @@ async test "SafeRoot atomically creates complete immutable files without replace
 }
 
 ///|
+async test "native SafeRoot reads file metadata without decoding contents" {
+  let fixture = @fs.tmpdir(prefix="dsh-safe-root-file-version")
+  @async.with_task_group() <| group => {
+    group.add_defer(() => @fs.rmdir(fixture, recursive=true))
+    let workspace = fixture + "/workspace"
+    let outside = fixture + "/outside"
+    @fs.mkdir(workspace)
+    @fs.mkdir(outside)
+    @fs.write_file(outside + "/secret.txt", "outside-secret")
+    @fs.symlink(workspace + "/linked-file.txt", target=outside + "/secret.txt")
+
+    let root = match SafeRoot::open(workspace) {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    group.add_defer(() => root.close())
+
+    let partial = "incomplete\u0000temporary"
+    @fs.write_file(workspace + "/.dsh-123-1.tmp", partial)
+    assert_true(root.read_text(".dsh-123-1.tmp") is Err(_))
+    let version = match root.file_version(".dsh-123-1.tmp") {
+      Ok(value) => value
+      Err(error) => fail(error)
+    }
+    assert_eq(version.size(), @utf8.encode(partial).length().to_int64())
+    assert_true(root.file_version("missing.tmp") is Err(_))
+    assert_true(root.file_version("linked-file.txt") is Err(_))
+  }
+}
+
+///|
 async test "native SafeRoot does not follow a swapped nested ancestor" {
   let fixture = @fs.tmpdir(prefix="dsh-safe-root-race")
   @async.with_task_group() <| group => {
