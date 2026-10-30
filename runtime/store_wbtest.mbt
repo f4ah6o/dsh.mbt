@@ -59,8 +59,9 @@ async test "archive inventory charges orphans and fails closed on special entrie
     group.add_defer(() => {
       @async.protect_from_cancel(() => ignore(store.close()))
     })
-    let orphan_path = store.archive_root.path() + "/orphan.tmp"
-    @fs.write_file(orphan_path, "orphan bytes")
+    store.archive_root
+    .write_atomic("orphan.tmp", "orphan bytes", permission=0o600)
+    .unwrap()
     let (bytes, entries) = match store.archive_inventory() {
       Ok(value) => value
       Err(error) => fail(error)

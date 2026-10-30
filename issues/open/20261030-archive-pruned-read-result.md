@@ -43,6 +43,8 @@ preflight を mutation gate 内で再導出し、bounded immutable object を kn
 - Native regression: 6 actual Read results, per-turn durable reopen, exact original-history API, legacy carrier refusal, remote receipt replay, and a subsequent CLI turn.
 - `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium PATH=/workspace/.moon/bin:$PATH MOON_HOME=/workspace/.moon sh scripts/test-browser-smoke.sh`: PASS, including the archived-original fixture, exact 60,003-byte rendering, tampered-object 404/no-render, and the ordinary browser acceptance flow.
 - Failure fixtures cover object OutcomeUnknown both without and after file creation, final manifest CAS conflict, post-write unknown acknowledgement, 32 MiB envelope admission, quota, corruption, and duplicate command. Cancellation interleaving and physical power-loss injection remain open.
+- CI #87 run `41118710490` exposed three fixture assumptions: inherited orphan-file mode, treating format 2 as unsupported after adding v2, and a temp-name exhaustion test tied to the process-global serial. The fixtures now set mode 0600 explicitly, use unsupported version 3, and run the serial-range test in a dedicated fresh native process. Under `umask 022`, the affected runtime fixture group passes 11 / 11 and the isolated atomic-create test passes 1 / 1. The post-fix GitHub rerun is pending.
+- A separate Windows native runtime smoke step failed in run `41118710627`: the first demo invocation reported `demo run did not resolve the write approval`. This fixture patch does not address that Windows smoke failure.
 - portable/native matrix、Node 不在 verifier、独立レビューと該当 CI。
 
 ## リスク

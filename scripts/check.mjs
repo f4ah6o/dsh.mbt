@@ -8,7 +8,8 @@ const portablePackages = [
   'verification/retry_math',
 ];
 const ownPackages = [
-  ...portablePackages, 'app', 'native', 'runtime', 'cmd/dsh', 'browser', 'browser/sw', 'desktop', 'desktop/linux', 'desktop/macos',
+  ...portablePackages, 'app', 'native', 'runtime', 'cmd/dsh', 'browser', 'browser/sw',
+  'desktop', 'desktop/linux', 'desktop/macos', 'verification/native_fs',
 ];
 
 function checkPackages(packages, target) {
@@ -172,7 +173,10 @@ try {
   run('moon', ['fmt', '--check', ...ownPackages]);
   checkPackages(portablePackages, 'all');
   checkPackages(['app'], 'js');
-  checkPackages(['native', 'runtime', 'cmd/dsh', 'desktop', 'desktop/linux', 'desktop/macos'], 'native');
+  checkPackages([
+    'native', 'runtime', 'cmd/dsh', 'desktop', 'desktop/linux', 'desktop/macos',
+    'verification/native_fs',
+  ], 'native');
   checkPackages(['browser', 'browser/sw'], 'js');
   checkPureMoonBitInventory();
   if (existsSync(join(projectRoot, 'web/moonbit/browser.js')) &&

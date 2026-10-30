@@ -153,7 +153,7 @@ async test "native store rejects unsupported receipt envelope versions" {
     assert_true(
       store.root.write_atomic(
         "sessions.json",
-        "{\"schema\":\"dsh.native-host-v1\",\"format_version\":2,\"engine\":null,\"receipts\":[]}",
+        "{\"schema\":\"dsh.native-host-v1\",\"format_version\":3,\"engine\":null,\"receipts\":[]}",
         permission=0o600,
       )
       is Ok(_),

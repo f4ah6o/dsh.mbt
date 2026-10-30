@@ -12,7 +12,7 @@ import {
 ///|
 async fn run_moon(
   args : Array[String],
-  extra_env? : Map[String, String] = Map([]),
+  extra_env~ : Map[String, String] = Map([]),
 ) -> Unit {
   let command = args.join(" ")
   println("[native verify] moon " + command)
@@ -58,7 +58,7 @@ fn json_text(value : Json?) -> String {
 }
 
 ///|
-fn json_int(value : Json?) -> Int {
+fn json_int(value : Json?) -> Int32 {
   match value {
     Some(Number(number, ..)) => number.to_int()
     _ => 0
@@ -69,7 +69,7 @@ fn json_int(value : Json?) -> Int {
 async fn check_native_packages() -> Unit {
   let packages = [
     "engine", "provider", "auth", "protocol", "client", "plugins", "api", "ui", "native",
-    "runtime", "cmd/dsh", "desktop", "verification/retry_math",
+    "runtime", "cmd/dsh", "desktop", "verification/retry_math", "verification/native_fs",
   ]
   let args = ["check"] + packages + ["--target", "native", "--json", "--frozen"]
   println("[native verify] moon " + args.join(" "))
@@ -192,7 +192,7 @@ async fn main {
   run_moon([
     "fmt", "--check", "engine", "provider", "auth", "protocol", "client", "plugins",
     "api", "ui", "native", "runtime", "cmd/dsh", "browser", "browser/sw", "desktop",
-    "verification/retry_math",
+    "verification/retry_math", "verification/native_fs",
   ])
   check_native_packages()
   let worker_root = match @env.get_env_var("DSH_NATIVE_VERIFY_TARGET_DIR") {
@@ -237,6 +237,19 @@ async fn main {
     ],
     extra_env={ "DSH_NATIVE_WORKER_BIN": worker_binary },
   )
+  // The temp-name exhaustion fixture assumes a fresh process-global serial.
+  run_moon([
+    "test",
+    "verification/native_fs",
+    "--target",
+    "native",
+    "--frozen",
+    "--no-parallelize",
+    "--filter",
+    "SafeRoot atomically creates complete immutable files without replacement",
+    "--target-dir",
+    worker_root + "/native-fs-test",
+  ])
   run_moon([
     "run", "native", "--target", "native", "--release", "--frozen", "--", "--help",
   ])
@@ -273,8 +286,8 @@ async fn main {
       "_build/js/release/build/browser/browser.js", "_build/js/release/build/browser/sw/sw.js",
       "web/moonbit/browser.js", "web/sw.js", "web/kumo-standalone.css", "web/yami-kumo-components.css",
       "web/yami-kumo-shell.css", "licenses/gpui-LICENSE", "licenses/yami-kumo-LICENSE",
-      "licenses/yami-kumo-cloudflare-kumo-LICENSE", "web/index.html",
-      "web/manifest.webmanifest", "web/icon.svg",
+      "licenses/yami-kumo-cloudflare-kumo-LICENSE", "web/index.html", "web/manifest.webmanifest",
+      "web/icon.svg",
     ] {
     if !@fs.exists(path) {
       fail("no-Node web asset build did not produce " + path)
